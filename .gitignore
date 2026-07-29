@@ -5,3 +5,9 @@ dist-single
 shots/
 *.log
 ref/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+.vercel
