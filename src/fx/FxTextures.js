@@ -363,8 +363,10 @@ export function bakeShardDetail(size = 128, seed = 5309) {
       const grain = fbm3(x / size * 22, y / size * 6, 1.0, { octaves: 3, period: 11, seed: seed + 13 });
       const rough = clamp01(mix(0.18, 0.62, cells) + (grain - 0.5) * 0.22);
       const i = (y * size + x) * 4;
-      data[i] = b(rough);
-      data[i + 1] = b(clamp01(0.75 + (grain - 0.5) * 0.5));
+      // glTF channel convention, which is what three.js samples:
+      // R = occlusion, G = roughness, B = metalness.
+      data[i] = b(clamp01(0.75 + (grain - 0.5) * 0.5));
+      data[i + 1] = b(rough);
       data[i + 2] = b(clamp01(1 - cells * 0.4));
       data[i + 3] = 255;
     }

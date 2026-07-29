@@ -64,6 +64,16 @@ const R_R_STRIKE = { hip_L: [0.4, 17, 2.9], knee_L: [42, 0, 0], ankle_L: [-14.1,
 const R_R_STANCE = { hip_L: [-39.3, 11.6, 9.6], knee_L: [90.7, 0, 0], ankle_L: [-28.4, -8.9, 0], hip_R: [-27.9, -17, -2.4], knee_R: [25.4, 0, 0], ankle_R: [-0.6, 6.3, 0] };
 const R_R_PUSH = { hip_L: [-55.9, 12.2, 11], knee_L: [64.7, 0, 0], ankle_L: [-8, -11.3, 0], hip_R: [-28.5, -6.8, -4.7], knee_R: [56.7, 0, 0], ankle_R: [-2.1, 2.1, 0] };
 
+/**
+ * The six run contacts, exported so the intro walk-on can borrow a real stride
+ * instead of duplicating six solved leg sets. Keyed by contact, not by frame.
+ * @type {Record<string, Record<string, [number, number, number]>>}
+ */
+export const STRIDE_LEGS = {
+  leadStrike: R_L_STRIKE, leadStance: R_L_STANCE, leadPush: R_L_PUSH,
+  rearStrike: R_R_STRIKE, rearStance: R_R_STANCE, rearPush: R_R_PUSH,
+};
+
 // ---------------------------------------------------------------------------
 // Arm sets. Absolute, because these leave the guard entirely.
 // ---------------------------------------------------------------------------

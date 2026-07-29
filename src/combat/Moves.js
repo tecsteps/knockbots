@@ -210,8 +210,11 @@ function make(s, cfg) {
 
 function coreMoves(mv, cfg) {
   // --- jab string: 1 -> 1,2 -> 1,2,3 --------------------------------------
+  // The jab and its cross are frame-locked across every archetype. Tekken does
+  // the same thing: everyone has the i10 punisher, and characters differentiate
+  // everywhere *except* the one move the whole punishment game is built on.
   mv({
-    id: 'jab', name: 'Servo Jab', input: '1', clip: 'p.jab', tag: 'jab',
+    id: 'jab', name: 'Servo Jab', input: '1', clip: 'p.jab', tag: 'jab', lockFrames: true,
     active: [W(10, 11, FIST_L(0.2))], total: 21,
     height: HEIGHT.HIGH, weight: WEIGHT.LIGHT, damage: 8,
     adv: { block: 1, hit: 8 }, reaction: REACTION.FLINCH_HIGH,
@@ -220,7 +223,7 @@ function coreMoves(mv, cfg) {
     sfx: 'lightHit',
   });
   mv({
-    id: 'jab2', name: 'Cross Follow', input: '1,2', clip: 'p.straight', tag: 'string',
+    id: 'jab2', name: 'Cross Follow', input: '1,2', clip: 'p.straight', tag: 'string', lockFrames: true,
     active: [W(12, 13, FIST_R(0.21))], total: 26,
     height: HEIGHT.HIGH, weight: WEIGHT.LIGHT, damage: 11,
     adv: { block: -1, hit: 7 }, reaction: REACTION.FLINCH_HIGH,

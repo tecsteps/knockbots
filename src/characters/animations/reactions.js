@@ -17,7 +17,7 @@
  * Axis conventions and the pose helpers live in ./idle.js.
  */
 
-import { STANCE, STANCE_Y, CROUCH, CROUCH_Y, add, over, makeClip } from './idle.js';
+import { STANCE, STANCE_Y, CROUCH, add, over, makeClip } from './idle.js';
 
 // ---------------------------------------------------------------------------
 // Solved leg sets.
@@ -211,10 +211,10 @@ const crumple = makeClip('r.crumple', { duration: 54, blendIn: 1, blendOut: 8 },
 const launch = makeClip('r.launch', { duration: 30, blendIn: 1, blendOut: 6 }, [
   { t: 0, ease: 'expo', pose: STANCE, root: [0, STANCE_Y, 0] },
   { t: 2, ease: 'quad', pose: add(STANCE, { hips: [8, 2, 0], spine01: [6, 0, 0], chest: [6, 2, 0], neck: [3, 0, 0], head: [6, 0, 0], knee_L: [14, 0, 0], knee_R: [12, 0, 0], hip_L: [-8, 0, 0], hip_R: [-6, 0, 0] }), root: [0, -0.15, -0.01] },
-  { t: 7, ease: 'quad', pose: add(over(STANCE, A_TRAIL), { hips: [-18, 6, 2], spine01: [-13, 2, 2], spine02: [-15, 3, 3], chest: [-22, 6, 6], neck: [-9, -2, -3], head: [-26, -6, -7], hip_L: [-30, 0, 4], knee_L: [-18, 0, 0], hip_R: [-24, 0, -4], knee_R: [-14, 0, 0] }), root: [0, -0.03, -0.1] },
-  { t: 13, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-26, 8, 3], spine01: [-17, 3, 3], spine02: [-19, 4, 4], chest: [-28, 8, 8], neck: [-11, -3, -4], head: [-33, -8, -9] }), root: [0, 0.04, -0.22] },
-  { t: 21, ease: 'sine', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-30, 9, 4], spine01: [-19, 3, 4], spine02: [-21, 4, 4], chest: [-31, 9, 9], neck: [-12, -3, -4], head: [-36, -9, -10], hip_L: [8, 0, 0], hip_R: [10, 0, 0], knee_L: [16, 0, 0], knee_R: [12, 0, 0] }), root: [0, 0.06, -0.32] },
-  { t: 30, pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-24, 8, 4], spine01: [-16, 3, 3], spine02: [-18, 4, 4], chest: [-26, 8, 8], neck: [-10, -3, -4], head: [-30, -8, -9], hip_L: [22, 0, 0], hip_R: [24, 0, 0], knee_L: [34, 0, 0], knee_R: [30, 0, 0] }), root: [0, 0.03, -0.4] },
+  { t: 7, ease: 'quad', pose: add(over(STANCE, A_TRAIL), { hips: [-10, 6, 2], spine01: [-7, 2, 2], spine02: [-8, 3, 3], chest: [-12, 6, 6], neck: [-5, -2, -3], head: [-14, -6, -7], hip_L: [-30, 0, 4], knee_L: [-18, 0, 0], hip_R: [-24, 0, -4], knee_R: [-14, 0, 0] }), root: [0, -0.03, -0.1] },
+  { t: 13, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-14, 8, 3], spine01: [-9, 3, 3], spine02: [-10, 4, 4], chest: [-15, 8, 8], neck: [-6, -3, -4], head: [-18, -8, -9] }), root: [0, 0.04, -0.22] },
+  { t: 21, ease: 'sine', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-17, 9, 4], spine01: [-10, 3, 4], spine02: [-11, 4, 4], chest: [-17, 9, 9], neck: [-7, -3, -4], head: [-20, -9, -10], hip_L: [8, 0, 0], hip_R: [10, 0, 0], knee_L: [16, 0, 0], knee_R: [12, 0, 0] }), root: [0, 0.06, -0.32] },
+  { t: 30, pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-13, 8, 4], spine01: [-8, 3, 3], spine02: [-9, 4, 4], chest: [-14, 8, 8], neck: [-6, -3, -4], head: [-16, -8, -9], hip_L: [22, 0, 0], hip_R: [24, 0, 0], knee_L: [34, 0, 0], knee_R: [30, 0, 0] }), root: [0, 0.03, -0.4] },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -223,7 +223,7 @@ const launch = makeClip('r.launch', { duration: 30, blendIn: 1, blendOut: 6 }, [
 // ---------------------------------------------------------------------------
 const AIR = over(STANCE, L_LIMP, A_LIMP);
 const airFlail = makeClip('r.airFlail', { duration: 36, loop: true, blendIn: 5, blendOut: 5 }, [
-  { t: 0, ease: 'sine', pose: add(AIR, { hips: [-16, 6, 3], spine01: [-9, 2, 2], spine02: [-10, 2, 2], chest: [-14, 4, 5], neck: [-4, -2, -2], head: [-16, -4, -5] }), root: [0, -0.02, 0] },
+  { t: 0, ease: 'sine', pose: add(AIR, { hips: [-16, 6, 3], spine01: [-9, 2, 2], spine02: [-10, 2, 2], chest: [-10, 4, 5], neck: [-3, -2, -2], head: [-12, -4, -5] }), root: [0, -0.02, 0] },
   { t: 9, ease: 'sine', pose: add(AIR, { hips: [-10, 10, -2], spine01: [-5, 4, -2], spine02: [-6, 4, -2], chest: [-8, 8, -4], neck: [-2, -3, 2], head: [-9, -6, 4], shoulder_L: [-18, 0, -8], shoulder_R: [14, 0, 6], hip_L: [-14, 0, 0], hip_R: [10, 0, 0], knee_L: [-16, 0, 0], knee_R: [14, 0, 0] }), root: [0, 0.02, 0.03] },
   { t: 18, ease: 'sine', pose: add(AIR, { hips: [-20, 2, -4], spine01: [-11, 0, -3], spine02: [-12, 0, -3], chest: [-16, 1, -6], neck: [-5, 1, 3], head: [-19, 2, 6], shoulder_L: [10, 0, 6], shoulder_R: [-16, 0, -7], hip_L: [12, 0, 0], hip_R: [-12, 0, 0], knee_L: [18, 0, 0], knee_R: [-14, 0, 0] }), root: [0, 0.01, -0.02] },
   { t: 27, ease: 'sine', pose: add(AIR, { hips: [-14, -4, 4], spine01: [-8, -2, 3], spine02: [-9, -2, 3], chest: [-12, -4, 6], neck: [-3, 2, -3], head: [-13, 4, -6], shoulder_L: [-8, 0, -4], shoulder_R: [6, 0, 3], hip_L: [-6, 0, 0], hip_R: [6, 0, 0], knee_L: [-8, 0, 0], knee_R: [8, 0, 0] }), root: [0, -0.01, 0.01] },
@@ -247,9 +247,9 @@ const spinFall = makeClip('r.spinFall', { duration: 44, blendIn: 1, blendOut: 8 
 // Knockdowns. Four separate contacts: hips, shoulders, skull, then the limbs.
 // ---------------------------------------------------------------------------
 const knockdownBack = makeClip('r.knockdownBack', { duration: 58, blendIn: 2, blendOut: 10 }, [
-  { t: 0, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-26, 6, 3], spine01: [-16, 2, 2], spine02: [-18, 3, 3], chest: [-26, 6, 7], neck: [-10, -3, -4], head: [-30, -7, -8] }), root: [0, -0.02, -0.06] },
-  { t: 8, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-48, 4, 3], spine01: [-14, 2, 2], spine02: [-15, 2, 2], chest: [-22, 5, 6], neck: [-8, -2, -3], head: [-26, -6, -7] }), root: [0, -0.36, -0.24] },
-  { t: 13, ease: 'snap', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-70, 2, 2], spine01: [-10, 1, 1], spine02: [-11, 1, 1], chest: [-16, 3, 4], neck: [-6, -1, -2], head: [-20, -4, -5] }), root: [0, -0.7, -0.4] },
+  { t: 0, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-14, 6, 3], spine01: [-9, 2, 2], spine02: [-10, 3, 3], chest: [-14, 6, 7], neck: [-5, -3, -4], head: [-17, -7, -8] }), root: [0, -0.02, -0.06] },
+  { t: 8, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-48, 4, 3], spine01: [-8, 2, 2], spine02: [-8, 2, 2], chest: [-12, 5, 6], neck: [-4, -2, -3], head: [-15, -6, -7] }), root: [0, -0.36, -0.24] },
+  { t: 13, ease: 'snap', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-70, 2, 2], spine01: [-6, 1, 1], spine02: [-6, 1, 1], chest: [-9, 3, 4], neck: [-4, -1, -2], head: [-13, -4, -5] }), root: [0, -0.7, -0.4] },
   { t: 17, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_SPRAWL), { hips: [-86, 0, 0], spine01: [-4, 0, 0], spine02: [-4, 0, 0], chest: [-6, 1, 2], neck: [-8, 0, -1], head: [-24, -2, -3] }), root: [0, -0.775, -0.5] },
   { t: 21, ease: 'cubic', pose: add(SUPINE, { hips: [2, 0, 0], neck: [4, 0, 0], head: [10, 0, 0], hip_L: [-40, 0, 0], hip_R: [-34, 0, 0], knee_L: [-22, 0, 0] }), root: [0, -0.75, -0.56] },
   { t: 27, ease: 'cubic', pose: add(SUPINE, { hip_L: [-18, 0, 0], hip_R: [-14, 0, 0], shoulder_L: [-6, 0, 6], shoulder_R: [-4, 0, -6] }), root: [0, SUPINE_Y, -0.6] },
@@ -353,8 +353,8 @@ const koFall = makeClip('r.koFall', { duration: 80, blendIn: 2, blendOut: 12 }, 
   { t: 0, ease: 'quad', pose: STANCE, root: [0, STANCE_Y, 0] },
   { t: 5, ease: 'sine', pose: add(over(STANCE, A_LIMP), { hips: [4, 2, 0], spine01: [4, 0, 0], spine02: [4, 0, 0], chest: [3, 2, -2], neck: [6, 0, 0], head: [12, 1, -2], knee_L: [10, 0, 0], knee_R: [8, 0, 0] }), root: [0, -0.13, -0.02] },
   { t: 14, ease: 'sine', pose: add(over(STANCE, A_LIMP), { hips: [-8, 3, 2], spine01: [-4, 1, 1], spine02: [-5, 1, 1], chest: [-8, 3, 3], neck: [2, -1, -1], head: [4, -3, -3], knee_L: [18, 0, 0], knee_R: [16, 0, 0], hip_L: [-12, 0, 0], hip_R: [-8, 0, 0] }), root: [0, -0.22, -0.08] },
-  { t: 26, ease: 'quad', pose: add(over(STANCE, A_LIMP), { hips: [-30, 4, 3], spine01: [-12, 1, 1], spine02: [-13, 2, 2], chest: [-20, 4, 5], neck: [-4, -2, -2], head: [-14, -5, -5], hip_L: [-24, 0, 2], knee_L: [22, 0, 0], hip_R: [-18, 0, -2], knee_R: [20, 0, 0] }), root: [0, -0.38, -0.22] },
-  { t: 38, ease: 'quad', pose: add(over(STANCE, A_TRAIL), { hips: [-58, 3, 2], spine01: [-14, 1, 1], spine02: [-15, 1, 1], chest: [-22, 3, 4], neck: [-6, -2, -2], head: [-20, -4, -4], hip_L: [-42, 0, 2], knee_L: [16, 0, 0], hip_R: [-36, 0, -2], knee_R: [14, 0, 0] }), root: [0, -0.62, -0.4] },
+  { t: 26, ease: 'quad', pose: add(over(STANCE, A_LIMP), { hips: [-30, 4, 3], spine01: [-7, 1, 1], spine02: [-8, 2, 2], chest: [-12, 4, 5], neck: [-3, -2, -2], head: [-10, -5, -5], hip_L: [-24, 0, 2], knee_L: [22, 0, 0], hip_R: [-18, 0, -2], knee_R: [20, 0, 0] }), root: [0, -0.38, -0.22] },
+  { t: 38, ease: 'quad', pose: add(over(STANCE, A_TRAIL), { hips: [-58, 3, 2], spine01: [-8, 1, 1], spine02: [-8, 1, 1], chest: [-12, 3, 4], neck: [-4, -2, -2], head: [-14, -4, -4], hip_L: [-42, 0, 2], knee_L: [16, 0, 0], hip_R: [-36, 0, -2], knee_R: [14, 0, 0] }), root: [0, -0.62, -0.4] },
   { t: 45, ease: 'snap', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-80, 1, 1], spine01: [-8, 0, 0], spine02: [-8, 0, 0], chest: [-12, 2, 2], neck: [-8, -1, -1], head: [-26, -2, -3] }), root: [0, -0.79, -0.52] },
   { t: 50, ease: 'cubic', pose: add(SUPINE, { hips: [2, 0, 0], head: [12, 0, 0], hip_L: [-44, 0, 0], hip_R: [-38, 0, 0] }), root: [0, -0.755, -0.58] },
   { t: 58, ease: 'cubic', pose: add(SUPINE, { hip_L: [-16, 0, 0], hip_R: [-12, 0, 0], shoulder_L: [-6, 0, 6], shoulder_R: [-4, 0, -6] }), root: [0, SUPINE_Y, -0.63] },

@@ -467,7 +467,16 @@ export class CombatSystem {
     const limX = a.bounds.halfWidth - a.radius;
     const aPinned = Math.abs(a.position.x) >= limX - 1e-3;
     const bPinned = Math.abs(b.position.x) >= limX - 1e-3;
-    if (aPinned === bPinned) return;
+    if (!aPinned && !bPinned) return;
+    if (aPinned && bPinned) {
+      // Both jammed into the same wall — the symmetric push has no room to
+      // work, so move the second fighter inward by the full capsule width.
+      const inward = -Math.sign(a.position.x) || 1;
+      b.position.x = THREE.MathUtils.clamp(a.position.x + inward * minD, -limX, limX);
+      b.position.z = a.position.z;
+      b.velocity.x = inward * Math.abs(b.velocity.x);
+      return;
+    }
     const free = aPinned ? b : a;
     const pinned = aPinned ? a : b;
     const need = minD - d + 1e-3;

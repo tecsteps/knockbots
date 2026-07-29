@@ -1198,7 +1198,10 @@ function dither(i) {
  * while the clearcoat map cuts the lacquer away, so a chip catches the rim
  * light and the environment. Albedo is the weakest of the four cues.
  */
-const V_PAINT = [0.85, 0.36, 0.60];  // by plate role: primary, secondary, accent
+const V_PAINT = [0.85, 0.46, 0.64];  // by plate role: primary, secondary, accent
+// The secondary step is deliberately not darker than this: on an already very
+// dark palette a lower value collapses those plates to black and the panel
+// layout stops reading at all.
 const V_STRUCTURE = 0.05;            // unpainted frame seen down a panel gap
 const V_BARE = 1.0;                  // cast steel where the paint has failed
 const V_CUT = 1.0;                   // freshly cut metal in a scratch
@@ -1694,16 +1697,19 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     carbon, rubber, cable, glass, visor, emissive,
   };
 
-  LIB_META.set(lib, { key, refs: 1, textures: [], materials: Object.values(lib) });
+  // `ownsTextures` is empty by design: a library owns only its materials, and
+  // every map it points at belongs to the shared bundle. It stays in the record
+  // so that adding a per-character map later is a one-line change here rather
+  // than a leak nobody notices.
+  LIB_META.set(lib, { key, refs: 1, ownsTextures: [], materials: Object.values(lib) });
   LIB_CACHE.set(key, lib);
   return lib;
 }
 
 /**
- * Releases one reference to a library. The per-character albedo textures and
- * the materials are destroyed when the last reference goes; the shared
- * greyscale detail maps survive for the next character and are only freed by
- * `disposeSharedTextures()`.
+ * Releases one reference to a library. The materials are destroyed when the
+ * last reference goes; the shared greyscale detail maps survive for the next
+ * character and are only freed by `disposeSharedTextures()`.
  *
  * @param {MaterialLibrary} lib
  */
@@ -1711,7 +1717,7 @@ export function disposeMaterialLibrary(lib) {
   const meta = lib && LIB_META.get(lib);
   if (!meta) return;
   if (--meta.refs > 0) return;
-  for (const tex of meta.textures) tex.dispose();
+  for (const tex of meta.ownsTextures) tex.dispose();
   for (const mat of meta.materials) mat.dispose();
   LIB_CACHE.delete(meta.key);
   LIB_META.delete(lib);

@@ -871,6 +871,14 @@ export class Fighter {
       a.stunTicks = 16;
       a.velocity.x = -a.facing * 3.0;
       a.playClip('t.throwBreak', 3, false);
+      // The pair were locked together for the grab; part them cleanly so the
+      // push-out does not have to resolve a perfect overlap.
+      const sep = this.radius + a.radius;
+      const dir = Math.sign(this.position.x - a.position.x) ||
+        -Math.sign(a.position.x) || -a.facing;
+      this.position.x = a.position.x + dir * sep;
+      this.position.z = a.position.z;
+      this.prevPosition.copy(this.position);
     }
     // 'throwBreak' is the precise event; 'parry' fires too so the FX and audio
     // layers, which only know the canonical list, still get their flash.

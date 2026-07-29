@@ -510,6 +510,25 @@ class DepthNormalPass extends Pass {
   }
 }
 
+/**
+ * A no-op pass that snapshots the renderer counters immediately after the
+ * scene has been drawn. Without it `renderer.info` reports the whole frame
+ * including every post pass, which is not the number the triangle and
+ * draw-call budgets are written against.
+ */
+class StatsProbePass extends Pass {
+  constructor(out) {
+    super();
+    this.needsSwap = false;
+    this.enabled = true;
+    this.out = out;
+  }
+  render(renderer) {
+    this.out.sceneDrawCalls = renderer.info.render.calls;
+    this.out.sceneTriangles = renderer.info.render.triangles;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Screen-space reflections, restricted to the wet floor
 // ---------------------------------------------------------------------------
@@ -753,10 +772,11 @@ class BokehDofPass extends Pass {
             float tapCoc = cocAt( uv );
             float tapRadius = uMaxRadius * abs( tapCoc );
             float dist = length( offset );
-            // A tap only lights this pixel if its own bokeh circle covers it.
+            // A tap only lights this pixel if its own bokeh circle reaches it.
+            // That single rule gives both correct near-field scatter (a blurred
+            // foreground spreads over sharp background) and correct far-field
+            // occlusion (a sharp foreground never smears into blurred depth).
             float w = clamp( tapRadius - dist + 1.0, 0.0, 1.0 );
-            // Near-field taps scatter forward, so let them always contribute.
-            w = max( w, tapCoc < -0.02 ? clamp( tapRadius - dist + 1.0, 0.0, 1.0 ) : 0.0 );
             sum += texture2D( tDiffuse, uv ).rgb * w;
             wsum += w;
           }
@@ -1270,8 +1290,15 @@ export class RenderPipeline {
       ssrIntensity: 0.62, aoIntensity: 0.92, dofStrength: 0.85, motionBlur: 0.55,
     };
 
-    /** Exposed for the QA harness. */
-    this.stats = { fps: 60, frameMs: 16.7, drawCalls: 0, triangles: 0, renderScale: 1 };
+    /**
+     * Exposed for the QA harness. `drawCalls`/`triangles` are whole-frame
+     * totals including post; `sceneDrawCalls`/`sceneTriangles` are the scene
+     * render alone, which is what the charter's budgets refer to.
+     */
+    this.stats = {
+      fps: 60, frameMs: 16.7, drawCalls: 0, triangles: 0,
+      sceneDrawCalls: 0, sceneTriangles: 0, renderScale: 1,
+    };
 
     this.renderScale = 1;
     this._targetScale = 1;
@@ -1283,7 +1310,7 @@ export class RenderPipeline {
 
     // Focus state, updated by FightCamera through the bus.
     this.shadowFocus = { center: new THREE.Vector3(0, 1.0, 0), radius: 4.2 };
-    this.dofFocus = { distance: 6.5, nearRange: 2.4, farRange: 9.5 };
+    this.dofFocus = { distance: 6.5, nearRange: 3.0, farRange: 18.0 };
     this._focusUnsub = bus.on('cameraFocus', (e) => this.setCameraFocus(e));
 
     this._lut = buildGradeLut();
@@ -1366,6 +1393,9 @@ export class RenderPipeline {
 
     passes.render = new RenderPass(this.scene, this.camera);
     composer.addPass(passes.render);
+
+    passes.probe = new StatsProbePass(this.stats);
+    composer.addPass(passes.probe);
 
     const wantsGeometry = tier.gbuffer &&
       (this.effects.ao || this.effects.ssr || this.effects.dof || this.effects.motionBlur);
@@ -1600,8 +1630,10 @@ export class RenderPipeline {
     this.renderer.shadowMap.needsUpdate = true;
     try {
       this.renderer.compile(scene, cam);
-    } catch {
-      // compile() touches every material; a half-built scene must not be fatal.
+    } catch (err) {
+      // compile() touches every material; a half-built scene must not be fatal,
+      // but it should be visible.
+      console.warn('[RenderPipeline] warmup compile failed', err);
     }
 
     this.#fitShadows(scene, cam);
@@ -1612,8 +1644,8 @@ export class RenderPipeline {
       try {
         this.#syncPasses(scene, cam);
         this.composer.render(1 / 60);
-      } catch {
-        // ignore: warmup is best effort
+      } catch (err) {
+        console.warn('[RenderPipeline] warmup frame failed', err);
       }
       this.composer.renderToScreen = wasToScreen;
     }
@@ -1760,6 +1792,7 @@ export class RenderPipeline {
       this.resize();
       this._adaptCooldown = 45;
       this._frameCount = 0;
+      this._frameIndex = 0;
     } else {
       this._adaptCooldown = 20;
     }

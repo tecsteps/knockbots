@@ -78,7 +78,11 @@ class Surf {
    */
   quad(a, b, c, d, na, nb, nc, nd, ua, ub, uc, ud) {
     const ref = [na[0] + nb[0] + nc[0] + nd[0], na[1] + nb[1] + nc[1] + nd[1], na[2] + nb[2] + nc[2] + nd[2]];
-    if (dot(faceNormal(a, b, c), ref) < 0) {
+    // At a lathe pole one edge collapses, so the obvious triangle has a zero
+    // normal and would silently skip the winding test — leaving every cone cap
+    // inside-out. Test whichever corner triangle is actually non-degenerate.
+    const g = firstValidNormal(a, b, c, d);
+    if (dot(g, ref) < 0) {
       // reverse winding: a d c b
       [b, d] = [d, b];
       [nb, nd] = [nd, nb];
@@ -120,6 +124,16 @@ class Surf {
 function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 function near(a, b) {
   return Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6 && Math.abs(a[2] - b[2]) < 1e-6;
+}
+
+/** Geometric normal of the first non-degenerate corner triangle of a quad. */
+function firstValidNormal(a, b, c, d) {
+  const corners = [[a, b, c], [b, c, d], [c, d, a], [d, a, b]];
+  for (const [p, q, r] of corners) {
+    const n = faceNormal(p, q, r);
+    if (n[0] * n[0] + n[1] * n[1] + n[2] * n[2] > 1e-18) return n;
+  }
+  return [0, 0, 0];
 }
 
 function faceNormal(a, b, c) {
@@ -1320,7 +1334,7 @@ function buildTorso(rig, spec, def) {
     addLouvres(rig, 'chest', {
       p: [sign * cw * 0.40, 0.115, FRONT * cd * 0.22],
       r: [0, sign * 118 * DEG, 0],
-      w: cd * 0.36, h: 0.075, n: 4, depth: 0.022, mirror, glow: 'vents',
+      w: cd * 0.30, h: 0.062, n: 4, depth: 0.020, mirror, glow: 'vents',
     });
   }
 
@@ -1937,6 +1951,16 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     r: [0, YAW_FRONT, sign * -pd.tilt * DEG],
     w: pd.w * 0.78, h: pd.h * 0.72, bolts: 3, splitsY: [0.24], splitsX: [-0.18], mirror,
   });
+  addPanelDetail(rig, `clavicle_${S}`, {
+    p: [sign * (pd.out + pd.w * 0.86), pd.up + pd.h * 0.06, 0],
+    r: [0, sign * 90 * DEG, sign * -pd.tilt * DEG],
+    w: pd.d * 0.72, h: pd.h * 0.64, bolts: 4, splitsY: [0.26], splitsX: [-0.22], mirror,
+    accent: 'armorAccent',
+  });
+  rig.add(`clavicle_${S}`, bevelBox(0.014, pd.h * 0.84, pd.d * 0.92, 0.004, { topX: 0.6 }), 'trim', {
+    p: [sign * (pd.out + pd.w * 0.90), pd.up + pd.h * 0.04, 0],
+    r: [0, 0, sign * -pd.tilt * DEG], mirror, tier: TIER.SECONDARY,
+  });
   rig.decal(`clavicle_${S}`, DECAL.HAZARD, pd.d * 0.7, 0.038, {
     p: [sign * (pd.out + pd.w * 0.30), pd.up + pd.h * 0.50, 0],
     r: [-90 * DEG, 0, sign * -pd.tilt * DEG], mirror, tier: TIER.GREEBLE,
@@ -1954,8 +1978,8 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   rig.add(`shoulder_${S}`, boltRing(6, upper * 0.52, 0.008, 0.010), 'trim',
     { world: true, p: [sign * 0.056, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.GREEBLE });
   rig.glow(`shoulder_${S}`, latheProfile([
-    { r: 0, y: 0 }, { r: upper * 0.26, y: 0 }, { r: 0, y: 0.006 },
-  ], 16), 'joints', { world: true, p: [sign * 0.060, 0, 0], r: [0, 0, sign * -90 * DEG], mirror });
+    { r: 0, y: 0 }, { r: upper * 0.115, y: 0 }, { r: upper * 0.10, y: 0.008 }, { r: 0, y: 0.010 },
+  ], 14), 'joints', { world: true, p: [sign * 0.062, 0, 0], r: [0, 0, sign * -90 * DEG], mirror });
 
   // --- upper arm: tapered plates around the bone axis, front/back split
   const uLen = 0.29;
@@ -1964,7 +1988,7 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   { p: [0, -uLen * 0.46, 0], mirror, tier: TIER.PRIMARY });
   rig.add(`shoulder_${S}`, bevelBox(upper * 1.1, uLen * 0.40, upper * 0.5, 0.008, { topX: 0.9, botX: 0.7 }), 'armorSecondary',
     { p: [0, -uLen * 0.52, FRONT * upper * 0.82], r: [0, 0, 0], mirror, tier: TIER.SECONDARY });
-  rig.add(`shoulder_${S}`, channelStrip(upper * 1.2, uLen * 0.5, 0.008), 'darkMetal',
+  rig.add(`shoulder_${S}`, channelStrip(upper * 0.42, uLen * 0.56, 0.009), 'darkMetal',
     { p: [0, -uLen * 0.44, -FRONT * upper * 0.78], r: FACE_BACK, mirror, tier: TIER.SECONDARY });
   rig.add(`shoulder_${S}`, latheProfile([
     { r: upper * 0.55, y: 0 }, { r: upper * 0.62, y: 0.012, smooth: true }, { r: upper * 0.62, y: 0.03 },
@@ -2008,7 +2032,7 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     { r: fore * 0.66, y: -0.048 },
   ], 20), 'darkMetal', { p: [0, 0, 0], mirror, tier: TIER.PRIMARY });
   rig.glow(`wrist_${S}`, latheProfile([
-    { r: fore * 0.70, y: 0 }, { r: fore * 0.76, y: 0.004 }, { r: fore * 0.76, y: 0.014 }, { r: fore * 0.70, y: 0.018 },
+    { r: fore * 0.73, y: 0 }, { r: fore * 0.77, y: 0.003 }, { r: fore * 0.77, y: 0.009 }, { r: fore * 0.73, y: 0.012 },
   ], 20), 'joints', { p: [0, -0.006, 0], mirror });
 
   // --- hand: fist block, knuckle plates, thumb
@@ -2095,13 +2119,13 @@ function addShoulderRing(rig, spec, side, sign, mirror) {
     blocks.push(g);
   }
   rig.add(`clavicle_${S}`, joinGeometries(blocks), 'armorAccent', {
-    p: [sign * (pd.out + 0.05), pd.up - 0.02, 0],
+    p: [sign * (pd.out + pd.w * 1.05), pd.up - 0.02, 0],
     r: [0, sign * 22 * DEG, sign * -18 * DEG], mirror, tier: TIER.PRIMARY,
   });
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + 0.4;
     rig.glow(`clavicle_${S}`, bevelBox(0.036, 0.012, 0.012, 0.003), 'spine', {
-      p: [sign * (pd.out + 0.05) + Math.cos(a) * R * 0.94, pd.up - 0.02 + Math.sin(a) * R * 0.94, 0],
+      p: [sign * (pd.out + pd.w * 1.05) + Math.cos(a) * R * 0.94, pd.up - 0.02 + Math.sin(a) * R * 0.94, 0],
       r: [0, sign * 22 * DEG, a + Math.PI / 2], mirror,
     });
   }
@@ -2125,7 +2149,7 @@ function buildLeg(rig, spec, side, sign, mirror) {
   // outer thigh panel + channel
   rig.add(`hip_${S}`, bevelBox(0.026, tLen * 0.52, L.thigh * 1.0, 0.006, { topX: 0.8 }), 'carbon',
     { p: [sign * L.thigh * 0.76, -tLen * 0.42, 0], mirror, tier: TIER.SECONDARY });
-  rig.add(`hip_${S}`, channelStrip(L.thigh * 0.9, tLen * 0.5, 0.010), 'darkMetal',
+  rig.add(`hip_${S}`, channelStrip(L.thigh * 0.30, tLen * 0.60, 0.011), 'darkMetal',
     { p: [0, -tLen * 0.40, FRONT * L.thigh * 0.78], r: FACE_FRONT, mirror, tier: TIER.SECONDARY });
   addPanelDetail(rig, `hip_${S}`, {
     p: [sign * (L.thigh * 0.76), -tLen * 0.40, 0], r: [0, sign * 90 * DEG, 0],
@@ -2306,42 +2330,42 @@ function buildMechanism(rig, spec) {
     rig.actuator(`clavicle_${s}`, [sign * 0.155, 0.105, back * 0.10],
       `shoulder_${s}`, [0, -0.16, back * a.upper * 1.0], { radius: 0.020 * k });
     // elbow
-    rig.actuator(`shoulder_${s}`, [0, -0.20, back * a.upper * 0.95],
-      `elbow_${s}`, [0, -0.085, back * a.fore * 0.95], { radius: 0.018 * k });
+    rig.actuator(`shoulder_${s}`, [sign * a.upper * 0.40, -0.20, back * a.upper * 0.80],
+      `elbow_${s}`, [sign * a.fore * 0.40, -0.085, back * a.fore * 0.80], { radius: 0.018 * k });
     // wrist
     rig.actuator(`elbow_${s}`, [sign * a.fore * 0.55, -0.17, back * a.fore * 0.60],
       `wrist_${s}`, [sign * a.fore * 0.42, 0.0, back * a.fore * 0.55], { radius: 0.012 * k, rodRatio: 0.5 });
     // hip
-    rig.actuator('hips', [sign * t.pelvisW * 0.44, 0.02, back * t.waistD * 0.30],
-      `hip_${s}`, [sign * L.thigh * 0.70, -0.14, back * L.thigh * 0.55], { radius: 0.022 * k });
+    rig.actuator('hips', [sign * t.pelvisW * 0.50, 0.02, back * t.waistD * 0.44],
+      `hip_${s}`, [sign * L.thigh * 0.78, -0.15, back * L.thigh * 0.62], { radius: 0.022 * k });
     // knee
     // front-mounted so flexion EXTENDS it: the knee folds backwards, so a rear
     // ram would collapse into its own housing
-    rig.actuator(`hip_${s}`, [sign * L.thigh * 0.62, -0.245, -back * L.thigh * 0.95],
-      `knee_${s}`, [sign * L.shin * 0.62, -0.125, -back * L.shin * 0.95], { radius: 0.022 * k });
+    rig.actuator(`hip_${s}`, [sign * L.thigh * 0.80, -0.250, -back * L.thigh * 0.60],
+      `knee_${s}`, [sign * L.shin * 0.80, -0.130, -back * L.shin * 0.62], { radius: 0.022 * k });
     // ankle
-    rig.actuator(`knee_${s}`, [sign * L.shin * 0.34, -0.26, back * L.shin * 1.05],
-      `foot_${s}`, [sign * L.footW * 0.34, 0.03, back * L.foot * 0.42], { radius: 0.016 * k, rodRatio: 0.5 });
+    rig.actuator(`knee_${s}`, [sign * L.shin * 0.60, -0.27, back * L.shin * 0.74],
+      `foot_${s}`, [sign * L.footW * 0.52, 0.04, back * L.foot * 0.34], { radius: 0.016 * k, rodRatio: 0.5 });
   }
 
   // --- cable looms -------------------------------------------------------
   rig.cable('hips', [0, 0.10, back * t.waistD * 0.62], 'chest', [0, 0.02, back * t.chestD * 0.52],
-    { sag: 0.05, radius: 0.011 * k, strands: 3, twists: 2.0 });
+    { sag: 0.031, radius: 0.0079 * k, strands: 3, twists: 2.0 });
 
   for (const { s, sign } of SIDES) {
     rig.cable('chest', [sign * t.chestW * 0.30, 0.13, back * t.chestD * 0.30],
-      `shoulder_${s}`, [0, -0.11, back * a.upper * 0.7], { sag: 0.045, radius: 0.010 * k });
+      `shoulder_${s}`, [0, -0.11, back * a.upper * 0.7], { sag: 0.028, radius: 0.0072 * k });
     rig.cable(`shoulder_${s}`, [sign * a.upper * 0.5, -0.22, back * a.upper * 0.7],
-      `elbow_${s}`, [sign * a.fore * 0.5, -0.06, back * a.fore * 0.7], { sag: 0.035, radius: 0.009 * k });
+      `elbow_${s}`, [sign * a.fore * 0.5, -0.06, back * a.fore * 0.7], { sag: 0.022, radius: 0.0065 * k });
     rig.cable('hips', [sign * t.pelvisW * 0.34, -0.02, back * t.waistD * 0.55],
-      `hip_${s}`, [sign * L.thigh * 0.5, -0.18, back * L.thigh * 0.85], { sag: 0.04, radius: 0.010 * k });
+      `hip_${s}`, [sign * L.thigh * 0.5, -0.18, back * L.thigh * 0.85], { sag: 0.025, radius: 0.0072 * k });
     rig.cable(`hip_${s}`, [sign * L.thigh * 0.55, -0.30, back * L.thigh * 0.9],
-      `knee_${s}`, [sign * L.shin * 0.55, -0.10, back * L.shin * 0.9], { sag: 0.035, radius: 0.009 * k });
+      `knee_${s}`, [sign * L.shin * 0.55, -0.10, back * L.shin * 0.9], { sag: 0.022, radius: 0.0065 * k });
     rig.cable(`knee_${s}`, [sign * L.shin * 0.45, -0.33, back * L.shin * 0.75],
-      `foot_${s}`, [sign * L.footW * 0.40, 0.03, back * L.foot * 0.25], { sag: 0.025, radius: 0.008 * k, strands: 2 });
+      `foot_${s}`, [sign * L.footW * 0.40, 0.03, back * L.foot * 0.25], { sag: 0.015, radius: 0.0058 * k, strands: 2 });
     // neck loom
     rig.cable('chest', [sign * 0.045, 0.16, back * 0.06], 'head', [sign * 0.04, 0.01, back * 0.07],
-      { sag: 0.018, radius: 0.007 * k, strands: 2, twists: 1.2 });
+      { sag: 0.011, radius: 0.0050 * k, strands: 2, twists: 1.2 });
   }
 
   // soft boot shroud: a lathed sleeve spanning ankle to foot, smooth-skinned so
