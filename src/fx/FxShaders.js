@@ -61,14 +61,14 @@ uniform float uRestitution;
 uniform float uTangentFriction;
 uniform float uDrag;
 
-/** Horizontal displacement under exponential drag over `dt`. */
+/** Horizontal displacement under exponential drag over dt. */
 vec2 dragStep( vec2 v, float dt ) {
   float k = max( uDrag, 1e-4 );
   return v * ( 1.0 - exp( -k * dt ) ) / k;
 }
 
 /**
- * Position and velocity at time `t` after spawn, bouncing on the plane y=floorY.
+ * Position and velocity at time t after spawn, bouncing on the plane y=floorY.
  * Vertical motion is exact ballistic; horizontal carries exponential drag,
  * which is where the visual difference between a spark and a thrown rock lives.
  */
@@ -111,7 +111,7 @@ vec3 ballistic( vec3 p0, vec3 v0, float t, float floorY, out vec3 outVel, out fl
 }`;
 
 /**
- * Blackbody-ish emission ramp. `t` is 0 at ignition and 1 at burn-out.
+ * Blackbody-ish emission ramp. t is 0 at ignition and 1 at burn-out.
  * Returns *radiance*, deliberately far above 1.0 at the head so the bloom pass
  * has something real to work with.
  */
@@ -152,7 +152,7 @@ vec3 curlAdvect( vec3 base, float t, float scale, float strength ) {
 
 /**
  * Expands an instanced unit quad into a camera-facing (or velocity-stretched)
- * billboard in view space. `corner` is the quad vertex in [-0.5,0.5].
+ * billboard in view space. corner is the quad vertex in [-0.5,0.5].
  */
 export const GLSL_BILLBOARD = /* glsl */ `
 vec4 billboard( vec3 worldPos, vec2 corner, float size, float roll ) {

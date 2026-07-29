@@ -434,29 +434,32 @@ export function stampText(field, size, text, x, y, cell, feather = 1) {
 export function heightToNormal(height, size, strength, opts = {}) {
   const wrap = opts.wrap !== false;
   const out = new Uint8Array(size * size * 4);
-  const idx = (i, j) => {
-    let x = i, y = j;
-    if (wrap) { x = ((x % size) + size) % size; y = ((y % size) + size) % size; }
-    else { x = x < 0 ? 0 : x >= size ? size - 1 : x; y = y < 0 ? 0 : y >= size ? size - 1 : y; }
-    return y * size + x;
-  };
+  const alpha = opts.alpha;
+  const last = size - 1;
+  // Row offsets and the neighbour indices are hoisted: at 2048px this loop runs
+  // thirty-four million taps and a closure per tap is the whole cost.
   for (let j = 0; j < size; j++) {
+    const jm = wrap ? (j === 0 ? last : j - 1) : (j === 0 ? 0 : j - 1);
+    const jp = wrap ? (j === last ? 0 : j + 1) : (j === last ? last : j + 1);
+    const rowM = jm * size;
+    const row = j * size;
+    const rowP = jp * size;
     for (let i = 0; i < size; i++) {
-      const tl = height[idx(i - 1, j - 1)], t = height[idx(i, j - 1)], tr = height[idx(i + 1, j - 1)];
-      const l = height[idx(i - 1, j)], r = height[idx(i + 1, j)];
-      const bl = height[idx(i - 1, j + 1)], b = height[idx(i, j + 1)], br = height[idx(i + 1, j + 1)];
+      const im = wrap ? (i === 0 ? last : i - 1) : (i === 0 ? 0 : i - 1);
+      const ip = wrap ? (i === last ? 0 : i + 1) : (i === last ? last : i + 1);
+      const tl = height[rowM + im], t = height[rowM + i], tr = height[rowM + ip];
+      const l = height[row + im], r = height[row + ip];
+      const bl = height[rowP + im], b = height[rowP + i], br = height[rowP + ip];
       const dx = (tr + 2 * r + br) - (tl + 2 * l + bl);
       const dy = (bl + 2 * b + br) - (tl + 2 * t + tr);
-      let nx = -dx * strength;
-      let ny = -dy * strength;
+      const nx = -dx * strength;
+      const ny = -dy * strength;
       const inv = 1 / Math.sqrt(nx * nx + ny * ny + 1);
-      nx *= inv; ny *= inv;
-      const nz = inv;
-      const k = (j * size + i) * 4;
-      out[k] = Math.round((nx * 0.5 + 0.5) * 255);
-      out[k + 1] = Math.round((ny * 0.5 + 0.5) * 255);
-      out[k + 2] = Math.round((nz * 0.5 + 0.5) * 255);
-      out[k + 3] = opts.alpha ? Math.round(clamp01(opts.alpha[j * size + i]) * 255) : 255;
+      const k = (row + i) * 4;
+      out[k] = ((nx * inv * 0.5 + 0.5) * 255) | 0;
+      out[k + 1] = ((ny * inv * 0.5 + 0.5) * 255) | 0;
+      out[k + 2] = ((inv * 0.5 + 0.5) * 255) | 0;
+      out[k + 3] = alpha ? (clamp01(alpha[row + i]) * 255) | 0 : 255;
     }
   }
   return out;

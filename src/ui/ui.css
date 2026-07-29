@@ -476,12 +476,19 @@
 
 /* -- animated backdrop shared by every full screen ---------------------- */
 
+/*
+ * Deliberately translucent: the game's own WebGL canvas keeps rendering the
+ * idling fighter pair behind every menu screen (Game#simulate runs fighters
+ * with a null command outside FIGHT too), so the menu reads as a HUD laid
+ * over a live scene — the same trick Tekken's own frontend uses — rather
+ * than a flat splash screen blocking it.
+ */
 .menu-bg {
   position: absolute; inset: -10%;
   background:
-    radial-gradient(120% 90% at 50% 18%, rgba(255, 138, 42, 0.10) 0%, transparent 55%),
-    radial-gradient(90% 70% at 82% 90%, rgba(63, 224, 255, 0.08) 0%, transparent 55%),
-    linear-gradient(180deg, #070a10 0%, #05070c 60%, #030406 100%);
+    radial-gradient(120% 90% at 50% 18%, rgba(255, 138, 42, 0.14) 0%, transparent 55%),
+    radial-gradient(90% 70% at 82% 90%, rgba(63, 224, 255, 0.1) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(5, 7, 12, 0.72) 0%, rgba(5, 7, 12, 0.5) 55%, rgba(3, 4, 6, 0.82) 100%);
 }
 .menu-bg::before {
   content: '';
@@ -495,7 +502,12 @@
 .menu-bg::after {
   content: '';
   position: absolute; inset: 0;
-  background: radial-gradient(120% 60% at 50% 50%, transparent 55%, rgba(0,0,0,0.65) 100%);
+  background: radial-gradient(120% 60% at 50% 50%, transparent 45%, rgba(0,0,0,0.7) 100%);
+}
+.menu-bg--dim {
+  background:
+    radial-gradient(120% 90% at 50% 10%, rgba(255, 138, 42, 0.06) 0%, transparent 60%),
+    rgba(3, 4, 7, 0.72);
 }
 @keyframes bgDrift {
   0% { transform: translate3d(0, 0, 0); }
@@ -772,6 +784,6 @@
 }
 .results-sub { font-size: 0.8em; letter-spacing: 0.3em; text-transform: uppercase; color: var(--kb-text-faint); }
 .results-score { display: flex; gap: 1.2em; align-items: center; font-family: var(--kb-font-mono); font-size: 1.8em; font-weight: 700; }
-.results-score b { color: var(--kb-good); }
+.results-score .win { color: var(--kb-good); text-shadow: 0 0 0.6em rgba(51,255,180,0.5); }
 .results-actions { display: flex; gap: 0.8em; margin-top: 0.6em; }
 .results-actions .mbtn { width: 12em; justify-content: center; }

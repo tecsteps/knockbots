@@ -94,6 +94,80 @@ const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const UP = new THREE.Vector3(0, 1, 0);
 
+// ---------------------------------------------------------------------------
+// Clip retiming
+//
+// Frame data and animation are authored independently, and they disagree: a
+// clip may throw its punch on frame 24 while the move it belongs to is i13.
+// Rather than bend the balance to the art or the art to the balance, each clip
+// is played at the speed that lands its impact frame exactly on the move's
+// first active frame. This is the standard fighting-game answer — the frame
+// data is law, the animation is time-warped to obey it — and it means an
+// animator can retime a clip without silently breaking a punish.
+//
+// The impact frame is measured once per clip by running a scratch rig through
+// it and finding the tick where a striking bone reaches furthest forward.
+// ---------------------------------------------------------------------------
+
+const STRIKE_BONES = [
+  'hand_L', 'hand_R', 'foot_L', 'foot_R', 'elbow_L', 'elbow_R',
+  'knee_L', 'knee_R', 'shoulder_L', 'shoulder_R', 'chest',
+];
+const MIN_CLIP_SPEED = 0.55;
+const MAX_CLIP_SPEED = 2.6;
+const _impactCache = new Map();
+let _probeRig = null;
+
+/**
+ * Tick at which `clipId` reaches its furthest forward extension.
+ * @param {string} clipId
+ * @returns {number} 0 when the clip has no meaningful strike
+ */
+export function clipImpactFrame(clipId) {
+  if (_impactCache.has(clipId)) return _impactCache.get(clipId);
+  const clip = CLIPS[clipId];
+  if (!clip) { _impactCache.set(clipId, 0); return 0; }
+  if (!_probeRig) {
+    const bundle = createSkeleton(null);
+    const group = new THREE.Group();
+    group.rotation.y = yawForFacing(1);
+    group.add(bundle.byName.root);
+    _probeRig = { bundle, group, animator: new Animator(bundle, CLIPS) };
+  }
+  const { bundle, group, animator } = _probeRig;
+  animator.play(clipId, { blend: 0, loop: false, speed: 1 });
+  animator.clearRootMotion?.();
+  let rootX = 0;
+  let bestT = 0;
+  let bestX = -Infinity;
+  const frames = Math.max(1, Math.round(clip.duration));
+  for (let t = 1; t <= frames; t++) {
+    animator.simulate();
+    if (animator.consumeRootMotion) rootX += animator.consumeRootMotion().z;
+    animator.applyTo(bundle.bones, 1);
+    group.position.x = rootX;
+    group.updateMatrixWorld(true);
+    for (const name of STRIKE_BONES) {
+      const bone = bundle.byName[name];
+      if (!bone) continue;
+      _v.setFromMatrixPosition(bone.matrixWorld);
+      if (_v.x > bestX) { bestX = _v.x; bestT = t; }
+    }
+  }
+  _impactCache.set(clipId, bestT);
+  return bestT;
+}
+
+/** Playback speed that puts `move`'s clip impact on its first active frame. */
+export function clipSpeedFor(move) {
+  if (move.clipSpeed != null) return move.clipSpeed;
+  const peak = clipImpactFrame(move.clip);
+  const speed = peak > 0 && move.startup > 0 ? peak / move.startup : 1;
+  const clamped = THREE.MathUtils.clamp(speed, MIN_CLIP_SPEED, MAX_CLIP_SPEED);
+  move.clipSpeed = clamped;
+  return clamped;
+}
+
 /** Mirror of Skeleton.scaleFor — hurtbox radii must scale with the proportions. */
 function proportionScale(name, p) {
   if (!p) return 1;
@@ -205,8 +279,21 @@ export class Fighter {
   async init() {
     this.scene.add(this.group);
     this.#buildRig();
+    Fighter.warmClipTiming();
     this.ready = true;
     return this;
+  }
+
+  /**
+   * Measure the impact frame of every attack clip once, at load, so the first
+   * time a move comes out mid-fight it does not stall for a rig walk.
+   */
+  static warmClipTiming() {
+    if (Fighter._timingWarmed) return;
+    Fighter._timingWarmed = true;
+    for (const set of Object.values(MOVES)) {
+      for (const move of Object.values(set)) clipSpeedFor(move);
+    }
   }
 
   #buildRig() {
@@ -729,7 +816,7 @@ export class Fighter {
     for (const n of this.moveBones) if (this.boneTrack[n]) this.boneTrack[n].valid = false;
     this.velocity.x *= 0.4;
     this.velocity.z *= 0.3;
-    this.#play(move.clip, move.startup > 16 ? 4 : 2, false);
+    this.#play(move.clip, move.startup > 16 ? 4 : 2, false, clipSpeedFor(move));
 
     if (move.props.super) {
       bus.emit('superStart', { fighter: this, move });
@@ -1536,7 +1623,7 @@ export class Fighter {
   }
 
   /** Public clip driver, used by the harness, intros and paired animations. */
-  playClip(id, blend = 4, loop = false) { this.#play(id, blend, loop); }
+  playClip(id, blend = 4, loop = false, speed = 1) { this.#play(id, blend, loop, speed); }
 
   /**
    * Play a clip, skipping the call when a looping clip is already running so a
@@ -1544,7 +1631,7 @@ export class Fighter {
    * fight stance rather than throwing — one missing animation must never be
    * able to take the whole match down.
    */
-  #play(id, blend = 4, loop = false) {
+  #play(id, blend = 4, loop = false, speed = 1) {
     if (!this.animator || !id) return;
     let clipId = id;
     if (!CLIPS[clipId]) {
@@ -1553,11 +1640,12 @@ export class Fighter {
         console.warn(`[Fighter] missing clip "${clipId}", falling back to idle.fight`);
       }
       clipId = 'idle.fight';
+      speed = 1;
       if (!CLIPS[clipId]) return;
     }
     if (loop && this.currentClip === clipId) return;
     this.currentClip = clipId;
-    this.animator.play(clipId, { blend, loop });
+    this.animator.play(clipId, { blend, loop, speed });
   }
 
   /** Round bookends. */

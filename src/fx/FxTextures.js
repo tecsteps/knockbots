@@ -287,6 +287,21 @@ export function bakeDecalAtlas(size = 1024, aniso = 8) {
     data[i] = b(r); data[i + 1] = b(g); data[i + 2] = b(bl); data[i + 3] = b(a);
   };
 
+  // Satellite droplets for the oil cell. Hoisted out of the pixel loop: these
+  // are fourteen fixed blobs, not a per-pixel field, and evaluating their noise
+  // per texel made this baker the slowest thing in the boot sequence.
+  const SATS = 14;
+  const satX = new Float32Array(SATS);
+  const satY = new Float32Array(SATS);
+  const satR = new Float32Array(SATS);
+  for (let k = 0; k < SATS; k++) {
+    const a0 = (k / SATS) * Math.PI * 2 + fbm3(k * 3.1, 0.5, 0.5, { octaves: 2, period: 4, seed: 77 }) * 2.2;
+    const d0 = 0.34 + fbm3(k * 1.7, 2.5, 1.5, { octaves: 2, period: 4, seed: 99 }) * 0.6;
+    satX[k] = Math.cos(a0) * d0 * 0.5;
+    satY[k] = Math.sin(a0) * d0 * 0.5;
+    satR[k] = 0.02 + fbm3(k * 5.3, 4.5, 2.5, { octaves: 2, period: 4, seed: 123 }) * 0.05;
+  }
+
   for (let y = 0; y < half; y++) {
     for (let x = 0; x < half; x++) {
       const u = (x + 0.5) / half - 0.5;
@@ -311,13 +326,13 @@ export function bakeDecalAtlas(size = 1024, aniso = 8) {
         const body = 1 - smoothstep(0.24 + lobe * 0.42, 0.4 + lobe * 0.52, r);
         // Satellite droplets flung out along the splash direction.
         let sat = 0;
-        for (let k = 0; k < 14; k++) {
-          const a0 = (k / 14) * Math.PI * 2 + fbm3(k * 3.1, 0.5, 0.5, { octaves: 2, period: 4, seed: 77 }) * 2.2;
-          const d0 = 0.34 + fbm3(k * 1.7, 2.5, 1.5, { octaves: 2, period: 4, seed: 99 }) * 0.6;
-          const rad = 0.02 + fbm3(k * 5.3, 4.5, 2.5, { octaves: 2, period: 4, seed: 123 }) * 0.05;
-          const dx = u - Math.cos(a0) * d0 * 0.5;
-          const dy = v - Math.sin(a0) * d0 * 0.5;
-          sat = Math.max(sat, 1 - smoothstep(rad * 0.6, rad, Math.sqrt(dx * dx + dy * dy)));
+        for (let k = 0; k < SATS; k++) {
+          const dx = u - satX[k];
+          const dy = v - satY[k];
+          const rad = satR[k];
+          const d2 = dx * dx + dy * dy;
+          if (d2 > rad * rad) continue;
+          sat = Math.max(sat, 1 - smoothstep(rad * 0.6, rad, Math.sqrt(d2)));
         }
         const a = clamp01(Math.max(body, sat) * (1 - smoothstep(0.92, 1.0, r)));
         const rim = Math.pow(a, 6) * 0.4 + Math.pow(clamp01(1 - Math.abs(a - 0.6) * 4), 3) * 0.5;

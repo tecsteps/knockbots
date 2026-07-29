@@ -158,7 +158,7 @@ export class CombatSystem {
 
     this.#resolveWalls(f0);
     this.#resolveWalls(f1);
-    this.#separateAtWall();
+    this.#separatePair();
     this.#updateCombos();
     this.#checkKO();
   }
@@ -452,39 +452,52 @@ export class CombatSystem {
   }
 
   /**
-   * When one fighter is pinned against a wall the symmetric half-and-half push
-   * cannot separate the pair, so shove the free one out the rest of the way.
+   * Authoritative separation pass, run once both fighters have moved.
+   *
+   * The per-fighter push is deliberately soft (each takes half the overlap) so
+   * walking into someone shoves them rather than stopping dead, but a lunging
+   * attack closes ground faster than a soft push opens it, and a fighter pinned
+   * against a wall has nowhere to give. This pass closes the gap for real: it
+   * resolves whatever overlap survives, spending the correction on whichever
+   * fighter actually has room to move.
    */
-  #separateAtWall() {
+  #separatePair() {
     const [a, b] = this.fighters;
     if (!a || !b) return;
     if (a.state === STATE.THROW || a.state === STATE.THROWN) return;
+    if (b.state === STATE.THROW || b.state === STATE.THROWN) return;
     const minD = a.radius + b.radius;
     const dx = b.position.x - a.position.x;
     const dz = b.position.z - a.position.z;
     const d = Math.hypot(dx, dz);
     if (d >= minD) return;
+
     const limX = a.bounds.halfWidth - a.radius;
     const aPinned = Math.abs(a.position.x) >= limX - 1e-3;
     const bPinned = Math.abs(b.position.x) >= limX - 1e-3;
-    if (!aPinned && !bPinned) return;
+
+    // Both jammed into the same wall: the symmetric push has no room to work,
+    // so walk the second fighter inward by the full capsule width.
     if (aPinned && bPinned) {
-      // Both jammed into the same wall — the symmetric push has no room to
-      // work, so move the second fighter inward by the full capsule width.
       const inward = -Math.sign(a.position.x) || 1;
       b.position.x = THREE.MathUtils.clamp(a.position.x + inward * minD, -limX, limX);
       b.position.z = a.position.z;
       b.velocity.x = inward * Math.abs(b.velocity.x);
       return;
     }
-    const free = aPinned ? b : a;
-    const pinned = aPinned ? a : b;
-    const need = minD - d + 1e-3;
+
     let ux, uz;
-    if (d < 1e-5) { ux = -Math.sign(pinned.position.x) || 1; uz = 0; }
-    else { ux = (free.position.x - pinned.position.x) / d; uz = (free.position.z - pinned.position.z) / d; }
-    free.position.x = THREE.MathUtils.clamp(free.position.x + ux * need, -limX, limX);
-    free.position.z += uz * need;
+    if (d < 1e-5) { ux = -Math.sign(a.position.x) || 1; uz = 0; }
+    else { ux = dx / d; uz = dz / d; }
+    const need = minD - d + 1e-4;
+    const limZ = a.bounds.halfDepth - a.radius;
+    const move = (f, sign, amount) => {
+      f.position.x = THREE.MathUtils.clamp(f.position.x + ux * sign * amount, -limX, limX);
+      f.position.z = THREE.MathUtils.clamp(f.position.z + uz * sign * amount, -limZ, limZ);
+    };
+    if (aPinned) move(b, 1, need);
+    else if (bPinned) move(a, -1, need);
+    else { move(b, 1, need * 0.5); move(a, -1, need * 0.5); }
   }
 
   #updateCombos() {

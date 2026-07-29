@@ -50,9 +50,12 @@ import { OverlayPass } from './OverlayPass.js';
 // --- scratch ---------------------------------------------------------------
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
 const _n = new THREE.Vector3();
 const _c = new THREE.Color();
 const _c2 = new THREE.Color();
+const _c3 = new THREE.Color();
+const _size = new THREE.Vector2();
 const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
 
 /** Per-weight impact recipe. Every number here is a readability decision. */
@@ -126,9 +129,20 @@ export class EffectsDirector {
     /** Screen-space punctuation state, decayed every frame. */
     this.impact = { level: 0, decay: 6, lines: 0, linesDecay: 5, invert: 0, invertDecay: 22 };
     this.flash = { amount: 0, decay: 8 };
-    this.overdrive = { on: false, t: 0, hold: 0, level: 0, desat: 0, flash: 0, fighter: null };
+    this.overdrive = {
+      on: false, t: 0, hold: 0, level: 0, desat: 0, flash: 0,
+      fighter: null, color: new THREE.Color(0.4, 0.75, 1),
+    };
+    this.overlayCenter = new THREE.Vector2();
+    this._speedSeed = 0;
 
     this._ringData = new Float32Array(MAX_DISTORT_RINGS * 4);
+    /** Bound once; `update()` must not build a closure every frame. */
+    this._onSplat = (x, y, z, size, r, g, b) => {
+      this.decals.add(DECAL.OIL, x, z, size, {
+        life: 22, strength: 0.85, tint: _c.setRGB(r, g, b),
+      });
+    };
     this._unsub = [];
     this._installedComposer = null;
     this._pass = null;
@@ -280,7 +294,7 @@ export class EffectsDirector {
       life: recipe.ringLife * (counter ? 1.15 : 1),
       thickness: recipe.thick,
       heat: recipe.ringHeat * scale,
-      tint: _c2.lerp(_c.setRGB(1, 1, 1), 0.45),
+      tint: _c2.lerp(_c3.setRGB(1, 1, 1), 0.45),
       distort: recipe.impact > 0 ? 1.1 * scale : 0.45,
     });
 
@@ -321,7 +335,7 @@ export class EffectsDirector {
 
     this.sparks.burst(e.point, _n, {
       count: 30, speed: 6.4, spread: 0.42, life: 0.4, size: 0.026,
-      heat: 4.0, tint: _c2.copy(_c).lerp(_c2.setRGB(1, 1, 1), 0.6),
+      heat: 4.0, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.6),
     });
     this.shock.spawn(e.point, {
       mode: 'facing', radius: 0.7, life: 0.24, thickness: 0.18,
@@ -335,7 +349,7 @@ export class EffectsDirector {
     this.#palette(e.defender, 'emissive', _c);
     this.shock.spawn(e.point, {
       mode: 'facing', radius: 1.5, life: 0.42, thickness: 0.16,
-      heat: 3.4, tint: _c2.copy(_c).lerp(_c2.setRGB(1, 1, 1), 0.5), distort: 1.2,
+      heat: 3.4, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.5), distort: 1.2,
     });
     this.sparks.burst(e.point, _v.set(0, 1, 0), {
       count: 56, speed: 8.5, spread: 1.0, life: 0.5, size: 0.03, heat: 5.6, tint: _c,
@@ -485,7 +499,8 @@ export class EffectsDirector {
     // Ground wash behind the dash.
     const dir = e.dir || -(f.facing || 1);
     _v2.set(-dir * 1.4, 0.9, 0).normalize();
-    this.smoke.puff(_v.clone().setY(this.floorY + 0.12), {
+    _v3.copy(_v).setY(this.floorY + 0.12);
+    this.smoke.puff(_v3, {
       count: 12, dir: _v2, speed: 2.4, spread: 1.2, radius: 0.3,
       size: 0.34, growth: 2.8, life: 0.95, buoyancy: 0.2, curl: 1.0,
       tint: _c.setRGB(0.46, 0.44, 0.41),
@@ -526,7 +541,8 @@ export class EffectsDirector {
       mode: 'ground', radius: 2.2, life: 0.75, thickness: 0.22,
       heat: 2.6, tint: _c, distort: 0.8,
     });
-    this.smoke.puff(_v.clone().setY(this.floorY + 0.4), {
+    _v3.copy(_v).setY(this.floorY + 0.4);
+    this.smoke.puff(_v3, {
       count: 16, dir: _v2.set(0, 1, 0), speed: 2.6, spread: 0.9, radius: 0.42,
       size: 0.3, growth: 2.2, life: 1.1, buoyancy: 0.9, curl: 0.8,
       tint: _c, emissive: 1.1,
@@ -544,7 +560,6 @@ export class EffectsDirector {
     this.overdrive.t = 0;
     this.overdrive.hold = 1.1;
     this.overdrive.fighter = f;
-    this.overdrive.color = this.overdrive.color || new THREE.Color();
     this.overdrive.color.copy(_c);
 
     _v.copy(f.position);
@@ -556,19 +571,22 @@ export class EffectsDirector {
       mode: 'ground', radius: 3.4, life: 0.9, thickness: 0.26,
       heat: 3.2, tint: _c, distort: 1.4,
     });
-    this.sparks.burst(_v.clone().setY(this.floorY + 0.1), _v2.set(0, 1, 0), {
+    _v3.copy(_v).setY(this.floorY + 0.1);
+    this.sparks.burst(_v3, _v2.set(0, 1, 0), {
       count: 190, speed: 9.5, spread: 0.5, life: 1.3, size: 0.032,
       heat: 5.6, tint: _c,
     });
-    this.smoke.puff(_v.clone().setY(this.floorY + 0.7), {
+    _v3.setY(this.floorY + 0.7);
+    this.smoke.puff(_v3, {
       count: 26, dir: _v2.set(0, 1, 0), speed: 3.4, spread: 1.0, radius: 0.5,
       size: 0.42, growth: 2.4, life: 1.6, buoyancy: 1.2, curl: 1.2,
       tint: _c, emissive: 1.4,
     });
     this.decals.add(DECAL.SCORCH, _v.x, _v.z, 1.9, {
-      life: 26, strength: 0.7, tint: _c2.copy(_c).lerp(_c2.setRGB(0.2, 0.2, 0.2), 0.55),
+      life: 26, strength: 0.7, tint: _c2.copy(_c).lerp(_c3.setRGB(0.2, 0.2, 0.2), 0.55),
     });
-    this.#flashLight(_v.clone().setY(this.floorY + 1.1), 180, _c.getHex());
+    _v3.setY(this.floorY + 1.1);
+    this.#flashLight(_v3, 180, _c.getHex());
   }
 
   #onSuperHit(e) {
@@ -652,8 +670,9 @@ export class EffectsDirector {
       THREE.MathUtils.clamp(_v2.x, -1, 1),
       THREE.MathUtils.clamp(_v2.y, -1, 1),
     );
-    this.impact.level = Math.max(this.impact.level, strength);
-    this.impact.lines = Math.max(this.impact.lines, strength * 0.85);
+    const s = Math.min(1, strength);
+    this.impact.level = Math.max(this.impact.level, s);
+    this.impact.lines = Math.max(this.impact.lines, s * 0.85);
     if (extreme) this.impact.invert = Math.max(this.impact.invert, 0.85);
     this._speedSeed = Math.random() * 90;
   }
@@ -687,11 +706,7 @@ export class EffectsDirector {
     this.decals.update(this.time);
 
     // Coolant that has finished falling leaves a splat where it landed.
-    this.fluid.drainSplats(this.time, (x, y, z, size, r, g, b) => {
-      this.decals.add(DECAL.OIL, x, z, size, {
-        life: 22, strength: 0.85, tint: _c.setRGB(r, g, b),
-      });
-    });
+    this.fluid.drainSplats(this.time, this._onSplat);
 
     this.#updateLights(step);
     this.#updateLighting();
@@ -974,7 +989,5 @@ export class EffectsDirector {
     this._ready = false;
   }
 }
-
-const _size = new THREE.Vector2();
 
 export default EffectsDirector;

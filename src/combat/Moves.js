@@ -65,8 +65,8 @@ const DEFAULT_FWD = [
   [/^elbow_/, 0.24],
   [/^(foot|ankle|toe)_/, 0.31],
   [/^knee_/, 0.27],
-  [/^(shoulder|clavicle)_/, 0.32],
-  [/^(chest|spine|hips)/, 0.44],
+  [/^(shoulder|clavicle)_/, 0.34],
+  [/^(chest|spine|hips)/, 0.46],
   [/^(head|neck)/, 0.24],
 ];
 
@@ -179,7 +179,9 @@ function make(s, cfg) {
         for (const [re, v] of DEFAULT_FWD) if (re.test(b.bone)) { b.fwd = v; break; }
       }
       b.radius = Math.round(b.radius * reach * 1000) / 1000;
-      b.fwd = Math.round(b.fwd * reach * 1000) / 1000;
+      // Reach moves the lead only half as much as the box size: a shorter-armed
+      // archetype should have a smaller strike, not an unusable one.
+      b.fwd = Math.round(b.fwd * (1 + (reach - 1) * 0.5) * 1000) / 1000;
     }
   }
   const power = s.lockPower ? 1 : cfg.power;
@@ -292,7 +294,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'overhand', name: 'Crown Breaker', input: 'b+2', clip: 'p.overhand', tag: 'mid',
-    active: [W(20, 22, FIST_R(0.27))], total: 45,
+    active: [W(20, 22, [B('hand_R', 0.27, [0, -0.05, 0], 0, 0.36), B('wrist_R', 0.22, [0, -0.04, 0], 0, 0.34)])], total: 45,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 25,
     adv: { block: -9, hit: 6 }, reaction: REACTION.FLINCH_MID,
     knockback: [2.4, 0, 0], blockPush: [2.6, 0, 0], meterGain: 8, trail: 'hand_R',
@@ -342,7 +344,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'sweep', name: 'Rotor Sweep', input: 'db+3', clip: 'k.sweep', tag: 'sweep',
-    active: [W(19, 21, [B('knee_L', 0.25, [0, -0.04, 0.04], 0.44), B('foot_L', 0.27, [0, -0.02, 0.06])])], total: 47,
+    active: [W(19, 21, [B('knee_L', 0.25, [0, -0.04, 0.04], 0.44), B('foot_L', 0.27, [0, -0.02, 0.06]), B('hand_L', 0.24, [0, -0.05, 0])])], total: 47,
     height: HEIGHT.LOW, weight: WEIGHT.MEDIUM, damage: 21,
     adv: { block: -14, hit: 6 }, reaction: REACTION.SWEEP,
     knockback: [3.6, 0.6, 0], blockPush: [2.0, 0, 0], meterGain: 7, trail: 'foot_L',
@@ -360,7 +362,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'midKick2', name: 'Turbine Spin', input: '3,4', clip: 'k.spinKick', tag: 'string',
-    active: [W(20, 22, FOOT_L(0.27))], total: 50,
+    active: [W(20, 22, [...FOOT_L(0.27), B('hand_L', 0.25, [0, -0.05, 0])])], total: 50,
     height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 23,
     adv: { block: -12, hit: 4 }, reaction: REACTION.SPIN,
     knockback: [5.4, 1.2, 0], blockPush: [3.0, 0, 0], meterGain: 9, trail: 'foot_L',
@@ -375,7 +377,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'sideKick', name: 'Bulkhead Kick', input: 'f+3', clip: 'k.sideKick', tag: 'mid',
-    active: [W(17, 19, FOOT_R(0.27))], total: 39,
+    active: [W(17, 19, FOOT_L(0.27))], total: 39,
     height: HEIGHT.MID, weight: WEIGHT.MEDIUM, damage: 21,
     adv: { block: -6, hit: 5 }, reaction: REACTION.FLINCH_MID,
     knockback: [6.2, 0, 0], blockPush: [4.2, 0, 0], meterGain: 6, trail: 'foot_R',
@@ -391,7 +393,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'roundhouse', name: 'Wrecking Round', input: 'b+4', clip: 'k.roundhouse', tag: 'heavy',
-    active: [W(20, 22, FOOT_R(0.29))], total: 48,
+    active: [W(20, 22, [...FOOT_R(0.29), B('hand_R', 0.28, [0, -0.05, 0], 0, 0.4), B('wrist_R', 0.24, [0, -0.04, 0], 0, 0.38)])], total: 48,
     height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 27,
     adv: { block: -13, hit: 5 }, reaction: REACTION.KNOCKDOWN,
     knockback: [6.6, 1.6, 0], blockPush: [3.2, 0, 0], meterGain: 10, trail: 'foot_R',
@@ -399,7 +401,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'spinKick', name: 'Gyro Sweepline', input: 'b+3', clip: 'k.spinKick', tag: 'heavy',
-    active: [W(22, 24, FOOT_L(0.28))], total: 52,
+    active: [W(22, 24, [...FOOT_L(0.28), B('hand_L', 0.26, [0, -0.05, 0])])], total: 52,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 25,
     adv: { block: -9, hit: 3 }, reaction: REACTION.KNOCKDOWN,
     knockback: [4.4, 1.0, 0], blockPush: [2.6, 0, 0], meterGain: 9, trail: 'foot_L',
@@ -407,7 +409,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'axeKick', name: 'Guillotine Axe', input: 'uf+4', clip: 'k.axeKick', tag: 'heavy',
-    active: [W(22, 24, FOOT_R(0.27))], total: 54,
+    active: [W(22, 24, FOOT_L(0.27))], total: 54,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 25,
     adv: { block: -13, hit: 4 }, reaction: REACTION.KNOCKDOWN,
     knockback: [2.0, -1.2, 0], blockPush: [2.2, 0, 0], meterGain: 9, trail: 'foot_R',
@@ -415,7 +417,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'stomp', name: 'Servo Stomp', input: 'd+3+4', clip: 'k.stomp', tag: 'heavy',
-    active: [W(20, 22, [B('foot_R', 0.3, [0, -0.04, 0.02]), B('knee_R', 0.26, [0, -0.04, 0.04], 0.4)])], total: 48,
+    active: [W(20, 22, [B('foot_R', 0.3, [0, -0.04, 0.02]), B('knee_R', 0.26, [0, -0.04, 0.04], 0.4), B('hand_L', 0.26, [0, -0.05, 0])])], total: 48,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 22,
     adv: { block: -16, hit: 0 }, reaction: REACTION.KNOCKDOWN,
     knockback: [1.4, -2.0, 0], blockPush: [1.8, 0, 0], meterGain: 8,
@@ -545,7 +547,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'risingFang', name: 'Rising Fang', input: 'dp+1', clip: 'sp.risingFang', tag: 'reversalLauncher',
-    active: [W(12, 16, [B('hand_R', 0.28, [0, -0.12, 0]), B('elbow_R', 0.22, [0, 0, 0])])], total: 56,
+    active: [W(12, 16, [B('hand_L', 0.28, [0, -0.12, 0]), B('elbow_L', 0.22, [0, 0, 0])])], total: 56,
     height: HEIGHT.MID, weight: WEIGHT.LAUNCHER, damage: 23,
     adv: { block: -21, hit: 22 }, reaction: REACTION.LAUNCH, juggleHeight: 7.2,
     knockback: [1.2, 0, 0], blockPush: [1.4, 0, 0], meterGain: 12, trail: 'hand_R',
@@ -553,7 +555,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'groundSpike', name: 'Fault Line', input: 'dd+3', clip: 'sp.groundSpike', tag: 'low',
-    active: [W(24, 28, [B('foot_R', 0.3, [0, -0.02, 0.3], 0, 0.5), B('knee_R', 0.26, [0, -0.04, 0.05], 0.44, 0.42), B('foot_L', 0.28, [0, -0.02, 0.1])])], total: 60,
+    active: [W(24, 28, [B('hand_L', 0.3, [0, -0.06, 0], 0, 0.42), B('foot_R', 0.3, [0, -0.02, 0.3], 0, 0.5), B('knee_R', 0.26, [0, -0.04, 0.05], 0.44, 0.42), B('foot_L', 0.28, [0, -0.02, 0.1])])], total: 60,
     height: HEIGHT.LOW, weight: WEIGHT.HEAVY, damage: 27,
     adv: { block: -16, hit: 8 }, reaction: REACTION.SWEEP,
     knockback: [3.0, 2.2, 0], blockPush: [2.4, 0, 0], meterGain: 12,
@@ -656,7 +658,7 @@ function heavyExtras(mv, cfg, set) {
   });
   mv({
     id: 'quakeStomp', name: 'Quake Stomp', input: 'd+3+4,3', clip: 'k.stomp', tag: 'string',
-    active: [W(22, 25, [B('foot_L', 0.34, [0, -0.04, 0.04]), B('knee_L', 0.28, [0, -0.04, 0.04], 0.4)])], total: 56,
+    active: [W(22, 25, [B('foot_L', 0.34, [0, -0.04, 0.04]), B('knee_L', 0.28, [0, -0.04, 0.04], 0.4), B('hand_L', 0.28, [0, -0.05, 0])])], total: 56,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 26,
     adv: { block: -18, hit: 0 }, reaction: REACTION.KNOCKDOWN,
     knockback: [2.0, -2.6, 0], blockPush: [2.4, 0, 0], meterGain: 10,
@@ -666,7 +668,7 @@ function heavyExtras(mv, cfg, set) {
   set.stomp.cancelWindow = [set.stomp.startup, set.stomp.total - 2];
   mv({
     id: 'grinderLow', name: 'Grinder Low', input: 'db+1+2', clip: 'sp.groundSpike', tag: 'low',
-    active: [W(24, 27, [B('hand_R', 0.3, [0, -0.06, 0.16], 0, 0.4), B('knee_R', 0.26, [0, -0.04, 0.04], 0.44), B('foot_R', 0.28, [0, -0.02, 0.1])])], total: 58,
+    active: [W(24, 27, [B('hand_L', 0.3, [0, -0.06, 0.16], 0, 0.4), B('knee_R', 0.26, [0, -0.04, 0.04], 0.44), B('foot_R', 0.28, [0, -0.02, 0.1])])], total: 58,
     height: HEIGHT.LOW, weight: WEIGHT.HEAVY, damage: 28,
     adv: { block: -15, hit: 5 }, reaction: REACTION.SWEEP,
     knockback: [3.4, 1.6, 0], blockPush: [2.6, 0, 0], meterGain: 12,
@@ -725,7 +727,7 @@ function agileExtras(mv, cfg, set) {
   });
   mv({
     id: 'heelSlice', name: 'Heel Slice', input: 'db+4', clip: 'k.sweep', tag: 'low',
-    active: [W(14, 15, SHIN_L(0.24))], total: 34,
+    active: [W(14, 15, [...SHIN_L(0.24), B('hand_L', 0.23, [0, -0.05, 0])])], total: 34,
     height: HEIGHT.LOW, weight: WEIGHT.LIGHT, damage: 12,
     adv: { block: -10, hit: 3 }, reaction: REACTION.FLINCH_LOW,
     knockback: [1.6, 0, 0], blockPush: [1.2, 0, 0], meterGain: 5,
@@ -733,7 +735,7 @@ function agileExtras(mv, cfg, set) {
   });
   mv({
     id: 'whirlwind', name: 'Whirlwind Arc', input: 'qcb+4', clip: 'k.roundhouse', tag: 'special',
-    active: [W(18, 22, [B('foot_L', 0.3, [0, -0.02, 0.05]), B('foot_R', 0.28, [0, -0.02, 0.05])])], total: 50,
+    active: [W(18, 22, [B('foot_L', 0.3, [0, -0.02, 0.05]), B('foot_R', 0.28, [0, -0.02, 0.05]), B('hand_R', 0.26, [0, -0.05, 0], 0, 0.38)])], total: 50,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 23,
     adv: { block: -9, hit: 3 }, reaction: REACTION.SPIN,
     knockback: [5.6, 1.4, 0], blockPush: [3.0, 0, 0], meterGain: 11, trail: 'foot_L',
@@ -769,7 +771,7 @@ function technicalExtras(mv, cfg, set) {
   });
   mv({
     id: 'hellsweep', name: 'Fracture Sweep', input: 'db+4', clip: 'k.sweep', tag: 'low',
-    active: [W(18, 19, SHIN_L(0.26))], total: 42,
+    active: [W(18, 19, [...SHIN_L(0.26), B('hand_L', 0.24, [0, -0.05, 0])])], total: 42,
     height: HEIGHT.LOW, weight: WEIGHT.MEDIUM, damage: 18,
     adv: { block: -13, hit: 4 }, reaction: REACTION.FLINCH_LOW,
     knockback: [2.2, 0, 0], blockPush: [1.8, 0, 0], meterGain: 7,
