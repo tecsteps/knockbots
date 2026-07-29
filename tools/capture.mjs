@@ -102,6 +102,17 @@ const SHOTS = [
     settle: 900,
   },
   {
+    name: '08b-hud-motion',
+    note: 'HUD easing across 20 ticks after damage lands — bar drain, chip layer, combo slam.',
+    // The same failure the impact shot had: a still cannot show easing, so any
+    // claim about the drain layer or the combo counter's entry is unmeasured.
+    // This tiles the ticks where the motion actually happens.
+    setup: `window.KB.setPhase('fight'); window.KB.fighters[0].meter = 84;
+            window.KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });`,
+    tickStrip: [1, 4, 10, 20, 34],
+    settle: 0,
+  },
+  {
     name: '09-roster',
     note: 'All characters lined up — silhouette variety across the cast.',
     setup: `window.KB.testHarness.rosterLineup();`,
@@ -231,6 +242,43 @@ async function main() {
     }
     if (shot.settle) await page.waitForTimeout(shot.settle);
     const file = resolve(OUT, `${shot.name}.png`);
+
+    if (shot.tickStrip) {
+      // Sample on the sim's own tick counter and tile the frames, so motion that
+      // lives in a few ticks can actually be reviewed. Same reasoning as the
+      // contact-frame freeze: a still cannot show easing.
+      const frames = [];
+      const base = await page.evaluate('window.KB.tick');
+      for (const off of shot.tickStrip) {
+        await page.waitForFunction(`window.KB.tick >= ${base + off}`, null, { timeout: 15000 }).catch(() => {});
+        frames.push({ t: off, b64: (await page.screenshot()).toString('base64') });
+      }
+      const sheet = await page.evaluate(async ({ cells, label }) => {
+        const imgs = await Promise.all(cells.map((c) => new Promise((res) => {
+          const im = new Image(); im.onload = () => res(im); im.src = 'data:image/png;base64,' + c.b64;
+        })));
+        const w = imgs[0].width, h = Math.round(imgs[0].height * 0.34); // HUD lives in the top third
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h * imgs.length + 30;
+        const g = cv.getContext('2d');
+        g.fillStyle = '#0a0d13'; g.fillRect(0, 0, cv.width, cv.height);
+        g.fillStyle = '#ff9e2c'; g.font = '600 19px ui-monospace, monospace';
+        g.fillText(label, 12, 21);
+        imgs.forEach((im, i) => {
+          g.drawImage(im, 0, 0, w, h, 0, i * h + 30, w, h);
+          g.fillStyle = 'rgba(0,0,0,.7)'; g.fillRect(0, i * h + 30, 78, 22);
+          g.fillStyle = '#4fd8e8'; g.font = '600 13px ui-monospace, monospace';
+          g.fillText('+' + cells[i].t + 't', 8, i * h + 46);
+        });
+        return cv.toDataURL('image/jpeg', 0.86);
+      }, { cells: frames, label: `${shot.name}  ·  ticks after damage` });
+      writeFileSync(file.replace(/\.png$/, '.jpg'), Buffer.from(sheet.split(',')[1], 'base64'));
+      await page.evaluate('window.KB.timeScale = 1;');
+      manifest.push({ name: shot.name, note: shot.note, file: file.replace(/\.png$/, '.jpg') });
+      console.log(`[capture] ${shot.name} (tick strip)`);
+      continue;
+    }
+
     await page.screenshot({ path: file });
     if (shot.freezeOnHit) {
       await page.evaluate('window.KB.paused = false; window.KB.timeScale = 1;');
