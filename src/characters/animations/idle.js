@@ -116,7 +116,7 @@ export const UPRIGHT = {
 };
 
 /** Pelvis height offset that goes with UPRIGHT. */
-export const UPRIGHT_Y = -0.012;
+export const UPRIGHT_Y = -0.004;
 
 /**
  * Deep defensive crouch: pelvis 30cm below the stance, knees splayed over the

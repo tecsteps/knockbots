@@ -73,11 +73,11 @@ const walkOn = makeClip('i.walkOn', { duration: 150, blendIn: 0, blendOut: 8 }, 
 // on tick 60 where the fighter drops into the stance under his own weight.
 // ---------------------------------------------------------------------------
 const INERT = over(UPRIGHT, {
-  hips: [8, -4, 0], spine01: [11, 0, 0], spine02: [12, 0, 0], chest: [14, -2, 3], neck: [15, 0, 0], head: [25, -1, 2],
+  hips: [5, -4, 0], spine01: [5, 0, 0], spine02: [5, 0, 0], chest: [6, -2, 3], neck: [8, 0, 0], head: [14, -1, 2],
   clavicle_L: [7, 0, -8], shoulder_L: [10, 0, -44], elbow_L: [-18, 0, 5], wrist_L: [16, 0, 0], hand_L: [20, 0, 0],
   clavicle_R: [7, 0, 8], shoulder_R: [12, 0, 44], elbow_R: [-15, 0, -5], wrist_R: [16, 0, 0], hand_R: [20, 0, 0],
-  hip_L: [4, 6, 3], knee_L: [14, 0, 0], ankle_L: [-8, 3, 0],
-  hip_R: [6, -6, -3], knee_R: [16, 0, 0], ankle_R: [-9, -3, 0],
+  hip_L: [3, 6, 3], knee_L: [11, 0, 0], ankle_L: [-8, 3, 0],
+  hip_R: [4, -6, -3], knee_R: [13, 0, 0], ankle_R: [-9, -3, 0],
 });
 const ARMS_FLUNG = {
   clavicle_L: [-9, -4, 12], shoulder_L: [34, 0, 22], elbow_L: [-30, 0, 10], wrist_L: [8, 0, 0], hand_L: [10, 0, 0],
@@ -89,21 +89,21 @@ const ARMS_CLENCH = {
 };
 
 const powerUp = makeClip('i.powerUp', { duration: 112, blendIn: 0, blendOut: 8 }, [
-  { t: 0, ease: 'hold', pose: INERT, root: [0, -0.055, 0] },
-  { t: 9, ease: 'quad', pose: INERT, root: [0, -0.055, 0] },
+  { t: 0, ease: 'hold', pose: INERT, root: [0, -0.026, 0] },
+  { t: 9, ease: 'quad', pose: INERT, root: [0, -0.026, 0] },
   // First twitch: the pelvis only. Everything above it is still dead.
-  { t: 13, ease: 'sine', pose: add(INERT, { hips: [-5, 3, -2], hip_L: [-3, 0, 0], hip_R: [-3, 0, 0] }), root: [0, -0.07, 0] },
-  { t: 20, ease: 'quad', pose: add(INERT, { hips: [-2, -1, 1] }), root: [0, -0.05, 0] },
+  { t: 13, ease: 'sine', pose: add(INERT, { hips: [-5, 3, -2], hip_L: [-3, 0, 0], hip_R: [-3, 0, 0], knee_L: [4, 0, 0], knee_R: [4, 0, 0] }), root: [0, -0.045, 0] },
+  { t: 20, ease: 'quad', pose: add(INERT, { hips: [-2, -1, 1] }), root: [0, -0.028, 0] },
   // The surge reaches the ribcage: chest inflates, clavicles lift, head still down.
-  { t: 30, ease: 'quad', pose: add(INERT, { hips: [-6, 2, 0], spine01: [-8, 0, 0], spine02: [-9, 0, 0], chest: [-12, 1, -2], clavicle_L: [-6, 0, 7], clavicle_R: [-6, 0, -7], shoulder_L: [-6, 0, 4], shoulder_R: [-6, 0, -4] }), root: [0, -0.02, 0] },
+  { t: 30, ease: 'quad', pose: add(INERT, { hips: [-4, 2, 0], spine01: [-4, 0, 0], spine02: [-4, 0, 0], chest: [-6, 1, -2], clavicle_L: [-6, 0, 7], clavicle_R: [-6, 0, -7], shoulder_L: [-6, 0, 4], shoulder_R: [-6, 0, -4] }), root: [0, -0.012, 0] },
   // Head snaps up on tick 38 — the only `snap` in the clip.
-  { t: 38, ease: 'snap', pose: add(INERT, { hips: [-8, 3, 0], spine01: [-10, 0, 0], spine02: [-11, 0, 0], chest: [-15, 2, -3], neck: [-20, 0, 0], head: [-32, 1, -2] }), root: [0, -0.005, 0] },
+  { t: 38, ease: 'snap', pose: add(INERT, { hips: [-5, 3, 0], spine01: [-5, 0, 0], spine02: [-5, 0, 0], chest: [-8, 2, -3], neck: [-14, 0, 0], head: [-26, 1, -2] }), root: [0, -0.004, 0] },
   // Overshoot: chest thrown open, arms flung back and out.
-  { t: 46, ease: 'quad', pose: add(over(INERT, ARMS_FLUNG), { hips: [-12, 4, 0], spine01: [-14, 0, 0], spine02: [-15, 0, 0], chest: [-21, 3, -4], neck: [-22, 0, 0], head: [-36, 2, -3], knee_L: [-10, 0, 0], knee_R: [-12, 0, 0] }), root: [0, 0.045, -0.02] },
-  { t: 54, ease: 'expo', pose: add(over(INERT, ARMS_FLUNG), { hips: [-13, 4, 0], spine01: [-15, 0, 0], spine02: [-16, 0, 0], chest: [-22, 3, -4], neck: [-21, 0, 0], head: [-34, 2, -3] }), root: [0, 0.05, -0.02] },
+  { t: 46, ease: 'quad', pose: add(over(INERT, ARMS_FLUNG), { hips: [-8, 4, 0], spine01: [-8, 0, 0], spine02: [-8, 0, 0], chest: [-12, 3, -4], neck: [-16, 0, 0], head: [-30, 2, -3], knee_L: [-9, 0, 0], knee_R: [-11, 0, 0] }), root: [0, 0.028, -0.02] },
+  { t: 54, ease: 'expo', pose: add(over(INERT, ARMS_FLUNG), { hips: [-9, 4, 0], spine01: [-9, 0, 0], spine02: [-9, 0, 0], chest: [-13, 3, -4], neck: [-15, 0, 0], head: [-28, 2, -3] }), root: [0, 0.03, -0.02] },
   // The slam: fists clench, arms drive down, the whole chassis compresses.
-  { t: 60, ease: 'cubic', pose: add(over(INERT, ARMS_CLENCH), { hips: [4, 6, 0], spine01: [-4, 0, 0], spine02: [-5, 0, 0], chest: [-7, 4, -4], neck: [-14, 0, 0], head: [-22, 3, -2], hip_L: [-24, 0, 4], knee_L: [34, 0, 0], hip_R: [-22, 0, -4], knee_R: [36, 0, 0] }), root: [0, -0.185, -0.01] },
-  { t: 68, ease: 'sine', pose: add(over(INERT, ARMS_CLENCH), { hips: [-2, 8, 0], spine01: [-7, 0, 0], spine02: [-8, 0, 0], chest: [-11, 5, -4], neck: [-16, 0, 0], head: [-26, 4, -2], hip_L: [-14, 0, 3], knee_L: [20, 0, 0], hip_R: [-12, 0, -3], knee_R: [22, 0, 0] }), root: [0, -0.085, -0.01] },
+  { t: 60, ease: 'cubic', pose: add(over(INERT, ARMS_CLENCH), { hips: [4, 6, 0], spine01: [-2, 0, 0], spine02: [-3, 0, 0], chest: [-4, 4, -4], neck: [-10, 0, 0], head: [-18, 3, -2], hip_L: [-26, 0, 4], knee_L: [34, 0, 0], hip_R: [-24, 0, -4], knee_R: [36, 0, 0] }), root: [0, -0.175, -0.01] },
+  { t: 68, ease: 'sine', pose: add(over(INERT, ARMS_CLENCH), { hips: [-2, 8, 0], spine01: [-4, 0, 0], spine02: [-4, 0, 0], chest: [-6, 5, -4], neck: [-12, 0, 0], head: [-22, 4, -2], hip_L: [-16, 0, 3], knee_L: [20, 0, 0], hip_R: [-14, 0, -3], knee_R: [22, 0, 0] }), root: [0, -0.078, -0.01] },
   // Shoulder roll on the way into the stance.
   { t: 80, ease: 'sine', pose: add(STANCE, { clavicle_L: [-4, 0, 6], clavicle_R: [-4, 0, -6], shoulder_L: [14, 0, 8], shoulder_R: [12, 0, -8], elbow_L: [26, 0, 0], elbow_R: [22, 0, 0], chest: [-4, 0, 0], head: [-4, 0, 0] }), root: [0, STANCE_Y + 0.02, 0] },
   { t: 92, ease: 'quad', pose: add(STANCE, { clavicle_L: [3, 0, -4], clavicle_R: [3, 0, 4], shoulder_L: [-8, 0, -5], shoulder_R: [-7, 0, 5], elbow_L: [-10, 0, 0], chest: [3, 0, 0], head: [3, 0, 0] }), root: [0, STANCE_Y - 0.03, 0] },

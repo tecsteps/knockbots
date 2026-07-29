@@ -90,6 +90,9 @@ function proportionScale(name, p) {
 }
 
 export class Fighter {
+  /** Clip ids we have already warned about, so the console stays readable. */
+  static missingClips = new Set();
+
   /**
    * @param {{index:number, def:Object, scene:THREE.Scene, environment:Object}} opts
    */
@@ -1449,13 +1452,24 @@ export class Fighter {
 
   /**
    * Play a clip, skipping the call when a looping clip is already running so a
-   * held walk does not restart every tick.
+   * held walk does not restart every tick. An unknown id falls back to the
+   * fight stance rather than throwing — one missing animation must never be
+   * able to take the whole match down.
    */
   #play(id, blend = 4, loop = false) {
     if (!this.animator || !id) return;
-    if (loop && this.currentClip === id) return;
-    this.currentClip = id;
-    this.animator.play(id, { blend, loop });
+    let clipId = id;
+    if (!CLIPS[clipId]) {
+      if (!Fighter.missingClips.has(clipId)) {
+        Fighter.missingClips.add(clipId);
+        console.warn(`[Fighter] missing clip "${clipId}", falling back to idle.fight`);
+      }
+      clipId = 'idle.fight';
+      if (!CLIPS[clipId]) return;
+    }
+    if (loop && this.currentClip === clipId) return;
+    this.currentClip = clipId;
+    this.animator.play(clipId, { blend, loop });
   }
 
   /** Round bookends. */
