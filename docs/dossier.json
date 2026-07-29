@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.7.0",
-    "commits": 26,
+    "rev": "0.8.0",
+    "commits": 30,
     "modules": 64,
-    "lines": "40k",
+    "lines": "42k",
     "clips": 89,
     "moves": 191,
     "characters": 10
@@ -11,27 +11,27 @@
   "verdicts": [
     {
       "axis": "Stage detail",
-      "score": 72
+      "score": 74
     },
     {
       "axis": "Interface craft",
-      "score": 69
+      "score": 72
     },
     {
       "axis": "Lighting & atmosphere",
-      "score": 62
+      "score": 66
     },
     {
       "axis": "Impact & effects",
-      "score": 61
+      "score": 64
     },
     {
       "axis": "Character rendering",
-      "score": 58
+      "score": 60
     },
     {
       "axis": "Animation quality",
-      "score": 48
+      "score": 53
     }
   ],
   "log": [
@@ -342,11 +342,49 @@
           "state": "done"
         }
       ]
+    },
+    {
+      "phase": "PHASE 10",
+      "when": "Round 6",
+      "rev": "rev 0.8.0",
+      "title": "Smoothing the seams, and two ceilings",
+      "paras": [
+        "Every axis moved: animation 48 to 53, lighting 62 to 66, impact 61 to 64, interface 69 to 72, character 58 to 60, stage 72 to 74. The average reached 65.",
+        "The transition pop is gone. Replacing the crossfade with a quintic inertialization cut transition jerk by 87 percent at the peak and 70 percent on average, and it did so without moving a single contact frame \u2014 measured pose deviation at contact is 0.00 degrees across all 24 attack clips. The agent also declined to inertialize hit reactions, having worked out that at one tick past contact a six-tick decay would leave the victim 94 percent in its pre-hit pose and quietly gut the impact axis.",
+        "A rig-header comment written on the first day turned out to say the wrong thing about which way the fighter faces. It caused a reactor pack to be mounted on a fighter's chest instead of its back. The data settles it: the forward-dash root track ends at positive Z and the toes sit forward of the ankle. Two foundation files claimed otherwise and one of them has been carrying that error into every agent that read it.",
+        "Two axes returned honest plateau calls. Character rendering and stage detail are now judged to be near their ceilings without asset-authoring work \u2014 clothed crowd meshes, a fabrication-detail prop kit, per-character hero geometry \u2014 rather than anything further that can be tuned."
+      ],
+      "tags": [
+        {
+          "label": "jerk -87%",
+          "state": "done"
+        },
+        {
+          "label": "animation +5",
+          "state": "done"
+        },
+        {
+          "label": "lighting +4",
+          "state": "done"
+        },
+        {
+          "label": "character plateau",
+          "state": "wait"
+        },
+        {
+          "label": "stage plateau",
+          "state": "wait"
+        },
+        {
+          "label": "perf 20fps",
+          "state": "wait"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.7.0",
-    "note": "Redeployed after each iteration. Bundle hash verified against the local build."
+    "rev": "0.8.0",
+    "note": "Redeployed each iteration. Bundle hash verified against the local build."
   }
 }
