@@ -9,7 +9,9 @@
  * see". So this file builds real housings around those four lights and drives
  * their emissive colour from the same numbers that drive the lights, which is
  * why a specular highlight on a shoulder plate always has a visible source
- * behind it.
+ * behind it. The same contract covers the two overhead tube runs the Environment
+ * casts from — see {@link RUNS} — which are hung, wired and lit off the mood's
+ * `ceiling` block rather than off a practical entry.
  *
  * The four emitter faces share one mesh and one draw call: each carries a
  * fixture index in a vertex attribute and the shader looks its colour up in a
@@ -25,11 +27,34 @@
 import * as THREE from 'three';
 import { LAYER } from '../core/Constants.js';
 import { Rng } from '../core/Rng.js';
-import { bevelBox, place, mergeAll, boltRing, insetPanel } from './GeoKit.js';
+import { bevelBox, place, mergeAll, boltRing, insetPanel, worldUv } from './GeoKit.js';
 import { fbm, stampText, blur, clamp01, smoothstep, makeTexture, encodeSrgb } from './ProcTex.js';
 import { PointBurst } from './StageParticles.js';
 
 const FIXTURES = 4;
+
+/**
+ * The two tube runs slung over the pit, matching `Environment`'s `STRIP` pair.
+ *
+ * These carry the only lights in the rig that reach the fighters from directly
+ * above, and the Environment drives them off each mood's `ceiling` block — so
+ * the fitting has to sit exactly where the light does or the streak it draws on
+ * a shoulder plate will have nothing above it. `len`, `y` and `z` are copies of
+ * that table rather than an import, because the light is a lighting decision and
+ * the fitting is a set decision and they are allowed to be reviewed separately;
+ * the comment is the contract.
+ *
+ * `tilt` is the angle each run is raked off vertical, signed toward +z, and it
+ * matches the aim the Environment gives its strips. It is what stops the
+ * reflector reading as a lamp pointed at the floor it is hanging over.
+ */
+const RUNS = [
+  { z: -2.8, y: 5.3, len: 10.0, tilt: 0.8 },
+  { z: 1.4, y: 5.3, len: 10.0, tilt: -0.475 },
+];
+
+/** Tube face height. Thin on purpose — see `Environment`'s STRIP block. */
+const RUN_FACE = 0.18;
 
 /** Caption bands in the screen text plate; one per board, power of two. */
 const BOARD_ROWS = 8;
@@ -222,6 +247,7 @@ export class StagePracticals {
     this.captions = screenCaptions(BOARDS.map((b) => b.cap), 512);
 
     this.#fixtures(bins);
+    this.#ceilingRuns();
     this.#pools();
     this.#neon();
     this.#beacons();
@@ -365,6 +391,97 @@ export class StagePracticals {
     this.emitters = new THREE.Mesh(faceGeo, this.emitterMaterial);
     this.emitters.name = 'arena.practicals.emitters';
     this.group.add(this.emitters);
+  }
+
+  /**
+   * The two raked tube runs over the pit.
+   *
+   * They exist because the Environment now casts from here. Its `ceiling` block
+   * had always described rows of overhead banks and only ever painted them into
+   * the HDR cube; the pit itself was lit from the sides and from eight metres
+   * back, which is why nothing on a fighter's upward-facing bevels ever caught a
+   * highlight. The run is a shallow reflector channel with a frosted face
+   * underneath, raked across the pit, on drop rods up toward the roof structure.
+   *
+   * Both are hung above the fight camera's frame line, so at play framing the
+   * player sees the streak and not the fitting. The wide and KO angles do see
+   * them, which is the right way round: a shot that pulls back to show the room
+   * should find the room lit by things that are in it.
+   *
+   * These are the one set of housings in this file that do **not** go into the
+   * shared `dark` bin, and the reason is shadows. The bin casts, and a solid bar
+   * hung five metres directly over the pit throws the key light's shadow as a
+   * hard black stripe across the deck a metre and a half behind the fighters —
+   * close enough that a sidestep walks into it. It is also the wrong answer
+   * physically: in the hall this set is pretending to be, these runs *are* the
+   * overhead light, and a lamp does not shadow itself. Own mesh, own draw call,
+   * casting off.
+   */
+  #ceilingRuns() {
+    const housings = [];
+    const faces = [];
+
+    for (const r of RUNS) {
+      // The face normal is the run's aim, so the channel is built flat and the
+      // whole assembly is rotated by the same angle.
+      const rot = [Math.PI / 2 - r.tilt, 0, 0];
+      const pos = [0, r.y, r.z];
+
+      faces.push(place(new THREE.PlaneGeometry(r.len, RUN_FACE), { pos, rot }));
+
+      // Channel body behind the face, along the face normal; `up` is the face's
+      // own short axis, which is where the reflector lips and the caps go.
+      const n = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(...rot));
+      const u = new THREE.Vector3(0, 1, 0).applyEuler(new THREE.Euler(...rot));
+      const at = (d, k = 0) => [
+        pos[0], pos[1] - n.y * d + u.y * k, pos[2] - n.z * d + u.z * k,
+      ];
+      housings.push(place(bevelBox(r.len + 0.18, RUN_FACE + 0.34, 0.26, 0.02), { pos: at(0.13), rot }));
+      for (const s of [-1, 1]) {
+        // Splayed reflector lip down each long edge.
+        housings.push(place(bevelBox(r.len + 0.2, 0.15, 0.05, 0.012), {
+          pos: at(0.03, s * (RUN_FACE * 0.5 + 0.07)),
+          rot: [rot[0] + s * 0.6, 0, 0],
+        }));
+        // End cap.
+        const cap = at(0.13);
+        cap[0] = s * (r.len / 2 + 0.09);
+        housings.push(place(bevelBox(0.07, RUN_FACE + 0.4, 0.3, 0.012), { pos: cap, rot }));
+      }
+      // Drop rods and their yokes. The rods run the whole way to the roof
+      // purlins at 13.5m rather than stopping in mid air, because the wide and
+      // KO framings both look up past the fitting.
+      for (const x of [-r.len * 0.42, r.len * 0.42]) {
+        const top = 13.5;
+        const foot = r.y + 0.2;
+        housings.push(place(new THREE.CylinderGeometry(0.022, 0.022, top - foot, 6), {
+          pos: [x, (top + foot) * 0.5, r.z],
+        }));
+        housings.push(place(bevelBox(0.26, 0.07, 0.07, 0.012), { pos: [x, r.y + 0.14, r.z], rot }));
+      }
+    }
+
+    this.runMaterial = new THREE.MeshBasicMaterial({
+      name: 'arena.ceilingRuns',
+      color: new THREE.Color(1, 1, 1),
+      side: THREE.FrontSide,
+      toneMapped: true,
+      fog: false,
+    });
+    this.ceilingRuns = new THREE.Mesh(mergeAll(faces), this.runMaterial);
+    this.ceilingRuns.name = 'arena.practicals.ceilingRuns';
+    this.ceilingRuns.castShadow = false;
+    this.ceilingRuns.receiveShadow = false;
+    this.group.add(this.ceilingRuns);
+
+    const shell = mergeAll(housings);
+    worldUv(shell, 1.9);
+    this.runHousings = new THREE.Mesh(shell, this.materials.darkMetal);
+    this.runHousings.name = 'arena.practicals.ceilingRunHousings';
+    this.runHousings.castShadow = false;
+    this.runHousings.receiveShadow = true;
+    this.runHousings.matrixAutoUpdate = false;
+    this.group.add(this.runHousings);
   }
 
   /**
@@ -812,6 +929,17 @@ export class StagePracticals {
         pub.size.copy(p.size);
       }
     }
+
+    // The tube runs read off the mood's `ceiling` block, the same term the
+    // Environment's overhead strips are driven by. `on` is the mood's own
+    // statement about whether it has a roof, so an outdoor mood puts the tubes
+    // out rather than leaving two lit fittings under an open sky.
+    const ceil = this.environment?.params?.ceiling;
+    if (ceil) {
+      const live = Math.max(0, ceil.intensity * ceil.on);
+      const power = live > 0.01 ? BLOOM_THRESHOLD * Math.pow(live / 4.5, 0.62) * 2.1 : 0;
+      this.runMaterial.color.copy(ceil.color).multiplyScalar(power);
+    }
   }
 
   /**
@@ -885,6 +1013,7 @@ export class StagePracticals {
   dispose() {
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.emitterMaterial.dispose();
+    this.runMaterial.dispose();
     this.poolMaterial.dispose();
     this.neonMaterial.dispose();
     this.beaconMaterial.dispose();

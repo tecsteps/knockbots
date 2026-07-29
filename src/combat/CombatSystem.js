@@ -26,7 +26,7 @@ import * as THREE from 'three';
 import {
   HEIGHT, WEIGHT, REACTION, HITSTOP, COMBO_SCALING, MIN_COMBO_SCALE,
   JUGGLE_DECAY, MIN_JUGGLE_SCALE, WALL_SPLAT_SPEED, MAX_HEALTH,
-  METER_ON_DEAL, GROUND_Y, ARENA_HALF_WIDTH, ARENA_HALF_DEPTH,
+  METER_ON_DEAL, GROUND_Y, ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, TICK_HZ,
 } from '../core/Constants.js';
 import { bus } from '../core/Bus.js';
 import { Rng } from '../core/Rng.js';
@@ -195,6 +195,34 @@ export class CombatSystem {
   // --- intersection --------------------------------------------------------
 
   /**
+   * True swept velocity of the striking bone, in metres per second.
+   *
+   * The capsule-separation normal is the axis two capsules had to move along to
+   * stop overlapping. It is a property of where the boxes happened to be when
+   * the test ran, not of the blow: a hook and an uppercut landing on the same
+   * rib produce nearly the same separation axis. Presentation needs the
+   * direction the limb was actually travelling, and there is exactly one honest
+   * source for that — the striking bone's world displacement across the tick
+   * that landed the hit. `Fighter` already records it for the swept hitbox test,
+   * so this costs a subtract.
+   *
+   * @param {import('./Fighter.js').Fighter} attacker
+   * @param {Object} hitbox the box that connected
+   * @param {THREE.Vector3} out
+   */
+  #strikeVelocity(attacker, hitbox, out) {
+    const rec = attacker.boneTrack?.[hitbox.bone];
+    if (rec && rec.valid) {
+      out.copy(rec.cur).sub(rec.prev).multiplyScalar(TICK_HZ);
+      // Below a walking pace the delta is animation noise rather than a strike,
+      // and normalising it would point the whole burst somewhere arbitrary.
+      if (out.lengthSq() > 1.0) return out;
+    }
+    out.set(attacker.facing * 8, 0, 0);
+    return out;
+  }
+
+  /**
    * First hitbox/hurtbox pair that overlaps this tick.
    * @returns {?{hitbox:Object, hurtbox:Object, point:THREE.Vector3, depth:number}}
    */
@@ -219,7 +247,11 @@ export class CombatSystem {
         const depth = rr - Math.sqrt(d2);
         if (depth > bestDepth) {
           bestDepth = depth;
-          best = best || { hitbox: null, hurtbox: null, point: new THREE.Vector3(), normal: new THREE.Vector3(), depth: 0 };
+          best = best || {
+            hitbox: null, hurtbox: null, depth: 0,
+            point: new THREE.Vector3(), normal: new THREE.Vector3(),
+            velocity: new THREE.Vector3(),
+          };
           best.hitbox = hb;
           best.hurtbox = hu;
           best.depth = depth;
@@ -230,6 +262,7 @@ export class CombatSystem {
         }
       }
     }
+    if (best) this.#strikeVelocity(attacker, best.hitbox, best.velocity);
     return best;
   }
 
@@ -325,6 +358,9 @@ export class CombatSystem {
     bus.emit('hit', {
       attacker, defender, move,
       point: hit.point.clone(), normal: hit.normal.clone(),
+      // The direction the blow actually travelled, and the bone that delivered
+      // it. FX orient off these, never off the separation normal.
+      velocity: hit.velocity.clone(), bone: hit.hitbox.bone,
       damage: applied, counter, region: hit.hurtbox.region || 'torso',
       comboCount: combo.hits,
     });
@@ -358,7 +394,10 @@ export class CombatSystem {
     this.combos[attacker.index].hits = 0;
     this.combos[attacker.index].damage = 0;
 
-    bus.emit('block', { attacker, defender, move, point: hit.point.clone() });
+    bus.emit('block', {
+      attacker, defender, move,
+      point: hit.point.clone(), velocity: hit.velocity.clone(), bone: hit.hitbox.bone,
+    });
     bus.emit('hitstop', { ticks: Math.max(3, Math.round((HITSTOP[move.weight] ?? 6) * 0.55)) });
     bus.emit('shake', { amount: (SHAKE_BY_WEIGHT[move.weight] ?? 0.2) * 0.45, ticks: 6 });
     if (this.stage?.impact && move.weight === WEIGHT.HEAVY) this.stage.impact(hit.point, 0.6);

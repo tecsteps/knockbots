@@ -4,10 +4,23 @@
  * One subscriber to the event bus, one owner of every particle system, one
  * per-frame entry point. Nothing else in the game knows that FX exist: the
  * simulation emits `hit` and this file decides that a heavy counter-hit on the
- * head means a thousand white-hot sparks along the contact normal, a screen-facing
- * shock with real refraction, five armour shards, a coolant spray that will
- * splat on the floor two hundred milliseconds from now, a point light that
- * flashes the robot's chrome, and three frames of radial speed lines.
+ * head means a thousand white-hot sparks down the line the fist was travelling,
+ * a screen-facing shock with real refraction, five armour shards, a coolant
+ * spray that will splat on the floor two hundred milliseconds from now, a point
+ * light that flashes the robot's chrome, and three frames of radial speed lines.
+ *
+ * Two properties decide whether that reads as an impact or as confetti, and
+ * neither is a particle-system problem:
+ *
+ *  - **Direction.** Every element orients off `hit.velocity`, the striking
+ *    bone's measured world displacement over the tick that landed — not off the
+ *    capsule separation normal, which describes where two boxes happened to be
+ *    rather than where the blow was going. See `#blowDir`.
+ *  - **Time.** A hit does not fire everything on one tick. The move carries a
+ *    beat table (`MoveSchema.resolveFx`) and this file schedules the flare,
+ *    lance, burst, front, shards and dust across two to eight ticks of the FX
+ *    clock. Hitstop stretches that clock, so the opening beats land inside the
+ *    freeze and the tail arrives as the reaction starts to move.
  *
  * The architecture is deliberately narrow:
  *
@@ -36,7 +49,8 @@
 
 import * as THREE from 'three';
 import { bus } from '../core/Bus.js';
-import { WEIGHT, GROUND_Y, ARENA_HALF_WIDTH, ARENA_HALF_DEPTH } from '../core/Constants.js';
+import { WEIGHT, GROUND_Y, ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, TICK_DT } from '../core/Constants.js';
+import { FX_SHAPE, FX_PART } from '../combat/MoveSchema.js';
 import { bakeFxTextures } from './FxTextures.js';
 import { SparkSystem } from './SparkSystem.js';
 import { FlashSystem } from './FlashSystem.js';
@@ -83,44 +97,108 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
  * hundred sparks is one buffer upload and one draw call. `ember` is the
  * exception: it is a small garnish of slower motes at the contact, not a second
  * burst, so it is counted in tens.
+ *
+ * The contact ring is small, and that is the correction it needed most. A
+ * screen-facing front with a metre and a half of radius covers a third of the
+ * frame; drawn additively through a soft profile it is not a shockwave but a
+ * low-contrast wash sitting over the fighters, the crowd and the floor at once —
+ * a smudge on the lens. A pressure front is legible because it is *tight*: half
+ * a metre across, bright enough to clip while it lives, and gone inside four
+ * frames. Anything that survives long enough to be seen expanding has already
+ * stopped being an impact.
  */
 const HIT_FX = {
   [WEIGHT.LIGHT]: {
     sparks: 190, jet: 64, speed: 7.4, size: 0.028, heat: 2.6, sparkLife: 0.16,
-    ring: 0.48, ringLife: 0.17, thick: 0.2, ringHeat: 1.5,
+    ring: 0.28, ringLife: 0.13, thick: 0.16, ringHeat: 2.2,
     flash: 0.26, flashHeat: 3.2, flashLife: 0.075,
     core: 0.10, coreHeat: 2.6, coreLife: 0.42, ember: 10,
     debris: 0, fluid: 0, light: 3.0, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
     sparks: 340, jet: 105, speed: 8.6, size: 0.032, heat: 3.0, sparkLife: 0.19,
-    ring: 0.82, ringLife: 0.22, thick: 0.2, ringHeat: 1.9,
+    ring: 0.40, ringLife: 0.15, thick: 0.17, ringHeat: 2.8,
     flash: 0.36, flashHeat: 3.8, flashLife: 0.09,
     core: 0.13, coreHeat: 3.4, coreLife: 0.55, ember: 16,
     debris: 0, fluid: 5, light: 5.0, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
     sparks: 680, jet: 200, speed: 10.4, size: 0.038, heat: 3.4, sparkLife: 0.24,
-    ring: 1.5, ringLife: 0.3, thick: 0.24, ringHeat: 2.4,
+    ring: 0.62, ringLife: 0.19, thick: 0.18, ringHeat: 3.4,
     flash: 0.56, flashHeat: 4.6, flashLife: 0.11,
     core: 0.19, coreHeat: 4.4, coreLife: 0.72, ember: 26,
     debris: 8, fluid: 12, light: 12.0, impact: 0.55, dust: 6,
   },
   [WEIGHT.LAUNCHER]: {
     sparks: 780, jet: 225, speed: 11.4, size: 0.04, heat: 3.5, sparkLife: 0.26,
-    ring: 1.8, ringLife: 0.34, thick: 0.25, ringHeat: 2.6,
+    ring: 0.72, ringLife: 0.21, thick: 0.19, ringHeat: 3.6,
     flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
     core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 30,
     debris: 10, fluid: 14, light: 14.0, impact: 0.62, dust: 8,
   },
   [WEIGHT.ULTRA]: {
     sparks: 1150, jet: 330, speed: 14.5, size: 0.048, heat: 4.0, sparkLife: 0.30,
-    ring: 2.85, ringLife: 0.44, thick: 0.28, ringHeat: 3.0,
+    ring: 1.20, ringLife: 0.28, thick: 0.22, ringHeat: 4.2,
     flash: 0.7, flashHeat: 6.0, flashLife: 0.16,
     core: 0.28, coreHeat: 5.6, coreLife: 0.9, ember: 42,
     debris: 18, fluid: 26, light: 26.0, impact: 1.0, dust: 14,
   },
 };
+
+/**
+ * How each impact shape throws its material.
+ *
+ * `HIT_FX` decides *how much* a hit produces, from its weight. This table
+ * decides *where it goes*, from the geometry of the blow, and the two are
+ * orthogonal on purpose: a heavy hook and a heavy piston should throw the same
+ * mass of sparks in visibly different directions. Before this existed the only
+ * input to an impact's appearance was its weight class, so every heavy hit in
+ * the game looked the same however it had been thrown.
+ *
+ *   fanSpread  cone half-angle of the wide burst, 0 = pencil, 1 = hemisphere
+ *   jetSpread  the same for the tight lance down the line of travel
+ *   jetSpeed   how much faster the lance runs than the burst
+ *   lift       how far the fan is tilted off the strike line toward vertical
+ *   carry      share of the blow's speed inherited by the whole population
+ *   ringAspect elongation of the pressure front along the blow
+ *   ringScale  the front's size relative to the weight's nominal radius
+ *   debris     shard and dust multipliers, because a blunt blow shatters more
+ */
+const SHAPE_FX = {
+  [FX_SHAPE.THRUST]: {
+    fanSpread: 0.44, jetSpread: 0.10, jetSpeed: 1.70, lift: 0.18, carry: 0.46,
+    ringAspect: 2.3, ringScale: 0.60, debris: 0.9, dust: 0.8,
+  },
+  [FX_SHAPE.SLASH]: {
+    fanSpread: 0.66, jetSpread: 0.20, jetSpeed: 1.40, lift: 0.10, carry: 0.54,
+    ringAspect: 3.1, ringScale: 0.72, debris: 1.2, dust: 1.0,
+  },
+  [FX_SHAPE.RISING]: {
+    fanSpread: 0.50, jetSpread: 0.13, jetSpeed: 1.60, lift: 0.52, carry: 0.42,
+    ringAspect: 2.6, ringScale: 0.66, debris: 1.0, dust: 0.7,
+  },
+  [FX_SHAPE.CRUSH]: {
+    fanSpread: 0.80, jetSpread: 0.30, jetSpeed: 1.15, lift: 0.06, carry: 0.34,
+    ringAspect: 1.25, ringScale: 0.92, debris: 1.5, dust: 1.9,
+  },
+  [FX_SHAPE.DRILL]: {
+    fanSpread: 0.30, jetSpread: 0.06, jetSpeed: 2.10, lift: 0.14, carry: 0.60,
+    ringAspect: 2.9, ringScale: 0.50, debris: 0.8, dust: 0.6,
+  },
+};
+
+/** Beats for a payload that arrives with no move metadata at all. */
+const DEFAULT_TIMELINE = [
+  { at: 0, parts: [FX_PART.FLASH, FX_PART.LIGHT, FX_PART.JET, FX_PART.PUNCH] },
+  { at: 1, parts: [FX_PART.FAN, FX_PART.CORE] },
+  { at: 2, parts: [FX_PART.RING, FX_PART.DEBRIS] },
+  { at: 4, parts: [FX_PART.EMBER, FX_PART.FLUID] },
+  { at: 6, parts: [FX_PART.DUST] },
+];
+
+/** Live hit contexts, and the beats scheduled against them. Fixed, never grown. */
+const MAX_HIT_CONTEXTS = 8;
+const MAX_BEATS = 128;
 
 /**
  * Impact dust, once and for all. It is pulverised paint, concrete and oxide —
@@ -180,6 +258,24 @@ export class EffectsDirector {
     this._lightScan = 60;
 
     this._ringData = new Float32Array(MAX_DISTORT_RINGS * 4);
+
+    // Presentation timeline. A hit fills one context and posts a handful of
+    // beats against it; `update()` drains whatever has come due. Both rings are
+    // built here so nothing on the hit path ever allocates.
+    this._hits = [];
+    for (let i = 0; i < MAX_HIT_CONTEXTS; i++) {
+      this._hits.push({
+        point: new THREE.Vector3(), dir: new THREE.Vector3(1, 0, 0),
+        fan: new THREE.Vector3(), ember: new THREE.Vector3(), inherit: new THREE.Vector3(),
+        hot: new THREE.Color(), ring: new THREE.Color(),
+        shard: new THREE.Color(), coolant: new THREE.Color(),
+        recipe: null, shape: null, roll: 0, scale: 1, counter: false, ultra: false,
+      });
+    }
+    this._hitCursor = 0;
+    this._beats = [];
+    for (let i = 0; i < MAX_BEATS; i++) this._beats.push({ due: -1, part: '', hit: null });
+    this._beatCursor = 0;
     /** Bound once; `update()` must not build a closure every frame. */
     this._onSplat = (x, y, z, size, r, g, b) => {
       this.decals.add(DECAL.OIL, x, z, size, {
@@ -344,129 +440,232 @@ export class EffectsDirector {
   // combat events
   // -------------------------------------------------------------------------
 
+  /**
+   * The direction of the blow, written to `out` as a unit vector.
+   *
+   * `velocity` is the striking bone's measured world displacement over the tick
+   * that landed the hit — the direction the limb was actually travelling.
+   * `normal` is the capsule separation axis, which is a property of where the
+   * two boxes happened to be rather than of the strike, and using it is why
+   * sparks used to spray along an arbitrary line. It stays as the fallback for
+   * events that carry no swept velocity.
+   * @param {Object} e bus payload
+   * @param {THREE.Vector3} out
+   */
+  #blowDir(e, out) {
+    const v = e.velocity;
+    if (v && v.lengthSq() > 1.0) return out.copy(v).normalize();
+    if (e.normal && e.normal.lengthSq() > 1e-6) return out.copy(e.normal).normalize();
+    return out.set(e.attacker?.facing || 1, 0.2, 0).normalize();
+  }
+
+  /**
+   * Fills a hit context from a bus payload and returns it.
+   *
+   * Everything the beats will need is frozen here, at contact: the direction of
+   * the blow, the two derived spray axes, the shape table, and the palettes.
+   * Beats fire over the following tenth of a second and the scratch registers at
+   * the top of this file will have been reused a hundred times by then, so a
+   * beat may not read anything it did not capture.
+   */
+  #openHit(e, recipe, counter, scale) {
+    const c = this._hits[this._hitCursor];
+    this._hitCursor = (this._hitCursor + 1) % this._hits.length;
+
+    const shape = SHAPE_FX[e.move?.fx?.shape] || SHAPE_FX[FX_SHAPE.THRUST];
+    c.point.copy(e.point);
+    this.#blowDir(e, c.dir);
+    c.shape = shape;
+    c.recipe = recipe;
+    c.counter = counter;
+    c.scale = scale;
+    c.ultra = e.move?.weight === WEIGHT.ULTRA;
+    c.roll = this.#screenRoll(c.dir);
+
+    // The wide fan carries the volume of the burst, tilted off the strike line
+    // toward vertical so it stays legible against the floor. How far depends on
+    // the shape: an uppercut drives its material straight up the front of the
+    // body, a body check throws it sideways and barely lifts at all.
+    c.fan.copy(c.dir).setY(c.dir.y * (1 - shape.lift) + shape.lift * 1.25).normalize();
+    c.ember.set(c.dir.x * 0.28, 1.0, c.dir.z * 0.28).normalize();
+    // Inherited velocity shifts the whole population downrange, so even the slow
+    // motes drift the way the hit went.
+    c.inherit.copy(c.dir).multiplyScalar(recipe.speed * shape.carry);
+
+    this.#palette(e.attacker, 'emissive', _c2);
+    c.hot.copy(_c2).lerp(_c.setRGB(1, 0.95, 0.88), 0.7);
+    c.ring.copy(_c2).lerp(_c.setRGB(1, 1, 1), 0.45);
+    this.#palette(e.defender, 'trim', c.shard);
+    this.#palette(e.defender, 'emissive', c.coolant);
+    return c;
+  }
+
+  /**
+   * Posts a move's beats against a hit context.
+   *
+   * `at` is in simulation ticks but the queue runs on the FX clock, which is
+   * what makes this behave: hitstop stretches the clock, so the first two or
+   * three beats land inside the freeze — the frames the player is actually
+   * looking at — and the tail arrives as the reaction starts moving.
+   */
+  #schedule(c, timeline) {
+    for (let i = 0; i < timeline.length; i++) {
+      const beat = timeline[i];
+      const due = this.time + Math.max(0, beat.at || 0) * TICK_DT;
+      const parts = beat.parts;
+      for (let k = 0; k < parts.length; k++) {
+        const b = this._beats[this._beatCursor];
+        this._beatCursor = (this._beatCursor + 1) % MAX_BEATS;
+        b.due = due;
+        b.part = parts[k];
+        b.hit = c;
+      }
+    }
+  }
+
+  /** Drains every beat that has come due. Called once per frame. */
+  #runBeats() {
+    const beats = this._beats;
+    for (let i = 0; i < beats.length; i++) {
+      const b = beats[i];
+      if (b.due < 0 || b.due > this.time) continue;
+      b.due = -1;
+      if (b.hit) this.#fire(b.part, b.hit);
+    }
+  }
+
+  /**
+   * Spawns one element of an impact. Every case reads its geometry from the
+   * context and its magnitude from the weight recipe, and nothing here knows
+   * what tick it is on — the schedule already decided that.
+   */
+  #fire(part, c) {
+    const r = c.recipe;
+    const s = c.shape;
+    const k = c.scale;
+
+    switch (part) {
+      // The flare at the contact point: the brightest element in the game and
+      // the one the bloom pass actually feeds on. Its streak lies along the blow.
+      case FX_PART.FLASH:
+        this.flashes.pop(c.point, {
+          size: r.flash * k, life: r.flashLife, heat: r.flashHeat * k,
+          roll: c.roll, tint: c.hot,
+        });
+        break;
+
+      // The heat the flare leaves behind. Without it the contact point is dark
+      // again four frames in, while the reaction animation is still playing.
+      case FX_PART.CORE:
+        this.flashes.pop(c.point, {
+          size: r.core * k, life: r.coreLife, heat: r.coreHeat * k, cool: true,
+        });
+        break;
+
+      // The tight lance straight down the line of travel. This is what makes the
+      // direction readable in a single frame instead of leaving an isotropic ball.
+      case FX_PART.JET:
+        this.sparks.burst(c.point, c.dir, {
+          count: r.jet * k, speed: r.speed * s.jetSpeed * k, spread: s.jetSpread,
+          life: r.sparkLife * 0.8,
+          inherit: _v3.copy(c.dir).multiplyScalar(r.speed * 0.5),
+          size: r.size * 1.15, heat: r.heat * 1.15,
+        });
+        break;
+
+      case FX_PART.FAN:
+        this.sparks.burst(c.point, c.fan, {
+          count: r.sparks * k, speed: r.speed * k, spread: s.fanSpread,
+          life: r.sparkLife, inherit: c.inherit, size: r.size, heat: r.heat,
+          tint: c.counter ? _c.setRGB(1.0, 0.86, 0.72) : null,
+        });
+        break;
+
+      // Slow motes lofted out of the contact, so the burst has a near field that
+      // is not travelling at ten metres a second. They are the tail of the same
+      // event, not a second one: no inherited velocity, and dead a handful of
+      // frames after the fast sparks are.
+      case FX_PART.EMBER:
+        if (!r.ember) break;
+        this.sparks.burst(c.point, c.ember, {
+          count: r.ember * k, speed: r.speed * 0.22, spread: 0.85,
+          life: r.sparkLife * 1.25, size: r.size * 0.8, heat: r.heat * 0.85,
+        });
+        break;
+
+      // The pressure front, rolled onto the line of the hit and stretched along
+      // it, so its long axis reads as the direction the force went.
+      case FX_PART.RING:
+        this.shock.spawn(c.point, {
+          mode: 'facing', tilt: c.roll, aspect: s.ringAspect,
+          radius: r.ring * s.ringScale * k,
+          life: r.ringLife * (c.counter ? 1.15 : 1),
+          thickness: r.thick, heat: r.ringHeat * k, tint: c.ring,
+          distort: r.impact > 0 ? 1.1 * k : 0.45,
+        });
+        break;
+
+      case FX_PART.DEBRIS:
+        if (!r.debris) break;
+        this.debris.burst(c.point, c.dir, {
+          count: r.debris * s.debris * k, speed: 4.6, spread: 0.9,
+          size: 0.055, life: 4.5, color: c.shard,
+        });
+        break;
+
+      case FX_PART.FLUID:
+        if (!r.fluid) break;
+        this.fluid.spray(c.point, c.dir, {
+          count: r.fluid * k, speed: 4.0, spread: 0.9,
+          life: 1.2, size: 0.04, tint: c.coolant,
+        });
+        break;
+
+      // Thrown clear of the contact along the blow, so the puff never sits on
+      // top of the heat core and swallows the one bright thing in the frame.
+      case FX_PART.DUST:
+        if (!r.dust) break;
+        _v3.copy(c.point).addScaledVector(c.dir, 0.18);
+        this.smoke.puff(_v3, {
+          count: Math.max(1, Math.round(r.dust * s.dust)), dir: c.dir,
+          speed: 2.6, spread: 1.5, radius: 0.13, size: 0.15, growth: 1.7,
+          life: 0.6, buoyancy: 0.32, curl: 1.1, tint: DUST,
+        });
+        break;
+
+      case FX_PART.LIGHT:
+        this.#flashLight(c.point, r.light * k, c.counter ? 0xfff0d8 : 0xffd0a0);
+        break;
+
+      case FX_PART.PUNCH:
+        if (r.impact > 0) this.#punch(c.point, r.impact * k, c.ultra);
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  /**
+   * A hit no longer dumps every element onto one tick. It opens a context and
+   * hands the move's own beat table to the scheduler; `#fire` does the spawning
+   * over the following two to eight ticks. Moves that never authored a timeline
+   * still get one, derived from their own data by `MoveSchema.resolveFx`.
+   */
   #onHit(e) {
     if (!this.enabled || !e?.point) return;
     const recipe = HIT_FX[e.move?.weight] || HIT_FX[WEIGHT.MEDIUM];
     const counter = !!e.counter;
-    const scale = counter ? 1.35 : 1;
-
-    _n.copy(e.normal && e.normal.lengthSq() > 1e-6 ? e.normal : _v.set(0, 1, 0)).normalize();
-    const roll = this.#screenRoll(_n);
-
-    // Sparks travel the way the blow did. The wide fan carries the volume of
-    // the burst, biased only slightly upward so it stays legible against the
-    // floor; the tight jet down the hit normal is what makes the direction
-    // readable in a single frame instead of leaving an isotropic ball. The
-    // inherited velocity is the other half of that: it shifts the *whole*
-    // population downrange, so even the slow motes drift the way the hit went.
-    _v2.copy(_n).setY(_n.y * 0.78 + 0.22).normalize();
-    this.sparks.burst(e.point, _v2, {
-      count: recipe.sparks * scale,
-      speed: recipe.speed * scale,
-      spread: 0.5,
-      life: recipe.sparkLife,
-      inherit: _v3.copy(_n).multiplyScalar(recipe.speed * 0.42),
-      size: recipe.size,
-      heat: recipe.heat,
-      tint: counter ? _c.setRGB(1.0, 0.86, 0.72) : null,
-    });
-    this.sparks.burst(e.point, _n, {
-      count: recipe.jet * scale,
-      speed: recipe.speed * 1.55 * scale,
-      spread: 0.12,
-      life: recipe.sparkLife * 0.8,
-      inherit: _v3.copy(_n).multiplyScalar(recipe.speed * 0.5),
-      size: recipe.size * 1.15,
-      heat: recipe.heat * 1.15,
-    });
-
-    // A few slow embers lofted out of the contact, to give the burst a near
-    // field that is not travelling at ten metres a second. They are the tail of
-    // the same event, not a second one: barely faster than the fighters, no
-    // inherited velocity to carry them downrange, and dead a handful of frames
-    // after the fast sparks are. Given a longer life they simply fall out of the
-    // strike line and pile up on the floor.
-    if (recipe.ember) {
-      _v2.copy(_n).setY(_n.y * 0.35 + 1.1).normalize();
-      this.sparks.burst(e.point, _v2, {
-        count: recipe.ember * scale,
-        speed: recipe.speed * 0.22,
-        spread: 0.85,
-        life: recipe.sparkLife * 1.25,
-        size: recipe.size * 0.8,
-        heat: recipe.heat * 0.85,
-      });
-    }
-
-    // The flare at the contact point: the brightest element and the one the
-    // bloom pass actually feeds on. Its streak lies along the blow.
-    this.#palette(e.attacker, 'emissive', _c2);
-    this.flashes.pop(e.point, {
-      size: recipe.flash * scale,
-      life: recipe.flashLife,
-      heat: recipe.flashHeat * scale,
-      roll,
-      tint: _c3.copy(_c2).lerp(_c.setRGB(1, 0.95, 0.88), 0.7),
-    });
-
-    // The heat core the flare leaves behind. Without it the contact point is
-    // dark again four frames in, while the reaction animation is still playing.
-    this.flashes.pop(e.point, {
-      size: recipe.core * scale,
-      life: recipe.coreLife,
-      heat: recipe.coreHeat * scale,
-      cool: true,
-    });
-
-    // Contact ring, facing the camera and rolled onto the line of the hit so
-    // its energy lobes sit where the force went.
-    this.shock.spawn(e.point, {
-      mode: 'facing',
-      tilt: roll,
-      radius: recipe.ring * scale,
-      life: recipe.ringLife * (counter ? 1.15 : 1),
-      thickness: recipe.thick,
-      heat: recipe.ringHeat * scale,
-      tint: _c2.lerp(_c3.setRGB(1, 1, 1), 0.45),
-      distort: recipe.impact > 0 ? 1.1 * scale : 0.45,
-    });
-
-    if (recipe.debris) {
-      this.#palette(e.defender, 'trim', _c);
-      this.debris.burst(e.point, _n, {
-        count: recipe.debris * scale, speed: 4.6, spread: 0.9,
-        size: 0.055, life: 4.5, color: _c,
-      });
-    }
-
-    if (recipe.fluid) {
-      this.#palette(e.defender, 'emissive', _c);
-      this.fluid.spray(e.point, _n, {
-        count: recipe.fluid * scale, speed: 4.0, spread: 0.9,
-        life: 1.2, size: 0.04, tint: _c,
-      });
-    }
-
-    if (recipe.dust) {
-      // Thrown clear of the contact along the normal, so the puff never sits on
-      // top of the heat core and swallows the one bright thing in the frame.
-      _v3.copy(e.point).addScaledVector(_n, 0.18);
-      this.smoke.puff(_v3, {
-        count: recipe.dust, dir: _n, speed: 2.6, spread: 1.5,
-        radius: 0.13, size: 0.15, growth: 1.7, life: 0.6,
-        buoyancy: 0.32, curl: 1.1, tint: DUST,
-      });
-    }
-
-    this.#flashLight(e.point, recipe.light * scale, counter ? 0xfff0d8 : 0xffd0a0);
-
-    if (recipe.impact > 0) this.#punch(e.point, recipe.impact * scale, e.move?.weight === WEIGHT.ULTRA);
+    const c = this.#openHit(e, recipe, counter, counter ? 1.35 : 1);
+    this.#schedule(c, e.move?.fx?.timeline || DEFAULT_TIMELINE);
   }
 
   #onBlock(e) {
     if (!this.enabled || !e?.point) return;
     this.#palette(e.defender, 'emissive', _c);
-    _n.set(e.attacker?.facing ? -e.attacker.facing : 1, 0.25, 0).normalize();
+    // A guard throws the blow's own energy back the way it came, so the spray
+    // is the reverse of the swept limb rather than a fixed sideways puff.
+    this.#blowDir(e, _n).negate().setY(0.25).normalize();
     const roll = this.#screenRoll(_n);
 
     this.sparks.burst(e.point, _n, {
@@ -474,8 +673,8 @@ export class EffectsDirector {
       heat: 2.6, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.6),
     });
     this.shock.spawn(e.point, {
-      mode: 'facing', tilt: roll, radius: 0.7, life: 0.24, thickness: 0.18,
-      heat: 1.6, tint: _c, distort: 0.4,
+      mode: 'facing', tilt: roll, aspect: 1.9, radius: 0.42, life: 0.16,
+      thickness: 0.15, heat: 2.6, tint: _c, distort: 0.4,
     });
     this.flashes.pop(e.point, { size: 0.3, life: 0.08, heat: 3.4, roll, tint: _c });
     this.flashes.pop(e.point, { size: 0.13, life: 0.34, heat: 2.2, cool: true });
@@ -486,8 +685,8 @@ export class EffectsDirector {
     if (!this.enabled || !e?.point) return;
     this.#palette(e.defender, 'emissive', _c);
     this.shock.spawn(e.point, {
-      mode: 'facing', radius: 1.5, life: 0.42, thickness: 0.16,
-      heat: 3.4, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.5), distort: 1.2,
+      mode: 'facing', radius: 0.8, life: 0.26, thickness: 0.14,
+      heat: 4.6, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.5), distort: 1.2,
     });
     this.sparks.burst(e.point, _v.set(0, 1, 0), {
       count: 320, speed: 8.5, spread: 1.0, life: 0.26, size: 0.032, heat: 3.2, tint: _c,
@@ -504,8 +703,8 @@ export class EffectsDirector {
       count: 260, speed: 5.4, spread: 1.0, life: 0.22, size: 0.032, heat: 2.7,
     });
     this.shock.spawn(e.point, {
-      mode: 'facing', radius: 0.9, life: 0.3, thickness: 0.24,
-      heat: 1.4, tint: _c.setRGB(1, 0.62, 0.24), distort: 0.5,
+      mode: 'facing', radius: 0.52, life: 0.19, thickness: 0.2, aspect: 1.3,
+      heat: 2.4, tint: _c.setRGB(1, 0.62, 0.24), distort: 0.5,
     });
     this.flashes.pop(e.point, { size: 0.4, life: 0.085, heat: 3.4, tint: _c.setRGB(1, 0.62, 0.24) });
     this.flashes.pop(e.point, { size: 0.18, life: 0.5, heat: 2.8, cool: true });
@@ -534,8 +733,8 @@ export class EffectsDirector {
       tint: _c.setRGB(0.34, 0.31, 0.28),
     });
     this.shock.spawn(e.point, {
-      mode: 'facing', tilt: roll, radius: 1.6, life: 0.42, thickness: 0.24,
-      heat: 2.4, tint: _c2, distort: 1.0,
+      mode: 'facing', tilt: roll, aspect: 1.6, radius: 0.85, life: 0.26, thickness: 0.2,
+      heat: 3.6, tint: _c2, distort: 1.0,
     });
     this.flashes.pop(e.point, { size: 0.7, life: 0.13, heat: 5.0, roll });
     this.flashes.pop(e.point, { size: 0.34, life: 0.95, heat: 4.6, cool: true });
@@ -598,8 +797,8 @@ export class EffectsDirector {
       tint: DUST,
     });
     this.shock.spawn(e.point, {
-      mode: 'facing', tilt: roll, radius: 2.4, life: 0.55, thickness: 0.26,
-      heat: 2.6, tint: _c2.setRGB(1, 0.92, 0.82), distort: 1.3,
+      mode: 'facing', tilt: roll, aspect: 1.5, radius: 1.25, life: 0.3, thickness: 0.22,
+      heat: 3.8, tint: _c2.setRGB(1, 0.92, 0.82), distort: 1.3,
     });
     // The impact dust settles at the base of the wall.
     const fx = THREE.MathUtils.clamp(e.point.x, -ARENA_HALF_WIDTH + 0.3, ARENA_HALF_WIDTH - 0.3);
@@ -763,8 +962,8 @@ export class EffectsDirector {
       count: 900, speed: 14.0, spread: 0.7, life: 0.34, size: 0.038, heat: 3.6,
     });
     this.shock.spawn(_v, {
-      mode: 'facing', tilt: roll, radius: 2.8, life: 0.55, thickness: 0.28,
-      heat: 2.2, tint: _c, distort: 1.6,
+      mode: 'facing', tilt: roll, aspect: 2.2, radius: 1.5, life: 0.32, thickness: 0.24,
+      heat: 3.4, tint: _c, distort: 1.6,
     });
     this.shock.spawn(_v.clone().setY(this.floorY), {
       mode: 'ground', radius: 3.4, life: 0.65, thickness: 0.26,
@@ -884,6 +1083,10 @@ export class EffectsDirector {
       this._lightScan = 60;
       this.#findStageLight();
     }
+
+    // Scheduled impact beats first: anything that comes due this frame must be
+    // in the buffers before the systems flush them.
+    this.#runBeats();
 
     this.#updateTrails(step);
     this.debris.update(step);
@@ -1140,6 +1343,7 @@ export class EffectsDirector {
     this.flashes.reset();
     this.decals.reset();
     this.trails.reset();
+    for (const b of this._beats) { b.due = -1; b.hit = null; }
 
     if (this._trailState) {
       for (const slots of this._trailState) {

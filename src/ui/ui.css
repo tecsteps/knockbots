@@ -339,6 +339,20 @@
     linear-gradient(270deg, transparent 0%, transparent 88%, rgba(255, 210, 190, 0.9) 96%, #fff 100%),
     linear-gradient(180deg, #ff9d86 0%, #e5433f 45%, #8f141d 100%);
 }
+/* While the chip is actively closing the gap toward true health, pulse its
+ * hot edge — an eased `transform` alone reads as a static gap in any single
+ * sampled frame; the pulse is what sells "still bleeding, still moving". */
+.hp-drain.hp-drain--bleeding {
+  animation: hpDrainBleed 0.4s ease-in-out infinite;
+  box-shadow:
+    inset 0 0.06em 0 rgba(255, 255, 255, 0.3),
+    inset 0 -0.2em 0.34em rgba(0, 0, 0, 0.45),
+    0 0 0.6em rgba(255, 61, 61, 0.65);
+}
+@keyframes hpDrainBleed {
+  0%, 100% { filter: brightness(1) saturate(1); }
+  50% { filter: brightness(1.55) saturate(1.3); }
+}
 /* True health — the brightest, most metallic layer: a six-stop gradient
  * (bright rolled-edge highlight, saturated amber body, dark base) plus a
  * bevel of four stacked inset shadows for a pressed-metal cross-section,
@@ -534,12 +548,20 @@
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.14); }
 }
+/*
+ * Sized to actually read at 1080p, not just sit there as a caption: at the
+ * previous 0.62em it rendered under 13px tall and disappeared against the
+ * dim colour it also needs for hierarchy under the timer. Pushing size and
+ * weight up while keeping the dim tone (rather than brightening it to
+ * `--kb-text`) is what keeps "ROUND 1" legible without letting it compete
+ * with the numeral above it for attention.
+ */
 .round-label {
-  margin-top: 0.4em;
+  margin-top: 0.5em;
   font-family: var(--kb-font-label);
-  font-size: 0.62em;
-  font-weight: 700;
-  letter-spacing: 0.26em;
+  font-size: 1em;
+  font-weight: 800;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
   text-align: center;
   color: var(--kb-text-dim);
@@ -642,9 +664,16 @@
 
 /* -- combo counters ---------------------------------------------------- */
 
+/*
+ * Slams in under the meter bars, on the attacking side, rather than down at
+ * the fighters' feet: it reads as part of the same glanceable top cluster as
+ * the health/meter readout instead of a separate thing happening in the
+ * middle of the arena, and it keeps clear of both the meter block above it
+ * (bottom edge ~7.5em) and the hp bar's own footprint.
+ */
 .combo {
   position: absolute;
-  bottom: 14%;
+  top: 8.6em;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -690,6 +719,9 @@
   letter-spacing: 0.16em;
   color: var(--kb-text-dim);
 }
+/* A launcher's own first hit shows the counter too (see HUD#onHit) — "1
+ * HITS" reads as broken grammar, so the singular case gets its own label. */
+.combo[data-count='one'] .combo-hits::after { content: ' HIT'; }
 /* Colour climbs with the tally: tier 2 runs hotter, tier 3 goes white-hot
  * with a bigger glow and a slight overall punch-up in scale. */
 .combo[data-tier='2'] .combo-hits {

@@ -16,7 +16,10 @@
  *      with the reflection camera's own matrix. It is gathered with a five-tap
  *      cross whose radius grows with roughness, so a puddle mirrors and the
  *      surrounding damp concrete smears — the difference between "wet floor"
- *      and "chrome".
+ *      and "chrome". It is the *only* reflection on this floor: the screen-space
+ *      pass that used to sit in the post chain and add a second one on top of
+ *      it is gone, and the roughness fade here was widened to cover the range
+ *      that pass had been covering.
  *   4. **Animated ripples**, scrolled in two directions and masked to the
  *      wetness channel. Amplitude is deliberately tiny: enough that the
  *      practicals crawl on the water, not enough to read as an ocean.
@@ -452,15 +455,23 @@ const FRAG_REFLECT_HOOK = /* glsl */ `
       coord.xy += wn.xz * uReflDistort * coord.w;
 
       // Roughness-proportional gather: a puddle mirrors, damp concrete smears.
-      float blurR = clamp( material.roughness * uReflBlur, 0.0, 0.018 ) * coord.w;
+      float blurR = clamp( material.roughness * uReflBlur, 0.0, 0.030 ) * coord.w;
       vec3 refl = texture2DProj( uReflection, coord ).rgb * 0.36;
       refl += texture2DProj( uReflection, coord + vec4(  blurR, 0.0, 0.0, 0.0 ) ).rgb * 0.16;
       refl += texture2DProj( uReflection, coord + vec4( -blurR, 0.0, 0.0, 0.0 ) ).rgb * 0.16;
       refl += texture2DProj( uReflection, coord + vec4( 0.0,  blurR * 0.6, 0.0, 0.0 ) ).rgb * 0.16;
       refl += texture2DProj( uReflection, coord + vec4( 0.0, -blurR * 0.6, 0.0, 0.0 ) ).rgb * 0.16;
 
+      // Roughness fade. This is the term that decides how much of the deck is
+      // allowed to mirror at all, and it used to close at 0.78 — which on this
+      // floor is most of it, because damp concrete bakes out around 0.5. The
+      // gap that left was being filled by a screen-space pass in the post
+      // chain, additively and on the same pixels; with that pass gone the fade
+      // has to run out to where the concrete actually stops being reflective,
+      // and the blur above has to grow far enough that the rough end smears
+      // rather than mirrors. A rough surface reflects less sharply, not less.
       float k = uReflStrength * fres * smoothstep( 0.02, 0.34, wet )
-              * ( 1.0 - smoothstep( 0.16, 0.78, material.roughness ) );
+              * ( 1.0 - smoothstep( uReflRough.x, uReflRough.y, material.roughness ) );
       // Energy-conserving: the reflection replaces diffuse rather than adding
       // to it, which is what keeps a wet floor from turning milky.
       gl_FragColor.rgb = mix( gl_FragColor.rgb, gl_FragColor.rgb * ( 1.0 - k * 0.55 ) + refl, saturate( k ) );
@@ -490,6 +501,7 @@ uniform sampler2D uWetMap;
 uniform float uReflStrength;
 uniform float uReflDistort;
 uniform float uReflBlur;
+uniform vec2 uReflRough;
 uniform float uDetailScale;
 uniform float uDetailAmp;
 uniform float uRippleScale;
@@ -536,7 +548,9 @@ export class StageFloor {
       uWetMap: { value: maps.normal },
       uReflStrength: { value: 0.62 },
       uReflDistort: { value: 0.028 },
-      uReflBlur: { value: 0.055 },
+      uReflBlur: { value: 0.075 },
+      // Roughness at which the reflection starts and finishes fading out.
+      uReflRough: { value: new THREE.Vector2(0.30, 0.98) },
       uDetailScale: { value: 2.4 },
       uDetailAmp: { value: 0.55 },
       uRippleScale: { value: 0.35 },
@@ -592,8 +606,14 @@ export class StageFloor {
 
   /**
    * The slab has to end somewhere. An unlit apron running out to the fog
-   * distance keeps the horizon from showing void in the reflection, and it is
-   * the cheapest possible geometry: two triangles.
+   * distance keeps the horizon from showing void behind the set, and it is the
+   * cheapest possible geometry: two triangles.
+   *
+   * It is on `LAYER.NO_REFLECT` because it sits two centimetres *below* the
+   * mirror plane, which puts it between the reflection camera and that plane —
+   * so the oblique near plane clips every fragment of it. Drawing it into the
+   * mirror was a draw call a frame for an image that could not survive the
+   * clip.
    */
   #buildApron() {
     const apron = new THREE.Mesh(
@@ -613,6 +633,7 @@ export class StageFloor {
     apron.matrixAutoUpdate = false;
     apron.updateMatrix();
     apron.name = 'arena.floor.apron';
+    apron.layers.set(LAYER.NO_REFLECT);
     this.apron = apron;
     this.group.add(apron);
   }
@@ -738,8 +759,12 @@ export class StageFloor {
   update(dt, time, envParams) {
     this.uniforms.uTime.value = time;
     // The mood decides how wet the room is; the floor decides how that reads.
+    // The curve is steeper than it was because this is now the only reflection
+    // the floor gets: the screen-space pass that used to sit on top of it in
+    // the post chain carried about a third of the visible wet, and that third
+    // has to come from the mirror instead of from nowhere.
     const refl = envParams?.floorRefl ?? 0.32;
-    this.uniforms.uReflStrength.value = (0.28 + refl * 1.05) * this.reflectionScale;
+    this.uniforms.uReflStrength.value = (0.34 + refl * 1.45) * this.reflectionScale;
     // Scuffs dry out over the round rather than vanishing on a timer.
     let dirty = false;
     for (let i = 0; i < this._decalLife.length; i++) {

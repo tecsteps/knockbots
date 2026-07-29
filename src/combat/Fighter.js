@@ -83,7 +83,20 @@ const JUGGLE_GRAVITY = 0.42;
 // Authored launch heights are tuned against normal gravity; under juggle gravity
 // they need trimming or the victim floats above the camera framing.
 const LAUNCH_SCALE = 0.85;
-const FOOT_CLEAR = 0.055;       // ankle height above the floor when planted
+// --- foot planting ---------------------------------------------------------
+// Every threshold here is a distance from the SOLE to the floor, and the sole is
+// not the ankle: on this chassis the boot hangs 16cm below the toe bone and 26cm
+// below the ankle. Thresholds written against bone positions — which is what
+// this used to do, at 5.5cm — can therefore never fire at all, so the offsets
+// are measured off the built robot rather than assumed. See `#measureSole`.
+const PLANT_BAND = 0.025;       // sole this close to the floor counts as contact
+const PLANT_RATE = 0.3;         // per-tick approach of the plant weight
+const FOOT_ROLL_LIMIT = 0.30;   // radians of ankle/ball pitch the roll may add
+const ROLL_CAPACITY = 0.05;     // penetration the roll can absorb before the leg must move
+// A fighting-stance walk is a shuffle: the sole clears the floor by five
+// centimetres, not fifteen. Footfall thresholds have to live inside that.
+const FOOTFALL_DOWN = 0.02;     // sole below this, and falling, is a footfall
+const FOOTFALL_UP = 0.035;      // and above this the foot has left again
 // How much of the animation's authored root translation the body actually takes.
 const ROOT_MOTION_SCALE = 1.0;
 // Per-tick share of the leftover animation yaw that unwinds once no clip is
@@ -112,80 +125,72 @@ const UP = new THREE.Vector3(0, 1, 0);
 // Clip retiming
 //
 // Frame data and animation are authored independently, and they disagree: a
-// clip may throw its punch on frame 24 while the move it belongs to is i13.
-// Rather than bend the balance to the art or the art to the balance, each clip
-// is played at the speed that lands its impact frame exactly on the move's
-// first active frame. This is the standard fighting-game answer — the frame
-// data is law, the animation is time-warped to obey it — and it means an
-// animator can retime a clip without silently breaking a punish.
+// clip may throw its punch on frame 22 while the move it belongs to is i15, and
+// one clip serves a dozen moves with a dozen different startups. The frame data
+// is law — it is balanced — so the art has to be made to land on it.
 //
-// The impact frame is measured once per clip by running a scratch rig through
-// it and finding the tick where a striking bone reaches furthest forward.
+// It used to be made to land on it by *guessing*: a scratch rig was walked
+// through every clip, the tick where some striking bone reached furthest forward
+// was taken as the contact frame, and the whole clip was then played at one
+// global speed multiplier. That was wrong twice over. The guess was frequently
+// nowhere near the authored contact — it picked frame 52 of a 66-tick special
+// whose punch lands on 26 — and even a correct guess produced a single speed,
+// which cannot pin contact without dragging the recovery with it. Multipliers
+// of 2.6 and 0.42 were routine; at 2.6 a clip finishes in a third of its move
+// and then holds one dead pose for the rest of it.
+//
+// So the clip declares its own contact, in `impact: { tick, bone }`, and
+// playback is anchored rather than scaled: contact is pinned onto the move's
+// first active frame and the clip's end onto the move's last, and only the
+// wind-up and the recovery stretch, each by its own factor. Inside a segment the
+// map is linear, so every authored 'snap' and 'expo' keeps its shape. The
+// factors are clamped to a narrow band as a safety net for the handful of pairs
+// that genuinely disagree — a 44-tick hammer fist serving an i48 siege slam —
+// and where the clamp bites the clip simply blends out early rather than smearing.
 // ---------------------------------------------------------------------------
 
-const STRIKE_BONES = [
-  'hand_L', 'hand_R', 'foot_L', 'foot_R', 'elbow_L', 'elbow_R',
-  'knee_L', 'knee_R', 'shoulder_L', 'shoulder_R', 'chest',
-];
-const MIN_CLIP_SPEED = 0.55;
-const MAX_CLIP_SPEED = 2.6;
-const _impactCache = new Map();
-let _probeRig = null;
+/**
+ * How far a segment may be stretched or squeezed before the mismatch is treated
+ * as an authoring problem rather than something to hide. Past roughly a third
+ * either way a strike stops reading as the same strike.
+ */
+const RETIME_MIN = 0.72;
+const RETIME_MAX = 1.38;
 
 /**
- * Tick at which `clipId` reaches its furthest forward extension.
- *
- * Measured on the unspun rig, deliberately. A spinning clip's root yaw is a
- * presentation offset — the body turns, the fighter's facing does not — and
- * folding it in here would re-warp six clips' playback speed off a peak that
- * sweeps past the camera rather than toward the opponent. The frame data is law;
- * this only says which tick of the art to line up with it.
+ * The tick a clip declares as its contact frame, or 0 when it declares none.
  * @param {string} clipId
- * @returns {number} 0 when the clip has no meaningful strike
+ * @returns {number}
  */
-export function clipImpactFrame(clipId) {
-  if (_impactCache.has(clipId)) return _impactCache.get(clipId);
-  const clip = CLIPS[clipId];
-  if (!clip) { _impactCache.set(clipId, 0); return 0; }
-  if (!_probeRig) {
-    const bundle = createSkeleton(null);
-    const group = new THREE.Group();
-    group.rotation.y = yawForFacing(1);
-    group.add(bundle.byName.root);
-    _probeRig = { bundle, group, animator: new Animator(bundle, CLIPS) };
-  }
-  const { bundle, group, animator } = _probeRig;
-  animator.play(clipId, { blend: 0, loop: false, speed: 1 });
-  animator.clearRootMotion?.();
-  let rootX = 0;
-  let bestT = 0;
-  let bestX = -Infinity;
-  const frames = Math.max(1, Math.round(clip.duration));
-  for (let t = 1; t <= frames; t++) {
-    animator.simulate();
-    if (animator.consumeRootMotion) rootX += animator.consumeRootMotion().z;
-    animator.applyTo(bundle.bones, 1);
-    group.position.x = rootX;
-    group.updateMatrixWorld(true);
-    for (const name of STRIKE_BONES) {
-      const bone = bundle.byName[name];
-      if (!bone) continue;
-      _v.setFromMatrixPosition(bone.matrixWorld);
-      if (_v.x > bestX) { bestX = _v.x; bestT = t; }
-    }
-  }
-  _impactCache.set(clipId, bestT);
-  return bestT;
+export function clipContactFrame(clipId) {
+  const t = CLIPS[clipId]?.impact?.tick;
+  return typeof t === 'number' && t > 0 ? t : 0;
 }
 
-/** Playback speed that puts `move`'s clip impact on its first active frame. */
-export function clipSpeedFor(move) {
-  if (move.clipSpeed != null) return move.clipSpeed;
-  const peak = clipImpactFrame(move.clip);
-  const speed = peak > 0 && move.startup > 0 ? peak / move.startup : 1;
-  const clamped = THREE.MathUtils.clamp(speed, MIN_CLIP_SPEED, MAX_CLIP_SPEED);
-  move.clipSpeed = clamped;
-  return clamped;
+/**
+ * Two-anchor time map that plays `move`'s clip against the move's frame counter.
+ * Cached on the move: it is a property of a (clip, frame data) pair, and both
+ * are static.
+ * @param {Object} move
+ * @returns {?{pivot:number, pivotAt:number, inScale:number, outScale:number}}
+ */
+export function retimeFor(move) {
+  if (move.retime !== undefined) return move.retime;
+  const clip = CLIPS[move.clip];
+  const pivot = clipContactFrame(move.clip);
+  const pivotAt = move.startup;
+  // A clip with no declared contact — a stance, a reaction, a whiff — plays at
+  // its authored rate. There is nothing to line up.
+  if (!clip || !(pivot > 0) || !(pivotAt > 0)) { move.retime = null; return null; }
+  const tail = clip.duration - pivot;
+  const tailAt = Math.max(1, move.total - pivotAt);
+  move.retime = {
+    pivot,
+    pivotAt,
+    inScale: THREE.MathUtils.clamp(pivot / pivotAt, RETIME_MIN, RETIME_MAX),
+    outScale: THREE.MathUtils.clamp(tail / tailAt, RETIME_MIN, RETIME_MAX),
+  };
+  return move.retime;
 }
 
 /** Mirror of Skeleton.scaleFor — hurtbox radii must scale with the proportions. */
@@ -291,6 +296,12 @@ export class Fighter {
     this.emissiveMats = [];
     this.actuators = [];
     this.footState = { L: { y: 1, down: false }, R: { y: 1, down: false } };
+    /** Latched floor contact per foot: where it was put, and how much it holds. */
+    this.plantState = {
+      L: { contact: 0, weight: 0, target: new THREE.Vector3(), sole: [] },
+      R: { contact: 0, weight: 0, target: new THREE.Vector3(), sole: [] },
+    };
+    this.legLength = 0.86;
     this.currentClip = '';
     this.ready = false;
   }
@@ -309,14 +320,27 @@ export class Fighter {
   }
 
   /**
-   * Measure the impact frame of every attack clip once, at load, so the first
-   * time a move comes out mid-fight it does not stall for a rig walk.
+   * Resolve the retime of every move once, at load, and report any move whose
+   * clip disagrees with its frame data by more than the clamp can absorb. That
+   * warning is the whole point: a mismatch is a note to an animator, not
+   * something to paper over silently at runtime.
    */
   static warmClipTiming() {
     if (Fighter._timingWarmed) return;
     Fighter._timingWarmed = true;
+    const off = [];
     for (const set of Object.values(MOVES)) {
-      for (const move of Object.values(set)) clipSpeedFor(move);
+      for (const move of Object.values(set)) {
+        const r = retimeFor(move);
+        if (!r) continue;
+        const wantIn = r.pivot / r.pivotAt;
+        if (wantIn < RETIME_MIN || wantIn > RETIME_MAX) {
+          off.push(`${move.id ?? move.name ?? move.clip} wants ${wantIn.toFixed(2)}x wind-up on ${move.clip}`);
+        }
+      }
+    }
+    if (off.length) {
+      console.warn(`[Fighter] ${off.length} move(s) clamped on retime:\n  ${off.slice(0, 8).join('\n  ')}`);
     }
   }
 
@@ -355,10 +379,22 @@ export class Fighter {
     // Some builders parent the rig themselves; if not, do it here.
     if (!bundle.byName.root.parent) this.group.add(bundle.byName.root);
 
+    // Reach of one leg on THIS rig — createSkeleton has already folded the
+    // character's proportions into the bone offsets, so measure, do not guess.
+    this.legLength = (bundle.byName.knee_L?.position.length() ?? 0.44) +
+      (bundle.byName.ankle_L?.position.length() ?? 0.42);
+    for (const side of ['L', 'R']) {
+      const st = this.plantState[side];
+      st.contact = 0;
+      st.weight = 0;
+    }
+
     this.animator = new Animator(bundle, CLIPS);
+    this.#installFootRoll();
     this.#collectVisualParts();
     this.#play('idle.fight', 0, true);
     this.#drivePose();
+    this.#measureSole();
     this.#buildHurtboxes();
   }
 
@@ -477,6 +513,11 @@ export class Fighter {
     this.upHeldTicks = 0;
     this.pendingSidestep = 0;
     this.lastDamageTick = -999;
+    for (const side of ['L', 'R']) {
+      const st = this.plantState[side];
+      st.contact = 0;
+      st.weight = 0;
+    }
     if (this.animator) this.#play('idle.fight', 0, true);
     this.#drivePose();
     this.#buildHurtboxes();
@@ -845,7 +886,7 @@ export class Fighter {
     for (const n of this.moveBones) if (this.boneTrack[n]) this.boneTrack[n].valid = false;
     this.velocity.x *= 0.4;
     this.velocity.z *= 0.3;
-    this.#play(move.clip, move.startup > 16 ? 4 : 2, false, clipSpeedFor(move));
+    this.#play(move.clip, move.startup > 16 ? 4 : 2, false, 1, retimeFor(move));
 
     if (move.props.super) {
       bus.emit('superStart', { fighter: this, move });
@@ -1567,45 +1608,206 @@ export class Fighter {
   // Presentation
   // -------------------------------------------------------------------------
 
-  #footIk() {
-    if (!this.animator?.setIkTarget) return;
-    const plant = !this.airborne && this.state !== STATE.KNOCKDOWN && this.state !== STATE.KO;
+  /**
+   * Foot contact.
+   *
+   * What this used to do was nothing at all, and it is worth being precise about
+   * why, because the reason generalises. It compared the ANKLE bone's height
+   * against `floorY + 0.055` — but on this chassis the boot's sole hangs 26cm
+   * below the ankle joint and the ankle stands at 26cm in the fight stance, so
+   * the test could only ever have fired with the leg driven a quarter of a metre
+   * into the concrete. Written against the foot bone, `#trackFootfalls` had the
+   * same fault and never emitted a single footstep. A threshold is only as good
+   * as the thing it measures, so the sole is now measured off the built robot
+   * (`#measureSole`) instead of assumed from the skeleton.
+   *
+   * Contact is decided on `#soleIntentHeight` — the height the CLIPS asked for,
+   * sampled before IK — and never on the posed result. A planter that reads its
+   * own output latches shut: holding a foot down keeps it in contact, which keeps
+   * it held, and the swing phase never arrives. Measured on a walk cycle that is
+   * exactly what happened; one foot's lift went to zero.
+   *
+   * `weight` is the contact ramp, published for the roll layer below and for the
+   * footfall tracker. Correction itself is deliberately minimal — see the note in
+   * the body about what a partially-weighted two-bone solve does to a leg that
+   * was already right.
+   */
+  /**
+   * Learn where each boot's sole actually is, once, off the built robot.
+   *
+   * Nothing in the skeleton says how thick a boot is, and on this chassis it is
+   * thick: the sole sits 16cm below the toe bone. So the reference stance is
+   * posed, the lowest point of the whole robot is taken as the floor it is
+   * standing on, and the point directly under each foot bone at that height is
+   * recorded in that bone's OWN frame. Storing it bone-local rather than as a
+   * scalar drop is what makes it survive a rotation: as the foot pitches over on
+   * to its toe, the recorded sole point pitches with it and still reports where
+   * the boot is, which a fixed offset could not.
+   */
+  #measureSole() {
+    this.group.updateMatrixWorld(true);
+    let floor = Infinity;
+    this.group.traverse((o) => {
+      const g = o.geometry;
+      if (!g) return;
+      if (!g.boundingBox) g.computeBoundingBox();
+      const bb = g.boundingBox;
+      if (!bb) return;
+      for (let i = 0; i < 8; i++) {
+        _v.set(i & 1 ? bb.max.x : bb.min.x, i & 2 ? bb.max.y : bb.min.y, i & 4 ? bb.max.z : bb.min.z)
+          .applyMatrix4(o.matrixWorld);
+        if (_v.y < floor) floor = _v.y;
+      }
+    });
     for (const side of ['L', 'R']) {
-      const chain = side === 'L' ? 'legL' : 'legR';
-      if (!IK_CHAINS[chain]) continue;
-      const bone = this.boneByName[`ankle_${side}`];
-      if (!bone) continue;
-      _v.setFromMatrixPosition(bone.matrixWorld);
-      const minY = this.floorY + FOOT_CLEAR;
-      if (plant && _v.y < minY) {
-        _v.y = minY;
-        this.animator.setIkTarget(chain, _v, 1);
-      } else if (plant && _v.y < minY + 0.09) {
-        const w = 1 - (_v.y - minY) / 0.09;
-        _v.y = minY;
-        this.animator.setIkTarget(chain, _v, w);
-      } else {
-        this.animator.setIkTarget(chain, null, 0);
+      const st = this.plantState[side];
+      st.sole.length = 0;
+      if (!Number.isFinite(floor)) continue;
+      for (const name of [`ankle_${side}`, `foot_${side}`, `toe_${side}`]) {
+        const bone = this.boneByName[name];
+        if (!bone) continue;
+        _v.setFromMatrixPosition(bone.matrixWorld);
+        const drop = _v.y - floor;
+        // A bone whose "sole" is above it, or absurdly far below, is not part of
+        // the boot; ignore it rather than plant the fighter on a bad number.
+        if (!(drop > 0.01 && drop < 0.45)) continue;
+        _v.y = floor;
+        _m.copy(bone.matrixWorld).invert();
+        st.sole.push({ bone, local: _v.clone().applyMatrix4(_m) });
       }
     }
   }
 
+  /** World height of the lowest point of one boot as it is actually posed. */
+  #soleHeight(side) {
+    const pts = this.plantState[side].sole;
+    let y = Infinity;
+    for (const s of pts) {
+      _v4.copy(s.local).applyMatrix4(s.bone.matrixWorld);
+      if (_v4.y < y) y = _v4.y;
+    }
+    return Number.isFinite(y) ? y : this.floorY;
+  }
+
+  /**
+   * The same height as the CLIPS wanted it, before the planter's own correction.
+   * Contact has to be decided on this and not on the posed result, or the plant
+   * latches itself shut: holding a foot on the floor keeps it in contact, which
+   * keeps it held, and the swing phase of a walk never comes.
+   */
+  #soleIntentHeight(side) {
+    const pts = this.plantState[side].sole;
+    if (!this.animator?.preIkPointY) return this.#soleHeight(side);
+    let y = Infinity;
+    for (const s of pts) {
+      const v = this.animator.preIkPointY(s.bone.name, s.local);
+      if (v !== null && v < y) y = v;
+    }
+    return Number.isFinite(y) ? y + this.position.y : this.floorY;
+  }
+
+  #footIk() {
+    if (!this.animator?.setIkTarget) return;
+    const grounded = !this.airborne && this.state !== STATE.KNOCKDOWN && this.state !== STATE.KO;
+    for (const side of ['L', 'R']) {
+      const chain = side === 'L' ? 'legL' : 'legR';
+      const st = this.plantState[side];
+      if (!IK_CHAINS[chain]) continue;
+      const ankle = this.boneByName[`ankle_${side}`];
+      const hip = this.boneByName[`hip_${side}`];
+      if (!ankle || !hip) continue;
+
+      _v.setFromMatrixPosition(ankle.matrixWorld);
+      const intent = this.#soleIntentHeight(side) - this.floorY;
+      const bury = Math.max(0, this.floorY - this.#soleHeight(side));
+
+      // Contact, decided on what the CLIP wanted rather than on what came out,
+      // and held across a small band so a landing is not a switch.
+      const contact = grounded && intent < PLANT_BAND;
+      st.contact = contact ? THREE.MathUtils.clamp(1 - intent / PLANT_BAND, 0, 1) : 0;
+      st.weight += (st.contact - st.weight) * PLANT_RATE;
+      if (st.weight < 0.004) st.weight = 0;
+
+      // The leg chain is only asked for help when the boot is buried deeper than
+      // the ankle roll can lift it out of. That threshold is not caution, it is
+      // measured: a partially-weighted two-bone solve does not leave a correct
+      // leg alone. It rebuilds the limb in the chain's canonical bend plane and
+      // slerps the ankle only part of the way back to its authored orientation,
+      // which pitches the boot toe-down. Run on every contact frame of a walk it
+      // took the deepest penetration from 2.6cm over 85 frames to 10cm over 400 —
+      // it made the exact problem it exists to fix four times worse. Rolling the
+      // ankle costs nothing and fixed 40% of those frames on its own, so the
+      // solver is held back for the case it is genuinely needed: a landing or a
+      // knockdown that drives the whole leg through the floor.
+      if (st.weight > 0.01 && bury > ROLL_CAPACITY) {
+        _v.y += bury;
+        // Past the end of the leg the solve would straighten the knee, so hand
+        // the weight back to the clip rather than snap it.
+        _v2.setFromMatrixPosition(hip.matrixWorld);
+        const easy = this.legLength * 0.94;
+        const reach = _v.distanceTo(_v2);
+        const w = reach > easy
+          ? st.weight * THREE.MathUtils.clamp(1 - (reach - easy) / (this.legLength * 0.1), 0, 1)
+          : st.weight;
+        if (w > 0.01) {
+          st.target.copy(_v);
+          this.animator.setIkTarget(chain, st.target, w);
+          continue;
+        }
+      }
+      this.animator.setIkTarget(chain, null, 0);
+    }
+  }
+
+  /**
+   * Roll a planted foot over its own ball instead of driving it through the
+   * floor. Runs as a post-IK layer so it reads the leg the solver actually
+   * produced, and writes only the two joints below the ankle.
+   */
+  #installFootRoll() {
+    if (!this.animator?.addProceduralLayer) return;
+    this.animator.addProceduralLayer((pose, ctx) => {
+      for (const side of ['L', 'R']) {
+        const w = this.plantState[side].weight;
+        if (w <= 0.01) continue;
+        // How far the boot is buried, and how far down the foot that point sits.
+        const deep = this.#soleHeight(side) - this.floorY;
+        if (deep >= 0) continue;
+        const ankle = ctx.worldPos(`ankle_${side}`);
+        const toe = ctx.worldPos(`toe_${side}`);
+        if (!ankle || !toe) continue;
+        const arm = Math.max(0.08, toe.distanceTo(ankle));
+        // Positive X at the ankle plantar-flexes, which drives the toe DOWN, so
+        // lifting the boot out of the floor is a negative rotation.
+        const pitch = THREE.MathUtils.clamp(deep / arm, -FOOT_ROLL_LIMIT, 0);
+        ctx.addEuler(`ankle_${side}`, pitch * 0.6, 0, 0, w);
+        ctx.addEuler(`foot_${side}`, pitch * 0.4, 0, 0, w);
+      }
+    }, { stage: 'post' });
+  }
+
+  /**
+   * A footstep fires when the SOLE arrives at the floor moving downward, not
+   * when a bone crosses an arbitrary height. Written against the foot bone this
+   * used the same wrong reference the old planter did and, on a chassis whose
+   * foot bone rests 20cm up, never fired once.
+   */
   #trackFootfalls() {
     if (this.airborne) return;
     for (const side of ['L', 'R']) {
-      const bone = this.boneByName[`foot_${side}`];
-      if (!bone) continue;
-      _v.setFromMatrixPosition(bone.matrixWorld);
       const s = this.footState[side];
-      const h = _v.y - this.floorY;
+      const h = this.#soleIntentHeight(side) - this.floorY;
       const dv = h - s.y;
-      if (!s.down && h < 0.11 && dv < -0.004) {
+      if (!s.down && h < FOOTFALL_DOWN && dv < -0.0015) {
         s.down = true;
+        const bone = this.boneByName[`foot_${side}`];
+        if (bone) _v.setFromMatrixPosition(bone.matrixWorld);
+        _v.y = this.floorY;
         bus.emit('footstep', {
           fighter: this, foot: side, point: _v.clone(),
           force: THREE.MathUtils.clamp(-dv * 55 + Math.abs(this.velocity.x) * 0.09, 0.2, 1.6),
         });
-      } else if (s.down && h > 0.17) {
+      } else if (s.down && h > FOOTFALL_UP) {
         s.down = false;
       }
       s.y = h;
@@ -1690,7 +1892,7 @@ export class Fighter {
   }
 
   /** Public clip driver, used by the harness, intros and paired animations. */
-  playClip(id, blend = 4, loop = false, speed = 1) { this.#play(id, blend, loop, speed); }
+  playClip(id, blend = 4, loop = false, speed = 1) { this.#play(id, blend, loop, speed, null); }
 
   /**
    * Play a clip, skipping the call when a looping clip is already running so a
@@ -1698,7 +1900,7 @@ export class Fighter {
    * fight stance rather than throwing — one missing animation must never be
    * able to take the whole match down.
    */
-  #play(id, blend = 4, loop = false, speed = 1) {
+  #play(id, blend = 4, loop = false, speed = 1, retime = null) {
     if (!this.animator || !id) return;
     let clipId = id;
     if (!CLIPS[clipId]) {
@@ -1708,11 +1910,12 @@ export class Fighter {
       }
       clipId = 'idle.fight';
       speed = 1;
+      retime = null;
       if (!CLIPS[clipId]) return;
     }
     if (loop && this.currentClip === clipId) return;
     this.currentClip = clipId;
-    this.animator.play(clipId, { blend, loop, speed });
+    this.animator.play(clipId, { blend, loop, speed, retime });
   }
 
   /** Round bookends. */

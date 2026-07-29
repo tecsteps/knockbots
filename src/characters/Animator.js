@@ -30,6 +30,14 @@
  * reads a bone's current quaternion, which is why retriggering a clip mid-play,
  * crossfading three clips at once, or blending IK in and out cannot drift.
  *
+ * An entry keeps two clocks. `clock` is the caller's — a move's frame counter —
+ * and `time` is where that lands inside the clip. With no retime the two are the
+ * same. With one, the clip's authored contact tick is pinned onto the frame the
+ * caller needs it on and the wind-up and the recovery are stretched separately,
+ * so a clip lands its blow on the right frame AND still finishes when the move
+ * does. Everything downstream reads `time`, so root motion, blending and clip
+ * end detection all follow the retime for free.
+ *
  * Root motion is extracted, not applied: horizontal translation and yaw are
  * accumulated into a delta that Fighter drains with consumeRootMotion() and
  * feeds to the physical body. Vertical root motion stays visual by default,
@@ -211,12 +219,35 @@ class Spring3 {
   reset() { this.x.set(0, 0, 0); this.v.set(0, 0, 0); }
 }
 
+/**
+ * Map an entry's own clock onto clip time through two anchored segments.
+ *
+ * A retime descriptor pins two points — the clip's authored contact tick and its
+ * end — onto the ticks the caller needs them to land on, and stretches only the
+ * span between them. Inside a segment the mapping is linear, so the shape of
+ * every authored easing curve survives; what changes is the length of the
+ * wind-up and the length of the recovery, independently. A single global speed
+ * multiplier cannot do that: forcing contact onto the right frame with one
+ * number necessarily drags the whole recovery with it, which is what leaves a
+ * clip finished a third of the way through its move, holding a dead pose.
+ * @param {{pivot:number, pivotAt:number, inScale:number, outScale:number}} r
+ * @param {number} clock
+ */
+function retimeClip(r, clock) {
+  if (clock <= r.pivotAt) return clock * r.inScale;
+  return r.pivot + (clock - r.pivotAt) * r.outScale;
+}
+
 /** One playing clip instance inside a layer. */
 class Entry {
   constructor(clipId, clip, opts) {
     this.clipId = clipId;
     this.clip = clip;
-    this.time = opts.offset || 0;
+    /** The entry's own clock, in the caller's ticks. */
+    this.clock = opts.offset || 0;
+    /** @type {?{pivot:number, pivotAt:number, inScale:number, outScale:number}} */
+    this.retime = opts.retime || null;
+    this.time = this.retime ? retimeClip(this.retime, this.clock) : this.clock;
     this.speed = opts.speed ?? 1;
     this.loop = opts.loop ?? !!clip.loop;
     this.weight = 0;
@@ -295,6 +326,9 @@ export class Animator {
     this.worldQuat = Array.from({ length: this.count }, () => new THREE.Quaternion());
     this.worldPos = Array.from({ length: this.count }, () => new THREE.Vector3());
     this._prevParentQuat = Array.from({ length: this.count }, () => new THREE.Quaternion());
+    // The same transforms as they stood before IK ran — see simulate().
+    this._preIkQuat = Array.from({ length: this.count }, () => new THREE.Quaternion());
+    this._preIkPos = Array.from({ length: this.count }, () => new THREE.Vector3());
 
     // --- root motion --------------------------------------------------------
     this.rootMotionAxes = { x: true, y: false, z: true, yaw: true };
@@ -523,6 +557,9 @@ export class Animator {
    *                                   entry, do nothing (default true)
    * @param {boolean} [opts.autoBlendOut] fade the entry out when it ends
    * @param {Function}[opts.onEnd]     called once when a non-looping clip ends
+   * @param {{pivot:number,pivotAt:number,inScale:number,outScale:number}} [opts.retime]
+   *   two-anchor time map: play the clip so its `pivot` tick falls on the
+   *   caller's `pivotAt`, at `inScale` before it and `outScale` after
    * @returns {Entry|null}
    */
   play(clipId, opts = {}) {
@@ -544,7 +581,9 @@ export class Animator {
 
     // A retrigger inside the same tick reuses the entry rather than stacking.
     if (top && !top.dying && top.clipId === clipId && top.fadeElapsed === 0 && top.weight <= 0) {
-      top.time = opts.offset || 0;
+      top.retime = opts.retime || null;
+      top.clock = opts.offset || 0;
+      top.time = top.retime ? retimeClip(top.retime, top.clock) : top.clock;
       top.speed = opts.speed ?? top.speed;
       this.#primeRoot(top);
       return top;
@@ -554,6 +593,7 @@ export class Animator {
       speed: opts.speed,
       loop: opts.loop,
       offset: opts.offset,
+      retime: opts.retime,
       easeFn,
       autoBlendOut: opts.autoBlendOut ?? !isBase,
       onEnd: opts.onEnd,
@@ -660,14 +700,19 @@ export class Animator {
     if (top) top.speed = speed;
   }
 
-  /** Jump the top entry of a layer to an exact tick. Used by move syncing. */
+  /**
+   * Jump the top entry of a layer to an exact tick of the CALLER's clock, which
+   * is the move's frame counter when a retime is in force and clip time
+   * otherwise. Used by move syncing.
+   */
   setTime(t, layerName = 'base') {
     const layer = this.layers.get(layerName);
     const top = layer?.entries[layer.entries.length - 1];
     if (!top) return;
-    top.time = t;
+    top.clock = t;
+    top.time = top.retime ? retimeClip(top.retime, top.clock) : top.clock;
     this.#primeRoot(top);
-    if (layer === this.base) this.time = t;
+    if (layer === this.base) this.time = top.time;
   }
 
   /** True if a clip is currently contributing to a layer. */
@@ -819,6 +864,22 @@ export class Animator {
     if (opts.space) this.look.space = opts.space;
   }
 
+  /**
+   * Model-space height of a point fixed in one bone's frame, taken from the pose
+   * the clips produced BEFORE inverse kinematics touched it. This is what a
+   * planter asks when it wants to know whether the animation is lifting a foot,
+   * a question its own corrected output cannot answer.
+   * @param {string} boneName
+   * @param {THREE.Vector3} local point in the bone's local frame
+   * @returns {?number} null when the bone is not in this skeleton
+   */
+  preIkPointY(boneName, local) {
+    const i = this.index[boneName];
+    if (i === undefined) return null;
+    _v0.copy(local).applyQuaternion(this._preIkQuat[i]).add(this._preIkPos[i]);
+    return _v0.y;
+  }
+
   /** Velocity of the body in model space; drives lean and secondary motion. */
   setBodyVelocity(v) {
     this.bodyVelocity.copy(v);
@@ -920,6 +981,15 @@ export class Animator {
     // 5 — world transforms of the procedural pose, for IK.
     this.#forwardKinematics(cur);
 
+    // Snapshot the pose the clips asked for, before IK edits it. A foot planter
+    // has to be able to tell "the animation is holding this foot down" from
+    // "the planter is holding this foot down", and it cannot do that by reading
+    // its own output: the correction hides the lift that should release it.
+    for (let i = 0; i < this.count; i++) {
+      this._preIkPos[i].copy(this.worldPos[i]);
+      this._preIkQuat[i].copy(this.worldQuat[i]);
+    }
+
     // 6 — IK, then refresh the world cache so anything reading worldPos /
     // worldQuat after simulate() sees the pose that will actually be rendered.
     this._ikApplied = false;
@@ -963,7 +1033,8 @@ export class Animator {
         // per-entry, from the entry's own unwrapped absolute offset, is what
         // keeps a looping walk from emitting a huge negative step on the wrap
         // and a crossfade from double-counting.
-        e.time += e.speed;
+        e.clock += e.speed;
+        e.time = e.retime ? retimeClip(e.retime, e.clock) : e.clock;
         if (clip.root && clip.root.length) {
           _v0.copy(e.rootAbs);
           const yaw0 = e.rootYawAbs;

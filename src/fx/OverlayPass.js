@@ -100,13 +100,19 @@ void main() {
   vec3 col;
   if ( uImpact > 0.002 ) {
     vec2 ic = uImpactCenter * 0.5 + 0.5;
-    float strength = uImpact * 0.085;
+    // Eight and a half percent of the frame is not an impact frame, it is a
+    // dissolve: on the frame the blow lands — the one frame anyone actually
+    // looks at — both fighters were smeared into unreadable streaks and the
+    // hit had nothing left to punctuate. The smear has to be felt at the
+    // periphery and survivable at the centre, so it is halved and its falloff
+    // is pushed further out from the contact point.
+    float strength = uImpact * 0.040;
     vec3 acc = vec3( 0.0 );
     float wsum = 0.0;
     for ( int k = 0; k < 7; k++ ) {
       float f = float( k ) / 6.0;
       float s = 1.0 - f * strength;
-      float wk = 1.0 - f * 0.72;
+      float wk = 1.0 - f * 0.82;
       vec2 oR = mix( ic, uvR, s );
       vec2 oG = mix( ic, uvG, s );
       vec2 oB = mix( ic, uvB, s );

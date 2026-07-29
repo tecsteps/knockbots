@@ -10,9 +10,10 @@
  *
  * Three health layers per fighter, matching real fighting-game convention:
  *   - `.hp-fill`  the true, current health — snaps instantly, no easing.
- *   - `.hp-drain` a pale/red layer that holds at the pre-hit value for
- *     ~0.5s and then eases down to meet `.hp-fill`, so a big hit visibly
- *     "bleeds out" rather than just vanishing.
+ *   - `.hp-drain` a hot red layer that holds at the pre-hit value for a
+ *     short beat (`DRAIN_HOLD_TICKS`, counted in sim ticks — see the note
+ *     below) and then eases down to meet `.hp-fill`, pulsing while it bleeds,
+ *     so a big hit visibly "bleeds out" rather than just vanishing.
  *   - `.hp-ghost` a grey layer at `(health + recoverable) / max`, i.e. the
  *     ceiling health regenerates back up to. It shrinks smoothly as
  *     `Fighter#recoverable` is spent by time or consumed by more damage.
@@ -31,11 +32,28 @@ import { bus } from '../core/Bus.js';
 import { MAX_HEALTH, METER_MAX, ROUNDS_TO_WIN, ROUND_TIME_SECONDS, TICK_HZ } from '../core/Constants.js';
 import { applyKbText } from './Typeface.js';
 
-const DRAIN_HOLD_SEC = 0.5;
-const DRAIN_RATE = 5.2; // damp lambda once the hold expires
-const GHOST_RATE = 3.0;
+// Hold/ease timing below is counted in *simulated ticks*, not real seconds.
+// A real-dt hold reads fine at a steady 60fps, but the moment a hit lands is
+// exactly the moment the frame is most likely to be expensive (hitstop,
+// sparks, screen shake, a camera cut all firing at once) — the render can
+// go slow right when the drain/combo readout most needs to be legible, and
+// a countdown driven by wall-clock dt then burns through its whole budget in
+// a couple of chunky frames before anyone sees it ease (see docs/CRITIC.md's
+// 08b-hud-motion capture, which caught exactly this). Ticks advance at a
+// fixed 60Hz regardless of render pace, so counting against the fighters'
+// own `simTick` keeps the beat the same length in game-time whether the
+// frame that tick lands on took 2ms or 200ms to draw.
+//
+// A hold long enough to read as a deliberate beat, short enough that the
+// bleed-down itself still fits inside the window a hit's hitstop/callouts
+// hold the eye for — at the old 0.5s-of-real-time the chip gap sat frozen
+// for nearly the whole of that window and the ease that followed was over
+// almost before it started.
+const DRAIN_HOLD_TICKS = 10;
+const DRAIN_RATE_PER_TICK = 6.0 / TICK_HZ; // damp lambda, per tick, once the hold expires
+const GHOST_RATE_PER_TICK = 3.0 / TICK_HZ;
 const CRITICAL_RATIO = 0.22;
-const COMBO_HOLD_SEC = 1.1; // time with no new hit before the combo readout dismisses
+const COMBO_HOLD_TICKS = 66; // ~1.1s of game-time with no new hit before the combo readout dismisses
 const MAX_CALLOUTS = 24;
 
 const IN_FIGHT_PHASES = new Set(['intro', 'ready', 'fight', 'ko', 'roundEnd']);
@@ -74,15 +92,17 @@ export class HUD {
     this.#buildCallouts();
     this.#buildAnnouncements();
 
-    /** Per-fighter animated health-bar state. */
+    /** Per-fighter animated health-bar state. `drainHoldUntil` is an
+     * absolute `simTick`, not a countdown, so a slow/batched frame can never
+     * over-consume it (see the timing note above `DRAIN_HOLD_TICKS`). */
     this.hp = fighters.map(() => ({
-      fill: 1, drain: 1, ghost: 1, drainHold: 0, prevHealth: MAX_HEALTH,
+      fill: 1, drain: 1, ghost: 1, drainHoldUntil: 0, lastTick: null,
     }));
     this.lastName = [null, null];
     this.lastWins = [-1, -1];
 
     this.combo = fighters.map(() => ({
-      visible: false, hits: 0, shownHits: 0, damage: 0, tag: 'COMBO', holdTimer: 0,
+      visible: false, hits: 0, shownHits: 0, damage: 0, tag: 'COMBO', holdUntilTick: 0,
     }));
 
     this.calloutPool = [];
@@ -321,27 +341,54 @@ export class HUD {
     void flash.offsetWidth; // restart the CSS animation
     flash.classList.add('hp-flash--go');
 
+    // Prime the drain/hold state straight off the event instead of waiting
+    // for `#updateHealth`'s next polled frame to notice the drop. A single
+    // busy tick can carry more than one health write (a test-harness floor
+    // clamp, then the hit itself; or several hitboxes in one move) before the
+    // next render, and a plain before/after comparison only ever sees the
+    // last of those — which can be a net rise, hiding the bleed gap
+    // completely even though a real hit landed. `damage` is exactly what
+    // health just lost, so the pre-hit ratio is reconstructable here without
+    // racing the next frame for it.
+    const s = this.hp[defender.index];
+    const preRatio = THREE.MathUtils.clamp((defender.health + damage) / MAX_HEALTH, 0, 1);
+    s.drain = Math.max(s.drain, preRatio);
+    s.drainHoldUntil = defender.simTick + DRAIN_HOLD_TICKS;
+
     this.#spawnCallout(point, `-${Math.round(damage)}`, 'callout--damage', defender.index === 0 ? -1 : 1);
     if (counter) this.#spawnCallout(point, 'COUNTER HIT', 'callout--counter', 0);
 
     const c = this.combo[attacker.index];
     c.hits = comboCount;
     c.damage = attacker.comboDamage;
-    if (defender.airborne) c.tag = 'JUGGLE';
+    const airborne = defender.airborne;
+    if (airborne) c.tag = 'JUGGLE';
     else if (comboCount === 1) c.tag = counter ? 'COUNTER' : 'COMBO';
-    c.holdTimer = COMBO_HOLD_SEC;
-    if (comboCount >= 2) this.#punchCombo(attacker.index);
-    c.visible = comboCount >= 2;
+    c.holdUntilTick = attacker.simTick + COMBO_HOLD_TICKS;
+    // A launcher's own first hit already puts the defender airborne — that
+    // is the start of a combo opportunity even though the tally itself only
+    // reads 1, so it earns the same slam-in beat a second hit would rather
+    // than staying silent until one arrives.
+    const visible = comboCount >= 2 || airborne;
+    if (visible) this.#punchCombo(attacker.index);
+    c.visible = visible;
   }
 
   #onBlock({ defender, point, move }) {
     const chip = Math.round((move.damage ?? 0) * 0.08) || 1;
     this.#spawnCallout(point, `-${chip}`, 'callout--chip', defender.index === 0 ? -1 : 1);
+
+    // Same reasoning as `#onHit`: prime the chip layer from the event so a
+    // block's small health loss gets the same guaranteed drain-and-hold read.
+    const s = this.hp[defender.index];
+    const preRatio = THREE.MathUtils.clamp((defender.health + chip) / MAX_HEALTH, 0, 1);
+    s.drain = Math.max(s.drain, preRatio);
+    s.drainHoldUntil = defender.simTick + DRAIN_HOLD_TICKS;
   }
 
   #onComboEnd({ fighter }) {
     const c = this.combo[fighter.index];
-    c.holdTimer = 0;
+    c.visible = false;
   }
 
   #onRoundEnd({ ko, perfect }) {
@@ -370,37 +417,36 @@ export class HUD {
     }
     if (!showHud) return;
 
-    this.#updateHealth(dt);
+    this.#updateHealth();
     this.#updateNamesAndPips(game);
     this.#updateTimer(game);
     this.#updateMeters(dt);
-    this.#updateCombos(dt);
+    this.#updateCombos();
     this.#updateCallouts(dt, game.camera);
   }
 
-  #updateHealth(dt) {
+  #updateHealth() {
     for (let i = 0; i < this.fighters.length; i++) {
       const f = this.fighters[i];
       const s = this.hp[i];
       const el = this.sides[i];
 
+      // Ease against ticks the fighter has actually simulated since the last
+      // render, not real dt — see the timing note above `DRAIN_HOLD_TICKS`.
+      const tick = f.simTick;
+      const tickDelta = s.lastTick == null ? 0 : Math.max(0, tick - s.lastTick);
+      s.lastTick = tick;
+
       const ht = THREE.MathUtils.clamp(f.health / MAX_HEALTH, 0, 1);
       const gt = THREE.MathUtils.clamp((f.health + f.recoverable) / MAX_HEALTH, 0, 1);
 
-      if (ht < s.prevHealth / MAX_HEALTH - 1e-4) {
-        s.drain = Math.max(s.drain, s.prevHealth / MAX_HEALTH);
-        s.drainHold = DRAIN_HOLD_SEC;
-      }
-      s.prevHealth = f.health;
-
       s.fill = ht; // instant — the "true" layer never eases
-      if (s.drainHold > 0) {
-        s.drainHold -= dt;
+      if (tick < s.drainHoldUntil) {
         s.drain = Math.max(s.drain, ht);
       } else {
-        s.drain = THREE.MathUtils.damp(s.drain, ht, DRAIN_RATE, dt);
+        s.drain = THREE.MathUtils.damp(s.drain, ht, DRAIN_RATE_PER_TICK, tickDelta);
       }
-      s.ghost = THREE.MathUtils.damp(s.ghost, gt, GHOST_RATE, dt);
+      s.ghost = THREE.MathUtils.damp(s.ghost, gt, GHOST_RATE_PER_TICK, tickDelta);
 
       el.fill.style.transform = `scaleX(${s.fill})`;
       el.drain.style.transform = `scaleX(${Math.max(s.drain, s.fill)})`;
@@ -408,6 +454,12 @@ export class HUD {
 
       const critical = ht > 0 && ht <= CRITICAL_RATIO;
       el.block.classList.toggle('hp-block--critical', critical);
+
+      // A pulsing hot edge while the chip is actively bleeding down toward
+      // the true value — the only way an eased `transform` reads as motion
+      // in a single sampled frame instead of a static gap.
+      const bleeding = tick >= s.drainHoldUntil && s.drain - s.fill > 0.002;
+      el.drain.classList.toggle('hp-drain--bleeding', bleeding);
     }
   }
 
@@ -541,15 +593,12 @@ export class HUD {
     el.classList.add('combo--punch');
   }
 
-  #updateCombos(dt) {
+  #updateCombos() {
     for (let i = 0; i < this.combo.length; i++) {
       const c = this.combo[i];
       const els = this.comboEls[i];
-      if (c.holdTimer > 0) {
-        c.holdTimer -= dt;
-        if (c.holdTimer <= 0) c.visible = false;
-      }
-      els.el.classList.toggle('combo--show', c.visible && c.hits >= 2);
+      if (c.visible && this.fighters[i].simTick >= c.holdUntilTick) c.visible = false;
+      els.el.classList.toggle('combo--show', c.visible);
       if (!c.visible) continue;
 
       // Count-up: chase the true hit count over a couple of frames so a
@@ -563,6 +612,7 @@ export class HUD {
         // bigger and hotter in colour, not just a bigger number.
         const tier = c.shownHits >= 8 ? '3' : c.shownHits >= 5 ? '2' : '1';
         if (els.el.dataset.tier !== tier) els.el.dataset.tier = tier;
+        els.el.dataset.count = c.shownHits === 1 ? 'one' : 'many';
       }
       if (els.tag.dataset.tag !== c.tag) {
         els.tag.dataset.tag = c.tag;

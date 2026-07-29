@@ -9,8 +9,8 @@
  *
  * 1. **Colour**. The composer works entirely in scene-referred linear light in
  *    half-float buffers. `renderer.toneMapping` is deliberately `NoToneMapping`
- *    while post is active, because bloom, SSR, DOF and motion blur are only
- *    correct on un-tonemapped radiance. The display transform lives in
+ *    while post is active, because bloom, DOF and motion blur are only correct
+ *    on un-tonemapped radiance. The display transform lives in
  *    `GradePass`: a hand-written AgX (log-encode -> sigmoid -> look -> outset).
  *    AgX is used rather than ACES because ACES over-saturates and hue-shifts
  *    exactly the things this game is made of — coloured emissives on metal —
@@ -28,12 +28,12 @@
  *    whose action fits in ~16m, one 4096 map is ~4mm per texel — better than any
  *    three-cascade split would give at these distances, for a third of the cost.
  *
- * 3. **G-buffer**. There isn't one. GTAO, the wet-floor SSR, depth of field and
- *    the motion blur reprojection all need scene depth and nothing else that
- *    cannot be derived from it, so `ScenePass` renders the beauty pass into a
- *    target that owns a real depth texture and everything downstream reads
- *    that. The dedicated view-normal prepass this replaced was a second full
- *    geometry pass — it cost as many draw calls as the scene itself.
+ * 3. **G-buffer**. There isn't one. GTAO, depth of field and the motion blur
+ *    reprojection all need scene depth and nothing else that cannot be derived
+ *    from it, so `ScenePass` renders the beauty pass into a target that owns a
+ *    real depth texture and everything downstream reads that. The dedicated
+ *    view-normal prepass this replaced was a second full geometry pass — it
+ *    cost as many draw calls as the scene itself.
  *
  * 4. **Motion blur is camera-only, deliberately.** A per-object velocity buffer
  *    written by a second skinned draw shipped here once and was taken out
@@ -57,7 +57,7 @@ import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { bus } from '../core/Bus.js';
-import { ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, GROUND_Y, LAYER } from '../core/Constants.js';
+import { ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, LAYER } from '../core/Constants.js';
 
 // ---------------------------------------------------------------------------
 // PCSS shadows
@@ -334,7 +334,6 @@ function installPcssShadows() {
  * @property {boolean} pcss
  * @property {boolean} depth          render scene depth for the geometry passes
  * @property {boolean} ao
- * @property {boolean} ssr
  * @property {boolean} bloom
  * @property {boolean} dof
  * @property {boolean} motionBlur
@@ -361,25 +360,25 @@ function installPcssShadows() {
 export const QUALITY_TIERS = {
   ultra: {
     renderScale: 1.0, minScale: 1.0, shadowMapSize: 4096, pcss: true,
-    depth: true, ao: true, aoSamples: 16, ssr: true, ssrSteps: 24,
+    depth: true, ao: true, aoSamples: 16,
     bloom: true, dof: true, dofTaps: 20, motionBlur: true, mbTaps: 12,
     grade: true, smaa: true, particleBudget: 1.0,
   },
   high: {
     renderScale: 0.95, minScale: 0.78, shadowMapSize: 2560, pcss: true,
-    depth: true, ao: true, aoSamples: 11, ssr: true, ssrSteps: 18,
+    depth: true, ao: true, aoSamples: 11,
     bloom: true, dof: true, dofTaps: 14, motionBlur: true, mbTaps: 8,
     grade: true, smaa: true, particleBudget: 0.8,
   },
   medium: {
     renderScale: 0.85, minScale: 0.65, shadowMapSize: 1536, pcss: false,
-    depth: false, ao: false, aoSamples: 8, ssr: false, ssrSteps: 12,
+    depth: false, ao: false, aoSamples: 8,
     bloom: true, dof: false, dofTaps: 12, motionBlur: false, mbTaps: 6,
     grade: true, smaa: true, particleBudget: 0.5,
   },
   low: {
     renderScale: 0.7, minScale: 0.6, shadowMapSize: 1024, pcss: false,
-    depth: false, ao: false, aoSamples: 6, ssr: false, ssrSteps: 8,
+    depth: false, ao: false, aoSamples: 6,
     bloom: true, dof: false, dofTaps: 8, motionBlur: false, mbTaps: 4,
     grade: true, smaa: false, particleBudget: 0.3,
   },
@@ -437,9 +436,8 @@ vec2 vogel( int i, int n, float phi ) {
  * `MeshNormalMaterial` prepass this used to need, which redrew every mesh in
  * the scene and therefore roughly doubled the frame's draw calls.
  *
- * View normals are gone with it. GTAO reconstructs them from depth (its own
- * default path) and the wet-floor SSR does the same in two derivatives, which
- * is exact on the flat surface it is masked to.
+ * View normals are gone with it. GTAO reconstructs them from depth, which is
+ * its own default path and the only consumer that ever wanted them.
  *
  * The same feedback rule applies inside the scene: soft particles want to fade
  * against opaque depth, but they are drawn into the very target that owns it.
@@ -575,180 +573,28 @@ class HalfResGtaoPass extends GTAOPass {
 }
 
 // ---------------------------------------------------------------------------
-// Screen-space reflections, restricted to the wet floor
+// Reflections
+//
+// There is no screen-space reflection pass here, and that is a decision rather
+// than an omission.
+//
+// The arena floor is the one surface in this game that has to mirror, and it
+// already does: `PlanarReflector` renders the scene a second time from a camera
+// mirrored through the floor plane, and `StageFloor` composites that buffer into
+// the floor shader, energy-conserving, weighted by its own wetness and roughness
+// fields. A wet-floor SSR pass shipped alongside it for four rounds and was
+// solving the same problem a second time, worse and on top: it masked to
+// upward-facing geometry near the floor plane — the same pixels the planar
+// reflection had already lit — and then *added* its result to them. Two
+// reflections summed into one surface is not a brighter reflection, it is a
+// floor whose blacks lift, which is the exact tell the grade at the bottom of
+// this file is written to avoid.
+//
+// It could not have won that overlap on quality either. A screen-space march
+// cannot see the underside of a fighter, because the underside of a fighter is
+// by definition not on screen — and the underside of the fighters is the entire
+// content of a floor reflection in a fighting game.
 // ---------------------------------------------------------------------------
-
-/**
- * A full-scene SSR would cost more than it returns on a stage made of matte
- * industrial metal. The one surface that genuinely needs it is the polished wet
- * floor, so this pass masks strictly to upward-facing geometry near the floor
- * plane and spends its whole ray budget there: linear march in view space with
- * geometric step growth, four-step binary refinement, thickness rejection, and
- * Fresnel-weighted energy so grazing angles mirror and steep angles barely
- * reflect at all.
- */
-class WetFloorSsrPass extends Pass {
-  constructor(camera, steps = 28) {
-    super();
-    this.camera = camera;
-    this.uniforms = {
-      tDiffuse: { value: null },
-      tDepth: { value: null },
-      uInvProjection: { value: new THREE.Matrix4() },
-      uProjection: { value: new THREE.Matrix4() },
-      uCameraWorld: { value: new THREE.Matrix4() },
-      uNear: { value: 0.1 },
-      uFar: { value: 200 },
-      uResolution: { value: new THREE.Vector2(1, 1) },
-      uFloorY: { value: GROUND_Y },
-      uSlab: { value: 0.55 },
-      uIntensity: { value: 0.62 },
-      uMaxDistance: { value: 14.0 },
-      uThickness: { value: 0.35 },
-      uFrame: { value: 0 },
-    };
-
-    this.material = new THREE.ShaderMaterial({
-      name: 'WetFloorSSR',
-      defines: { SSR_STEPS: steps },
-      uniforms: this.uniforms,
-      vertexShader: FULLSCREEN_VERT,
-      fragmentShader: /* glsl */ `
-        varying vec2 vUv;
-        uniform sampler2D tDiffuse;
-        uniform highp sampler2D tDepth;
-        uniform mat4 uProjection;
-        uniform mat4 uCameraWorld;
-        uniform vec2 uResolution;
-        uniform float uFloorY;
-        uniform float uSlab;
-        uniform float uIntensity;
-        uniform float uMaxDistance;
-        uniform float uThickness;
-        uniform float uFrame;
-        ${DEPTH_HELPERS}
-
-        void main() {
-          vec3 base = texture2D( tDiffuse, vUv ).rgb;
-          float depth = texture2D( tDepth, vUv ).x;
-
-          // Geometric normal from the depth gradient. Both derivatives are
-          // taken before any branch, because a derivative in divergent control
-          // flow is undefined. Silhouettes come out wrong, but the mask below
-          // throws away everything that is not a near-horizontal surface close
-          // to the floor plane, and on that surface two derivatives are exact.
-          vec3 viewPos = viewPosFromDepth( vUv, min( depth, 0.999999 ) );
-          vec3 viewNormal = normalize( cross( dFdx( viewPos ), dFdy( viewPos ) ) );
-          if ( viewNormal.z < 0.0 ) viewNormal = -viewNormal;
-
-          if ( depth >= 1.0 ) { gl_FragColor = vec4( base, 1.0 ); return; }
-
-          vec3 worldPos = ( uCameraWorld * vec4( viewPos, 1.0 ) ).xyz;
-          vec3 worldNormal = normalize( ( uCameraWorld * vec4( viewNormal, 0.0 ) ).xyz );
-
-          float heightMask = 1.0 - smoothstep( uFloorY + uSlab * 0.5, uFloorY + uSlab, worldPos.y );
-          float facingMask = smoothstep( 0.72, 0.94, worldNormal.y );
-          float mask = heightMask * facingMask;
-          if ( mask <= 0.002 ) { gl_FragColor = vec4( base, 1.0 ); return; }
-
-          vec3 viewDir = normalize( viewPos );
-          vec3 rayDir = normalize( reflect( viewDir, viewNormal ) );
-
-          // Dither the ray origin along the reflection so the marching pattern
-          // breaks up instead of banding.
-          float jitter = ign( gl_FragCoord.xy + vec2( uFrame * 5.588238, uFrame * 3.141593 ) );
-          float stepLen = uMaxDistance / float( SSR_STEPS );
-
-          vec3 p = viewPos + viewNormal * 0.015 + rayDir * stepLen * ( 0.35 + jitter * 0.65 );
-          vec3 prev = p;
-          vec2 hitUv = vec2( -1.0 );
-          float travelled = 0.0;
-
-          for ( int i = 0; i < SSR_STEPS; i ++ ) {
-            prev = p;
-            // Gentle geometric growth. Steeper growth bands badly, because the
-            // thickness test starts missing thin geometry between samples.
-            float grow = 1.0 + float( i ) * 0.05;
-            float advance = stepLen * grow;
-            p += rayDir * advance;
-            travelled += advance;
-
-            vec4 clip = uProjection * vec4( p, 1.0 );
-            if ( clip.w <= 0.0 ) break;
-            vec2 suv = ( clip.xy / clip.w ) * 0.5 + 0.5;
-            if ( suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0 ) break;
-
-            float sd = texture2D( tDepth, suv ).x;
-            if ( sd >= 1.0 ) continue;
-            vec3 scenePos = viewPosFromDepth( suv, sd );
-            float diff = scenePos.z - p.z;
-
-            // Accept a surface as a hit if the ray passed behind it by less
-            // than one step's worth of depth, so a coarse march cannot tunnel
-            // through a thin object and leave a dashed reflection.
-            float thick = uThickness + advance * 0.75;
-            if ( diff > 0.0 && diff < thick ) {
-              // Binary refine between the last miss and this hit.
-              vec3 lo = prev;
-              vec3 hi = p;
-              for ( int k = 0; k < 4; k ++ ) {
-                vec3 mid = ( lo + hi ) * 0.5;
-                vec4 mc = uProjection * vec4( mid, 1.0 );
-                vec2 muv = ( mc.xy / mc.w ) * 0.5 + 0.5;
-                float md = texture2D( tDepth, muv ).x;
-                vec3 mp = viewPosFromDepth( muv, md );
-                if ( mp.z - mid.z > 0.0 ) hi = mid; else lo = mid;
-              }
-              vec4 fc = uProjection * vec4( hi, 1.0 );
-              hitUv = ( fc.xy / fc.w ) * 0.5 + 0.5;
-              break;
-            }
-          }
-
-          if ( hitUv.x < 0.0 ) { gl_FragColor = vec4( base, 1.0 ); return; }
-
-          vec3 reflected = texture2D( tDiffuse, hitUv ).rgb;
-
-          // Fades: screen border, ray length, and rays that head back at the eye.
-          vec2 edge = abs( hitUv - 0.5 ) * 2.0;
-          float edgeFade = ( 1.0 - smoothstep( 0.72, 1.0, edge.x ) ) * ( 1.0 - smoothstep( 0.78, 1.0, edge.y ) );
-          float distFade = 1.0 - smoothstep( 0.55, 1.0, travelled / uMaxDistance );
-          float backFade = 1.0 - smoothstep( 0.0, 0.55, rayDir.z );
-
-          float cosTheta = clamp( dot( -viewDir, viewNormal ), 0.0, 1.0 );
-          float fresnel = 0.03 + 0.97 * pow( 1.0 - cosTheta, 5.0 );
-
-          float weight = mask * edgeFade * distFade * backFade * uIntensity * clamp( fresnel * 6.0, 0.06, 1.0 );
-          gl_FragColor = vec4( base + reflected * weight, 1.0 );
-        }`,
-    });
-    this._fsQuad = new FullScreenQuad(this.material);
-  }
-
-  setSize(width, height) {
-    this.uniforms.uResolution.value.set(width, height);
-  }
-
-  render(renderer, writeBuffer, readBuffer) {
-    const cam = this.camera;
-    this.uniforms.tDiffuse.value = readBuffer.texture;
-    this.uniforms.uProjection.value.copy(cam.projectionMatrix);
-    this.uniforms.uInvProjection.value.copy(cam.projectionMatrixInverse);
-    this.uniforms.uCameraWorld.value.copy(cam.matrixWorld);
-    this.uniforms.uNear.value = cam.near;
-    this.uniforms.uFar.value = cam.far;
-    this.uniforms.uFrame.value = (this.uniforms.uFrame.value + 1) % 1024;
-
-    renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
-    if (this.clear) renderer.clear();
-    this._fsQuad.render(renderer);
-  }
-
-  dispose() {
-    this.material.dispose();
-    this._fsQuad.dispose();
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Depth of field
@@ -1536,7 +1382,7 @@ export class RenderPipeline {
 
     /** Every effect is individually switchable; the tier sets the defaults. */
     this.effects = {
-      shadows: true, ao: true, ssr: true, bloom: true, dof: true,
+      shadows: true, ao: true, bloom: true, dof: true,
       motionBlur: true, grade: true, smaa: true, adaptiveResolution: true,
     };
 
@@ -1549,7 +1395,7 @@ export class RenderPipeline {
       chroma: 0.0009, distortion: 0.018, grain: 0.02, vignette: 0.3,
       bloomStrength: 0.22, bloomRadius: 0.35, bloomThreshold: 5.5,
       bloomKnee: 0.35, bloomClamp: 2.0,
-      ssrIntensity: 0.62, aoIntensity: 0.92, dofStrength: 0.9, motionBlur: 0.45,
+      aoIntensity: 0.92, dofStrength: 0.9, motionBlur: 0.45,
     };
 
     /**
@@ -1654,7 +1500,7 @@ export class RenderPipeline {
     const passes = {};
 
     const wantsDepth = tier.depth &&
-      (this.effects.ao || this.effects.ssr || this.effects.dof || this.effects.motionBlur);
+      (this.effects.ao || this.effects.dof || this.effects.motionBlur);
 
     // The scene pass carries the depth texture; on tiers that need no geometry
     // passes there is nothing to carry, so a stock RenderPass is cheaper.
@@ -1691,14 +1537,6 @@ export class RenderPipeline {
       gtao.updatePdMaterial({ lumaPhi: 8, depthPhi: 2.2, normalPhi: 3.6, radius: 4, samples: 12, rings: 2 });
       passes.ao = gtao;
       composer.addPass(gtao);
-    }
-
-    if (tier.ssr && this.effects.ssr && depthTexture) {
-      const ssr = new WetFloorSsrPass(this.camera, tier.ssrSteps);
-      ssr.uniforms.tDepth.value = depthTexture;
-      ssr.uniforms.uIntensity.value = this.look.ssrIntensity;
-      passes.ssr = ssr;
-      composer.addPass(ssr);
     }
 
     if (tier.bloom && this.effects.bloom) {
@@ -1844,28 +1682,6 @@ export class RenderPipeline {
     g.uniforms.uDistortion.value = this.look.distortion;
     g.uniforms.uGrain.value = soft ? this.look.grain * 0.7 : this.look.grain;
     g.uniforms.uVignette.value = this.look.vignette;
-  }
-
-  /**
-   * Retunes the wet-floor reflections in place.
-   *
-   * The pass has no roughness channel to read, so it masks on geometry: any
-   * upward-facing surface within `slab` metres of `floorY` reflects. A stage
-   * with a matte floor should turn `intensity` down or off rather than let it
-   * mirror.
-   *
-   * @param {{intensity?:number, floorY?:number, slab?:number,
-   *          maxDistance?:number, thickness?:number}} values
-   */
-  setSsr({ intensity, floorY, slab, maxDistance, thickness } = {}) {
-    if (typeof intensity === 'number') this.look.ssrIntensity = intensity;
-    const u = this._passes.ssr?.uniforms;
-    if (!u) return;
-    u.uIntensity.value = this.look.ssrIntensity;
-    if (typeof floorY === 'number') u.uFloorY.value = floorY;
-    if (typeof slab === 'number') u.uSlab.value = slab;
-    if (typeof maxDistance === 'number') u.uMaxDistance.value = maxDistance;
-    if (typeof thickness === 'number') u.uThickness.value = thickness;
   }
 
   /**
@@ -2060,7 +1876,6 @@ export class RenderPipeline {
     if (p.render) { p.render.scene = scene; p.render.camera = camera; }
     if (p.scene) { p.scene.scene = scene; p.scene.camera = camera; }
     if (p.ao) { p.ao.scene = scene; p.ao.camera = camera; }
-    if (p.ssr) p.ssr.camera = camera;
     if (p.dof) {
       p.dof.camera = camera;
       p.dof.uniforms.uFocus.value = this.dofFocus.distance;

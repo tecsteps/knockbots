@@ -18,6 +18,18 @@
  *     how the floor excludes itself (infinite recursion) and how additive
  *     volumetrics stay out of a buffer they would double-count in.
  *
+ * The pass is a second full scene render and therefore the single largest block
+ * of draw calls in the frame, so what it is allowed to draw matters as much as
+ * how it is projected. Two things keep it down. The crowd, the skyline and the
+ * light shafts are already on `LAYER.NO_REFLECT`, so the mirror never sees the
+ * far half of the set. What is left is dominated by the fighters, and they are
+ * the one thing that cannot be dropped — so instead every `THREE.LOD` in the
+ * scene is demoted to its coarsest level for the duration of the pass. A
+ * reflection off damp concrete is gathered over a roughness-proportional radius
+ * and mixed in at a fraction of its own radiance; it is the last place in the
+ * frame where a decimated silhouette is legible as decimated, and the far level
+ * is a level the game already considers acceptable at thirteen metres.
+ *
  * The pass is driven from the floor mesh's `onBeforeRender`, exactly as
  * three's stock `Reflector` does, so it always sees the final camera transform
  * for the frame and never runs when the floor is culled. The RenderPipeline
@@ -48,12 +60,15 @@ export class PlanarReflector {
    * @param {number} [opts.width=1024] render target width
    * @param {number} [opts.height=512] render target height
    * @param {number} [opts.clipBias=0.004]
+   * @param {boolean} [opts.coarseLod=true] draw LOD objects at their far level
    */
   constructor(scene, opts = {}) {
     this.scene = scene;
     this.planeY = opts.planeY ?? 0;
     this.clipBias = opts.clipBias ?? 0.004;
     this.enabled = true;
+    /** Demote every `THREE.LOD` to its last level for the mirror pass. */
+    this.coarseLod = opts.coarseLod !== false;
 
     this.target = new THREE.WebGLRenderTarget(opts.width ?? 1024, opts.height ?? 512, {
       type: THREE.HalfFloatType,
@@ -77,6 +92,10 @@ export class PlanarReflector {
     this._token = -1;
     this._busy = false;
     this._hidden = [];
+    /** Reused across frames; entries are `{ lod, autoUpdate, visible: [] }`. */
+    this._lodState = [];
+    this._lodCount = 0;
+    this._collectLod = (o) => { if (o.isLOD && o.levels.length > 1) this.#demote(o); };
   }
 
   /**
@@ -181,6 +200,7 @@ export class PlanarReflector {
     const selfVisible = self ? self.visible : false;
     if (self) self.visible = false;
     for (const o of this._hidden) o.visible = false;
+    if (this.coarseLod) this.scene.traverse(this._collectLod);
 
     // The composer leaves autoClear off between passes; the mirror buffer must
     // clear itself or it accumulates last frame's image.
@@ -188,6 +208,7 @@ export class PlanarReflector {
     renderer.setRenderTarget(this.target);
     renderer.render(this.scene, cam);
 
+    this.#restoreLods();
     for (const o of this._hidden) o.visible = true;
     if (self) self.visible = selfVisible;
 
@@ -198,6 +219,45 @@ export class PlanarReflector {
     renderer.setRenderTarget(prevTarget, prevActiveCube, prevActiveMip);
 
     this._busy = false;
+  }
+
+  /**
+   * Pins one LOD to its coarsest level and records what to put back.
+   *
+   * `autoUpdate` has to go with it: three re-selects a level inside
+   * `projectObject`, from the distance to whichever camera is drawing, so
+   * without this the mirror camera — which sits at roughly the same distance as
+   * the real one — would immediately choose level 0 again.
+   * @param {THREE.LOD} lod
+   */
+  #demote(lod) {
+    let entry = this._lodState[this._lodCount];
+    if (!entry) {
+      entry = { lod: null, autoUpdate: true, visible: [] };
+      this._lodState[this._lodCount] = entry;
+    }
+    entry.lod = lod;
+    entry.autoUpdate = lod.autoUpdate;
+    entry.visible.length = 0;
+    const last = lod.levels.length - 1;
+    for (let i = 0; i <= last; i++) {
+      entry.visible.push(lod.levels[i].object.visible);
+      lod.levels[i].object.visible = i === last;
+    }
+    lod.autoUpdate = false;
+    this._lodCount++;
+  }
+
+  /** Restores every level's visibility exactly as the main pass left it. */
+  #restoreLods() {
+    for (let i = 0; i < this._lodCount; i++) {
+      const entry = this._lodState[i];
+      const levels = entry.lod.levels;
+      for (let j = 0; j < levels.length; j++) levels[j].object.visible = entry.visible[j];
+      entry.lod.autoUpdate = entry.autoUpdate;
+      entry.lod = null;
+    }
+    this._lodCount = 0;
   }
 
   /**

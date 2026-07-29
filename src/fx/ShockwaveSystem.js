@@ -34,6 +34,7 @@ attribute vec3 aOrigin;
 attribute vec4 aParams;  // birth, life, maxRadius, thickness
 attribute vec4 aStyle;   // mode (0 ground, 1 facing), heat, seed, tiltZ
 attribute vec3 aTint;
+attribute float aAspect; // >1 stretches along the roll axis, <1 across it
 
 uniform float uTime;
 
@@ -67,7 +68,11 @@ void main() {
     vec3 world = aOrigin + vec3( position.x * size, 0.012, position.y * size );
     mv = viewMatrix * vec4( world, 1.0 );
   } else {
-    mv = billboard( aOrigin, position.xy, size, aStyle.w );
+    // Area-preserving anisotropy: a pressure front driven by a limb travelling
+    // in one direction is an ellipse whose long axis lies along that direction.
+    // A circle is the tell that the ring was drawn rather than caused.
+    vec2 corner = position.xy * vec2( aAspect, 1.0 / aAspect );
+    mv = billboard( aOrigin, corner, size, aStyle.w );
   }
   gl_Position = projectionMatrix * mv;
 
@@ -116,9 +121,12 @@ void main() {
   vec3 col = vTint * prof.r * vHeat * fade * amp;
   col += vec3( 1.0, 0.96, 0.92 ) * prof.g * vHeat * 0.5 * fade * amp;
 
-  // Coverage dies faster than emission does, so a spent ring vanishes instead
-  // of hanging around as a fat grey torus once it has stopped being hot.
-  float a = prof.a * pow( 1.0 - vT, 3.4 ) * uOpacity * ( 0.4 + amp * 0.5 );
+  // Coverage dies far faster than emission does, so a spent ring vanishes
+  // instead of hanging around as a fat grey torus once it has stopped being hot.
+  // The exponent is steep because the front is at its largest at the end of its
+  // life: whatever alpha survives to t = 0.6 is spread over four times the area
+  // it started with, which is exactly the wash that reads as a dirty lens.
+  float a = prof.a * pow( 1.0 - vT, 4.6 ) * uOpacity * ( 0.4 + amp * 0.5 );
   if ( a < 0.004 ) discard;
   gl_FragColor = vec4( col, a );
 }`;
@@ -133,7 +141,7 @@ export class ShockwaveSystem {
       capacity,
       lifeAttribute: 'aParams',
       lifeComponent: 1,
-      attributes: { aOrigin: 3, aParams: 4, aStyle: 4, aTint: 3 },
+      attributes: { aOrigin: 3, aParams: 4, aStyle: 4, aTint: 3, aAspect: 1 },
     });
 
     this.material = new THREE.ShaderMaterial({
@@ -175,12 +183,13 @@ export class ShockwaveSystem {
    * @param {number} [opts.thickness] 0..1 fraction of the radius the wake fills
    * @param {number} [opts.heat] emission multiplier
    * @param {number} [opts.tilt] roll for facing rings
+   * @param {number} [opts.aspect] elongation along the roll axis; 1 is circular
    * @param {number} [opts.distort] screen-space refraction strength, 0 disables
    * @param {THREE.Color} [opts.tint]
    */
   spawn(point, opts = {}) {
     const i = this.pool.alloc();
-    const { aOrigin, aParams, aStyle, aTint } = this.pool.arrays;
+    const { aOrigin, aParams, aStyle, aTint, aAspect } = this.pool.arrays;
     const time = this._time;
 
     const o = i * 3;
@@ -203,6 +212,7 @@ export class ShockwaveSystem {
     aTint[o] = tint ? tint.r : 0.85;
     aTint[o + 1] = tint ? tint.g : 0.9;
     aTint[o + 2] = tint ? tint.b : 1.0;
+    aAspect[i] = Math.max(0.25, Math.min(4, opts.aspect ?? 1));
 
     const distort = opts.distort ?? 1;
     if (distort > 0) {

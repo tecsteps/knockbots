@@ -11,20 +11,28 @@
  *      CubeCamera into a half-float WebGLCubeRenderTarget and then filtered by
  *      PMREMGenerator, so rough and smooth materials both get a correct,
  *      pre-convolved specular response.
- *   2. Four RectAreaLights sit at the same positions as the brightest emissive
- *      quads in that cube. A PMREM env map alone gives soft, mushy highlights;
- *      the area lights put back the crisp, shaped, moving speculars that make a
- *      shoulder plate look like bent steel.
+ *   2. **Area sources, everywhere the highlight has to be shaped.** Four
+ *      RectAreaLights sit at the same positions as the brightest emissive quads
+ *      in the cube; two more run the length of the pit overhead on the line the
+ *      mood's `ceiling` block describes; and one rides with each fighter on the
+ *      key azimuth. A PMREM env map alone gives soft mushy highlights and a
+ *      punctual light gives a round dot, and neither one is what the eye reads
+ *      as metal. A rectangle reflects as a rectangle — a long bar drawn down a
+ *      plate, bending where the plate bends — and that single cue carries both
+ *      the "expensive render" read and the material library's response variety,
+ *      because paint, brushed steel, rubber and glass differ almost entirely in
+ *      how wide they smear that bar. See {@link KEY_BOX} and {@link STRIP}.
  *   3. A key / rim / rim-B / bounce / hemisphere rig on top, plus a **per-fighter
  *      rim rig**: two spot lights that ride three-quarters behind and slightly
  *      above each fighter on the same azimuths as the mood's rim pair. That
- *      locality is the whole point. A scene-wide directional rim lights the
- *      backdrop exactly as hard as it lights the fighter, so a pale robot
- *      standing in front of a pale barrier has nothing to separate against; a
- *      spot at three metres falls off, edges the armour, and leaves the wall
- *      four metres further back alone. The directional pair is kept at
- *      {@link DIRECTIONAL_RIM_SHARE} of its authored strength — enough to edge
- *      the set dressing, not enough to flatten it.
+ *      locality is the whole point, and it is why the key softbox rides with
+ *      them too. A scene-wide directional lights the backdrop exactly as hard as
+ *      it lights the fighter, so a pale robot standing in front of a pale
+ *      barrier has nothing to separate against; a source at three metres falls
+ *      off, edges the armour, and leaves the wall four metres further back
+ *      alone. The directional rim pair is kept at {@link DIRECTIONAL_RIM_SHARE}
+ *      of its authored strength — enough to edge the set dressing, not enough to
+ *      flatten it.
  *
  * The ambient terms are deliberately starved. Hemisphere fill and ground bounce
  * are held near a tenth of the key, because a wash that lifts every plane by the
@@ -78,12 +86,24 @@ const PRACTICAL_COUNT = 4;
  */
 const ENV_QUAD_LAYER = 3;
 
-/** Cube face resolution, shadow map size and light budget per quality tier. */
+/**
+ * Cube face resolution, shadow map size and light budget per quality tier.
+ *
+ * `cube` is the input to PMREM and it is the sharpness of every reflection in
+ * the game. It was 256 and that was too low to tell the material library's story:
+ * PMREM's roughness-zero mip is the input cube itself, so a chrome accent, a
+ * polished piston and a scuffed plate all reflected the same soft mush and
+ * therefore all read as the same middling metal. At 512 the light banks come
+ * back as banks — a defined bright rectangle in the mirror surfaces and a smear
+ * in the rough ones — which is the difference the eye actually uses to separate
+ * them. It is baked only on a mood change, so the cost is memory and a couple of
+ * milliseconds on a cross-fade, not per frame.
+ */
 const TIERS = {
-  ultra: { cube: 256, bg: 1024, shadow: 2048, practicals: 4, rims: 2 },
-  high: { cube: 256, bg: 768, shadow: 2048, practicals: 4, rims: 2 },
-  medium: { cube: 128, bg: 384, shadow: 1024, practicals: 3, rims: 2 },
-  low: { cube: 64, bg: 256, shadow: 512, practicals: 2, rims: 1 },
+  ultra: { cube: 512, bg: 1024, shadow: 2048, practicals: 4, rims: 2, boxes: 1, strips: 2 },
+  high: { cube: 512, bg: 768, shadow: 2048, practicals: 4, rims: 2, boxes: 1, strips: 2 },
+  medium: { cube: 256, bg: 384, shadow: 1024, practicals: 3, rims: 2, boxes: 1, strips: 1 },
+  low: { cube: 128, bg: 256, shadow: 512, practicals: 2, rims: 1, boxes: 0, strips: 0 },
 };
 
 /** One rim rig per fighter; the game runs two. */
@@ -132,6 +152,144 @@ const RIM = {
    * enough to draw the edge, not hot enough to become the key.
    */
   gain: 1.7,
+};
+
+/**
+ * The per-fighter key softbox: one {@link THREE.RectAreaLight} riding on the
+ * mood's own key azimuth, two-and-a-bit metres out.
+ *
+ * This is the single largest thing separating a browser render from a shipped
+ * one, and it is not a tuning value. A directional light is a point at infinity,
+ * so its specular lobe is the *point's* mirror image blurred by roughness: on a
+ * bevelled armour plate that lands as a small round dot in the middle of the
+ * facet, and a round dot is what the eye reads as plastic. A rectangle two
+ * metres tall reflects as a rectangle two metres tall — a long shaped bar drawn
+ * down the plate, bending where the plate bends. Bent steel looks like bent
+ * steel because you can see the shape of the room in it.
+ *
+ * The same source is what makes the material library legible. `Materials.js`
+ * authors real response variety — clearcoat on paint, anisotropy on the frame
+ * stock and the pistons, sheen on the cable, a near-mirror on the chrome — and
+ * under a punctual light almost none of it survives, because every one of those
+ * differences is a difference in the *width* of the lobe and a point source
+ * gives them all the same tiny dot to widen. Under an area source rubber smears
+ * the bar into a dim wash, brushed gunmetal stretches it along the grain, the
+ * piston draws it as a hard stripe and the visor mirrors it outright. Nothing in
+ * that list is new work; it was always there and had nothing to reflect.
+ *
+ * It rides the fighter for the same reason the rim spots do: at 2.8 metres it
+ * falls off, so it lifts the armour without lifting the barrier behind it. That
+ * matters here more than anywhere — before this the floor measured brighter than
+ * both fighters standing on it, which inverts the figure/ground relationship
+ * every fighting game depends on.
+ *
+ * Unlike the rims it does **not** yaw into the camera's frame. It is the mood's
+ * key made local, so it has to agree with the directional key at every camera
+ * angle; a softbox that swung round on a KO orbit while the hard key stayed put
+ * would read as two keys from two directions.
+ */
+const KEY_BOX = {
+  radius: 2.8,
+  elevationDeg: 33,
+  /** Aim height above the fighter's root — chest, same as the rim rigs. */
+  aimHeight: 1.3,
+  /**
+   * Panel size, and the reason it is a strip rather than a square. Fill and
+   * highlight are two different quantities off the same light: the diffuse lift
+   * follows *irradiance*, which is radiance times solid angle, while the
+   * brightness of the bar drawn on a polished facet follows *radiance* alone.
+   * Divide the area by two at constant irradiance and the fill is unchanged
+   * while the bar doubles.
+   *
+   * That is the whole trick, and it was found by walking the other way first: a
+   * panel wide enough to be a proper softbox had to be driven six times over
+   * before the highlight read, and by then it was pouring so much fill into the
+   * armour that the shadow side had gone and the fighters were flatter than
+   * before the light was added. Thirty centimetres by two metres is a tube
+   * fixture rather than a softbox — 6° by 40° seen from the chest — and it draws
+   * a long thin bar down the plates at a radiance the tone curve lands on white,
+   * on a fill that stays where it was.
+   *
+   * It is also what buys the top of the range back. Every capture before this
+   * measured zero clipped pixels on a fighter and a 99.9th percentile around
+   * 0.8: nothing on the armour ever reached white, which is the difference
+   * between a lit object and a photographed one. Raising exposure would have
+   * done it too and would have taken the deck and the backdrop up with it; a
+   * hotter, narrower source puts the peak on the armour and nowhere else.
+   */
+  width: 0.3,
+  height: 2.0,
+  /**
+   * Irradiance the box delivers at the aim point, as a fraction of the mood's
+   * authored key. Radiance is solved back out of it at use, so a mood that
+   * pushes its key drags the softbox with it and the ratio survives.
+   *
+   * Under two-thirds, and that ceiling is not arbitrary. The box casts no
+   * shadow — three has none for area lights — so every unit of it also fills the
+   * creases the hard key is carving. Past about 0.7 the shadow side stops being
+   * a shadow side and the armour goes back to being one value, which is the
+   * exact failure the rim gain was pulled back from in round 4.
+   */
+  share: 0.6,
+};
+
+/**
+ * The overhead strip pair: two long thin {@link THREE.RectAreaLight}s running
+ * along the fight axis above the pit, the light the mood's `ceiling` block has
+ * always described and never actually cast.
+ *
+ * `ceiling` already authors rows of light banks into the HDR cube — colour,
+ * height, and an `on` term that is 1 in the shop and the arena, a fifth on the
+ * night rooftop and zero at golden hour. Reading the strips off it means no mood
+ * gains a light it should not have, and the sky shader and the rig cannot drift
+ * apart. `StagePracticals` hangs the tube runs and their drop rods on the same
+ * two lines, so the streak has a fitting above it.
+ *
+ * They are long, close and nearly overhead, which is a different highlight from
+ * the key box: the box draws a vertical bar down the front planes, the strips
+ * draw a horizontal one across every upward-facing bevel — shoulder caps, the
+ * tops of thigh plates, the helmet crown. Two shaped highlights crossing at an
+ * angle is most of what "expensive render" means on hard-surface armour.
+ */
+const STRIP = {
+  /**
+   * Ten metres of it, against an arena eighteen wide. Long enough that a fighter
+   * pushed most of the way to a wall is still under the run, short enough that
+   * the deck it also lights stays inside the play area rather than washing the
+   * whole pit — the run is here to put a highlight on the fighters, and every
+   * metre of it past them is a metre of floor competing with them.
+   */
+  length: 10.0,
+  width: 0.18,
+  /**
+   * World z of the two runs, and the height they hang at. Both sit above the
+   * fight camera's frame line and inside the band `StageStructure` already
+   * reserves for services, so `StagePracticals` can hang real fittings on them
+   * without either one arriving in the middle of the shot.
+   */
+  z: [-2.8, 1.4],
+  y: 5.3,
+  /**
+   * The runs are aimed across the pit rather than straight down, at the far
+   * side of the fight line. Pointing a strip at the floor it hangs over spends
+   * its whole cosine on the floor — the deck comes up, the fighters barely move,
+   * and the figure/ground ratio gets worse rather than better. Raked across, the
+   * fighters sit near the axis and the deck under the fixture is lit at a
+   * glance. `aim` is the height, the fraction is how far past centre in z.
+   */
+  aim: 1.35,
+  aimCross: -0.45,
+  /**
+   * Radiance per unit of `ceiling.intensity`, gated by `ceiling.on`. Parity: the
+   * sky shader already treats `ceiling.intensity` as the radiance of a bank
+   * face, so the light and the bank in the reflection are the same surface at
+   * the same brightness, which is the property the whole practical system is
+   * built on. The cross-section carries the budget instead — 18 centimetres of
+   * tube behind a reflector, not a two-metre trough. The small discount off
+   * parity is the reflector: a channel fitting throws most of its output down
+   * the cone and loses the rest to the housing.
+   */
+  gain: 0.85,
 };
 
 /**
@@ -556,7 +714,50 @@ function opposeRimToKey(mood) {
   mood.rim.color.setHSL((key.h + away * MIN_RIM_HUE_SEPARATION + 1) % 1, rim.s, rim.l);
 }
 
-for (const mood of Object.values(MOODS)) opposeRimToKey(mood);
+/**
+ * Ceiling on a mood's undirected lift, as a fraction of its key.
+ *
+ * `fill` and `bounce` are the two terms that add the same amount to the lit
+ * plane, the side plane and the wall four metres behind, so they are the only
+ * two that can quietly destroy form without showing up anywhere as a mistake.
+ * A tenth of the key is generous — every mood in the table is at four to nine
+ * per cent — and the number exists so the next mood, or the next round of
+ * tuning, cannot drift past it without someone deciding to.
+ *
+ * It deliberately does not police `envIntensity`. The image-based term is
+ * ambient too, but it is *shaped* ambient: a rough plate facing the light banks
+ * gets a different amount from it than one facing the dark machinery, which is
+ * the opposite of a flat lift and is budgeted separately against `bgSky`.
+ */
+const MAX_FILL_SHARE = 0.1;
+
+/**
+ * Hold {@link MAX_FILL_SHARE}. Scales `fill` and `bounce` together so their
+ * ratio to each other — which is a look decision — survives, and only their
+ * total against the key is corrected.
+ *
+ * Worth stating what "the key" means here now that {@link KEY_BOX} exists: the
+ * softbox delivers another {@link KEY_BOX}.share of the same irradiance onto the
+ * fighters, so on a fighter the real ratio is better than this by a further
+ * factor of `1 + share`. The check is written against the authored key alone
+ * because that is the term the set is lit by, and the set is where a flat lift
+ * does its damage.
+ *
+ * @param {object} mood entry from {@link MOODS}, mutated in place
+ */
+function holdKeyToFill(mood) {
+  const lift = mood.fill.intensity + mood.bounce.intensity;
+  const ceiling = mood.key.intensity * MAX_FILL_SHARE;
+  if (lift <= ceiling || lift <= 0) return;
+  const k = ceiling / lift;
+  mood.fill.intensity *= k;
+  mood.bounce.intensity *= k;
+}
+
+for (const mood of Object.values(MOODS)) {
+  opposeRimToKey(mood);
+  holdKeyToFill(mood);
+}
 
 /** Mood identifiers, in presentation order. */
 export const MOOD_NAMES = Object.keys(MOODS);
@@ -796,13 +997,20 @@ export class Environment {
     /**
      * The per-fighter rim rigs, in player order. `root` is the object each rig
      * follows; set it through {@link trackFighters} or leave it to the by-name
-     * lookup in {@link update}.
+     * lookup in {@link update}. `box` is the key softbox that rides with them.
      * @type {{index: number, root: ?THREE.Object3D, cool: THREE.SpotLight,
-     *         warm: THREE.SpotLight, lights: THREE.SpotLight[], aim: THREE.Vector3}[]}
+     *         warm: THREE.SpotLight, lights: THREE.SpotLight[],
+     *         box: THREE.RectAreaLight, aim: THREE.Vector3}[]}
      */
     this.fighterRims = [];
     /** @type {THREE.RectAreaLight[]} */
     this.practicals = [];
+    /**
+     * The two overhead tube runs over the pit. Stage-fixed, driven by the
+     * mood's `ceiling` block.
+     * @type {THREE.RectAreaLight[]}
+     */
+    this.strips = [];
     /** @type {?THREE.Group} Visible emissive cards for the practicals. */
     this.practicalMeshes = null;
     /** @type {?THREE.FogExp2} Installed on the scene by {@link init}. */
@@ -1047,6 +1255,7 @@ export class Environment {
     this._rig.add(this.rimLightB, this.rimLightB.target);
 
     this._buildFighterRims(tier);
+    this._buildStrips(tier);
 
     // Ground bounce: low, from below the horizon, kills the dead black on the
     // undersides of thighs and forearms without flattening anything.
@@ -1088,14 +1297,38 @@ export class Environment {
         this._rig.add(l, l.target);
         lights.push(l);
       }
+
+      const box = new THREE.RectAreaLight(0xffffff, 0, KEY_BOX.width, KEY_BOX.height);
+      box.name = `fighterKeyBox${i}`;
+      box.visible = tier.boxes > 0;
+      this._rig.add(box);
+
       this.fighterRims.push({
         index: i,
         root: null,
         cool: lights[0],
         warm: lights[1],
         lights,
+        box,
         aim: new THREE.Vector3(0, RIM.aimHeight, 0),
       });
+    }
+  }
+
+  /**
+   * The two overhead tube runs. Fixed in the set — they are architecture, not a
+   * character rig — and aimed a little inboard of straight down so the long axis
+   * of the reflection runs across the fighters rather than past them.
+   */
+  _buildStrips(tier) {
+    for (let i = 0; i < STRIP.z.length; i++) {
+      const l = new THREE.RectAreaLight(0xffffff, 0, STRIP.length, STRIP.width);
+      l.name = `ceilingStrip${i}`;
+      l.visible = i < tier.strips;
+      l.position.set(0, STRIP.y, STRIP.z[i]);
+      l.lookAt(0, STRIP.aim, STRIP.z[i] * STRIP.aimCross);
+      this.strips.push(l);
+      this._rig.add(l);
     }
   }
 
@@ -1314,7 +1547,9 @@ export class Environment {
     }
     for (const rig of this.fighterRims) {
       for (let k = 0; k < rig.lights.length; k++) rig.lights[k].visible = k < tier.rims;
+      rig.box.visible = tier.boxes > 0;
     }
+    for (let i = 0; i < this.strips.length; i++) this.strips[i].visible = i < tier.strips;
     if (this.ready) {
       this._allocateTargets(tier);
       this._bake();
@@ -1459,6 +1694,7 @@ export class Environment {
 
     this._acquireCooldown -= d;
     this._updateFighterRims(coolPower, warmPower);
+    this._updateStrips(pulseAmount);
 
     // --- shafts breathe, ambient reacts to the pulse ------------------------
     this.shaftIntensity = p.shaft.intensity * (0.82 + 0.18 * Math.sin(t * 0.29) + 0.06 * Math.sin(t * 0.83 + 0.6)) + pulseAmount * 0.5;
@@ -1479,18 +1715,24 @@ export class Environment {
    * out. `yaw` rotates the authored azimuth so "three-quarters behind" stays
    * three-quarters behind from wherever the shot is taken.
    *
-   * @param {THREE.Vector3} dir mood rim direction
+   * The key softbox passes `yaw` of zero for the opposite reason: it is the
+   * mood's key made local and has to agree with the directional key, which is
+   * pinned to the world.
+   *
+   * @param {THREE.Vector3} dir mood direction the source sits along
    * @param {number} yaw radians to rotate the azimuth about Y
+   * @param {number} elevationDeg elevation to re-seat the source at
+   * @param {number} radius metres out from the aim point
    * @param {THREE.Vector3} out receives the offset
    */
-  _rimOffset(dir, yaw, out) {
-    const el = THREE.MathUtils.degToRad(RIM.elevationDeg);
+  _sourceOffset(dir, yaw, elevationDeg, radius, out) {
+    const el = THREE.MathUtils.degToRad(elevationDeg);
     const c = Math.cos(yaw);
     const s = Math.sin(yaw);
     out.set(dir.x * c + dir.z * s, 0, dir.z * c - dir.x * s);
     if (out.lengthSq() < 1e-8) out.set(0, 0, -1);
-    out.normalize().multiplyScalar(Math.cos(el) * RIM.radius);
-    out.y = Math.sin(el) * RIM.radius;
+    out.normalize().multiplyScalar(Math.cos(el) * radius);
+    out.y = Math.sin(el) * radius;
     return out;
   }
 
@@ -1534,6 +1776,13 @@ export class Environment {
     // mood reads the same whichever light type carries it.
     const falloff = RIM.gain * RIM.radius * RIM.radius;
 
+    // Same conversion for the softbox, but a rectangle is a radiance and not an
+    // intensity, so the area divides back out: irradiance from a panel is
+    // roughly radiance * (area / distance²) and the share is authored as the
+    // irradiance half of that.
+    const boxRadiance =
+      p.key.intensity * KEY_BOX.share * (KEY_BOX.radius * KEY_BOX.radius) / (KEY_BOX.width * KEY_BOX.height);
+
     for (const rig of this.fighterRims) {
       if (acquire && !rig.root?.parent) {
         rig.root = this.scene.getObjectByName(`fighter${rig.index}`) ?? null;
@@ -1541,6 +1790,7 @@ export class Environment {
       if (!rig.root) {
         rig.cool.intensity = 0;
         rig.warm.intensity = 0;
+        rig.box.intensity = 0;
         continue;
       }
 
@@ -1551,12 +1801,44 @@ export class Environment {
       rig.cool.color.copy(this._tmpColor);
       rig.cool.intensity = coolPower * falloff;
       rig.cool.target.position.copy(rig.aim);
-      rig.cool.position.copy(this._rimOffset(p.rim.dir, yaw, this._tmpVecB)).add(rig.aim);
+      rig.cool.position
+        .copy(this._sourceOffset(p.rim.dir, yaw, RIM.elevationDeg, RIM.radius, this._tmpVecB))
+        .add(rig.aim);
 
       rig.warm.color.copy(this._tmpColorB);
       rig.warm.intensity = warmPower * falloff;
       rig.warm.target.position.copy(rig.aim);
-      rig.warm.position.copy(this._rimOffset(p.rimB.dir, yaw, this._tmpVecB)).add(rig.aim);
+      rig.warm.position
+        .copy(this._sourceOffset(p.rimB.dir, yaw, RIM.elevationDeg, RIM.radius, this._tmpVecB))
+        .add(rig.aim);
+
+      // The box is the mood's key, so it stays on the world azimuth the
+      // directional key uses and is aimed a little below the chest — a panel
+      // squared up to the sternum lights the head as hard as the plastron.
+      this._tmpVec.copy(rig.aim);
+      this._tmpVec.y = rig.aim.y - RIM.aimHeight + KEY_BOX.aimHeight;
+      rig.box.color.copy(p.key.color);
+      rig.box.intensity = boxRadiance;
+      rig.box.position
+        .copy(this._sourceOffset(p.key.dir, 0, KEY_BOX.elevationDeg, KEY_BOX.radius, this._tmpVecB))
+        .add(this._tmpVec);
+      rig.box.lookAt(this._tmpVec.x, this._tmpVec.y - 0.25, this._tmpVec.z);
+    }
+  }
+
+  /**
+   * Drive the overhead tube runs off the mood's `ceiling` block. `on` is the
+   * mood's own statement about whether it has a roof: at golden hour it is zero
+   * and the runs go dark, which is the correct answer and costs nothing to ask.
+   *
+   * @param {number} pulseAmount 0..1+ flash term shared with the rest of the rig
+   */
+  _updateStrips(pulseAmount) {
+    const c = this.params.ceiling;
+    const radiance = c.intensity * c.on * STRIP.gain * (1 + pulseAmount * 0.5);
+    for (const l of this.strips) {
+      l.color.copy(c.color);
+      l.intensity = radiance;
     }
   }
 
@@ -1582,6 +1864,7 @@ export class Environment {
     this._tmpColor.copy(p.rim.color);
     this._tmpColorB.copy(p.rimB.color);
     this._updateFighterRims(p.rim.intensity, p.rimB.intensity);
+    this._updateStrips(0);
 
     this.bounceLight.color.copy(p.bounce.color);
     this.bounceLight.intensity = p.bounce.intensity;
@@ -1645,6 +1928,7 @@ export class Environment {
     if (this._rig) this.scene.remove(this._rig);
     if (this.practicalMeshes) this.scene.remove(this.practicalMeshes);
     this.practicals.length = 0;
+    this.strips.length = 0;
     this.fighterRims.length = 0;
     this.ready = false;
   }

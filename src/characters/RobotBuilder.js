@@ -1207,6 +1207,12 @@ class Rig {
     if (!m) { geo.dispose?.(); return this; }
     const g = geo.index ? geo.toNonIndexed() : geo;
     if (g !== geo) geo.dispose();
+    // Tile placement and plate bounds are both authored in the primitive's own
+    // frame — that is the only space in which "the face this vertex is on" and
+    // "how far along it" mean anything — so they are taken before the plate is
+    // moved into bind space. A decal keeps its UVs: they index one cell of a
+    // clamped atlas and moving them would fetch the neighbouring marking.
+    tagPlateSurface(g, this.plateCount, m.getMaxScaleOnAxis(), mat !== 'decal');
     g.applyMatrix4(m);
     if (m.determinant() < 0) flipWinding(g);
     bindRigid(g, this.index[bone]);
@@ -1358,6 +1364,10 @@ class Rig {
     geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
     const g = geo.index ? geo.toNonIndexed() : geo;
     if (g !== geo) geo.dispose();
+    // A cable is a tube, not a plate: it has no face to bound and no border to
+    // bed into anything, so it opts out of the seam rather than growing one
+    // around an arbitrary projection of itself.
+    tagNoFrame(g);
     tagPlate(g, this.plateCount++, WEAR_BY_MAT[mat] ?? 0.6, tier);
     this.parts.push({ geo: g, mat, tier });
     return this;
@@ -1514,6 +1524,106 @@ function plateHash(i) {
  *     per-channel albedo multiplier derived from the same hashes; recover the
  *     seed with `(color - 1.0) / 0.20 + 0.5` if the raw value is wanted.
  */
+/**
+ * Metres of perimeter shading around a plate face. A real panel gap on a
+ * machine this size is 3-8mm wide and the occlusion out of it reaches perhaps
+ * twice that, so the ramp is authored at 13mm and then clamped to a third of
+ * the face's own half-extent — a 4cm greeble must not be swallowed whole by the
+ * shading meant to bed a 40cm chest plate into its frame.
+ */
+const SEAM_WIDTH = 0.013;
+
+/** Half-extent scale of the `plateFrame` attribute, in metres. */
+const FRAME_RANGE = 1.0;
+
+/**
+ * Per-plate surface authoring, applied while the geometry is still in its own
+ * local frame. Two things the fragment shader has no way to work out for
+ * itself, and one of them is the single most artificial thing about a
+ * procedural robot.
+ *
+ * **Tile placement.** `boxUv` projects about the primitive's own origin, and
+ * every primitive here is authored centred, so without this every plate on
+ * every character samples the *same* patch of the shared panel atlas. Forty
+ * plates then wear one repeated sheet of panelling — the grid reads as a
+ * texture printed over the machine rather than as plates that were laid out.
+ * A per-plate translation and quarter turn of the tile is what breaks that.
+ * Quarter turns only: the atlas panels are axis-aligned, and any other angle
+ * shears them across the plate's own edges. The tangent frame three derives
+ * from the UV gradient turns with them, so the normal map, the anisotropy axis
+ * and the brushed grain all follow — which is correct, since a real part is cut
+ * from stock in whatever orientation the nesting gave it.
+ *
+ * **Plate bounds.** `plateFrame` carries, per vertex, the in-plane coordinate
+ * of that vertex on its own face and the face's half-extents, both in metres.
+ * It is what lets the shader put a seam on the plate's *actual* boundary
+ * instead of wherever the atlas happened to draw one. It has to be a frame
+ * rather than a precomputed distance because a chamfered box face is a single
+ * quad whose four corners all sit on the border: any per-vertex distance is
+ * constant across the whole face and interpolates to nothing.
+ *
+ * @param {THREE.BufferGeometry} geo non-indexed, in the primitive's local frame
+ * @param {number} index monotonic plate counter
+ * @param {number} scale uniform world scale the frame matrix will apply
+ * @param {boolean} retile whether the tile may be moved; false for atlas decals
+ */
+function tagPlateSurface(geo, index, scale, retile) {
+  const pos = geo.getAttribute('position');
+  const nrm = geo.getAttribute('normal');
+  const uv = geo.getAttribute('uv');
+  const n = pos ? pos.count : 0;
+  if (!n) return;
+  const [ha, hb] = plateHash(index * 3 + 1);
+
+  if (retile && uv) {
+    const q = (hb * 4) | 0;
+    const c = q === 1 ? 0 : q === 2 ? -1 : q === 3 ? 0 : 1;
+    const s = q === 1 ? 1 : q === 2 ? 0 : q === 3 ? -1 : 0;
+    for (let i = 0; i < n; i++) {
+      const u = uv.getX(i);
+      const v = uv.getY(i);
+      uv.setXY(i, u * c - v * s + ha, u * s + v * c + hb);
+    }
+    uv.needsUpdate = true;
+  }
+
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox;
+  const cx = (bb.min.x + bb.max.x) * 0.5;
+  const cy = (bb.min.y + bb.max.y) * 0.5;
+  const cz = (bb.min.z + bb.max.z) * 0.5;
+  const hxe = (bb.max.x - bb.min.x) * 0.5 * scale;
+  const hye = (bb.max.y - bb.min.y) * 0.5 * scale;
+  const hze = (bb.max.z - bb.min.z) * 0.5 * scale;
+  const K = 1 / FRAME_RANGE;
+  const frame = new Int16Array(n * 4);
+  const put = (o, u, v, hu, hv) => {
+    frame[o] = clamp(u * K, -1, 1) * 32767;
+    frame[o + 1] = clamp(v * K, -1, 1) * 32767;
+    frame[o + 2] = clamp(hu * K, 0, 1) * 32767;
+    frame[o + 3] = clamp(hv * K, 0, 1) * 32767;
+  };
+  for (let i = 0; i < n; i++) {
+    const ax = Math.abs(nrm ? nrm.getX(i) : 0);
+    const ay = Math.abs(nrm ? nrm.getY(i) : 1);
+    const az = Math.abs(nrm ? nrm.getZ(i) : 0);
+    const o = i * 4;
+    // The same dominant-axis rule `boxUv` projects with, so the frame and the
+    // tile agree about which two axes lie in the face.
+    if (ax >= ay && ax >= az) put(o, (pos.getZ(i) - cz) * scale, (pos.getY(i) - cy) * scale, hze, hye);
+    else if (ay >= az) put(o, (pos.getX(i) - cx) * scale, (pos.getZ(i) - cz) * scale, hxe, hze);
+    else put(o, (pos.getX(i) - cx) * scale, (pos.getY(i) - cy) * scale, hxe, hye);
+  }
+  geo.setAttribute('plateFrame', new THREE.Int16BufferAttribute(frame, 4, true));
+}
+
+/** A plate frame that asks for no seam at all, for parts with no faces to bound. */
+function tagNoFrame(geo) {
+  const n = geo.getAttribute('position')?.count ?? 0;
+  if (!n) return;
+  geo.setAttribute('plateFrame', new THREE.Int16BufferAttribute(new Int16Array(n * 4), 4, true));
+}
+
 function tagPlate(geo, index, wear, tier) {
   const n = geo.getAttribute('position').count;
   if (!n) return;
@@ -3764,6 +3874,10 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
   // ---- actuators --------------------------------------------------------
   const actSegments = maxTier >= 2 ? 16 : 10;
   const actGeo = { housing: actuatorHousingGeo(actSegments), rod: actuatorRodGeo(actSegments) };
+  // Actuators share the frame material with the plates but are turned cylinders,
+  // not panels; the empty frame is what tells the shader to leave them alone.
+  tagNoFrame(actGeo.housing);
+  tagNoFrame(actGeo.rod);
   const actuatorRig = new ActuatorRig(rig.actuators, actGeo, mats);
   group.add(actuatorRig);
   group.updateMatrixWorld(true);

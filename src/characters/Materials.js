@@ -890,12 +890,27 @@ function buildPlateDetail(size) {
   const rivet = new Float32Array(n);
   const bead = new Float32Array(n);
 
+  // Oil-canning. A stamped or rolled plate is never flat: it crowns between its
+  // fasteners and pulls in at them, by a few degrees over the span of a panel.
+  // Nothing in the rest of this bake carries that, and its absence is exactly
+  // why a big painted face reflects the key as one clean unbroken sheet — the
+  // reflection has nothing to travel over. It is kept in its own field because
+  // it is a *shape*, not a cavity: the occlusion, edge and chip masks are all
+  // derived from the detail height and must not see it, or every crowned panel
+  // would come out ringed with a shadow it has no reason to cast.
+  const dish = new Float32Array(n);
+
   const rects = buildPanelLayout(rng);
   // Where a run of fluid is allowed to start: the lower lip of a louvre, the
   // bottom groove of a plate. Each entry is [x, y, jitter] in texels.
   const dripOrigins = [];
 
+  let rectIndex = 0;
   for (const r of rects) {
+    // Decorrelated from every other per-plate decision, and drawn from the
+    // rect's ordinal rather than the shared Rng so that adding it here does not
+    // reshuffle the panel layout every character in the roster is wearing.
+    const dishAmp = ((ihash(rectIndex++, 91, 4177) & 0xffff) / 65535 - 0.5) * 2;
     const px0 = r.x0 * size;
     const px1 = r.x1 * size;
     const py0 = r.y0 * size;
@@ -918,10 +933,13 @@ function buildPlateDetail(size) {
       dripOrigins.push([lerp(px0, px1, 0.2 + r.variation * 0.6), py0 + gw, (px1 - px0) * 0.22]);
     }
 
+    const spanX = Math.max(1, px1 - px0);
+    const spanY = Math.max(1, py1 - py0);
     for (let y = iy0; y < iy1; y++) {
       const fy = y + 0.5;
       const dy = Math.min(fy - py0, py1 - fy);
       const row = y * size;
+      const domeY = Math.sin(Math.PI * ((fy - py0) / spanY));
       for (let x = ix0; x < ix1; x++) {
         const fx = x + 0.5;
         const dx = Math.min(fx - px0, px1 - fx);
@@ -932,6 +950,11 @@ function buildPlateDetail(size) {
         groove[i] = g;
         const b = smoothstep(gw * 0.7, gw * 3.6, d);
         bevel[i] = b;
+        // Gated on the bevel mask, because a plate is held flat where it is
+        // fastened and only bulges between: letting the dome run all the way
+        // into the groove rings every panel with a shadow it has not earned and
+        // the face stops reading as metal and starts reading as quilting.
+        dish[i] = Math.sin(Math.PI * ((fx - px0) / spanX)) * domeY * dishAmp * b;
         plateStep[i] = step * b - g * 0.85;
         if (r.vent && d > gw * 2.6) {
           // Louvred vent: horizontal slats, each with a shadowed leading lip.
@@ -1036,7 +1059,15 @@ function buildPlateDetail(size) {
 
   const ao = aoFromHeight(height, size, [2, 7, 24], [0.28, 0.4, 0.32], 3.4);
   const up = upFacingFromHeight(height, size, 26);
-  const normalPx = encodeNormal(height, size, 5.4);
+
+  // The shape the light actually reflects off: detail plus the panel crowns.
+  // A dome of this amplitude across a 20cm panel tilts the normal by about five
+  // degrees at its steepest, which is what a stamped plate really does and is
+  // enough to make a hard key stretch and break as it crosses the face instead
+  // of laying a single flat sheet over it.
+  const shape = new Float32Array(n);
+  for (let i = 0; i < n; i++) shape[i] = height[i] + dish[i] * 0.42 + macro[i] * 0.16;
+  const normalPx = encodeNormal(shape, size, 5.4);
 
   // --- edge / curvature mask --------------------------------------------
   // Convexity: the pixel stands proud of its neighbourhood. Paint is thin on
@@ -1698,8 +1729,10 @@ function getShared(sizes, maxAniso) {
 // ---------------------------------------------------------------------------
 
 const STORY_PARS_VERTEX = /* glsl */`
+attribute vec4 plateFrame;
 varying vec3 vKbObjPos;
 varying vec3 vKbObjNrm;
+varying vec4 vKbFrame;
 `;
 
 const STORY_PARS_FRAGMENT = /* glsl */`
@@ -1707,6 +1740,8 @@ uniform sampler2D kbGrungeMap;
 uniform float kbGrungeScale;
 uniform vec4 kbStory;      // grime, oxide, fade, marking
 uniform vec4 kbStoryB;     // bare-metal neutralisation, heat, dust, plate masks
+uniform vec4 kbSurface;    // form curvature scale, micro curvature scale, hollow, seam
+uniform vec4 kbSurfaceB;   // burnish, direct occlusion, occlusion sharpness, polish
 uniform vec3 kbSootColor;
 uniform vec3 kbOxideColor;
 uniform vec3 kbHeatColor;
@@ -1715,6 +1750,7 @@ uniform vec3 kbInkLight;
 uniform vec3 kbInkDark;
 varying vec3 vKbObjPos;
 varying vec3 vKbObjNrm;
+varying vec4 vKbFrame;
 
 // The three projections are flipped to face outward, or every stencil on the
 // far half of the body would come out mirrored — the one artefact that gives a
@@ -1804,6 +1840,108 @@ roughnessFactor = mix( roughnessFactor, 0.6, kbMark );
 metalnessFactor *= 1.0 - kbMark * 0.9;
 `;
 
+/**
+ * Form response.
+ *
+ * Everything in the story layer varies with *where* a texel is. None of it
+ * varies with what the surface is doing there, and that is the difference the
+ * reference keeps showing: on a real machined part the gloss tracks the form.
+ * Paint is thinner on a convex edge and gets rubbed by everything that brushes
+ * past, so a lip burnishes. A recess is never touched and collects whatever
+ * settles in it, so it dulls. Shading a plate at one roughness from edge to
+ * edge is most of what makes it read as a rendered quad with a texture on it,
+ * and no amount of extra incident in the texture fixes it, because the eye is
+ * reading the specular, not the albedo.
+ *
+ * Curvature here is the derivative of the shading normal with respect to
+ * distance, in 1/metre. Both derivatives are taken in view space, so the screen
+ * footprint divides out: a 12mm chamfer measures the same curvature at any
+ * distance, any field of view and any output resolution, and the micro term
+ * falls away on its own as the normal map mips down — which is the correct
+ * behaviour, not a compromise.
+ *
+ *   kbRoll    unsigned, from the geometric normal only, so it sees the rolled
+ *             chamfers and nothing the normal map put there. This is the term
+ *             that gives a chamfer a highlight which travels along the arc.
+ *   kbCrown   signed positive, from the shading normal: lips, rivet crowns,
+ *             weld beads, the proud side of a plate step.
+ *   kbHollow  signed negative: panel gaps, louvre slats, scratch troughs.
+ */
+const STORY_FORM_FRAGMENT = /* glsl */`
+vec3 kbVx = dFdx( vViewPosition );
+vec3 kbVy = dFdy( vViewPosition );
+float kbInvFoot = 1.0 / max( dot( kbVx, kbVx ) + dot( kbVy, kbVy ), 1e-9 );
+vec3 kbGx = dFdx( nonPerturbedNormal );
+vec3 kbGy = dFdy( nonPerturbedNormal );
+vec3 kbSx = dFdx( normal );
+vec3 kbSy = dFdy( normal );
+float kbForm = sqrt( ( dot( kbGx, kbGx ) + dot( kbGy, kbGy ) ) * kbInvFoot );
+// vViewPosition is the negated view-space position, hence the sign.
+float kbMean = - ( dot( kbSx, kbVx ) + dot( kbSy, kbVy ) ) * kbInvFoot;
+float kbRoll = 1.0 - exp( - kbForm * kbSurface.x );
+float kbCrown = 1.0 - exp( - max( kbMean, 0.0 ) * kbSurface.y );
+float kbHollow = 1.0 - exp( - max( - kbMean, 0.0 ) * kbSurface.y );
+
+// A rolled edge is polished by everything that brushes past it and its paint
+// is thin over the arc, so the lacquer tightens, the roughness drops and bare
+// alloy starts to show at the crown. This is what turns a chamfer from a
+// shading artefact into a machined edge.
+float kbPolish = kbRoll * ( 0.35 + 0.65 * kbCrown ) * kbSurfaceB.w;
+// The floor is deliberately not tight. A chamfer is a one-pixel feature at
+// fighting range and driving it to mirror roughness there buys a sparkle that
+// aliases rather than a highlight that travels.
+roughnessFactor = clamp( roughnessFactor * ( 1.0 - 0.42 * kbPolish ), 0.06, 1.0 );
+float kbBurn = clamp( kbPolish * kbSurfaceB.x * ( 1.0 - kbGrime * 0.7 ), 0.0, 1.0 );
+diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * ( 0.35 + 1.3 * dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) ), kbBurn * 0.7 );
+metalnessFactor = mix( metalnessFactor, 1.0, kbBurn * 0.6 );
+
+// Hollows do the opposite. A groove whose two walls differ only in normal reads
+// as a line drawn on a flat plate; a groove whose walls also lose gloss and
+// value reads as a groove with a floor somewhere below them.
+float kbHol = kbHollow * kbSurface.z;
+roughnessFactor = clamp( roughnessFactor + 0.34 * kbHol, 0.06, 1.0 );
+diffuseColor.rgb *= 1.0 - 0.32 * kbHol;
+
+// Plate perimeter. The plateFrame attribute carries the vertex's coordinate on
+// its own face and that face's half-extents, both in metres, so this seam lands
+// on the plate's real boundary instead of wherever the shared atlas happened to
+// draw one. The ramp is clamped to a fifth of the smallest half-extent: a 4cm
+// greeble outlined on all four sides by shading meant to bed a 40cm chest plate
+// into its frame stops reading as metal and starts reading as quilting.
+float kbSeam = 0.0;
+if ( vKbFrame.z > 0.0 && vKbFrame.w > 0.0 ) {
+	vec2 kbToEdge = vKbFrame.zw - abs( vKbFrame.xy );
+	float kbSeamW = min( 0.011, min( vKbFrame.z, vKbFrame.w ) * 0.2 );
+	kbSeam = 1.0 - smoothstep( 0.0, kbSeamW, min( kbToEdge.x, kbToEdge.y ) );
+}
+kbSeam *= kbSurface.w;
+diffuseColor.rgb *= 1.0 - 0.30 * kbSeam;
+roughnessFactor = clamp( roughnessFactor + 0.16 * kbSeam, 0.06, 1.0 );
+`;
+
+/**
+ * Recess occlusion, applied where it can reach the direct response.
+ *
+ * three multiplies the occlusion map into indirect light only. That is right
+ * for a sky term and wrong for a 3mm panel gap: under a hard key light the gap
+ * is precisely the place the key cannot reach, and leaving it fully lit is what
+ * turns a recess into a dark line painted onto a flat plate. This is the
+ * standard microshadow — the same baked occlusion, sharpened, applied to the
+ * direct response — plus the plate's own perimeter, where two plates approach
+ * each other and nothing gets in between them.
+ */
+const STORY_OCCLUSION_FRAGMENT = /* glsl */`
+float kbSeamOcc = 1.0 - kbSeam * 0.48;
+float kbOcc = kbSeamOcc;
+#ifdef USE_AOMAP
+	kbOcc *= mix( 1.0, pow( clamp( ambientOcclusion, 0.0, 1.0 ), kbSurfaceB.z ), kbSurfaceB.y );
+#endif
+reflectedLight.directDiffuse *= kbOcc;
+reflectedLight.directSpecular *= mix( 1.0, kbOcc, 0.75 );
+reflectedLight.indirectDiffuse *= kbSeamOcc;
+reflectedLight.indirectSpecular *= mix( 1.0, kbSeamOcc, 0.8 );
+`;
+
 const STORY_CLEARCOAT_FRAGMENT = /* glsl */`
 #ifdef USE_CLEARCOAT
 	// A lacquer that has been through what this plate has been through does not
@@ -1812,6 +1950,12 @@ const STORY_CLEARCOAT_FRAGMENT = /* glsl */`
 	// of albedo variation can, because the specular carries far more energy.
 	material.clearcoat = saturate( material.clearcoat * ( 0.34 + 0.78 * kbG.r ) * ( 1.0 - kbGrime * 0.82 ) * ( 1.0 - kbOx * 0.95 ) * ( 1.0 - kbMark * 0.55 ) );
 	material.clearcoatRoughness = clamp( material.clearcoatRoughness + ( 0.55 - kbG.r ) * 0.45 + kbGrime * 0.35 + kbOx * 0.45 + kbDust * 0.3, 0.0525, 1.0 );
+	// The coat follows the form for the same reason the paint under it does: a
+	// rolled edge gets polished and a panel gap never gets waxed. Keeping the two
+	// lobes in agreement is what stops the chamfer highlight reading as two
+	// unrelated specular events stacked on one another.
+	material.clearcoatRoughness = clamp( material.clearcoatRoughness * ( 1.0 - 0.55 * kbPolish ) + 0.3 * kbHol + 0.22 * kbSeam, 0.0525, 1.0 );
+	material.clearcoat = saturate( material.clearcoat * ( 1.0 - 0.5 * kbSeam ) );
 #endif
 `;
 
@@ -1835,6 +1979,19 @@ const STORY_DEFAULTS = {
   heat: 1,
   dust: 0.6,
   plateMasks: true,
+  // Form response. `form` and `micro` are the curvature radii, in metres, at
+  // which the geometric and the normal-mapped terms reach roughly 63% — 22mm
+  // catches a rolled chamfer without touching the barrel of a pauldron, 5mm
+  // catches a panel gap wall and a hero scratch without picking up the casting
+  // mottle. The rest are strengths.
+  form: 0.022,
+  micro: 0.005,
+  hollow: 1,
+  seam: 1,
+  burnish: 0.55,
+  occlusion: 0.75,
+  occlusionPower: 1.7,
+  polish: 1,
 };
 
 /**
@@ -1882,6 +2039,8 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
     u.kbGrungeScale = { value: s.scale };
     u.kbStory = { value: new THREE.Vector4(s.grime, s.oxide, s.fade, s.marking) };
     u.kbStoryB = { value: new THREE.Vector4(s.bare, s.heat, s.dust, s.plateMasks ? 1 : 0) };
+    u.kbSurface = { value: new THREE.Vector4(s.form, s.micro, s.hollow, s.seam) };
+    u.kbSurfaceB = { value: new THREE.Vector4(s.burnish, s.occlusion, s.occlusionPower, s.polish) };
     u.kbSootColor = { value: new THREE.Color(STORY_INK.soot) };
     u.kbOxideColor = { value: new THREE.Color(STORY_INK.oxide) };
     u.kbHeatColor = { value: new THREE.Color(STORY_INK.heat) };
@@ -1889,15 +2048,29 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
     u.kbInkLight = { value: new THREE.Color(STORY_INK.light) };
     u.kbInkDark = { value: new THREE.Color(STORY_INK.dark) };
 
+    // Kept so a capture harness can A/B one term at a time without a rebuild.
+    this.userData.kbUniforms = u;
+
     // Object space, captured before skinning, so the weathering is welded to
     // the model the way a baked texture would be and never swims under motion.
+    // `plateFrame` is passed straight through: a geometry that carries none
+    // reads the generic attribute, whose Z is zero, which the seam treats as
+    // "this part has no face to bound" and skips.
     shader.vertexShader = STORY_PARS_VERTEX + shader.vertexShader
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n\tvKbObjNrm = objectNormal;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvKbObjPos = position;');
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvKbObjPos = position;\n\tvKbFrame = plateFrame;');
 
+    // The whole layer moves down to `normal_fragment_maps`, because the form
+    // response needs both normals: the geometric one for the chamfers and the
+    // perturbed one for everything the maps put on top of them. Every value it
+    // touches — diffuseColor, roughnessFactor, metalnessFactor and the two
+    // texel samples — is declared at function scope further up and is still
+    // live there.
     shader.fragmentShader = STORY_PARS_FRAGMENT + shader.fragmentShader
-      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\n${STORY_BODY_FRAGMENT}`)
-      .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>\n${STORY_CLEARCOAT_FRAGMENT}`);
+      .replace('#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>\n${STORY_BODY_FRAGMENT}\n${STORY_FORM_FRAGMENT}`)
+      .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>\n${STORY_CLEARCOAT_FRAGMENT}`)
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>\n${STORY_OCCLUSION_FRAGMENT}`);
   }
 }
 
@@ -2056,7 +2229,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
 
   const worn = new StoryPhysicalMaterial({
     name: 'kb.worn',
-    story: story({ grime: 1.25, oxide: 1.4, bare: 0.3, marking: 0.4, dust: 0.8 }),
+    story: story({ grime: 1.25, oxide: 1.4, bare: 0.3, marking: 0.4, dust: 0.8, burnish: 0.9 }),
     color: wornSteel,
     map: wornAlbedo,
     normalMap: shared.plateNormal,
@@ -2077,7 +2250,13 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     name: 'kb.darkMetal',
     // The frame is unpainted, so there is no paint to fade and no stencil to
     // spray: it only collects what runs down onto it out of the armour above.
-    story: story({ plateMasks: false, fade: 0.35, marking: 0, oxide: 0.7, bare: 0, grime: 1.15, heat: 0, dust: 0.5 }),
+    // The frame is a machined billet, not a plate bedded into anything, so the
+    // perimeter seam is held back and the burnish is pushed up: bare alloy is
+    // exactly what polishes on an edge.
+    story: story({
+      plateMasks: false, fade: 0.35, marking: 0, oxide: 0.7, bare: 0, grime: 1.15, heat: 0, dust: 0.5,
+      seam: 0.45, burnish: 0.8,
+    }),
     color: gunmetal,
     map: shared.metalMod,
     normalMap: shared.metalNormal,
@@ -2093,8 +2272,15 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     envMapIntensity: 1.05,
   });
 
-  const piston = new THREE.MeshPhysicalMaterial({
+  // A rod and a mirror boss carry almost no history — the rod is wiped by its
+  // own seal on every stroke — but they do have chamfers, and a chamfer that
+  // does not answer the light is the one thing that still reads as a rendered
+  // cylinder. They take the form response and nothing else.
+  const bareSteel = { plateMasks: false, fade: 0, marking: 0, oxide: 0, bare: 0, heat: 0 };
+
+  const piston = new StoryPhysicalMaterial({
     name: 'kb.piston',
+    story: story({ ...bareSteel, grime: 0.35, dust: 0.15, seam: 0, burnish: 0.5, hollow: 0.6 }),
     color: honedSteel,
     map: shared.metalMod,
     normalMap: shared.metalNormal,
@@ -2114,8 +2300,9 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     envMapIntensity: 1.25,
   });
 
-  const chrome = new THREE.MeshPhysicalMaterial({
+  const chrome = new StoryPhysicalMaterial({
     name: 'kb.chrome',
+    story: story({ ...bareSteel, grime: 0.25, dust: 0.1, seam: 0.3, burnish: 0.3, hollow: 0.5 }),
     color: chromeAlloy,
     map: shared.metalMod,
     normalMap: shared.metalNormal,
@@ -2134,7 +2321,10 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     name: 'kb.carbon',
     // Lacquered weave sheds almost everything; what it keeps is dust and a
     // little soot in the cavities, which is exactly what sells the lacquer.
-    story: story({ plateMasks: false, fade: 0.25, marking: 0, oxide: 0, bare: 0, grime: 0.5, heat: 0, dust: 0.35 }),
+    story: story({
+      plateMasks: false, fade: 0.25, marking: 0, oxide: 0, bare: 0, grime: 0.5, heat: 0, dust: 0.35,
+      seam: 0.5, burnish: 0.12, hollow: 0.7,
+    }),
     map: shared.carbonAlbedo,
     normalMap: shared.carbonNormal,
     normalScale: new THREE.Vector2(1.0, 1.0),
