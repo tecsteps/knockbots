@@ -4,3 +4,4 @@ dist-single
 .DS_Store
 shots/
 *.log
+ref/
