@@ -68,3 +68,55 @@ What mobile needs, beyond the frame budget:
 
 Critic findings live only in workflow journals under `~/.claude`, so each round's agents cannot
 read the previous round's reasoning and partially re-derive it. Persist verdicts into the repo.
+
+---
+
+## Performance: the actual causes (Codex GPT-5.6 Sol review, verified)
+
+An independent review by a second model, run directly rather than through a wrapper, and
+spot-checked against the code. It corrected my own hypothesis: I had blamed forced layout
+reflows in the HUD, and those turn out to be cheap.
+
+**The steady frame cost is lighting, not geometry.** Eight live `RectAreaLight`s expand every
+forward material shader. Removing them takes the measured frame from **41.8 ms to 16.1 ms** —
+about 3.2 ms per light, 25.7 ms total. Adding them back in pairs measured 16.1, 22.2, 27.4,
+32.9, 41.8. That single change is the difference between ~24 fps and inside 60 fps, with no
+change to geometry. Verified: `Environment.js` constructs them from three call sites.
+
+Not worth pursuing, per the same review: halving the 4096 shadow map produced no measurable
+gain, the shadow pass is under 1 ms, planar-reflection downsampling saved almost nothing until
+visibly poor, particles are already instanced, and 411–558k triangles sits well under the 900k
+budget. **The game is light-shader-bound, not triangle-bound.**
+
+**The multi-second freeze is a synchronous GPU readback disguised as UI work.**
+`HUD.#capturePortrait()` calls `readRenderTargetPixels()` twice during the first HUD render of a
+match. The readback flushes the whole GL queue: **316–1382 ms each, so 632–2764 ms for two.**
+That matches the reported symptom exactly. The rendering itself is 0.4–0.9 ms. An async path
+now exists but the synchronous fallback remains. Verified at `HUD.js:664`.
+
+**A real configuration defect.** `MenuSystem.#setQuality()` calls only
+`game.renderer.setQuality()`. `Environment.setQuality()` and `Stage.setQuality()` both exist and
+are never called, so selecting "low" still runs all eight area lights and the reflection.
+Wiring the existing tiers is worth ~19 ms on low and ~6.4 ms on medium. Verified.
+
+**Wasted work.** `Fighter.setCharacter()` has no equality check, so `startMatch()` rebuilds both
+robots even when the same characters are already selected — 96–135 ms per fighter. Verified.
+`TestHarness.rosterLineup()` builds all ten robots in one loop, measured at 2.236 s, which
+contaminates headless captures.
+
+**Why the fps figures were erratic.** `RenderPipeline.#recordFrame()` reports a rolling average
+of the last 48 wall-clock intervals between render calls — not GPU timing — and the capture
+script interleaves match restarts, roster builds, forced combat states and Playwright
+screenshots, giving some shots only 1.8 s to settle (fewer frames than the reporting window).
+Those numbers were never comparable steady-state measurements. For a trustworthy figure: hold
+one fixed fight state for 120+ frames after warm-up, take no screenshots in the interval, and
+report CPU frame time and GPU timer queries separately as median and p95.
+
+### Order of work
+
+1. Cut or replace the six non-fighter area lights (~19 ms), keeping the two fighter softboxes.
+2. Drop the synchronous portrait readback fallback; keep async, or cache portraits.
+3. Wire `setQuality` through to `Environment` and `Stage`.
+4. Equality check in `setCharacter`; cache or incrementally build in `rosterLineup`.
+5. Replace the three zero-intensity `PointLight`s (~3 ms) with emissive sprites.
+6. PCSS → PCF on lower tiers (1.8 ms).
