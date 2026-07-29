@@ -1,4 +1,5 @@
 import { Game } from './core/Game.js';
+import { renderControlLegend } from './core/ControlLegend.js';
 
 const boot = document.getElementById('boot');
 const bootStatus = document.getElementById('boot-status');
@@ -9,7 +10,16 @@ function progress(label, pct) {
   if (bar) bar.style.width = `${Math.round(pct * 100)}%`;
 }
 
+const bootStart = performance.now();
+
 async function main() {
+  // Draw the control legend before anything expensive starts, so it is readable
+  // for the whole of the load rather than flashing up at the end of it. A
+  // gamepad connected after this point still re-renders, because the pad is not
+  // visible to the page until it reports its first input.
+  renderControlLegend(document);
+  window.addEventListener('gamepadconnected', () => renderControlLegend(document), { once: true });
+
   const game = new Game(document.getElementById('app'), document.getElementById('ui'), progress);
   try {
     await game.init();
@@ -33,8 +43,14 @@ async function main() {
   window.KB.bus = (await import('./core/Bus.js')).bus;
   window.dispatchEvent(new CustomEvent('knockbots:ready'));
 
-  setTimeout(() => boot?.classList.add('hidden'), 250);
-  setTimeout(() => boot?.remove(), 900);
+  // Hold the boot screen long enough for the control legend to actually be
+  // read. On a warm load the game is ready in well under a second, which would
+  // flash the mapping past before anyone could take it in. The floor stays
+  // under the capture harness's 2.5s settle so shots are never contaminated.
+  const MIN_LEGEND_MS = 2000;
+  const remaining = Math.max(0, MIN_LEGEND_MS - (performance.now() - bootStart));
+  setTimeout(() => boot?.classList.add('hidden'), remaining);
+  setTimeout(() => boot?.remove(), remaining + 650);
 }
 
 main();

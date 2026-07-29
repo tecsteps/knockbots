@@ -29,6 +29,31 @@
       #boot p { margin-top: 14px; font-size: 13px; letter-spacing: .28em; color: #5f7c9e; text-transform: uppercase; }
       #bar { margin: 26px auto 0; width: min(340px, 60vw); height: 2px; background: #16233a; overflow: hidden; }
       #bar i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #2f6fd0, #7fd4ff); transition: width .25s ease; }
+
+      /* Control legend. Which one shows is decided at runtime from the device,
+         because telling a gamepad player about WASD is worse than saying nothing. */
+      #controls {
+        margin: 40px auto 0; max-width: min(680px, 88vw);
+        border-top: 1px solid #16233a; padding-top: 22px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      }
+      #controls h2 {
+        font-size: 9px; letter-spacing: .3em; color: #4f6a8c;
+        text-transform: uppercase; font-weight: 400; margin-bottom: 16px;
+      }
+      #controls .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 12px 26px; }
+      /* keys column is fixed so every label starts on the same x */
+      #controls .row { display: grid; grid-template-columns: 118px 1fr; align-items: center; gap: 12px; }
+      #controls .keys { display: flex; gap: 4px; justify-content: flex-end; }
+      #controls kbd {
+        display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 7px;
+        background: linear-gradient(180deg, #1b2942, #101a2b);
+        border: 1px solid #26364f; border-bottom-width: 2px; border-radius: 4px;
+        font: 600 11px/1 ui-monospace, monospace; color: #cfe6ff;
+      }
+      #controls .lbl { font-size: 10.5px; letter-spacing: .1em; color: #6f8bab; text-transform: uppercase; text-align: left; }
+      #controls .note { margin-top: 16px; font-size: 10.5px; letter-spacing: .06em; color: #d08a4a; line-height: 1.7; }
+      @media (max-width: 620px) { #controls .grid { grid-template-columns: 1fr; } #controls .row { grid-template-columns: 108px 1fr; } }
     </style>
   </head>
   <body>
@@ -39,6 +64,11 @@
         <h1>KNOCKBOTS</h1>
         <p id="boot-status">Initialising</p>
         <div id="bar"><i></i></div>
+        <div id="controls" hidden>
+          <h2 id="controls-title">Controls</h2>
+          <div class="grid" id="controls-grid"></div>
+          <div class="note" id="controls-note" hidden></div>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.js"></script>
