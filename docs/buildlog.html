@@ -1,0 +1,518 @@
+<title>KNOCKBOTS — Build Dossier</title>
+
+<style>
+  /* ── tokens ─────────────────────────────────────────────────────────── */
+  :root {
+    --ground:#0A0D13; --panel:#121722; --panel-2:#0E131C; --hair:#1E2632;
+    --ink:#C9D4E2; --ink-dim:#8494A8; --ink-mute:#5A6779;
+    --amber:#FF9E2C; --cyan:#4FD8E8; --danger:#FF4D5E; --good:#58D68D;
+    --grid:rgba(79,216,232,.055); --plate:#0d1119;
+    --disp:"Avenir Next Condensed","Helvetica Neue Condensed","Arial Narrow",Impact,sans-serif;
+    --body:"Helvetica Neue",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --rail:236px; --pad:clamp(20px,4vw,60px);
+  }
+  @media (prefers-color-scheme:light){
+    :root{
+      --ground:#EDEAE1; --panel:#F6F4EE; --panel-2:#E6E2D6; --hair:#CFC9BA;
+      --ink:#1B2430; --ink-dim:#4E5666; --ink-mute:#8A8474;
+      --amber:#B4560F; --cyan:#0F6B84; --danger:#B3202F; --good:#2C7A4B;
+      --grid:rgba(27,36,48,.06); --plate:#E9E5DA;
+    }
+  }
+  :root[data-theme="light"]{
+    --ground:#EDEAE1; --panel:#F6F4EE; --panel-2:#E6E2D6; --hair:#CFC9BA;
+    --ink:#1B2430; --ink-dim:#4E5666; --ink-mute:#8A8474;
+    --amber:#B4560F; --cyan:#0F6B84; --danger:#B3202F; --good:#2C7A4B;
+    --grid:rgba(27,36,48,.06); --plate:#E9E5DA;
+  }
+  :root[data-theme="dark"]{
+    --ground:#0A0D13; --panel:#121722; --panel-2:#0E131C; --hair:#1E2632;
+    --ink:#C9D4E2; --ink-dim:#8494A8; --ink-mute:#5A6779;
+    --amber:#FF9E2C; --cyan:#4FD8E8; --danger:#FF4D5E; --good:#58D68D;
+    --grid:rgba(79,216,232,.055); --plate:#0d1119;
+  }
+
+  /* ── base ───────────────────────────────────────────────────────────── */
+  body{
+    background:var(--ground); color:var(--ink); font-family:var(--body);
+    font-size:15.5px; line-height:1.62; -webkit-font-smoothing:antialiased;
+    background-image:linear-gradient(var(--grid) 1px,transparent 1px),
+                     linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:38px 38px;
+  }
+  ::selection{background:var(--amber); color:var(--ground);}
+  a{color:var(--cyan); text-decoration:none; border-bottom:1px solid transparent;}
+  a:hover{border-bottom-color:currentColor;}
+  :focus-visible{outline:2px solid var(--amber); outline-offset:3px;}
+
+  .shell{display:grid; grid-template-columns:var(--rail) minmax(0,1fr); gap:0; min-height:100vh;}
+
+  /* ── left status spine ──────────────────────────────────────────────── */
+  .spine{
+    border-right:1px solid var(--hair); padding:26px 20px 40px;
+    position:sticky; top:0; height:100vh; overflow-y:auto;
+    background:linear-gradient(180deg,var(--panel-2),transparent 60%);
+  }
+  .mark{font-family:var(--disp); font-weight:700; font-size:19px; letter-spacing:.16em; line-height:1;}
+  .mark b{color:var(--amber); font-weight:700;}
+  .mark span{display:block; font-family:var(--mono); font-size:9px; letter-spacing:.22em;
+    color:var(--ink-mute); margin-top:7px; font-weight:400;}
+
+  .readout{margin-top:30px; font-family:var(--mono); font-size:10.5px; letter-spacing:.04em;}
+  .readout h4{font-family:var(--mono); font-size:9px; letter-spacing:.24em; color:var(--ink-mute);
+    text-transform:uppercase; font-weight:400; margin:22px 0 9px; padding-bottom:6px;
+    border-bottom:1px solid var(--hair);}
+  .kv{display:flex; justify-content:space-between; gap:10px; padding:3.5px 0; color:var(--ink-dim);}
+  .kv b{color:var(--ink); font-weight:500; font-variant-numeric:tabular-nums;}
+
+  .sysbar{height:3px; background:var(--panel-2); margin-top:5px; overflow:hidden;}
+  .sysbar i{display:block; height:100%; background:var(--amber);}
+
+  nav.toc{margin-top:26px; display:flex; flex-direction:column; gap:1px;}
+  nav.toc a{font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; color:var(--ink-dim);
+    padding:5px 8px; border-left:2px solid transparent; border-bottom:none;}
+  nav.toc a:hover{color:var(--ink); border-left-color:var(--amber); background:var(--panel);}
+
+  /* ── main ───────────────────────────────────────────────────────────── */
+  main{padding:0 var(--pad) 120px; max-width:1180px;}
+
+  /* hero */
+  .hero{padding:clamp(34px,6vw,72px) 0 40px; border-bottom:1px solid var(--hair);}
+  .eyebrow{font-family:var(--mono); font-size:10px; letter-spacing:.3em; color:var(--amber);
+    text-transform:uppercase; display:flex; align-items:center; gap:12px;}
+  .eyebrow::after{content:""; flex:1; height:1px; background:var(--hair);}
+  h1{font-family:var(--disp); font-weight:700; letter-spacing:.02em; line-height:.92;
+    font-size:clamp(52px,9.5vw,124px); margin:16px 0 0; text-wrap:balance;}
+  h1 em{font-style:normal; color:var(--amber);}
+  .dek{max-width:62ch; color:var(--ink-dim); margin-top:18px; font-size:17px;}
+
+  .rigwrap{margin-top:34px; border:1px solid var(--hair); background:var(--plate); position:relative;}
+  .rigwrap canvas{display:block; width:100%; height:340px;}
+  .rigwrap figcaption{position:absolute; left:14px; bottom:12px; font-family:var(--mono);
+    font-size:9.5px; letter-spacing:.16em; color:var(--ink-mute); text-transform:uppercase;}
+  .rigwrap .corner{position:absolute; width:9px; height:9px; border:1px solid var(--amber); opacity:.6;}
+  .rigwrap .corner.tl{top:-1px; left:-1px; border-right:0; border-bottom:0;}
+  .rigwrap .corner.tr{top:-1px; right:-1px; border-left:0; border-bottom:0;}
+  .rigwrap .corner.bl{bottom:-1px; left:-1px; border-right:0; border-top:0;}
+  .rigwrap .corner.br{bottom:-1px; right:-1px; border-left:0; border-top:0;}
+
+  /* sections */
+  section{padding-top:56px;}
+  h2{font-family:var(--disp); font-weight:700; font-size:clamp(26px,3.4vw,38px);
+    letter-spacing:.05em; text-transform:uppercase; margin-bottom:6px;}
+  .sublede{color:var(--ink-mute); font-family:var(--mono); font-size:10.5px;
+    letter-spacing:.16em; text-transform:uppercase; margin-bottom:26px;}
+  h3{font-family:var(--disp); font-size:21px; letter-spacing:.05em; font-weight:600; margin-bottom:4px;}
+  p{max-width:70ch;}
+  p + p{margin-top:12px;}
+
+  /* log entries */
+  .log{display:flex; flex-direction:column; gap:0;}
+  .entry{display:grid; grid-template-columns:132px minmax(0,1fr); gap:24px;
+    border-top:1px solid var(--hair); padding:24px 0;}
+  .entry:last-child{border-bottom:1px solid var(--hair);}
+  .stamp{font-family:var(--mono); font-size:10px; letter-spacing:.1em; color:var(--ink-mute);
+    line-height:1.8; padding-top:3px;}
+  .stamp b{display:block; color:var(--amber); font-weight:500; font-size:10px; letter-spacing:.18em;}
+  .entry .body p{margin-top:8px; color:var(--ink-dim);}
+  .entry .body p:first-child{margin-top:6px;}
+
+  .tag{display:inline-block; font-family:var(--mono); font-size:9px; letter-spacing:.14em;
+    text-transform:uppercase; padding:2px 7px; border:1px solid var(--hair);
+    color:var(--ink-mute); margin:10px 6px 0 0;}
+  .tag.done{color:var(--good); border-color:color-mix(in srgb,var(--good) 40%,transparent);}
+  .tag.run{color:var(--amber); border-color:color-mix(in srgb,var(--amber) 45%,transparent);}
+  .tag.wait{color:var(--ink-mute);}
+
+  /* decision plates */
+  .plates{display:grid; grid-template-columns:repeat(auto-fit,minmax(272px,1fr)); gap:1px;
+    background:var(--hair); border:1px solid var(--hair);}
+  .plate{background:var(--panel); padding:20px 20px 22px;}
+  .plate .no{font-family:var(--mono); font-size:9px; letter-spacing:.2em; color:var(--amber);}
+  .plate p{font-size:14px; color:var(--ink-dim); margin-top:8px;}
+  .plate .why{margin-top:12px; padding-top:11px; border-top:1px dashed var(--hair);
+    font-family:var(--mono); font-size:11px; line-height:1.6; color:var(--ink-mute);}
+  .plate .why b{color:var(--cyan); font-weight:500; letter-spacing:.08em;}
+
+  /* data table */
+  .tablewrap{overflow-x:auto; border:1px solid var(--hair); background:var(--panel);}
+  table{border-collapse:collapse; width:100%; font-family:var(--mono); font-size:12px;
+    font-variant-numeric:tabular-nums; min-width:640px;}
+  th{text-align:left; font-weight:400; font-size:9px; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--ink-mute); padding:11px 14px; border-bottom:1px solid var(--hair); white-space:nowrap;}
+  td{padding:9px 14px; border-bottom:1px solid color-mix(in srgb,var(--hair) 55%,transparent); color:var(--ink-dim);}
+  tr:last-child td{border-bottom:0;}
+  td:first-child{color:var(--ink);}
+  .neg{color:var(--danger);} .pos{color:var(--good);} .zero{color:var(--ink-mute);}
+
+  /* captures */
+  .gallery{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:18px;}
+  .capture{border:1px solid var(--hair); background:var(--panel); position:relative;}
+  .capture img{display:block; width:100%; height:auto;}
+  .capture .meta{padding:11px 14px; border-top:1px solid var(--hair);}
+  .capture .meta b{font-family:var(--disp); font-size:14px; letter-spacing:.09em; text-transform:uppercase;}
+  .capture .meta span{display:block; font-family:var(--mono); font-size:10.5px; color:var(--ink-mute); margin-top:3px;}
+  .pending{display:grid; place-items:center; aspect-ratio:16/9; background:var(--plate);
+    border:1px dashed var(--hair); font-family:var(--mono); font-size:10px; letter-spacing:.2em;
+    color:var(--ink-mute); text-transform:uppercase; text-align:center; padding:20px;}
+
+  /* verdict scoreboard */
+  .verdict{border:1px solid var(--hair); background:var(--panel);}
+  .verdict .row{display:grid; grid-template-columns:minmax(120px,1.4fr) 1fr auto; gap:16px;
+    align-items:center; padding:12px 18px; border-bottom:1px solid color-mix(in srgb,var(--hair) 55%,transparent);}
+  .verdict .row:last-child{border-bottom:0;}
+  .verdict .row span:first-child{font-family:var(--mono); font-size:11.5px; letter-spacing:.06em;}
+  .meter{height:6px; background:var(--panel-2); position:relative; overflow:hidden;}
+  .meter i{display:block; height:100%; background:linear-gradient(90deg,var(--cyan),var(--amber));}
+  .meter::after{content:""; position:absolute; inset:0; left:80%; border-left:1px dashed var(--danger); opacity:.55;}
+  .score{font-family:var(--mono); font-size:11.5px; color:var(--ink); font-variant-numeric:tabular-nums;}
+
+  footer{margin-top:70px; padding-top:22px; border-top:1px solid var(--hair);
+    font-family:var(--mono); font-size:10px; letter-spacing:.14em; color:var(--ink-mute);
+    text-transform:uppercase; display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px;}
+
+  @media (max-width:880px){
+    .shell{grid-template-columns:1fr;}
+    .spine{position:static; height:auto; border-right:0; border-bottom:1px solid var(--hair);}
+    nav.toc{display:none;}
+    .entry{grid-template-columns:1fr; gap:8px;}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important;}}
+</style>
+
+<div class="shell">
+  <aside class="spine">
+    <div class="mark">KNOCK<b>BOTS</b><span>BUILD DOSSIER</span></div>
+
+    <div class="readout">
+      <h4>Build state</h4>
+      <div class="kv"><span>Revision</span><b id="rev">0.1.0</b></div>
+      <div class="kv"><span>Engine</span><b>three r185</b></div>
+      <div class="kv"><span>Sim rate</span><b>60 Hz fixed</b></div>
+      <div class="kv"><span>Commits</span><b id="commits">1</b></div>
+
+      <h4>Subsystems</h4>
+      <div class="kv"><span>Complete</span><b id="sys-done">6 / 18</b></div>
+      <div class="sysbar"><i id="sys-bar" style="width:33%"></i></div>
+
+      <h4>Asset policy</h4>
+      <div class="kv"><span>External files</span><b>0</b></div>
+      <div class="kv"><span>Textures</span><b>procedural</b></div>
+      <div class="kv"><span>Audio</span><b>synthesised</b></div>
+      <div class="kv"><span>HDRI</span><b>generated</b></div>
+
+      <h4>Budget</h4>
+      <div class="kv"><span>Target</span><b>60 fps @ 1080p</b></div>
+      <div class="kv"><span>Triangles</span><b>&lt; 900k</b></div>
+      <div class="kv"><span>Draw calls</span><b>&lt; 120</b></div>
+    </div>
+
+    <nav class="toc">
+      <a href="#brief">Brief</a>
+      <a href="#decisions">Decisions</a>
+      <a href="#log">Build log</a>
+      <a href="#captures">Captures</a>
+      <a href="#verdict">Critic verdict</a>
+      <a href="#framedata">Frame data</a>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="eyebrow">工 Project dossier &nbsp;/&nbsp; revision 0.1.0</div>
+      <h1>Robot fighting<br>at <em>Tekken 8</em> scale.</h1>
+      <p class="dek">A ground-up 3D fighting game in Three.js. No imported assets — every
+        texture, mesh, environment map and sound is generated in code, so the whole game
+        ships as one self-contained file. This dossier tracks the decisions, the progress,
+        and the screenshots as they come in.</p>
+
+      <figure class="rigwrap">
+        <span class="corner tl"></span><span class="corner tr"></span>
+        <span class="corner bl"></span><span class="corner br"></span>
+        <canvas id="rig"></canvas>
+        <figcaption id="rigcap">Rig · 34 bones · drawn live from src/characters/Skeleton.js</figcaption>
+      </figure>
+    </header>
+
+    <section id="brief">
+      <h2>The brief</h2>
+      <p class="sublede">What "AAA" has to mean here</p>
+      <p>The target is explicit: a fighting game that stands next to Tekken 8. That sets a bar
+        on four axes at once — character rendering, animation, combat feel, and presentation —
+        and a weakness in any one of them collapses the whole illusion. A beautifully lit robot
+        that animates like a mannequin looks worse than a plain robot that moves with weight.</p>
+      <p>So the work is split across parallel workstreams with pinned APIs, and every visual
+        subsystem is reviewed by a separate critic agent that scores captures against real
+        Tekken 8 reference — blind, side by side. Anything that loses gets rebuilt.</p>
+    </section>
+
+    <section id="decisions">
+      <h2>Decisions on record</h2>
+      <p class="sublede">Choices that constrain everything downstream</p>
+      <div class="plates">
+        <article class="plate">
+          <div class="no">D—01</div>
+          <h3>Everything procedural</h3>
+          <p>No glTF, no textures, no audio files, no webfonts. Meshes, PBR maps, the HDRI
+            environment and every sound are synthesised at load.</p>
+          <div class="why"><b>WHY</b> It keeps the game a single self-contained HTML file, and it
+            removes the asset pipeline that would otherwise be the real bottleneck. The cost is
+            that quality has to come from technique rather than from an artist's source files.</div>
+        </article>
+        <article class="plate">
+          <div class="no">D—02</div>
+          <h3>Fixed 60 Hz sim, free-running render</h3>
+          <p>The simulation steps at exactly 1/60s and never varies. Rendering interpolates
+            between the last two sim states.</p>
+          <div class="why"><b>WHY</b> Fighting games are defined by frame data. If a jab is 10
+            frames of startup it must be 10 frames on every machine. Hitstop and slow-motion
+            scale what enters the accumulator, never the tick itself.</div>
+        </article>
+        <article class="plate">
+          <div class="no">D—03</div>
+          <h3>Rigid plates, one bone each</h3>
+          <p>The robots are skinned, but almost every armour plate is bound 100% to a single
+            bone. Only cables and shrouds smooth-skin across joints.</p>
+          <div class="why"><b>WHY</b> Smooth-skinning a mechanical character smears the panels at
+            every joint and instantly reads as amateur. Rigid binding gives crisp hard-surface
+            deformation, and the gaps it opens are exactly where the exposed pistons live.</div>
+        </article>
+        <article class="plate">
+          <div class="no">D—04</div>
+          <h3>Animation as authored data</h3>
+          <p>Clips are hand-written keyframes — Euler degrees layered over the rest pose, times
+            in ticks — not imported motion.</p>
+          <div class="why"><b>WHY</b> It is diffable, reviewable and tunable by frame, which
+            matters when a move's readability at its startup frame is a gameplay requirement and
+            not an aesthetic preference.</div>
+        </article>
+        <article class="plate">
+          <div class="no">D—05</div>
+          <h3>Sim never talks to presentation</h3>
+          <p>Combat emits events on a bus. Effects, audio, HUD and camera subscribe. The
+            simulation has no reference to any of them.</p>
+          <div class="why"><b>WHY</b> It keeps the sim deterministic and lets twelve workstreams
+            build against one event contract instead of against each other.</div>
+        </article>
+        <article class="plate">
+          <div class="no">D—06</div>
+          <h3>Derived frame advantage</h3>
+          <p>On-block and on-hit numbers are computed from stun minus recovery, never authored
+            by hand.</p>
+          <div class="why"><b>WHY</b> Published frame data that disagrees with what the engine
+            actually does is the classic fighting-game bug. Deriving it makes the two impossible
+            to desynchronise.</div>
+        </article>
+      </div>
+    </section>
+
+    <section id="log">
+      <h2>Build log</h2>
+      <p class="sublede">Newest last · timestamps are session-relative</p>
+      <div class="log" id="logbody">
+        <article class="entry">
+          <div class="stamp"><b>PHASE 00</b>Foundation<br>rev 0.1.0</div>
+          <div class="body">
+            <h3>Contracts before code</h3>
+            <p>Wrote the pieces every other workstream has to agree on before any of them could
+              start in parallel: the 34-bone rig with its A-pose rest and IK chains, the clip
+              format, the Tekken-style move schema with validation, the event bus, and the fixed
+              timestep game shell.</p>
+            <p>Also pinned a clip-ID manifest so the animation and combat workstreams could
+              reference each other's output without coordinating, and a static integrity checker
+              that validates every clip against the skeleton and every move against the schema.</p>
+            <span class="tag done">rig</span><span class="tag done">clip format</span><span class="tag done">move schema</span><span class="tag done">event bus</span><span class="tag done">game loop</span><span class="tag done">QA harness</span>
+          </div>
+        </article>
+        <article class="entry">
+          <div class="stamp"><b>PHASE 01</b>Subsystems<br>in progress</div>
+          <div class="body">
+            <h3>Twelve workstreams, disjoint files</h3>
+            <p>Fanned out the whole engine at once against the pinned charter — render pipeline
+              and camera, procedural environment lighting, the material library, the robot mesh
+              builder, roster and animator, two animation workstreams, combat, effects, arena,
+              interface, and AI plus audio.</p>
+            <p>Each owns files nobody else touches, so they can run concurrently without
+              collisions. Integration and the first build happen once they land.</p>
+            <span class="tag run">render</span><span class="tag run">environment</span><span class="tag run">materials</span><span class="tag run">robot mesh</span><span class="tag run">animator</span><span class="tag run">animation ×2</span><span class="tag run">combat</span><span class="tag run">effects</span><span class="tag run">arena</span><span class="tag run">interface</span><span class="tag run">ai + audio</span>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="captures">
+      <h2>Captures</h2>
+      <p class="sublede">Headless renders at 1920×1080 · fed to the critic</p>
+      <div class="gallery" id="gallery">
+        <div class="pending">Awaiting first integrated build<br>—<br>capture harness armed</div>
+      </div>
+    </section>
+
+    <section id="verdict">
+      <h2>Critic verdict</h2>
+      <p class="sublede">Blind side-by-side against Tekken 8 · dashed line is the ship bar</p>
+      <div class="verdict" id="verdictbody">
+        <div class="row"><span>Character rendering</span><div class="meter"><i style="width:0%"></i></div><span class="score">—</span></div>
+        <div class="row"><span>Animation quality</span><div class="meter"><i style="width:0%"></i></div><span class="score">—</span></div>
+        <div class="row"><span>Lighting &amp; atmosphere</span><div class="meter"><i style="width:0%"></i></div><span class="score">—</span></div>
+        <div class="row"><span>Impact &amp; effects</span><div class="meter"><i style="width:0%"></i></div><span class="score">—</span></div>
+        <div class="row"><span>Stage detail</span><div class="meter"><i style="width:0%"></i></div><span class="score">—</span></div>
+        <div class="row"><span>Interface craft</span><div class="meter"><i style="width:0%"></i></div><span class="score">—</span></div>
+      </div>
+    </section>
+
+    <section id="framedata">
+      <h2>Frame data</h2>
+      <p class="sublede">Derived by the engine, not authored · ticks at 60 Hz</p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Move</th><th>Input</th><th>Startup</th><th>Height</th><th>Damage</th><th>On block</th><th>On hit</th></tr></thead>
+          <tbody id="fd">
+            <tr><td colspan="7" style="color:var(--ink-mute)">Populated once the combat workstream lands.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <span>Knockbots · build dossier</span>
+      <span id="stamp">rev 0.1.0</span>
+    </footer>
+  </main>
+</div>
+
+<script>
+// ── Live rig viewport ────────────────────────────────────────────────────
+// Bone data mirrored from src/characters/Skeleton.js so the hero shows the
+// project's actual rig rather than a decorative illustration.
+const D = Math.PI / 180;
+const BONES = [
+  ['root',null,0,0,0],['hips','root',0,.98,0],
+  ['spine01','hips',0,.14,0],['spine02','spine01',0,.15,0],['chest','spine02',0,.16,0],
+  ['neck','chest',0,.19,.005],['head','neck',0,.10,0],['headTop','head',0,.19,0],
+  ['clavicle_L','chest',.055,.13,.01],['shoulder_L','clavicle_L',.155,.015,0,-50],
+  ['elbow_L','shoulder_L',0,-.29,0],['wrist_L','elbow_L',0,-.27,0],
+  ['hand_L','wrist_L',0,-.12,0],['fingers_L','hand_L',0,-.10,.01],
+  ['clavicle_R','chest',-.055,.13,.01],['shoulder_R','clavicle_R',-.155,.015,0,50],
+  ['elbow_R','shoulder_R',0,-.29,0],['wrist_R','elbow_R',0,-.27,0],
+  ['hand_R','wrist_R',0,-.12,0],['fingers_R','hand_R',0,-.10,.01],
+  ['hip_L','hips',.105,-.03,0],['knee_L','hip_L',0,-.44,0],['ankle_L','knee_L',0,-.42,0],
+  ['foot_L','ankle_L',0,-.06,.06],['toe_L','foot_L',0,-.045,.14],
+  ['hip_R','hips',-.105,-.03,0],['knee_R','hip_R',0,-.44,0],['ankle_R','knee_R',0,-.42,0],
+  ['foot_R','ankle_R',0,-.06,.06],['toe_R','foot_R',0,-.045,.14],
+];
+const HURT = {hips:.19,spine01:.18,spine02:.20,chest:.23,neck:.075,head:.125,
+  shoulder_L:.105,elbow_L:.082,wrist_L:.07,hand_L:.085,
+  shoulder_R:.105,elbow_R:.082,wrist_R:.07,hand_R:.085,
+  hip_L:.125,knee_L:.10,ankle_L:.085,foot_L:.09,
+  hip_R:.125,knee_R:.10,ankle_R:.085,foot_R:.09};
+
+const cv = document.getElementById('rig');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, dpr = Math.min(devicePixelRatio || 1, 2);
+
+function fit(){
+  const r = cv.getBoundingClientRect();
+  W = r.width; H = r.height;
+  cv.width = W * dpr; cv.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+new ResizeObserver(fit).observe(cv);
+fit();
+
+function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+// Forward kinematics in local space, rest pose only.
+function solve(){
+  const out = {};
+  for (const [name, parent, x, y, z, rz] of BONES){
+    const p = parent ? out[parent] : {m:[1,0,0, 0,1,0, 0,0,1], p:[0,0,0]};
+    // rotate offset by parent's basis
+    const m = p.m;
+    const wx = p.p[0] + m[0]*x + m[3]*y + m[6]*z;
+    const wy = p.p[1] + m[1]*x + m[4]*y + m[7]*z;
+    const wz = p.p[2] + m[2]*x + m[5]*y + m[8]*z;
+    let nm = m;
+    if (rz){
+      const c = Math.cos(rz*D), s = Math.sin(rz*D);
+      // parent basis * Rz
+      nm = [
+        m[0]*c + m[3]*s, m[1]*c + m[4]*s, m[2]*c + m[5]*s,
+       -m[0]*s + m[3]*c,-m[1]*s + m[4]*c,-m[2]*s + m[5]*c,
+        m[6], m[7], m[8],
+      ];
+    }
+    out[name] = {p:[wx,wy,wz], m:nm, parent};
+  }
+  return out;
+}
+const REST = solve();
+document.getElementById('rigcap').textContent =
+  `Rig · ${BONES.length} bones · ${Object.keys(HURT).length} hurtbox capsules · drawn from src/characters/Skeleton.js`;
+
+let t = 0, reduced = matchMedia('(prefers-reduced-motion:reduce)').matches;
+
+function draw(){
+  const yaw = reduced ? 0.5 : t * 0.0055;
+  const scale = Math.min(H / 2.35, 150);
+  const cx = W / 2, cy = H * 0.94;
+  const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
+
+  const proj = {};
+  for (const n in REST){
+    const [x, y, z] = REST[n].p;
+    const rx = x * cosY - z * sinY;
+    const rz = x * sinY + z * cosY;
+    proj[n] = {x: cx + rx * scale, y: cy - y * scale, d: rz};
+  }
+
+  ctx.clearRect(0, 0, W, H);
+  const hair = css('--hair'), cyan = css('--cyan'), amber = css('--amber'), mute = css('--ink-mute');
+
+  // ground grid
+  ctx.strokeStyle = hair; ctx.lineWidth = 1;
+  for (let i = -3; i <= 3; i++){
+    ctx.globalAlpha = .5;
+    ctx.beginPath();
+    ctx.moveTo(cx + i * scale * .5 * cosY - 3 * scale * sinY * 0, cy);
+    ctx.lineTo(cx + i * scale * .5, cy);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.beginPath(); ctx.moveTo(cx - scale * 1.6, cy); ctx.lineTo(cx + scale * 1.6, cy); ctx.stroke();
+
+  // hurtbox capsules, back to front
+  const order = Object.keys(HURT).sort((a, b) => proj[a].d - proj[b].d);
+  for (const n of order){
+    const q = proj[n];
+    const r = HURT[n] * scale;
+    ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = cyan; ctx.globalAlpha = .055 + .045 * (q.d + 1) / 2; ctx.fill();
+    ctx.globalAlpha = .28; ctx.strokeStyle = cyan; ctx.lineWidth = 1; ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // bones
+  ctx.lineWidth = 1.6; ctx.strokeStyle = mute;
+  for (const [name, parent] of BONES){
+    if (!parent) continue;
+    const a = proj[parent], b = proj[name];
+    ctx.globalAlpha = .35 + .45 * (b.d + 1) / 2;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // joints
+  for (const [name] of BONES){
+    const q = proj[name];
+    const key = name === 'head' || name === 'hips' || name === 'chest';
+    ctx.beginPath(); ctx.arc(q.x, q.y, key ? 3 : 1.8, 0, Math.PI * 2);
+    ctx.fillStyle = key ? amber : cyan; ctx.fill();
+  }
+
+  t++;
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
