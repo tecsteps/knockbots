@@ -1,0 +1,27 @@
+{
+  "name": "knockbots",
+  "version": "0.1.0",
+  "description": "Knockbots — a AAA-grade 3D robot fighting game in Three.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "build:one": "KB_SINGLEFILE=1 vite build",
+    "shots": "node tools/capture.mjs"
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.0",
+    "vite": "^8.1.5",
+    "vite-plugin-singlefile": "^2.3.3"
+  },
+  "private": true
+}

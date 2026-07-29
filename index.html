@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>KNOCKBOTS</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #05070c; }
+      body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      #app { position: fixed; inset: 0; }
+      canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+      #ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+      #boot {
+        position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+        background: radial-gradient(120% 90% at 50% 40%, #0d1422 0%, #05070c 70%);
+        transition: opacity .5s ease; color: #cfe6ff;
+      }
+      #boot.hidden { opacity: 0; pointer-events: none; }
+      #boot .wrap { text-align: center; }
+      #boot h1 {
+        font-size: clamp(38px, 9vw, 104px); letter-spacing: .14em; font-weight: 900;
+        background: linear-gradient(180deg, #eaf4ff 0%, #6fa8ff 55%, #1d4b8f 100%);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+        text-shadow: 0 0 60px rgba(90,150,255,.35);
+      }
+      #boot p { margin-top: 14px; font-size: 13px; letter-spacing: .28em; color: #5f7c9e; text-transform: uppercase; }
+      #bar { margin: 26px auto 0; width: min(340px, 60vw); height: 2px; background: #16233a; overflow: hidden; }
+      #bar i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #2f6fd0, #7fd4ff); transition: width .25s ease; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="ui"></div>
+    <div id="boot">
+      <div class="wrap">
+        <h1>KNOCKBOTS</h1>
+        <p id="boot-status">Initialising</p>
+        <div id="bar"><i></i></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
