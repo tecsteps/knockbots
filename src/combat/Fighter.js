@@ -62,9 +62,19 @@ export const STATE = {
 };
 
 // Movement tuning, metres/second and ticks.
+// Movement speeds are matched to the authored stride of the clip that plays at
+// each one, measured by sampling the clips through the real rig. A mismatch
+// here reads as skating and no amount of animation polish hides it.
+//   forward 2.75 -> loco.runFwd  (authored 2.69, ratio 1.02)
+//   back    0.55 -> loco.walkBack (authored 0.41, ratio 1.34, inside the band
+//                                  where playback scaling is invisible)
+//   crouch  0.32 -> loco.crouchWalk (authored 0.27, ratio 1.19)
+// Backward and crouch speeds were previously 2.25 and 1.25 against clips
+// authored for a fifth of that. Slowing them is also the correct fighting-game
+// choice — retreating should not outrun advancing.
 const WALK_FWD = 2.75;
-const WALK_BACK = 2.25;
-const CROUCH_WALK = 1.25;
+const WALK_BACK = 0.55;
+const CROUCH_WALK = 0.32;
 const DASH_SPEED = 7.4;
 const DASH_TICKS = 14;
 const BACKDASH_SPEED = 8.6;
@@ -742,7 +752,12 @@ export class Fighter {
     if (cmd.fwd || cmd.back) {
       this.#enter(STATE.WALK);
       this.velocity.x = this.facing * (cmd.fwd ? WALK_FWD : -WALK_BACK);
-      this.#play(cmd.fwd ? 'loco.walkFwd' : 'loco.walkBack', 6, true);
+      // Pick the clip whose authored stride matches the speed we actually drive
+      // the body at, rather than always playing the walk. Measured authored
+      // ground speeds: walkFwd 0.46 m/s, walkBack 0.41, runFwd 2.69. Playing
+      // walkFwd at WALK_FWD made the fighter skate at six times its stride in
+      // every neutral-game frame; runFwd matches it to within 2%.
+      this.#play(cmd.fwd ? 'loco.runFwd' : 'loco.walkBack', 6, true);
       return;
     }
     this.#idle();
