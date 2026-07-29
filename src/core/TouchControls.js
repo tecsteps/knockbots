@@ -45,7 +45,8 @@ const CSS = `
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
-.kbt-root.kbt-off { display: none; }
+.kbt-root.kbt-off { opacity: 0; }
+.kbt-root { transition: opacity .25s ease; }
 
 /* The whole left half is the stick's catchment, so the thumb never has to find
    a target. The ring only becomes visible once it is holding one. */
@@ -121,11 +122,23 @@ export class TouchControls {
     this._stickOrigin = { x: 0, y: 0 };
     this._swipe = null;
 
+    // Decide from the device, not from a first touch. The pad used to mount
+    // hidden with `display: none` and reveal itself on touchstart, which cannot
+    // work: a display:none element receives no events, so the touch that was
+    // meant to wake it never arrived. Gate on the same signal the boot legend
+    // uses — a coarse primary pointer that cannot hover.
+    const coarse = typeof matchMedia === 'function'
+      && matchMedia('(pointer: coarse)').matches
+      && matchMedia('(hover: none)').matches;
     this.supported = typeof window !== 'undefined'
-      && (navigator.maxTouchPoints > 0 || 'ontouchstart' in window);
+      && (coarse || navigator.maxTouchPoints > 0 || 'ontouchstart' in window);
     if (!this.supported || opts.enabled === false) return;
 
     this.#mount(host);
+    // Show immediately on a genuine touch device; on a touch-capable laptop
+    // stay dimmed until a finger actually lands, so a mouse user is not given
+    // a pad they never asked for.
+    if (coarse) this.#wake();
   }
 
   #mount(host) {
