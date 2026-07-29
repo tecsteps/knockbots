@@ -29,6 +29,7 @@ import './ui.css';
 import * as THREE from 'three';
 import { bus } from '../core/Bus.js';
 import { MAX_HEALTH, METER_MAX, ROUNDS_TO_WIN, ROUND_TIME_SECONDS, TICK_HZ } from '../core/Constants.js';
+import { applyKbText } from './Typeface.js';
 
 const DRAIN_HOLD_SEC = 0.5;
 const DRAIN_RATE = 5.2; // damp lambda once the hold expires
@@ -38,6 +39,17 @@ const COMBO_HOLD_SEC = 1.1; // time with no new hit before the combo readout dis
 const MAX_CALLOUTS = 24;
 
 const IN_FIGHT_PHASES = new Set(['intro', 'ready', 'fight', 'ko', 'roundEnd']);
+
+/**
+ * Fixed camera layer used only for the offscreen portrait pass — high
+ * enough that it can never collide with `LAYER.BLOOM_ONLY`/`NO_REFLECT`
+ * from `Constants.js`. Tagging a fighter's group with it and pointing a
+ * layer-exclusive camera at it is what lets `#capturePortrait` render just
+ * that one robot (still fully lit by the real scene lights, which are not
+ * layer-gated) with the opponent, stage and background left out of frame.
+ */
+const PORTRAIT_LAYER = 6;
+const PORTRAIT_SIZE = 128;
 
 /** Reusable scratch vector for world -> screen projection. */
 const _proj = new THREE.Vector3();
@@ -80,6 +92,12 @@ export class HUD {
     this.visible = null; // last hud--hidden state written, to avoid redundant class writes
     this.tenseState = null;
 
+    /** Lazily-created offscreen render target + camera for `#capturePortrait`. */
+    this.portraitRT = null;
+    this.portraitCamera = new THREE.PerspectiveCamera(26, 1, 0.05, 4);
+    this.portraitCamera.layers.set(PORTRAIT_LAYER);
+    this._portraitPos = new THREE.Vector3();
+
     this.#wireBus();
   }
 
@@ -92,8 +110,28 @@ export class HUD {
     const block = document.createElement('div');
     block.className = `hp-block hp-block--${p}`;
 
+    // Portrait chip: a live render of the fighter's head (see
+    // `#capturePortrait`) over a beveled metal plate, with a monogram
+    // fallback shown until that first capture lands.
+    const portrait = document.createElement('div');
+    portrait.className = 'portrait-chip';
+    const portraitCanvas = document.createElement('canvas');
+    portraitCanvas.className = 'portrait-canvas';
+    portraitCanvas.width = PORTRAIT_SIZE;
+    portraitCanvas.height = PORTRAIT_SIZE;
+    const portraitFallback = document.createElement('div');
+    portraitFallback.className = 'portrait-fallback';
+    const portraitMono = document.createElement('span');
+    portraitFallback.appendChild(portraitMono);
+    portrait.append(portraitCanvas, portraitFallback);
+
+    // The bar is two nested boxes: `.hp-frame` is the outer metal bezel
+    // (bevel + keyline + cast shadow, see ui.css), `.hp-inner` is the
+    // clipped window the health layers actually scale inside.
     const frame = document.createElement('div');
     frame.className = 'hp-frame';
+    const inner = document.createElement('div');
+    inner.className = 'hp-inner';
     const ghost = document.createElement('div');
     ghost.className = 'hp-layer hp-ghost';
     const drain = document.createElement('div');
@@ -104,13 +142,14 @@ export class HUD {
     sheen.className = 'hp-sheen';
     const flash = document.createElement('div');
     flash.className = 'hp-flash';
-    frame.append(ghost, drain, fill, sheen, flash);
+    inner.append(ghost, drain, fill, sheen, flash);
+    frame.appendChild(inner);
 
     const plate = document.createElement('div');
     plate.className = 'nameplate';
     const name = document.createElement('span');
     name.className = 'nameplate-name';
-    name.textContent = '—';
+    applyKbText(name, '');
     const pips = document.createElement('div');
     pips.className = 'pips';
     const pipEls = [];
@@ -122,9 +161,12 @@ export class HUD {
     }
     plate.append(...(i === 0 ? [name, pips] : [pips, name]));
 
-    block.append(frame, plate);
+    block.append(portrait, frame, plate);
 
-    return { block, frame, ghost, drain, fill, flash, name, pipEls };
+    return {
+      block, frame, ghost, drain, fill, flash, name, pipEls,
+      portrait, portraitCanvas, portraitCtx: portraitCanvas.getContext('2d'), portraitMono,
+    };
   }
 
   #buildTop() {
@@ -136,7 +178,7 @@ export class HUD {
     timerFrame.className = 'timer-frame';
     const timerValue = document.createElement('div');
     timerValue.className = 'timer-value';
-    timerValue.textContent = String(ROUND_TIME_SECONDS);
+    applyKbText(timerValue, String(ROUND_TIME_SECONDS));
     timerFrame.appendChild(timerValue);
     const roundLabel = document.createElement('div');
     roundLabel.className = 'round-label';
@@ -183,7 +225,7 @@ export class HUD {
       el.className = `combo combo--p${i}`;
       const hits = document.createElement('div');
       hits.className = 'combo-hits';
-      hits.textContent = '0';
+      applyKbText(hits, '0');
       const tag = document.createElement('div');
       tag.className = 'combo-tag';
       tag.dataset.tag = 'COMBO';
@@ -218,9 +260,22 @@ export class HUD {
     layer.className = 'announce-layer';
     const banner = document.createElement('div');
     banner.className = 'announce-banner';
+    // `.announce-plate` is the opaque lit slab; `.announce-text` (the
+    // glyph mask) sits on top of it. `.announce-inner` has no styling of
+    // its own — it just sizes itself to the text so the plate, which is
+    // absolutely positioned against it, can inset around that footprint.
+    const inner = document.createElement('div');
+    inner.className = 'announce-inner';
+    const plateEl = document.createElement('div');
+    plateEl.className = 'announce-plate';
+    const text = document.createElement('div');
+    text.className = 'announce-text';
+    inner.append(plateEl, text);
+    banner.appendChild(inner);
     layer.appendChild(banner);
     this.uiRoot.appendChild(layer);
     this.announceBanner = banner;
+    this.announceText = text;
     banner.addEventListener('animationend', () => this.#advanceAnnounceQueue());
   }
 
@@ -350,10 +405,12 @@ export class HUD {
     for (let i = 0; i < this.fighters.length; i++) {
       const f = this.fighters[i];
       const el = this.sides[i];
-      const nm = f.def?.name || '—';
+      const nm = f.def?.name || '';
       if (this.lastName[i] !== nm) {
-        el.name.textContent = nm;
+        applyKbText(el.name, nm);
+        applyKbText(el.portraitMono, nm.slice(0, 1));
         this.lastName[i] = nm;
+        this.#capturePortrait(game, i);
       }
       const wins = game.wins?.[i] ?? 0;
       if (this.lastWins[i] !== wins) {
@@ -363,11 +420,80 @@ export class HUD {
     }
   }
 
+  /**
+   * Renders fighter `i`'s head to `PORTRAIT_SIZE`x`PORTRAIT_SIZE` and paints
+   * it into that side's portrait canvas — a bonus, not a dependency: any
+   * failure (renderer without readback support, robot not built yet, no
+   * `head` bone) is swallowed and just leaves the monogram fallback chip
+   * showing, never crashes the HUD.
+   * @param {import('../core/Game.js').Game} game
+   * @param {number} i fighter index
+   */
+  #capturePortrait(game, i) {
+    const fighter = this.fighters[i];
+    const side = this.sides[i];
+    const renderer = game.renderer?.renderer;
+    const scene = game.scene;
+    const head = fighter?.robot?.parts?.byName?.head;
+    if (!renderer || !scene || !head || typeof renderer.readRenderTargetPixels !== 'function') return;
+
+    try {
+      if (!this.portraitRT) {
+        this.portraitRT = new THREE.WebGLRenderTarget(PORTRAIT_SIZE, PORTRAIT_SIZE, {
+          colorSpace: THREE.SRGBColorSpace,
+        });
+      }
+
+      fighter.group.traverse((o) => o.layers?.enable(PORTRAIT_LAYER));
+
+      head.getWorldPosition(this._portraitPos);
+      const { x: hx, y: hy, z: hz } = this._portraitPos;
+      const facing = fighter.facing || 1;
+      this.portraitCamera.position.set(hx - facing * 0.6, hy + 0.12, hz + 0.5);
+      this.portraitCamera.lookAt(hx + facing * 0.06, hy + 0.02, hz);
+      this.portraitCamera.updateProjectionMatrix();
+
+      const prevTarget = renderer.getRenderTarget();
+      const prevBackground = scene.background;
+      const prevClearColor = new THREE.Color();
+      renderer.getClearColor(prevClearColor);
+      const prevClearAlpha = renderer.getClearAlpha();
+
+      scene.background = null;
+      renderer.setClearColor(0x000000, 0);
+      renderer.setRenderTarget(this.portraitRT);
+      renderer.clear(true, true, true);
+      renderer.render(scene, this.portraitCamera);
+      renderer.setRenderTarget(prevTarget);
+      scene.background = prevBackground;
+      renderer.setClearColor(prevClearColor, prevClearAlpha);
+
+      fighter.group.traverse((o) => o.layers?.disable(PORTRAIT_LAYER));
+
+      const buf = new Uint8Array(PORTRAIT_SIZE * PORTRAIT_SIZE * 4);
+      renderer.readRenderTargetPixels(this.portraitRT, 0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE, buf);
+
+      // WebGL render targets read back bottom-to-top; canvas ImageData is
+      // top-to-bottom, so flip rows on the way in.
+      const img = side.portraitCtx.createImageData(PORTRAIT_SIZE, PORTRAIT_SIZE);
+      const rowBytes = PORTRAIT_SIZE * 4;
+      for (let y = 0; y < PORTRAIT_SIZE; y++) {
+        const src = (PORTRAIT_SIZE - 1 - y) * rowBytes;
+        img.data.set(buf.subarray(src, src + rowBytes), y * rowBytes);
+      }
+      side.portraitCtx.putImageData(img, 0, 0);
+      side.portrait.classList.add('portrait-chip--ready');
+    } catch {
+      // Portraits are a finishing touch; the monogram fallback already
+      // covers this case, so there is nothing else to do here.
+    }
+  }
+
   #updateTimer(game) {
     const secs = Math.max(0, Math.ceil((game.roundTimer ?? 0) / TICK_HZ));
     const text = String(secs);
     if (text !== this.lastTimerText) {
-      this.timerValue.textContent = text;
+      applyKbText(this.timerValue, text);
       this.lastTimerText = text;
     }
     const tense = secs > 0 && secs <= 10 && game.phase === 'fight';
@@ -422,7 +548,7 @@ export class HUD {
         c.shownHits = c.hits >= c.shownHits + 3
           ? c.shownHits + Math.ceil((c.hits - c.shownHits) * 0.4)
           : c.hits;
-        els.hits.textContent = String(c.shownHits);
+        applyKbText(els.hits, String(c.shownHits));
         // Tier climbs with the count so a long combo visibly escalates —
         // bigger and hotter in colour, not just a bigger number.
         const tier = c.shownHits >= 8 ? '3' : c.shownHits >= 5 ? '2' : '1';
@@ -508,7 +634,7 @@ export class HUD {
     if (!next) { this.announceBusy = false; return; }
     this.announceBusy = true;
     this.announceBanner.dataset.kind = next.kind;
-    this.announceBanner.textContent = next.text;
+    applyKbText(this.announceText, next.text);
     void this.announceBanner.offsetWidth;
     this.announceBanner.classList.add('announce--run');
   }

@@ -53,45 +53,66 @@ const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _n = new THREE.Vector3();
+const _roll = new THREE.Vector3();
 const _c = new THREE.Color();
 const _c2 = new THREE.Color();
 const _c3 = new THREE.Color();
 const _size = new THREE.Vector2();
 const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
 
-/** Per-weight impact recipe. Every number here is a readability decision. */
+/**
+ * Per-weight impact recipe. Every number here is a readability decision.
+ *
+ * The persistence hierarchy is deliberate and it is the opposite of the obvious
+ * one: `flashLife` is two to four frames, `coreLife` and the spark life are
+ * most of a second. The flare is the event; the cooling metal and the falling
+ * embers are the evidence it left. Getting that the wrong way round leaves a
+ * reaction animation playing out over a contact point with nothing at it.
+ */
 const HIT_FX = {
   [WEIGHT.LIGHT]: {
-    sparks: 26, speed: 6.2, size: 0.028, heat: 2.3,
-    ring: 0.48, ringLife: 0.17, thick: 0.34, ringHeat: 1.0,
-    flash: 0.34, flashHeat: 1.3, flashLife: 0.1,
+    sparks: 30, jet: 10, speed: 7.4, size: 0.026, heat: 2.6, sparkLife: 0.85,
+    ring: 0.48, ringLife: 0.17, thick: 0.2, ringHeat: 1.5,
+    flash: 0.26, flashHeat: 3.2, flashLife: 0.075,
+    core: 0.13, coreHeat: 2.6, coreLife: 0.42,
     debris: 0, fluid: 0, light: 3.0, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
-    sparks: 50, speed: 7.6, size: 0.033, heat: 2.7,
-    ring: 0.82, ringLife: 0.22, thick: 0.36, ringHeat: 1.3,
-    flash: 0.5, flashHeat: 1.7, flashLife: 0.13,
+    sparks: 54, jet: 16, speed: 8.6, size: 0.03, heat: 3.0, sparkLife: 1.0,
+    ring: 0.82, ringLife: 0.22, thick: 0.2, ringHeat: 1.9,
+    flash: 0.36, flashHeat: 3.8, flashLife: 0.09,
+    core: 0.18, coreHeat: 3.4, coreLife: 0.6,
     debris: 0, fluid: 5, light: 5.0, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
-    sparks: 104, speed: 9.6, size: 0.04, heat: 3.2,
-    ring: 1.5, ringLife: 0.3, thick: 0.42, ringHeat: 1.7,
-    flash: 0.82, flashHeat: 2.3, flashLife: 0.17,
-    debris: 5, fluid: 12, light: 12.0, impact: 0.55, dust: 6,
+    sparks: 108, jet: 30, speed: 10.4, size: 0.036, heat: 3.4, sparkLife: 1.2,
+    ring: 1.5, ringLife: 0.3, thick: 0.24, ringHeat: 2.4,
+    flash: 0.56, flashHeat: 4.6, flashLife: 0.11,
+    core: 0.28, coreHeat: 4.4, coreLife: 0.85,
+    debris: 8, fluid: 12, light: 12.0, impact: 0.55, dust: 6,
   },
   [WEIGHT.LAUNCHER]: {
-    sparks: 118, speed: 10.6, size: 0.042, heat: 3.3,
-    ring: 1.8, ringLife: 0.34, thick: 0.44, ringHeat: 1.8,
-    flash: 0.95, flashHeat: 2.5, flashLife: 0.19,
-    debris: 6, fluid: 14, light: 14.0, impact: 0.62, dust: 8,
+    sparks: 122, jet: 34, speed: 11.4, size: 0.038, heat: 3.5, sparkLife: 1.3,
+    ring: 1.8, ringLife: 0.34, thick: 0.25, ringHeat: 2.6,
+    flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
+    core: 0.31, coreHeat: 4.8, coreLife: 0.92,
+    debris: 10, fluid: 14, light: 14.0, impact: 0.62, dust: 8,
   },
   [WEIGHT.ULTRA]: {
-    sparks: 200, speed: 13.5, size: 0.052, heat: 3.9,
-    ring: 2.85, ringLife: 0.44, thick: 0.5, ringHeat: 2.2,
-    flash: 1.5, flashHeat: 3.2, flashLife: 0.26,
-    debris: 14, fluid: 26, light: 26.0, impact: 1.0, dust: 14,
+    sparks: 200, jet: 56, speed: 14.5, size: 0.046, heat: 4.0, sparkLife: 1.45,
+    ring: 2.85, ringLife: 0.44, thick: 0.28, ringHeat: 3.0,
+    flash: 0.95, flashHeat: 6.0, flashLife: 0.16,
+    core: 0.46, coreHeat: 5.6, coreLife: 1.1,
+    debris: 18, fluid: 26, light: 26.0, impact: 1.0, dust: 14,
   },
 };
+
+/**
+ * Impact dust, once and for all. It is pulverised paint, concrete and oxide —
+ * a warm neutral grey that the arena light colours, never the palette of
+ * whichever robot happened to get hit.
+ */
+const DUST = new THREE.Color(0.46, 0.42, 0.37);
 
 /** Bones that can carry a trail, with the joint that forms the ribbon's inner edge. */
 const TRAIL_BONES = [
@@ -282,6 +303,21 @@ export class EffectsDirector {
     return out.copy(DEFAULT_ACCENT[idx]);
   }
 
+  /**
+   * Billboard roll that puts a quad's local x-axis along a world direction as
+   * the camera sees it. Impact effects that ignore this are identical whichever
+   * way the blow travelled, which is the single clearest tell that a hit was
+   * drawn rather than caused.
+   * @param {THREE.Vector3} dir world-space direction of travel
+   * @returns {number} roll in radians
+   */
+  #screenRoll(dir) {
+    if (!this.camera) return 0;
+    _roll.copy(dir).transformDirection(this.camera.matrixWorldInverse);
+    if (_roll.x * _roll.x + _roll.y * _roll.y < 1e-8) return 0;
+    return Math.atan2(_roll.y, _roll.x);
+  }
+
   // -------------------------------------------------------------------------
   // combat events
   // -------------------------------------------------------------------------
@@ -293,33 +329,57 @@ export class EffectsDirector {
     const scale = counter ? 1.35 : 1;
 
     _n.copy(e.normal && e.normal.lengthSq() > 1e-6 ? e.normal : _v.set(0, 1, 0)).normalize();
+    const roll = this.#screenRoll(_n);
 
-    // Sparks fan back along the hit normal, biased upward so the burst is
-    // legible against the floor rather than firing into it.
-    _v2.copy(_n).setY(_n.y * 0.6 + 0.45).normalize();
+    // Sparks travel the way the blow did. The wide fan carries the volume of
+    // the burst, biased only slightly upward so it stays legible against the
+    // floor; the tight jet down the hit normal is what makes the direction
+    // readable in a single frame instead of leaving an isotropic ball.
+    _v2.copy(_n).setY(_n.y * 0.7 + 0.3).normalize();
     this.sparks.burst(e.point, _v2, {
       count: recipe.sparks * scale,
       speed: recipe.speed * scale,
-      spread: 0.72,
-      life: 0.62,
+      spread: 0.46,
+      life: recipe.sparkLife,
+      inherit: _v3.copy(_n).multiplyScalar(recipe.speed * 0.22),
       size: recipe.size,
       heat: recipe.heat,
       tint: counter ? _c.setRGB(1.0, 0.86, 0.72) : null,
     });
+    this.sparks.burst(e.point, _n, {
+      count: recipe.jet * scale,
+      speed: recipe.speed * 1.55 * scale,
+      spread: 0.14,
+      life: recipe.sparkLife * 0.8,
+      size: recipe.size * 1.15,
+      heat: recipe.heat * 1.15,
+    });
 
     // The flare at the contact point: the brightest element and the one the
-    // bloom pass actually feeds on.
+    // bloom pass actually feeds on. Its streak lies along the blow.
     this.#palette(e.attacker, 'emissive', _c2);
     this.flashes.pop(e.point, {
       size: recipe.flash * scale,
       life: recipe.flashLife,
       heat: recipe.flashHeat * scale,
-      tint: _c3.copy(_c2).lerp(_c.setRGB(1, 0.95, 0.88), 0.55),
+      roll,
+      tint: _c3.copy(_c2).lerp(_c.setRGB(1, 0.95, 0.88), 0.7),
     });
 
-    // Contact ring, oriented to face the camera at the contact point.
+    // The heat core the flare leaves behind. Without it the contact point is
+    // dark again four frames in, while the reaction animation is still playing.
+    this.flashes.pop(e.point, {
+      size: recipe.core * scale,
+      life: recipe.coreLife,
+      heat: recipe.coreHeat * scale,
+      cool: true,
+    });
+
+    // Contact ring, facing the camera and rolled onto the line of the hit so
+    // its energy lobes sit where the force went.
     this.shock.spawn(e.point, {
       mode: 'facing',
+      tilt: roll,
       radius: recipe.ring * scale,
       life: recipe.ringLife * (counter ? 1.15 : 1),
       thickness: recipe.thick,
@@ -345,11 +405,13 @@ export class EffectsDirector {
     }
 
     if (recipe.dust) {
-      this.#palette(e.defender, 'secondary', _c);
-      this.smoke.puff(e.point, {
-        count: recipe.dust, dir: _n, speed: 1.9, spread: 1.4,
-        radius: 0.16, size: 0.3, growth: 1.1, life: 0.85,
-        buoyancy: 0.35, curl: 0.9, tint: _c.multiplyScalar(0.7),
+      // Thrown clear of the contact along the normal, so the puff never sits on
+      // top of the heat core and swallows the one bright thing in the frame.
+      _v3.copy(e.point).addScaledVector(_n, 0.18);
+      this.smoke.puff(_v3, {
+        count: recipe.dust, dir: _n, speed: 2.6, spread: 1.5,
+        radius: 0.13, size: 0.15, growth: 1.7, life: 0.6,
+        buoyancy: 0.32, curl: 1.1, tint: DUST,
       });
     }
 
@@ -362,16 +424,18 @@ export class EffectsDirector {
     if (!this.enabled || !e?.point) return;
     this.#palette(e.defender, 'emissive', _c);
     _n.set(e.attacker?.facing ? -e.attacker.facing : 1, 0.25, 0).normalize();
+    const roll = this.#screenRoll(_n);
 
     this.sparks.burst(e.point, _n, {
-      count: 30, speed: 6.4, spread: 0.42, life: 0.4, size: 0.026,
-      heat: 2.4, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.6),
+      count: 34, speed: 7.2, spread: 0.34, life: 0.65, size: 0.026,
+      heat: 2.6, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.6),
     });
     this.shock.spawn(e.point, {
-      mode: 'facing', radius: 0.7, life: 0.24, thickness: 0.18,
+      mode: 'facing', tilt: roll, radius: 0.7, life: 0.24, thickness: 0.18,
       heat: 1.6, tint: _c, distort: 0.4,
     });
-    this.flashes.pop(e.point, { size: 0.42, life: 0.1, heat: 1.5, tint: _c });
+    this.flashes.pop(e.point, { size: 0.3, life: 0.08, heat: 3.4, roll, tint: _c });
+    this.flashes.pop(e.point, { size: 0.13, life: 0.34, heat: 2.2, cool: true });
     this.#flashLight(e.point, 4, 0xbfe4ff);
   }
 
@@ -383,9 +447,10 @@ export class EffectsDirector {
       heat: 3.4, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.5), distort: 1.2,
     });
     this.sparks.burst(e.point, _v.set(0, 1, 0), {
-      count: 56, speed: 8.5, spread: 1.0, life: 0.5, size: 0.03, heat: 3.0, tint: _c,
+      count: 56, speed: 8.5, spread: 1.0, life: 0.85, size: 0.03, heat: 3.2, tint: _c,
     });
-    this.flashes.pop(e.point, { size: 1.05, life: 0.2, heat: 2.6, tint: _c });
+    this.flashes.pop(e.point, { size: 0.6, life: 0.11, heat: 4.4, tint: _c });
+    this.flashes.pop(e.point, { size: 0.24, life: 0.55, heat: 3.2, cool: true });
     this.#flashLight(e.point, 9, 0xd8f0ff);
     this.#punch(e.point, 0.3, false);
   }
@@ -393,26 +458,28 @@ export class EffectsDirector {
   #onArmor(e) {
     if (!this.enabled || !e?.point) return;
     this.sparks.burst(e.point, _v.set(0, 0.6, 0).normalize(), {
-      count: 44, speed: 5.4, spread: 1.0, life: 0.45, size: 0.03, heat: 2.5,
+      count: 44, speed: 5.4, spread: 1.0, life: 0.75, size: 0.03, heat: 2.7,
     });
     this.shock.spawn(e.point, {
-      mode: 'facing', radius: 0.9, life: 0.3, thickness: 0.4,
+      mode: 'facing', radius: 0.9, life: 0.3, thickness: 0.24,
       heat: 1.4, tint: _c.setRGB(1, 0.62, 0.24), distort: 0.5,
     });
-    this.flashes.pop(e.point, { size: 0.6, life: 0.14, heat: 1.6, tint: _c.setRGB(1, 0.62, 0.24) });
+    this.flashes.pop(e.point, { size: 0.4, life: 0.085, heat: 3.4, tint: _c.setRGB(1, 0.62, 0.24) });
+    this.flashes.pop(e.point, { size: 0.18, life: 0.5, heat: 2.8, cool: true });
     this.#flashLight(e.point, 6, 0xffb066);
   }
 
   #onPartBreak(e) {
     if (!this.enabled || !e?.point) return;
     _n.set(e.fighter?.facing ? -e.fighter.facing : 1, 0.5, 0).normalize();
+    const roll = this.#screenRoll(_n);
     this.#palette(e.fighter, 'trim', _c);
 
     this.debris.burst(e.point, _n, {
       count: 18, speed: 6.4, spread: 1.3, size: 0.085, life: 6.5, color: _c,
     });
     this.sparks.burst(e.point, _n, {
-      count: 120, speed: 9.0, spread: 1.0, life: 0.7, size: 0.038, heat: 3.2,
+      count: 120, speed: 9.6, spread: 0.72, life: 1.05, size: 0.038, heat: 3.4,
     });
     this.#palette(e.fighter, 'emissive', _c2);
     this.fluid.spray(e.point, _n, {
@@ -420,14 +487,15 @@ export class EffectsDirector {
     });
     this.smoke.puff(e.point, {
       count: 10, dir: _n, speed: 2.4, spread: 1.6, radius: 0.2,
-      size: 0.38, growth: 1.3, life: 1.4, buoyancy: 0.5, curl: 1.1,
-      tint: _c.setRGB(0.16, 0.15, 0.15),
+      size: 0.32, growth: 1.5, life: 1.2, buoyancy: 0.5, curl: 1.1,
+      tint: _c.setRGB(0.34, 0.31, 0.28),
     });
     this.shock.spawn(e.point, {
-      mode: 'facing', radius: 1.6, life: 0.42, thickness: 0.4,
+      mode: 'facing', tilt: roll, radius: 1.6, life: 0.42, thickness: 0.24,
       heat: 2.4, tint: _c2, distort: 1.0,
     });
-    this.flashes.pop(e.point, { size: 1.1, life: 0.2, heat: 2.5 });
+    this.flashes.pop(e.point, { size: 0.7, life: 0.13, heat: 5.0, roll });
+    this.flashes.pop(e.point, { size: 0.34, life: 0.95, heat: 4.6, cool: true });
     this.#flashLight(e.point, 16, 0xffc48a);
     this.#punch(e.point, 0.5, false);
   }
@@ -437,19 +505,27 @@ export class EffectsDirector {
     _v.copy(e.fighter.position);
     _v.y = this.floorY;
     this.shock.spawn(_v, {
-      mode: 'ground', radius: 2.1, life: 0.55, thickness: 0.36,
+      mode: 'ground', radius: 2.1, life: 0.55, thickness: 0.22,
       heat: 1.6, tint: _c.setRGB(0.9, 0.86, 0.78), distort: 0.7,
     });
-    this.#groundDust(_v, 14, 2.6, 0.42);
+    this.#groundDust(_v, 7, 2.6, 0.26);
+    // Boots tearing off the floor throw a low ember shower that is still
+    // glowing when the launched fighter reaches the top of the arc — the one
+    // piece of the hit that survives long enough to punctuate the whole
+    // reaction rather than just its first four frames.
+    _v3.copy(_v).setY(this.floorY + 0.12);
+    this.sparks.burst(_v3, _v2.set(0, 1, 0), {
+      count: 34, speed: 5.4, spread: 0.9, life: 1.5, size: 0.03, heat: 2.6,
+    });
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.9, { life: 14, strength: 0.34 });
   }
 
   #onKnockdown(e) {
     if (!this.enabled || !e?.point) return;
     _v.copy(e.point); _v.y = this.floorY;
-    this.#groundDust(_v, 22, 3.4, 0.5);
+    this.#groundDust(_v, 11, 3.4, 0.32);
     this.shock.spawn(_v, {
-      mode: 'ground', radius: 2.6, life: 0.6, thickness: 0.4,
+      mode: 'ground', radius: 2.6, life: 0.6, thickness: 0.24,
       heat: 1.2, tint: _c.setRGB(0.86, 0.82, 0.76), distort: 0.6,
     });
     this.#palette(e.fighter, 'trim', _c);
@@ -464,27 +540,29 @@ export class EffectsDirector {
   #onWallSplat(e) {
     if (!this.enabled || !e?.point) return;
     _n.copy(e.normal && e.normal.lengthSq() > 1e-6 ? e.normal : _v.set(0, 1, 0)).normalize();
+    const roll = this.#screenRoll(_n);
     this.sparks.burst(e.point, _n, {
-      count: 140, speed: 11.0, spread: 0.85, life: 0.75, size: 0.045, heat: 3.4,
+      count: 140, speed: 11.6, spread: 0.62, life: 1.1, size: 0.045, heat: 3.6,
     });
     this.#palette(e.fighter, 'trim', _c);
     this.debris.burst(e.point, _n, {
       count: 12, speed: 6.0, spread: 1.0, size: 0.07, life: 5.5, color: _c,
     });
     this.smoke.puff(e.point, {
-      count: 12, dir: _n, speed: 2.8, spread: 1.5, radius: 0.28,
-      size: 0.44, growth: 1.3, life: 1.5, buoyancy: 0.4, curl: 1.0,
-      tint: _c2.setRGB(0.3, 0.28, 0.26),
+      count: 12, dir: _n, speed: 3.0, spread: 1.5, radius: 0.26,
+      size: 0.36, growth: 1.6, life: 1.3, buoyancy: 0.4, curl: 1.0,
+      tint: DUST,
     });
     this.shock.spawn(e.point, {
-      mode: 'facing', radius: 2.4, life: 0.55, thickness: 0.42,
+      mode: 'facing', tilt: roll, radius: 2.4, life: 0.55, thickness: 0.26,
       heat: 2.6, tint: _c2.setRGB(1, 0.92, 0.82), distort: 1.3,
     });
     // The impact dust settles at the base of the wall.
     const fx = THREE.MathUtils.clamp(e.point.x, -ARENA_HALF_WIDTH + 0.3, ARENA_HALF_WIDTH - 0.3);
     const fz = THREE.MathUtils.clamp(e.point.z, -ARENA_HALF_DEPTH + 0.3, ARENA_HALF_DEPTH - 0.3);
     this.decals.add(DECAL.SCORCH, fx, fz, 1.1, { life: 24, strength: 0.55 });
-    this.flashes.pop(e.point, { size: 1.25, life: 0.22, heat: 2.7 });
+    this.flashes.pop(e.point, { size: 0.8, life: 0.13, heat: 5.2, roll });
+    this.flashes.pop(e.point, { size: 0.4, life: 1.0, heat: 4.8, cool: true });
     this.#flashLight(e.point, 18, 0xffd0a0);
     this.#punch(e.point, 0.7, false);
   }
@@ -496,16 +574,16 @@ export class EffectsDirector {
     const k = THREE.MathUtils.clamp(speed / 12, 0.2, 1.6);
     _v.copy(e.point); _v.y = this.floorY;
 
-    this.#groundDust(_v, Math.round(10 + 18 * k), 2.2 + 2.0 * k, 0.34 + 0.2 * k);
+    this.#groundDust(_v, Math.round(6 + 9 * k), 2.2 + 2.0 * k, 0.22 + 0.13 * k);
     this.shock.spawn(_v, {
       mode: 'ground', radius: 1.4 + 1.8 * k, life: 0.4 + 0.25 * k,
-      thickness: 0.4, heat: 1.0 + k, tint: _c.setRGB(0.88, 0.84, 0.78),
+      thickness: 0.24, heat: 1.4 + k, tint: _c.setRGB(0.88, 0.84, 0.78),
       distort: 0.5 * k,
     });
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.7 + 0.8 * k, { life: 16, strength: 0.3 + 0.22 * k });
     if (k > 0.9) {
       this.sparks.burst(_v, _v2.set(0, 1, 0), {
-        count: 40, speed: 5.0, spread: 1.0, life: 0.45, size: 0.028, heat: 2.3,
+        count: 40, speed: 5.0, spread: 1.0, life: 0.8, size: 0.028, heat: 2.5,
       });
       this.decals.add(DECAL.FRACTURE, _v.x, _v.z, 0.9, { life: 20, strength: 0.4 });
     }
@@ -536,9 +614,9 @@ export class EffectsDirector {
     _v2.set(-dir * 1.4, 0.9, 0).normalize();
     _v3.copy(_v).setY(this.floorY + 0.12);
     this.smoke.puff(_v3, {
-      count: 12, dir: _v2, speed: 2.4, spread: 1.2, radius: 0.3,
-      size: 0.3, growth: 1.2, life: 0.95, buoyancy: 0.2, curl: 1.0,
-      tint: _c.setRGB(0.46, 0.44, 0.41),
+      count: 7, dir: _v2, speed: 2.4, spread: 1.2, radius: 0.3,
+      size: 0.22, growth: 1.2, life: 0.8, buoyancy: 0.2, curl: 1.0,
+      tint: DUST,
     });
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.5, { life: 8, strength: 0.28 });
 
@@ -563,7 +641,7 @@ export class EffectsDirector {
     if (!this.enabled || !e?.fighter) return;
     _v.copy(e.fighter.position);
     _v.y = this.floorY;
-    this.#groundDust(_v, 10, 2.0, 0.34);
+    this.#groundDust(_v, 6, 2.0, 0.24);
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.44, { life: 8, strength: 0.24 });
   }
 
@@ -603,7 +681,7 @@ export class EffectsDirector {
     // A column of charge: ground ring, rising embers, a coloured plume and a
     // scorch ring that stays on the floor after the move.
     this.shock.spawn(_v, {
-      mode: 'ground', radius: 2.4, life: 0.75, thickness: 0.4,
+      mode: 'ground', radius: 2.4, life: 0.75, thickness: 0.24,
       heat: 1.8, tint: _c, distort: 1.0,
     });
     _v3.copy(_v).setY(this.floorY + 0.1);
@@ -611,17 +689,20 @@ export class EffectsDirector {
       count: 110, speed: 9.0, spread: 0.5, life: 1.2, size: 0.026,
       heat: 2.8, tint: _c,
     });
+    // The plume is charged, not incandescent. Pushing its self-illumination up
+    // gives the bloom a metre-wide white sun to chew on, and the camera is a
+    // metre and a half away on this cinematic: the whole frame goes to paper.
     _v3.setY(this.floorY + 0.7);
     this.smoke.puff(_v3, {
-      count: 22, dir: _v2.set(0, 1, 0), speed: 3.6, spread: 1.0, radius: 0.34,
-      size: 0.15, growth: 1.3, life: 1.1, buoyancy: 1.3, curl: 1.3,
-      tint: _c, emissive: 0.5,
+      count: 20, dir: _v2.set(0, 1, 0), speed: 3.6, spread: 1.0, radius: 0.36,
+      size: 0.2, growth: 1.5, life: 1.1, buoyancy: 1.3, curl: 1.3,
+      tint: _c, emissive: 0.22,
     });
     this.decals.add(DECAL.SCORCH, _v.x, _v.z, 1.9, {
       life: 26, strength: 0.7, tint: _c2.copy(_c).lerp(_c3.setRGB(0.2, 0.2, 0.2), 0.55),
     });
     _v3.setY(this.floorY + 1.1);
-    this.#flashLight(_v3, 30, _c.getHex());
+    this.#flashLight(_v3, 16, _c.getHex());
   }
 
   #onSuperHit(e) {
@@ -632,24 +713,27 @@ export class EffectsDirector {
     this.#palette(e?.attacker, 'emissive', _c);
 
     this.overdrive.flash = 1;
-    this.sparks.burst(_v, _v2.set(0, 1, 0), {
-      count: 150, speed: 13.0, spread: 1.0, life: 0.9, size: 0.036, heat: 3.4,
+    _n.set(e?.attacker?.facing || 1, 0.2, 0).normalize();
+    const roll = this.#screenRoll(_n);
+    this.sparks.burst(_v, _v2.copy(_n).setY(0.55).normalize(), {
+      count: 150, speed: 14.0, spread: 0.7, life: 1.2, size: 0.036, heat: 3.6,
     });
     this.shock.spawn(_v, {
-      mode: 'facing', radius: 2.8, life: 0.55, thickness: 0.45,
+      mode: 'facing', tilt: roll, radius: 2.8, life: 0.55, thickness: 0.28,
       heat: 2.2, tint: _c, distort: 1.6,
     });
     this.shock.spawn(_v.clone().setY(this.floorY), {
-      mode: 'ground', radius: 3.4, life: 0.65, thickness: 0.42,
+      mode: 'ground', radius: 3.4, life: 0.65, thickness: 0.26,
       heat: 1.5, tint: _c, distort: 0.9,
     });
     this.#palette(d, 'trim', _c2);
     this.debris.burst(_v, _v2.set(0, 0.6, 0).normalize(), {
       count: 26, speed: 8.0, spread: 1.4, size: 0.09, life: 6, color: _c2,
     });
-    this.flashes.pop(_v, { size: 1.9, life: 0.3, heat: 3.4, tint: _c });
+    this.flashes.pop(_v, { size: 1.0, life: 0.16, heat: 5.5, roll, tint: _c });
+    this.flashes.pop(_v, { size: 0.5, life: 1.2, heat: 5.0, cool: true });
     this.#punch(_v, 1.0, true);
-    this.#flashLight(_v, 42, 0xffffff);
+    this.#flashLight(_v, 22, 0xffffff);
   }
 
   #onRoundEnd(e) {
@@ -676,8 +760,7 @@ export class EffectsDirector {
       _v2.set(Math.cos(a), 0.42, Math.sin(a)).normalize();
       this.smoke.puff(_v3, {
         count: Math.min(4, c - i), dir: _v2, speed, spread: 0.7, radius: 0.24,
-        size, growth: 1.4, life: 1.25, buoyancy: 0.18, curl: 1.1,
-        tint: _c.setRGB(0.44, 0.42, 0.38),
+        size, growth: 1.2, life: 0.95, buoyancy: 0.18, curl: 1.1, tint: DUST,
       });
     }
   }
@@ -922,8 +1005,8 @@ export class EffectsDirector {
     } else if (od.level > 0) {
       od.level = Math.max(0, od.level - dt * 1.8);
     }
-    od.flash = Math.max(0, od.flash - dt * 4.2);
-    od.desat = od.level * 0.85;
+    od.flash = Math.max(0, od.flash - dt * 5.5);
+    od.desat = od.level * 0.6;
 
     u.uSuper.value = od.level;
     u.uDesat.value = od.desat;

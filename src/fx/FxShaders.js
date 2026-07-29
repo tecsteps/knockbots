@@ -105,21 +105,32 @@ vec3 ballistic( vec3 p0, vec3 v0, float t, float floorY, out vec3 outVel, out fl
  * Blackbody-ish emission ramp. t is 0 at ignition and 1 at burn-out.
  * Returns *radiance*, deliberately far above 1.0 at the head so the bloom pass
  * has something real to work with.
+ *
+ * The luminance curve is two terms, not one. The first is the Stefan-Boltzmann
+ * collapse that takes a spark from white-hot to invisible in a handful of
+ * frames; the second is a slow ember floor that keeps a dim cherry-red glow
+ * alive for the rest of the particle's life, which is the phase where a spark
+ * has already fallen, bounced and is rolling on the floor. A single steep power
+ * law kills that phase entirely and leaves a hit with nothing behind it once the
+ * first two frames are over.
  */
 export const GLSL_TEMPERATURE = /* glsl */ `
-vec3 sparkEmission( float t, float heat ) {
-  float u = clamp( t, 0.0, 1.0 );
-  // Hue path: 6500K white -> 3200K yellow -> 2000K orange -> 1100K cherry.
+/** 6500K white -> 3200K yellow -> 2000K orange -> 1100K cherry. */
+vec3 blackbodyHue( float u ) {
   vec3 white  = vec3( 1.00, 0.97, 0.94 );
   vec3 yellow = vec3( 1.00, 0.78, 0.36 );
   vec3 orange = vec3( 1.00, 0.42, 0.10 );
   vec3 cherry = vec3( 0.72, 0.07, 0.02 );
   vec3 c = mix( white, yellow, smoothstep( 0.0, 0.22, u ) );
   c = mix( c, orange, smoothstep( 0.18, 0.55, u ) );
-  c = mix( c, cherry, smoothstep( 0.5, 1.0, u ) );
-  // Stefan-Boltzmann falls off far faster than the hue does.
-  float lum = heat * pow( 1.0 - u, 2.6 );
-  return c * lum;
+  return mix( c, cherry, smoothstep( 0.5, 1.0, u ) );
+}
+
+vec3 sparkEmission( float t, float heat ) {
+  float u = clamp( t, 0.0, 1.0 );
+  float flash = pow( 1.0 - u, 3.2 ) * 0.78;
+  float ember = pow( 1.0 - u, 0.6 ) * 0.42;
+  return blackbodyHue( u ) * heat * ( flash + ember );
 }`;
 
 /** Divergence-free 2D advection from the baked potential-gradient field. */

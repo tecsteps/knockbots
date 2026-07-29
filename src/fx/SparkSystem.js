@@ -85,9 +85,10 @@ void main() {
   vUv = vec2( uv.x, 1.0 - uv.y );
 
   // Sparks are shedding oxide: they sputter. Bounced sparks have given up
-  // energy to the floor and burn visibly cooler.
+  // energy to the floor and burn cooler, but only a little — a spark that dies
+  // the instant it touches the ground takes the whole ember phase with it.
   float flicker = 0.7 + 0.3 * sin( seed * 61.7 + uTime * 78.0 + hash11( seed ) * 6.28 );
-  float heat = uHeat * flicker * exp( -bounces * 0.35 );
+  float heat = uHeat * flicker * exp( -bounces * 0.18 );
   vColor = sparkEmission( t, heat ) * aTint;
 }`;
 
@@ -131,7 +132,7 @@ export class SparkSystem {
         uTangentFriction: { value: 0.66 },
         uDrag: { value: 1.35 },
         uSizeScale: { value: 1 },
-        uStreak: { value: 0.055 },
+        uStreak: { value: 0.075 },
         uHeat: { value: 1.0 },
         uOpacity: { value: 1 },
       },
@@ -167,7 +168,7 @@ export class SparkSystem {
     const count = Math.max(1, Math.round(opts.count ?? 40));
     const speed = opts.speed ?? 7.5;
     const spread = opts.spread ?? 0.55;
-    const life = opts.life ?? 0.55;
+    const life = opts.life ?? 0.9;
     const size = opts.size ?? 0.035;
     const tint = opts.tint;
     const inherit = opts.inherit;

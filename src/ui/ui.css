@@ -101,6 +101,60 @@
   clip: rect(0 0 0 0); white-space: nowrap;
 }
 
+/* ------------------------------------------------------------------------
+ * Procedural display type (Typeface.js)
+ *
+ * Every `.kb-text` element is a plain container sized to its glyph mask's
+ * aspect ratio (set inline, in `em`, by `applyKbText`); the three children
+ * share that mask via the inherited `--kb-mask` custom property and differ
+ * only in offset/colour/blend, which is what reads as bevelled cast metal
+ * instead of flat masked text. Colour is controlled by overriding
+ * `--kb-ink-a/--kb-ink-b` (top/bottom of the body gradient) on a modifier
+ * class or a `data-*` attribute selector at the call site.
+ * ---------------------------------------------------------------------- */
+.kb-text {
+  position: relative;
+  display: inline-block;
+  height: 1em;
+  vertical-align: baseline;
+  --kb-mask: none;
+  --kb-ink-a: #fffef2;
+  --kb-ink-b: #a84e0a;
+}
+.kb-text__shadow, .kb-text__body, .kb-text__gloss {
+  position: absolute;
+  inset: 0;
+  mask-image: var(--kb-mask);
+  -webkit-mask-image: var(--kb-mask);
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-size: 100% 100%;
+  -webkit-mask-size: 100% 100%;
+  pointer-events: none;
+}
+.kb-text__shadow {
+  background: #000;
+  transform: translate(0, 8%);
+  opacity: 0.6;
+  filter: blur(0.015em);
+}
+.kb-text__body {
+  background-image: linear-gradient(180deg, var(--kb-ink-a) 0%, var(--kb-ink-a) 30%, var(--kb-ink-b) 100%);
+  filter: drop-shadow(0 0.05em 0.1em rgba(0, 0, 0, 0.8));
+}
+.kb-text__gloss {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 55%);
+  transform: translate(0, -6%);
+  opacity: 0.55;
+  mix-blend-mode: screen;
+}
+.kb-text--white { --kb-ink-a: #ffffff; --kb-ink-b: #b6c0d4; }
+.kb-text--danger { --kb-ink-a: #ffb3ba; --kb-ink-b: #a4020f; }
+.kb-text--cyan { --kb-ink-a: #d8fbff; --kb-ink-b: #0d7f96; }
+.kb-text--good { --kb-ink-a: #d4ffef; --kb-ink-b: #0f9f6e; }
+.kb-text--gold { --kb-ink-a: #fff6cf; --kb-ink-b: #b8791a; }
+.kb-text--grey { --kb-ink-a: #dbe1ec; --kb-ink-b: #626e84; }
+
 /* ========================================================================
  * HUD
  * ==================================================================== */
@@ -160,7 +214,7 @@
   position: absolute;
   top: 0;
   width: 0.32em;
-  height: 1.7em;
+  height: 2.72em;
   opacity: 0.95;
   pointer-events: none;
 }
@@ -184,27 +238,49 @@
 .hp-block--p2::before {
   content: '';
   position: absolute;
-  top: 0.84em;
+  top: 1.32em;
   width: 2.4em;
   height: 2px;
 }
 .hp-block--p1::before { left: 100%; background: linear-gradient(90deg, var(--kb-line-strong), transparent); }
 .hp-block--p2::before { right: 100%; background: linear-gradient(270deg, var(--kb-line-strong), transparent); }
 
+/*
+ * The bar is two nested boxes, not one. `.hp-frame` is the outer bezel —
+ * brushed metal, padded, with the bevel and the *cast* shadow (`filter:
+ * drop-shadow`, not `box-shadow`: a clip-path'd element clips its own
+ * box-shadow along with its content, which is why the previous single-box
+ * bar had no shadow separating it from the scene at all). `.hp-inner` is
+ * the clipped window the health layers actually live and scale inside —
+ * the padding between the two is what reads as a keyline/frame at a glance.
+ */
 .hp-frame {
   position: relative;
-  height: 1.7em;
+  height: 2.72em;
   width: 100%;
   max-width: 29em;
+  padding: 0.16em;
+  background: linear-gradient(180deg, #454e60 0%, #171b25 10%, #06070b 48%, #0b0e17 88%, #2a3040 100%);
+  clip-path: polygon(var(--kb-cut) 0, 100% 0, calc(100% - var(--kb-cut)) 100%, 0 100%);
+  box-shadow:
+    inset 0 0 0 0.05em rgba(0, 0, 0, 0.85),
+    inset 0 0.09em 0 rgba(255, 255, 255, 0.22),
+    inset 0 -0.09em 0.16em rgba(0, 0, 0, 0.65);
+  filter: drop-shadow(0 0.55em 1.1em rgba(0, 0, 0, 0.55)) drop-shadow(0 0.1em 0.16em rgba(0, 0, 0, 0.6));
+}
+.hp-inner {
+  position: relative;
+  height: 100%;
+  width: 100%;
   background:
     repeating-linear-gradient(100deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 3px),
     linear-gradient(180deg, #05060a 0%, #0d1119 55%, #070911 100%);
-  clip-path: polygon(var(--kb-cut) 0, 100% 0, calc(100% - var(--kb-cut)) 100%, 0 100%);
-  box-shadow: var(--kb-shadow-panel), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  clip-path: polygon(
+    calc(var(--kb-cut) * 0.82) 0, 100% 0,
+    calc(100% - var(--kb-cut) * 0.82) 100%, 0 100%
+  );
+  box-shadow: inset 0 0 0 1px var(--kb-line);
   overflow: hidden;
-}
-.hp-block--p2 .hp-frame {
-  clip-path: polygon(var(--kb-cut) 0, 100% 0, calc(100% - var(--kb-cut)) 100%, 0 100%);
 }
 
 .hp-layer {
@@ -305,32 +381,84 @@
 .nameplate {
   position: relative;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.55em;
   max-width: 100%;
   min-width: 0;
-  padding: 0.16em 0.5em;
+  padding: 0.2em 0.5em;
   background: linear-gradient(180deg, rgba(11, 14, 22, 0.88), rgba(5, 7, 12, 0.72));
   clip-path: polygon(0.4em 0, 100% 0, calc(100% - 0.4em) 100%, 0 100%);
   box-shadow: inset 0 0 0 1px var(--kb-line), inset 0 0.05em 0 rgba(255, 255, 255, 0.06);
+  filter: drop-shadow(0 0.22em 0.4em rgba(0, 0, 0, 0.45));
 }
 .hp-block--p2 .nameplate { flex-direction: row-reverse; }
+/* Room for `.portrait-chip`, which overlaps this corner of the block. */
+.hp-block--p1 .nameplate { padding-left: 3.05em; }
+.hp-block--p2 .nameplate { padding-right: 3.05em; }
 
-.nameplate-name {
+.nameplate-name.kb-text {
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 900;
-  font-size: 1.05em;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  line-height: 1;
-  text-shadow: 0 0.1em 0.4em rgba(0, 0, 0, 0.6);
+  height: 1.05em;
 }
 .hp-block--p1 .nameplate-name { border-left: 0.18em solid var(--kb-p1); padding-left: 0.4em; }
 .hp-block--p2 .nameplate-name { border-right: 0.18em solid var(--kb-p2); padding-right: 0.4em; }
+
+/*
+ * Head-and-shoulders portrait, rendered once per match by `HUD#capturePortrait`
+ * into `.portrait-canvas` from a dedicated offscreen pass over the fighter's
+ * own head bone — see HUD.js. `.portrait-fallback`'s monogram covers the gap
+ * before that first capture lands (character select -> intro is a handful of
+ * frames) and on any renderer that can't support the readback.
+ */
+.portrait-chip {
+  position: absolute;
+  top: -0.4em;
+  width: 3.15em;
+  height: 3.15em;
+  z-index: 3;
+  background: linear-gradient(155deg, #3f4758 0%, #171b25 42%, #05060a 100%);
+  clip-path: polygon(0.42em 0, 100% 0, 100% calc(100% - 0.42em), calc(100% - 0.42em) 100%, 0 100%);
+  box-shadow:
+    inset 0 0 0 0.05em rgba(0, 0, 0, 0.85),
+    inset 0 0.08em 0 rgba(255, 255, 255, 0.24),
+    inset 0 -0.1em 0.18em rgba(0, 0, 0, 0.6);
+  filter: drop-shadow(0 0.4em 0.7em rgba(0, 0, 0, 0.55));
+  overflow: hidden;
+}
+.hp-block--p1 .portrait-chip { left: -0.4em; }
+.hp-block--p2 .portrait-chip {
+  right: -0.4em;
+  clip-path: polygon(0 0, calc(100% - 0.42em) 0, 100% 100%, 0.42em 100%, 0 calc(100% - 0.42em));
+}
+.portrait-chip::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  clip-path: inherit;
+  pointer-events: none;
+}
+.hp-block--p1 .portrait-chip::after { box-shadow: inset 0 0 0 0.08em rgba(79, 210, 255, 0.85); }
+.hp-block--p2 .portrait-chip::after { box-shadow: inset 0 0 0 0.08em rgba(255, 95, 109, 0.85); }
+.portrait-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+.portrait-chip--ready .portrait-canvas { opacity: 1; }
+.portrait-chip--ready .portrait-fallback { opacity: 0; }
+.portrait-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 1.7em;
+  background: radial-gradient(80% 80% at 50% 35%, rgba(255, 255, 255, 0.08), transparent 70%);
+  transition: opacity 0.3s ease;
+}
 
 .pips { display: flex; gap: 0.28em; flex-shrink: 0; }
 .hp-block--p2 .pips { flex-direction: row-reverse; }
@@ -356,21 +484,19 @@
   display: grid; place-items: center;
   background: linear-gradient(180deg, #0d1119, #070a10);
   clip-path: polygon(14% 0, 86% 0, 100% 30%, 100% 70%, 86% 100%, 14% 100%, 0 70%, 0 30%);
-  box-shadow: var(--kb-shadow-panel);
+  box-shadow: inset 0 0 0 1px var(--kb-line);
+  filter: drop-shadow(0 0.3em 0.6em rgba(0, 0, 0, 0.5));
 }
 .timer-value {
-  font-family: var(--kb-font-mono);
-  font-weight: 700;
-  font-size: 1.15em;
-  letter-spacing: 0.02em;
-  font-variant-numeric: tabular-nums;
-  color: var(--kb-text);
+  font-size: 1.2em;
+  height: 1em;
 }
 .timer-frame.timer--tense {
-  box-shadow: var(--kb-shadow-panel), 0 0 1.4em rgba(255, 59, 78, 0.6);
+  filter: drop-shadow(0 0.3em 0.6em rgba(0, 0, 0, 0.5)) drop-shadow(0 0 0.9em rgba(255, 59, 78, 0.75));
 }
 .timer-frame.timer--tense .timer-value {
-  color: var(--kb-danger-soft);
+  --kb-ink-a: #ffb3ba;
+  --kb-ink-b: #a4020f;
   animation: timerPulse 0.6s ease-in-out infinite;
 }
 @keyframes timerPulse {
@@ -397,7 +523,7 @@
  */
 .meter-wrap {
   position: absolute;
-  top: 4.45em;
+  top: 5.5em;
   left: 1.1em;
   right: 1.1em;
   display: grid;
@@ -484,14 +610,11 @@
 }
 .combo-hits {
   position: relative;
-  font-family: var(--kb-font-mono);
-  font-weight: 800;
   font-size: 3.4em;
   line-height: 1;
-  letter-spacing: -0.01em;
-  color: var(--kb-text);
-  text-shadow: 0 0.07em 0 rgba(0, 0, 0, 0.7), 0 0 0.6em rgba(255, 138, 42, 0.4);
-  transition: color 0.15s ease, text-shadow 0.15s ease;
+  --kb-ink-a: #fffef2;
+  --kb-ink-b: #a84e0a;
+  transition: filter 0.15s ease;
 }
 /* A soft glow plate behind the number gives it a floor to land on instead
  * of sitting bare on the 3D scene — reads as weight, not a debug overlay. */
@@ -505,19 +628,26 @@
   transition: opacity 0.2s ease;
 }
 .combo.combo--show .combo-hits::before { opacity: 1; }
-.combo-hits::after { content: ' HITS'; font-size: 0.32em; font-weight: 700; letter-spacing: 0.16em; color: var(--kb-text-dim); }
+.combo-hits::after {
+  content: ' HITS';
+  position: relative;
+  font-size: 0.32em;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--kb-text-dim);
+}
 /* Colour climbs with the tally: tier 2 runs hotter, tier 3 goes white-hot
  * with a bigger glow and a slight overall punch-up in scale. */
 .combo[data-tier='2'] .combo-hits {
-  color: var(--kb-accent-soft);
-  text-shadow: 0 0.07em 0 rgba(0, 0, 0, 0.7), 0 0 1em rgba(255, 138, 42, 0.75);
+  --kb-ink-a: #ffd9a8;
+  --kb-ink-b: #ff8a2a;
+  filter: drop-shadow(0 0 0.35em rgba(255, 138, 42, 0.6));
 }
-.combo[data-tier='2'] .combo-hits::before { background: radial-gradient(60% 65% at 50% 55%, rgba(255, 138, 42, 0.4), transparent 72%); }
 .combo[data-tier='3'] .combo-hits {
-  color: #fff4dd;
-  text-shadow: 0 0.07em 0 rgba(0, 0, 0, 0.75), 0 0 1.6em rgba(255, 89, 42, 0.95), 0 0 0.4em rgba(255, 255, 255, 0.6);
+  --kb-ink-a: #ffffff;
+  --kb-ink-b: #ff8a2a;
+  filter: drop-shadow(0 0 0.55em rgba(255, 89, 42, 0.75));
 }
-.combo[data-tier='3'] .combo-hits::before { background: radial-gradient(60% 65% at 50% 55%, rgba(255, 89, 42, 0.55), transparent 72%); }
 .combo.combo--show[data-tier='3'] { transform: scale(1.08); }
 .combo-tag {
   font-size: 0.9em;
@@ -589,13 +719,9 @@
 }
 .announce-banner {
   position: absolute;
-  font-weight: 900;
-  text-transform: uppercase;
-  text-align: center;
-  letter-spacing: 0.12em;
   opacity: 0;
-  white-space: nowrap;
   --flare: var(--kb-accent);
+  --flare-glow: rgba(255, 138, 42, 0.7);
 }
 .announce-banner.announce--run { animation-name: announceCycle; animation-duration: 1.5s; animation-timing-function: linear; animation-fill-mode: forwards; }
 @keyframes announceCycle {
@@ -607,8 +733,8 @@
   100% { opacity: 0; transform: scale(1.5) translateY(-6%); filter: blur(4px); }
 }
 /* A blurred horizontal streak in the announcement's own colour, behind the
- * text, so it reads as a crisp lit object over whatever the 3D scene is
- * doing rather than blending into it — the "hold" beat gets a floor. */
+ * plate, so the whole assembly reads as a crisp lit object hovering over
+ * whatever the 3D scene is doing — the "hold" beat gets a floor. */
 .announce-banner::before {
   content: '';
   position: absolute;
@@ -628,42 +754,63 @@
   78%  { opacity: 0.45; }
   100% { opacity: 0; transform: translate(-50%, -50%) scaleX(1.4); }
 }
-.announce-banner[data-kind='round'] {
-  font-size: clamp(28px, 6vw, 96px); color: var(--kb-text); --flare: var(--kb-accent);
-  -webkit-text-stroke: 0.012em rgba(5, 3, 0, 0.5);
-  text-shadow: 0 0.12em 0.28em rgba(0, 0, 0, 0.85), 0 0 1.4em rgba(255, 138, 42, 0.55);
+
+/*
+ * `.announce-inner` sizes itself to the text (an explicit-width `.kb-text`),
+ * and `.announce-plate` is an absolutely-inset sibling behind it — a solid
+ * beveled slab with its own cast shadow (`filter: drop-shadow`, for the same
+ * clip-path reason the health bar bezel uses it), not a tint the 3D scene
+ * shows through. This is the fix for the old background-clip:text banner:
+ * the letters now sit *on* something instead of being a hole in the layer.
+ */
+.announce-inner {
+  position: relative;
+  display: inline-block;
 }
-.announce-banner[data-kind='fight'] {
-  font-size: clamp(46px, 10vw, 160px); --flare: var(--kb-accent);
-  background: linear-gradient(180deg, #fff6e0, var(--kb-accent-soft) 45%, var(--kb-accent) 100%);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  -webkit-text-stroke: 0.016em rgba(10, 4, 0, 0.55);
+.announce-plate {
+  position: absolute;
+  inset: -0.22em -0.85em;
+  background: linear-gradient(180deg, #454e60 0%, #1a1e28 16%, #05060a 55%, #0a0d16 88%, #262c38 100%);
+  clip-path: polygon(1.1em 0, 100% 0, calc(100% - 1.1em) 100%, 0 100%);
+  box-shadow:
+    inset 0 0 0 0.06em rgba(0, 0, 0, 0.8),
+    inset 0 0.1em 0 rgba(255, 255, 255, 0.2),
+    inset 0 -0.12em 0.2em rgba(0, 0, 0, 0.6),
+    inset 0 0 0 0.16em rgba(0, 0, 0, 0.4);
   filter:
-    drop-shadow(0 0.14em 0.3em rgba(0, 0, 0, 0.9))
-    drop-shadow(0 0 1.6em rgba(255, 138, 42, 0.8));
+    drop-shadow(0 0.7em 1.4em rgba(0, 0, 0, 0.6))
+    drop-shadow(0 0 1.8em var(--flare-glow));
 }
-.announce-banner[data-kind='ko'] {
-  font-size: clamp(50px, 11vw, 176px);
-  color: var(--kb-danger); --flare: var(--kb-danger);
-  -webkit-text-stroke: 0.024em rgba(0,0,0,0.75);
-  text-shadow: 0 0 2.2em rgba(255, 59, 78, 0.8), 0 0.14em 0 rgba(0,0,0,0.9);
+.announce-plate::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  clip-path: inherit;
+  box-shadow: inset 0 0 0 0.045em var(--flare);
+  opacity: 0.65;
 }
-.announce-banner[data-kind='perfect'] {
-  font-size: clamp(24px, 5vw, 74px);
-  color: var(--kb-gold); --flare: var(--kb-gold);
-  -webkit-text-stroke: 0.014em rgba(10, 6, 0, 0.5);
-  text-shadow: 0 0.1em 0.24em rgba(0,0,0,0.85), 0 0 1.6em rgba(255, 207, 74, 0.75);
+.announce-banner[data-kind='round'] .announce-text { font-size: clamp(28px, 6vw, 90px); }
+.announce-banner[data-kind='fight'] { --flare: var(--kb-accent); }
+.announce-banner[data-kind='fight'] .announce-text { font-size: clamp(44px, 9.4vw, 150px); }
+.announce-banner[data-kind='ko'] { --flare: var(--kb-danger); --flare-glow: rgba(255, 59, 78, 0.75); }
+.announce-banner[data-kind='ko'] .announce-text {
+  font-size: clamp(48px, 10.4vw, 164px);
+  --kb-ink-a: #ffb3ba; --kb-ink-b: #7a020c;
 }
-.announce-banner[data-kind='timeup'] {
-  font-size: clamp(26px, 5.4vw, 82px);
-  color: var(--kb-grey); --flare: var(--kb-grey);
-  text-shadow: 0 0.1em 0.24em rgba(0,0,0,0.85), 0 0 1.2em rgba(139, 150, 170, 0.55);
+.announce-banner[data-kind='perfect'] { --flare: var(--kb-gold); --flare-glow: rgba(255, 207, 74, 0.75); }
+.announce-banner[data-kind='perfect'] .announce-text {
+  font-size: clamp(22px, 4.6vw, 68px);
+  --kb-ink-a: #fff6cf; --kb-ink-b: #a8690f;
 }
-.announce-banner[data-kind='great'] {
-  font-size: clamp(30px, 6.4vw, 100px);
-  color: var(--kb-good); --flare: var(--kb-good);
-  -webkit-text-stroke: 0.014em rgba(0, 10, 6, 0.5);
-  text-shadow: 0 0.1em 0.24em rgba(0,0,0,0.85), 0 0 1.6em rgba(51, 255, 180, 0.7);
+.announce-banner[data-kind='timeup'] { --flare: var(--kb-grey); --flare-glow: rgba(139, 150, 170, 0.6); }
+.announce-banner[data-kind='timeup'] .announce-text {
+  font-size: clamp(24px, 5vw, 76px);
+  --kb-ink-a: #eef1f6; --kb-ink-b: #4b5567;
+}
+.announce-banner[data-kind='great'] { --flare: var(--kb-good); --flare-glow: rgba(51, 255, 180, 0.7); }
+.announce-banner[data-kind='great'] .announce-text {
+  font-size: clamp(28px, 6vw, 92px);
+  --kb-ink-a: #d4ffef; --kb-ink-b: #0c8a5e;
 }
 
 /* ========================================================================
@@ -736,15 +883,11 @@
   justify-content: center;
   gap: 2.4em;
 }
-.title-logo {
-  font-size: clamp(40px, 10vw, 128px);
-  font-weight: 900;
-  letter-spacing: 0.1em;
-  background: linear-gradient(180deg, #fefefe 0%, var(--kb-accent-soft) 45%, var(--kb-accent) 80%, #7a3d10 100%);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  text-shadow: 0 0 3em rgba(255, 138, 42, 0.4);
-  text-align: center;
-  line-height: 0.95;
+.title-logo.kb-text {
+  height: clamp(40px, 10vw, 128px);
+  --kb-ink-a: #fefefe;
+  --kb-ink-b: #7a3d10;
+  filter: drop-shadow(0 0 2.4em rgba(255, 138, 42, 0.45));
 }
 .title-tagline {
   margin-top: 0.5em;
@@ -985,13 +1128,11 @@
   position: relative; height: 100%;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.6em;
 }
-.results-winner {
-  font-size: clamp(30px, 6vw, 88px);
-  font-weight: 900; letter-spacing: 0.1em; text-transform: uppercase;
-  background: linear-gradient(180deg, #fff, var(--kb-accent-soft) 60%, var(--kb-accent));
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  text-shadow: 0 0 2em rgba(255,138,42,0.5);
-  text-align: center;
+.results-winner.kb-text {
+  height: clamp(30px, 6vw, 88px);
+  --kb-ink-a: #ffffff;
+  --kb-ink-b: #a84e0a;
+  filter: drop-shadow(0 0 1.8em rgba(255, 138, 42, 0.55));
 }
 .results-sub { font-size: 0.8em; letter-spacing: 0.3em; text-transform: uppercase; color: var(--kb-text-faint); }
 .results-score { display: flex; gap: 1.2em; align-items: center; font-family: var(--kb-font-mono); font-size: 1.8em; font-weight: 700; }

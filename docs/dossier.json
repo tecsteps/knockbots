@@ -1,0 +1,82 @@
+{
+  "status": {
+    "rev": "0.3.0",
+    "commits": 14,
+    "modules": 60,
+    "lines": "29.9k",
+    "clips": 89,
+    "moves": 191,
+    "characters": 10
+  },
+  "verdicts": [
+    { "axis": "Stage detail", "score": 58 },
+    { "axis": "Interface craft", "score": 58 },
+    { "axis": "Lighting & atmosphere", "score": 45 },
+    { "axis": "Character rendering", "score": 43 },
+    { "axis": "Impact & effects", "score": 42 },
+    { "axis": "Animation quality", "score": 0 }
+  ],
+  "log": [
+    {
+      "phase": "PHASE 00",
+      "when": "Foundation",
+      "rev": "rev 0.1.0",
+      "title": "Contracts before code",
+      "paras": [
+        "Wrote the pieces every other workstream had to agree on before any of them could start in parallel: the 34-bone rig with its A-pose rest and IK chains, the clip format, the Tekken-style move schema with validation, the event bus, and the fixed-timestep game shell.",
+        "Also pinned a clip-ID manifest so the animation and combat workstreams could reference each other's output without coordinating, and a static integrity checker that validates every clip against the skeleton and every move against the schema."
+      ],
+      "tags": [
+        { "label": "rig", "state": "done" }, { "label": "clip format", "state": "done" },
+        { "label": "move schema", "state": "done" }, { "label": "event bus", "state": "done" },
+        { "label": "game loop", "state": "done" }, { "label": "QA harness", "state": "done" }
+      ]
+    },
+    {
+      "phase": "PHASE 01",
+      "when": "Subsystems",
+      "rev": "rev 0.2.0",
+      "title": "Twelve workstreams, disjoint files",
+      "paras": [
+        "Fanned out the whole engine at once against the pinned charter. Twelve agents, zero errors, and the contracts held: two animation workstreams that never communicated produced 89 clips matching the manifest exactly — no missing ids, no extras, none invalid.",
+        "Every one of the 43 attack clips drives the hips or spine. Arm-isolated strikes are the classic tell of amateur animation and there are none in the set.",
+        "Notable engineering: r185 deprecated PCFSoftShadowMap, so the render agent replaced three's shadow shader chunk with a real PCSS implementation — blocker search, penumbra estimate, variable-radius PCF — guarded by a signature check that falls back to stock if upstream changes."
+      ],
+      "tags": [
+        { "label": "60 modules", "state": "done" }, { "label": "89 clips", "state": "done" },
+        { "label": "191 moves", "state": "done" }, { "label": "10 characters", "state": "done" },
+        { "label": "builds clean", "state": "done" }
+      ]
+    },
+    {
+      "phase": "PHASE 02",
+      "when": "First light",
+      "rev": "rev 0.2.1",
+      "title": "It renders, and it is wrong",
+      "paras": [
+        "The first capture showed a live round with combat resolving — but a milky veil buried the lower half of the frame and everything was uniformly soft. Disabling bloom, SSR, depth of field and motion blur left the veil untouched, which proved it was stage geometry rather than post.",
+        "Two root causes, both found by measurement rather than guesswork. Four additive stage emitters were each unbounded and their sum was the veil: light pools were covering 4.2x the shaft footprint at 5.5x intensity, and 1000 dust motes had no size cap, so a 6cm mote a metre from the lens covered 200 pixels.",
+        "The blanket softness was not depth of field at all. Adaptive resolution had a 0.75 floor and captures were rendering at 0.79 scale then upscaling. The DOF circle-of-confusion was separately wrong — linear in metres, so a fighter half a metre off the focus plane picked up 40% blur immediately."
+      ],
+      "tags": [
+        { "label": "veil removed", "state": "done" }, { "label": "contrast +172%", "state": "done" },
+        { "label": "prepass cut", "state": "done" }, { "label": "247→176 calls", "state": "done" }
+      ]
+    },
+    {
+      "phase": "PHASE 03",
+      "when": "First verdict",
+      "rev": "rev 0.3.0",
+      "title": "Five blind comparisons, five losses",
+      "paras": [
+        "Ten official Tekken 8 press screenshots were put on disk as the benchmark, and critics ran the blind protocol: describe both images without labelling them, pick the one that reads as shipped AAA, only then reveal which was which.",
+        "Every axis lost. Character rendering 43, lighting 45, impact 42, stage 58, interface 58. The verdicts were specific rather than vague — the character critic's finding was that the shapes are fine but the surfaces are empty: \"every facet is a single smooth value ramp, no machining marks, no paint fade, no grime in the recesses.\" The lighting critic could not tell from the pixels where the light source was.",
+        "Two defects the critics missed and I caught by eye: Vulkan reads as headless because the head is recessed between the shoulder masses, and Kestrel's idle stance splays rather than braces. Both are in round 2."
+      ],
+      "tags": [
+        { "label": "10 refs on disk", "state": "done" }, { "label": "blind protocol", "state": "done" },
+        { "label": "round 2 running", "state": "run" }
+      ]
+    }
+  ]
+}

@@ -23,12 +23,34 @@
  */
 
 import * as THREE from 'three';
+import { LAYER } from '../core/Constants.js';
 import { Rng } from '../core/Rng.js';
 import { bevelBox, place, mergeAll, boltRing, insetPanel } from './GeoKit.js';
 import { fbm, stampText, blur, clamp01, smoothstep, makeTexture, encodeSrgb } from './ProcTex.js';
 import { PointBurst } from './StageParticles.js';
 
 const FIXTURES = 4;
+
+/** Colour slots the light pools sample: the four fixtures plus the neon strip. */
+const POOL_SLOTS = 5;
+
+/**
+ * The pools' floor-scattering cards. Each is a gradient quad tied to a colour
+ * slot: `edge` is the fraction of each axis that stays at full brightness before
+ * the falloff starts, so a round pool is [0, 0] and a long strip wash is
+ * [0.74, 0] — flat along its length, falling off across it.
+ */
+const POOLS = [
+  { pos: [-6.6, 0.02, -6.0], rot: [-Math.PI / 2, 0, 0], w: 13, h: 10, slot: 0, edge: [0, 0], gain: 0.8 },
+  { pos: [6.6, 0.02, -6.0], rot: [-Math.PI / 2, 0, 0], w: 13, h: 10, slot: 1, edge: [0, 0], gain: 0.8 },
+  { pos: [-9.0, 0.02, -5.6], rot: [-Math.PI / 2, 0, 0], w: 9.0, h: 8.0, slot: 2, edge: [0, 0], gain: 1.7 },
+  { pos: [9.6, 0.02, 6.6], rot: [-Math.PI / 2, 0, 0], w: 6.5, h: 5.5, slot: 3, edge: [0, 0], gain: 0.9 },
+  { pos: [0, 1.28, -8.54], rot: [0, 0, 0], w: 26, h: 2.6, slot: 4, edge: [0.74, 0], gain: 1.2 },
+  { pos: [0, 0.02, -7.85], rot: [-Math.PI / 2, 0, 0], w: 26, h: 2.4, slot: 4, edge: [0.74, 0], gain: 0.85 },
+];
+
+/** Linear radiance per unit of `sqrt(power)` for a pool card. */
+const POOL_GAIN = 0.1;
 
 const _tmp = new THREE.Color();
 const _white = new THREE.Color(1, 1, 1);
@@ -153,6 +175,7 @@ export class StagePracticals {
     this.captions = screenCaptions(256);
 
     this.#fixtures(bins);
+    this.#pools();
     this.#neon();
     this.#beacons();
     this.#screens(bins);
@@ -295,6 +318,133 @@ export class StagePracticals {
     this.emitters = new THREE.Mesh(faceGeo, this.emitterMaterial);
     this.emitters.name = 'arena.practicals.emitters';
     this.group.add(this.emitters);
+  }
+
+  /**
+   * Where the light lands. A fixture that emits but deposits nothing reads as a
+   * sticker on the wall: the eye locates a source by the pool it throws, not by
+   * the lamp. Before this the arena's floor luminance sat inside one narrow band
+   * from frame-left to frame-right and there was no telling where the light was
+   * coming from.
+   *
+   * These are not a substitute for the Environment's RectAreaLights, which still
+   * do the real shading. They are the term those lights cannot pay for: the
+   * shallow grazing scatter off a rough wet floor and the wash a strip light
+   * leaves on the metre of barrier around it. Tint and brightness come from the
+   * same practical parameters as the lights, so a mood cross-fade drags the
+   * pools along with the lamps.
+   *
+   * Six cards, one draw call — the colour slot rides in a vertex attribute, the
+   * same trick the fixture faces use.
+   */
+  #pools() {
+    const quads = [];
+    const slot = [];
+    const edge = [];
+    const gain = [];
+
+    for (const p of POOLS) {
+      const g = place(new THREE.PlaneGeometry(p.w, p.h), { pos: p.pos, rot: p.rot });
+      const n = g.attributes.position.count;
+      const s = new Float32Array(n);
+      const e = new Float32Array(n * 2);
+      const a = new Float32Array(n);
+      s.fill(p.slot);
+      a.fill(p.gain);
+      for (let i = 0; i < n; i++) { e[i * 2] = p.edge[0]; e[i * 2 + 1] = p.edge[1]; }
+      quads.push(g);
+      slot.push(s);
+      edge.push(e);
+      gain.push(a);
+    }
+
+    const geo = mergeAll(quads);
+    const n = geo.attributes.position.count;
+    const fSlot = new Float32Array(n);
+    const fEdge = new Float32Array(n * 2);
+    const fGain = new Float32Array(n);
+    let o = 0;
+    for (let i = 0; i < slot.length; i++) {
+      fSlot.set(slot[i], o);
+      fEdge.set(edge[i], o * 2);
+      fGain.set(gain[i], o);
+      o += slot[i].length;
+    }
+    geo.setAttribute('aSlot', new THREE.Float32BufferAttribute(fSlot, 1));
+    geo.setAttribute('aEdge', new THREE.Float32BufferAttribute(fEdge, 2));
+    geo.setAttribute('aGain', new THREE.Float32BufferAttribute(fGain, 1));
+
+    this.poolMaterial = new THREE.ShaderMaterial({
+      name: 'arena.practicals.pools',
+      uniforms: {
+        uPool: {
+          value: Array.from({ length: POOL_SLOTS }, () => new THREE.Color(0, 0, 0)),
+        },
+      },
+      defines: { POOL_SLOTS },
+      vertexShader: /* glsl */ `
+        attribute float aSlot;
+        attribute vec2 aEdge;
+        attribute float aGain;
+        varying vec2 vUv;
+        varying vec2 vEdge;
+        varying float vGain;
+        varying float vSlot;
+        varying vec3 vWorld;
+        void main() {
+          vUv = uv;
+          vEdge = aEdge;
+          vGain = aGain;
+          vSlot = aSlot;
+          vec4 w = modelMatrix * vec4( position, 1.0 );
+          vWorld = w.xyz;
+          gl_Position = projectionMatrix * viewMatrix * w;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uPool[ POOL_SLOTS ];
+        varying vec2 vUv;
+        varying vec2 vEdge;
+        varying float vGain;
+        varying float vSlot;
+        varying vec3 vWorld;
+        void main() {
+          vec3 c = uPool[ 0 ];
+          for ( int i = 1; i < POOL_SLOTS; i++ ) {
+            if ( abs( vSlot - float( i ) ) < 0.5 ) c = uPool[ i ];
+          }
+
+          // Separable falloff: full brightness inside the plateau, quadratic
+          // skirt outside it, squared once more so the pool has a core rather
+          // than a uniform lift.
+          vec2 q = abs( vUv - 0.5 ) * 2.0;
+          vec2 e = clamp( ( q - vEdge ) / max( vec2( 1.0 ) - vEdge, vec2( 1e-3 ) ), 0.0, 1.0 );
+          float f = ( 1.0 - e.x * e.x ) * ( 1.0 - e.y * e.y );
+          f *= f;
+
+          // Large-scale unevenness so a pool reads as light on a dirty floor
+          // rather than as a decal someone airbrushed on.
+          f *= 0.85 + 0.15 * sin( vWorld.x * 0.83 + vWorld.z * 0.61 ) * sin( vWorld.z * 1.27 - 1.1 );
+
+          gl_FragColor = vec4( c * ( f * vGain ), 1.0 );
+        }
+      `,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: true,
+      fog: false,
+      side: THREE.DoubleSide,
+    });
+
+    this.pools = new THREE.Mesh(geo, this.poolMaterial);
+    this.pools.name = 'arena.practicals.pools';
+    // Scatter, not scenery: it must never be picked up by the floor mirror or
+    // the reflection would double the deposit.
+    this.pools.layers.set(LAYER.NO_REFLECT);
+    this.pools.castShadow = false;
+    this.pools.receiveShadow = false;
+    this.group.add(this.pools);
   }
 
   /** Neon strips along the catwalk edges and the machinery bank. */
@@ -501,6 +651,7 @@ export class StagePracticals {
     const lights = this.environment?.practicals;
     const params = this.environment?.params?.practicals;
     const cols = this.emitterMaterial.uniforms.uColor.value;
+    const pools = this.poolMaterial.uniforms.uPool.value;
     for (let i = 0; i < FIXTURES; i++) {
       const light = lights?.[i];
       const p = params?.[i];
@@ -509,8 +660,12 @@ export class StagePracticals {
       // and a 4.5-unit sign box have to end up within a stop of each other on
       // screen, or the bright one clips to a white rectangle and stops reading
       // as a lit surface at all.
-      const power = Math.pow(Math.max(0, light?.intensity ?? p.power), 0.62) * (i === 3 ? 0.28 : 0.4);
+      const live = Math.max(0, light?.intensity ?? p.power);
+      const power = Math.pow(live, 0.62) * (i === 3 ? 0.28 : 0.4);
       cols[i].copy(light?.color ?? p.color).multiplyScalar(power);
+      // The pool is scatter, so it follows the source's flicker at a square
+      // root: a lamp that dips 10% dims its pool, it does not switch it off.
+      pools[i].copy(p.color).multiplyScalar(Math.sqrt(live) * POOL_GAIN);
       const pub = this.practicalPositions[i];
       if (pub) {
         pub.position.copy(p.pos);
@@ -527,6 +682,11 @@ export class StagePracticals {
    * @param {object} envParams live Environment mood parameters
    */
   update(dt, time, envParams) {
+    // The Environment's animation clock — practical flicker, the rim hue drift,
+    // the mood cross-fade and the per-fighter rim rigs following their fighters.
+    // The Stage is its only per-frame consumer, so the Stage winds it; `frame`
+    // stands down of its own accord if the game ever drives `update` directly.
+    this.environment?.frame(dt);
     this.syncToEnvironment();
     this.screenMaterial.uniforms.uTime.value = time;
 
@@ -535,8 +695,11 @@ export class StagePracticals {
     if (rimA) {
       // Neon and screens take their hue from the mood's rim pair, which is what
       // keeps the practicals and the lighting reading as one design.
-      this.neonMaterial.color.copy(rimA).multiplyScalar(1.7 + 0.22 * Math.sin(time * 0.8));
+      const pulse = 1.7 + 0.22 * Math.sin(time * 0.8);
+      this.neonMaterial.color.copy(rimA).multiplyScalar(pulse);
       this.screenMaterial.uniforms.uColor.value.copy(rimA).lerp(_white, 0.25);
+      // The strip's own wash on the barrier and the floor at its foot.
+      this.poolMaterial.uniforms.uPool.value[4].copy(rimA).multiplyScalar(pulse * 0.22);
     }
     if (rimB) this.screenMaterial.uniforms.uWarn.value.copy(rimB).lerp(_amber, 0.4);
 
@@ -580,6 +743,7 @@ export class StagePracticals {
   dispose() {
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.emitterMaterial.dispose();
+    this.poolMaterial.dispose();
     this.neonMaterial.dispose();
     this.beaconMaterial.dispose();
     this.screenMaterial.dispose();

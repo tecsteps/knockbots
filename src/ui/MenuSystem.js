@@ -32,6 +32,7 @@
 import { bus } from '../core/Bus.js';
 import { ROSTER } from '../characters/roster.js';
 import { QUALITY_TIERS } from '../engine/RenderPipeline.js';
+import { applyKbText } from './Typeface.js';
 
 /** Game#phase -> the screen that phase implies. `null` means "hide the menu". */
 const SCREEN_FOR_PHASE = {
@@ -277,7 +278,7 @@ export class MenuSystem {
     wrap.className = 'title-wrap';
     const logo = document.createElement('div');
     logo.className = 'title-logo';
-    logo.textContent = 'KNOCKBOTS';
+    applyKbText(logo, 'KNOCKBOTS');
     const tagline = document.createElement('div');
     tagline.className = 'title-tagline';
     tagline.textContent = 'Steel Settles Everything';
@@ -764,7 +765,7 @@ export class MenuSystem {
     const names = this.game.fighters?.map((f) => f.def?.name || '???') ?? ['P1', 'P2'];
     const wins = this.game.wins || [0, 0];
     const w = this._lastWinner;
-    winnerEl.textContent = w === 0 || w === 1 ? `${names[w]} WINS` : 'DRAW';
+    applyKbText(winnerEl, w === 0 || w === 1 ? `${names[w]} WINS` : 'DRAW');
     s1.textContent = `${names[0]} ${wins[0]}`;
     s2.textContent = `${names[1]} ${wins[1]}`;
     s1.classList.toggle('win', w === 0);

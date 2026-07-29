@@ -15,10 +15,20 @@
  *      quads in that cube. A PMREM env map alone gives soft, mushy highlights;
  *      the area lights put back the crisp, shaped, moving speculars that make a
  *      shoulder plate look like bent steel.
- *   3. A key / rim / rim-B / bounce / hemisphere rig on top. The rim pair is the
- *      single most important element — strong, saturated, and set against the
- *      key's temperature so the silhouette separates from the backdrop even when
- *      a fighter is standing in front of a bright wall.
+ *   3. A key / rim / rim-B / bounce / hemisphere rig on top, plus a **per-fighter
+ *      rim rig**: two spot lights that ride three-quarters behind and slightly
+ *      above each fighter on the same azimuths as the mood's rim pair. That
+ *      locality is the whole point. A scene-wide directional rim lights the
+ *      backdrop exactly as hard as it lights the fighter, so a pale robot
+ *      standing in front of a pale barrier has nothing to separate against; a
+ *      spot at three metres falls off, edges the armour, and leaves the wall
+ *      four metres further back alone. The directional pair is kept at
+ *      {@link DIRECTIONAL_RIM_SHARE} of its authored strength — enough to edge
+ *      the set dressing, not enough to flatten it.
+ *
+ * The ambient terms are deliberately starved. Hemisphere fill and ground bounce
+ * are held near a tenth of the key, because a wash that lifts every plane by the
+ * same amount is what makes hard-surface armour read as one grey shape.
  *
  * Two cubes are baked from the same scene at chest height (0, 1.4, 0), so the
  * parallax of the practical quads is correct for a standing robot:
@@ -53,13 +63,55 @@ const PRACTICAL_COUNT = 4;
  */
 const ENV_QUAD_LAYER = 3;
 
-/** Cube face resolution and shadow map size per quality tier. */
+/** Cube face resolution, shadow map size and light budget per quality tier. */
 const TIERS = {
-  ultra: { cube: 256, bg: 1024, shadow: 2048, practicals: 4 },
-  high: { cube: 256, bg: 768, shadow: 2048, practicals: 4 },
-  medium: { cube: 128, bg: 384, shadow: 1024, practicals: 3 },
-  low: { cube: 64, bg: 256, shadow: 512, practicals: 2 },
+  ultra: { cube: 256, bg: 1024, shadow: 2048, practicals: 4, rims: 2 },
+  high: { cube: 256, bg: 768, shadow: 2048, practicals: 4, rims: 2 },
+  medium: { cube: 128, bg: 384, shadow: 1024, practicals: 3, rims: 2 },
+  low: { cube: 64, bg: 256, shadow: 512, practicals: 2, rims: 1 },
 };
+
+/** One rim rig per fighter; the game runs two. */
+const FIGHTER_RIG_COUNT = 2;
+
+/**
+ * Geometry and response of a per-fighter rim spot. The numbers are a lighting
+ * setup, not tuning knobs: three metres back puts the source well outside the
+ * body so the cone grazes rather than floods, and 27° of elevation catches the
+ * top of the shoulder and the helmet crown without becoming a hair light.
+ *
+ * The cone is the part that had to be measured: three's penumbra is the
+ * fraction of the cone spent ramping, so the plateau is `angle * (1 - penumbra)`.
+ * At 0.85 that plateau is five degrees — a spotlight nominally lighting a whole
+ * fighter that actually delivers full strength to a hand-sized patch. 0.42 puts
+ * a metre of plateau on the torso at three metres with a metre of skirt around
+ * it, which is a rim rather than a torch.
+ */
+const RIM = {
+  radius: 3.0,
+  elevationDeg: 27,
+  /** Aim height above the fighter's root — a standing robot's chest. */
+  aimHeight: 1.15,
+  angle: 0.62,
+  penumbra: 0.42,
+  decay: 2,
+  range: 9,
+  /**
+   * Candela per unit of the mood's authored rim irradiance. `radius²` is folded
+   * in at use. Above one because a rim is meant to overdrive: on brushed metal
+   * the edge is carried by a specular lobe, and a rim that merely matches the
+   * key produces a highlight the key has already paid for.
+   */
+  gain: 1.8,
+};
+
+/**
+ * Fraction of the mood's rim intensity left on the scene-wide directional pair.
+ * The rest lives on the per-fighter spots. Directional rim light is parallel and
+ * infinite: it edges the fighter and the wall behind the fighter by exactly the
+ * same amount, which is how a silhouette dies into its background.
+ */
+const DIRECTIONAL_RIM_SHARE = 0.34;
 
 /**
  * Radiance of an env-scene practical quad per unit of RectAreaLight power.
@@ -111,12 +163,17 @@ function practical(pos, target, w, h, color, power, flickerAmp, flickerHz, seed)
 // read, while the sun sits at 1e1–1e3 and the practicals at 4–36 to give bloom
 // and the specular lobes something genuinely HDR to bite on.
 //
-// Two rules were paid for in rendered frames rather than guessed at:
-//   - the key sits 40–50° off the camera axis at 40–55° elevation. Higher and
+// Three rules were paid for in rendered frames rather than guessed at:
+//   - the key sits 40–50° off the camera axis at 40–48° elevation. Higher and
 //     flatter both kill the lit-side/shadow-side read on hard-surface armour.
 //   - the rims are nearly horizontal (11–17°) and well behind. A rim above the
 //     subject washes a side plane; a rim beside it draws the silhouette edge,
-//     which is the entire point.
+//     which is the entire point. `rim.intensity` is the budget for the whole
+//     rim pass; the per-fighter spots take the majority of it.
+//   - `fill` and `bounce` stay under a fifth of the key. They keep the shadow
+//     side off paper black and do nothing else. Whatever they add, they add
+//     equally to the lit plane, the side plane and the wall four metres behind,
+//     so they buy readability at the direct cost of form.
 // ---------------------------------------------------------------------------
 
 /** @type {Record<string, object>} */
@@ -156,14 +213,14 @@ const MOODS = {
     screens: { color: C(0x7fd4ff), intensity: 1.7, count: 9, y: 0.2, height: 0.05 },
     structure: { count: 11, width: 0.15, dark: 0.16 },
     floorRefl: 0.32,
-    key: { color: C(0xffe6c6), intensity: 5.4, dir: dir(38, 50) },
-    rim: { color: C(0x63d6ff), intensity: 7.6, dir: dir(214, 16), hueDrift: 0.018 },
-    rimB: { color: C(0xff8a4f), intensity: 3.0, dir: dir(326, 13) },
-    bounce: { color: C(0x6b7c94), intensity: 0.55, dir: dir(280, -22) },
-    fill: { sky: C(0x36506b), ground: C(0x181310), intensity: 0.5 },
+    key: { color: C(0xffe6c6), intensity: 6.6, dir: dir(38, 44) },
+    rim: { color: C(0x63d6ff), intensity: 8.4, dir: dir(214, 16), hueDrift: 0.018 },
+    rimB: { color: C(0xff8a4f), intensity: 4.2, dir: dir(326, 13) },
+    bounce: { color: C(0x6b7c94), intensity: 0.2, dir: dir(280, -22) },
+    fill: { sky: C(0x36506b), ground: C(0x181310), intensity: 0.15 },
     fog: { color: C(0x0e151f), density: 0.031 },
     shaft: { color: C(0xbfd8ff), intensity: 0.55 },
-    envIntensity: 0.7,
+    envIntensity: 0.56,
     bgSky: 0.2,
     bgLights: 0.6,
     bgKnee: 0.5,
@@ -211,14 +268,14 @@ const MOODS = {
     screens: { color: C(0x2ff2ff), intensity: 4.6, count: 19, y: 0.16, height: 0.05 },
     structure: { count: 9, width: 0.13, dark: 0.1 },
     floorRefl: 0.55,
-    key: { color: C(0xbcd2ff), intensity: 4.2, dir: dir(46, 47) },
-    rim: { color: C(0x1fe6ff), intensity: 9.0, dir: dir(212, 14), hueDrift: 0.035 },
-    rimB: { color: C(0xff2fb0), intensity: 4.4, dir: dir(328, 12) },
-    bounce: { color: C(0x8a4fd0), intensity: 0.7, dir: dir(290, -20) },
-    fill: { sky: C(0x3d1a60), ground: C(0x0a0810), intensity: 0.4 },
+    key: { color: C(0xbcd2ff), intensity: 5.2, dir: dir(46, 44) },
+    rim: { color: C(0x1fe6ff), intensity: 10.0, dir: dir(212, 14), hueDrift: 0.035 },
+    rimB: { color: C(0xff2fb0), intensity: 6.0, dir: dir(328, 12) },
+    bounce: { color: C(0x8a4fd0), intensity: 0.26, dir: dir(290, -20) },
+    fill: { sky: C(0x3d1a60), ground: C(0x0a0810), intensity: 0.13 },
     fog: { color: C(0x160a26), density: 0.042 },
     shaft: { color: C(0xff6fd0), intensity: 0.85 },
-    envIntensity: 0.75,
+    envIntensity: 0.6,
     bgSky: 0.26,
     bgLights: 0.66,
     bgKnee: 0.46,
@@ -266,14 +323,14 @@ const MOODS = {
     screens: { color: C(0xffb04a), intensity: 2.4, count: 7, y: 0.14, height: 0.05 },
     structure: { count: 13, width: 0.12, dark: 0.09 },
     floorRefl: 0.5,
-    key: { color: C(0xff9c52), intensity: 5.2, dir: dir(36, 42) },
-    rim: { color: C(0x5aa8ff), intensity: 6.4, dir: dir(216, 15), hueDrift: 0.02 },
-    rimB: { color: C(0xffd08a), intensity: 3.4, dir: dir(324, 11) },
-    bounce: { color: C(0xff5a20), intensity: 1.4, dir: dir(275, -30) },
-    fill: { sky: C(0x4d1408), ground: C(0x2a0a03), intensity: 0.68 },
+    key: { color: C(0xff9c52), intensity: 6.0, dir: dir(36, 42) },
+    rim: { color: C(0x5aa8ff), intensity: 7.6, dir: dir(216, 15), hueDrift: 0.02 },
+    rimB: { color: C(0xffd08a), intensity: 4.6, dir: dir(324, 11) },
+    bounce: { color: C(0xff5a20), intensity: 0.5, dir: dir(275, -30) },
+    fill: { sky: C(0x4d1408), ground: C(0x2a0a03), intensity: 0.2 },
     fog: { color: C(0x240904), density: 0.05 },
     shaft: { color: C(0xff8a3a), intensity: 1.0 },
-    envIntensity: 0.7,
+    envIntensity: 0.58,
     bgSky: 0.26,
     bgLights: 0.66,
     bgKnee: 0.46,
@@ -321,14 +378,14 @@ const MOODS = {
     screens: { color: C(0xff3b46), intensity: 3.0, count: 11, y: 0.155, height: 0.05 },
     structure: { count: 15, width: 0.11, dark: 0.12 },
     floorRefl: 0.4,
-    key: { color: C(0xfff2df), intensity: 6.2, dir: dir(44, 54) },
-    rim: { color: C(0x35b8ff), intensity: 7.8, dir: dir(215, 17), hueDrift: 0.012 },
-    rimB: { color: C(0xff4a5e), intensity: 4.2, dir: dir(325, 14) },
-    bounce: { color: C(0x8fa3ba), intensity: 0.6, dir: dir(284, -24) },
-    fill: { sky: C(0x2d3b4d), ground: C(0x121417), intensity: 0.6 },
+    key: { color: C(0xfff2df), intensity: 7.2, dir: dir(44, 46) },
+    rim: { color: C(0x35b8ff), intensity: 8.6, dir: dir(215, 17), hueDrift: 0.012 },
+    rimB: { color: C(0xff4a5e), intensity: 5.4, dir: dir(325, 14) },
+    bounce: { color: C(0x8fa3ba), intensity: 0.22, dir: dir(284, -24) },
+    fill: { sky: C(0x2d3b4d), ground: C(0x121417), intensity: 0.16 },
     fog: { color: C(0x0b1018), density: 0.024 },
     shaft: { color: C(0xdce9ff), intensity: 0.75 },
-    envIntensity: 0.7,
+    envIntensity: 0.56,
     bgSky: 0.19,
     bgLights: 0.58,
     bgKnee: 0.55,
@@ -376,14 +433,14 @@ const MOODS = {
     screens: { color: C(0xffe0b0), intensity: 1.2, count: 8, y: 0.11, height: 0.04 },
     structure: { count: 10, width: 0.17, dark: 0.06 },
     floorRefl: 0.28,
-    key: { color: C(0xffb478), intensity: 6.4, dir: dir(206, 21) },
-    rim: { color: C(0x82bcff), intensity: 6.6, dir: dir(332, 14), hueDrift: 0.014 },
-    rimB: { color: C(0xffd8a0), intensity: 3.6, dir: dir(258, 9) },
-    bounce: { color: C(0xc89060), intensity: 0.8, dir: dir(80, -26) },
-    fill: { sky: C(0x6a90d0), ground: C(0x3a2620), intensity: 0.72 },
+    key: { color: C(0xffb478), intensity: 7.4, dir: dir(206, 21) },
+    rim: { color: C(0x82bcff), intensity: 7.8, dir: dir(332, 14), hueDrift: 0.014 },
+    rimB: { color: C(0xffd8a0), intensity: 4.6, dir: dir(258, 9) },
+    bounce: { color: C(0xc89060), intensity: 0.3, dir: dir(80, -26) },
+    fill: { sky: C(0x6a90d0), ground: C(0x3a2620), intensity: 0.22 },
     fog: { color: C(0x2a1c18), density: 0.034 },
     shaft: { color: C(0xffc890), intensity: 1.0 },
-    envIntensity: 0.8,
+    envIntensity: 0.64,
     bgSky: 0.085,
     bgLights: 0.42,
     bgKnee: 0.6,
@@ -632,12 +689,26 @@ export class Environment {
     this.bounceLight = null;
     /** @type {?THREE.HemisphereLight} */
     this.fillLight = null;
+    /**
+     * The per-fighter rim rigs, in player order. `root` is the object each rig
+     * follows; set it through {@link trackFighters} or leave it to the by-name
+     * lookup in {@link update}.
+     * @type {{index: number, root: ?THREE.Object3D, cool: THREE.SpotLight,
+     *         warm: THREE.SpotLight, lights: THREE.SpotLight[], aim: THREE.Vector3}[]}
+     */
+    this.fighterRims = [];
     /** @type {THREE.RectAreaLight[]} */
     this.practicals = [];
     /** @type {?THREE.Group} Visible emissive cards for the practicals. */
     this.practicalMeshes = null;
     /** @type {?THREE.FogExp2} Installed on the scene by {@link init}. */
     this.fog = null;
+    /**
+     * Camera the rim rigs orient against. Acquired from the first scene render
+     * unless {@link setCamera} overrides it.
+     * @type {?THREE.Camera}
+     */
+    this.camera = null;
 
     /**
      * Breathing 0..~1.3 multiplier the Stage/FX can hang volumetric shafts on.
@@ -650,6 +721,11 @@ export class Environment {
     this._time = 0;
     this._envDirty = true;
     this._regenCooldown = 0;
+    this._acquireCooldown = 0;
+    this._ownerDriven = 0;
+    this._inFrame = false;
+    this._cameraPinned = false;
+    this._prevSceneBeforeRender = null;
     this._pulse = { color: new THREE.Color(1, 1, 1), strength: 0, t: 0, dur: 1 };
 
     this._pmrem = null;
@@ -667,7 +743,10 @@ export class Environment {
     this._rig = null;
 
     this._tmpColor = new THREE.Color();
+    this._tmpColorB = new THREE.Color();
     this._tmpVec = new THREE.Vector3();
+    this._tmpVecB = new THREE.Vector3();
+    this._camPos = new THREE.Vector3();
   }
 
   /**
@@ -693,8 +772,29 @@ export class Environment {
     this._applyParams();
     this._bake();
 
+    this._watchCamera();
     this.scene.fog = this.fog;
     this.ready = true;
+  }
+
+  /**
+   * Learn the eye the rim rigs orient against, without requiring the owner to
+   * hand it over. `Scene.onBeforeRender` is called with the camera the scene is
+   * about to be drawn from, which is exactly the question being asked; any
+   * existing hook is chained rather than replaced.
+   *
+   * The planar-floor mirror draws the scene a second time from a camera below
+   * the floor, so anything at or under the plane is ignored — a rim rig aimed
+   * from the reflection's point of view would swing every frame.
+   */
+  _watchCamera() {
+    this._prevSceneBeforeRender = this.scene.onBeforeRender;
+    this.scene.onBeforeRender = (renderer, scene, camera, ...rest) => {
+      this._prevSceneBeforeRender?.call(scene, renderer, scene, camera, ...rest);
+      if (this._cameraPinned || !camera?.isPerspectiveCamera) return;
+      this._camPos.setFromMatrixPosition(camera.matrixWorld);
+      if (this._camPos.y > 0.05) this.camera = camera;
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -842,6 +942,8 @@ export class Environment {
     this.rimLightB.target.position.set(0, 1.05, 0);
     this._rig.add(this.rimLightB, this.rimLightB.target);
 
+    this._buildFighterRims(tier);
+
     // Ground bounce: low, from below the horizon, kills the dead black on the
     // undersides of thighs and forearms without flattening anything.
     this.bounceLight = new THREE.DirectionalLight(0xffffff, 0.5);
@@ -862,6 +964,35 @@ export class Environment {
 
     this.fog = new THREE.FogExp2(0x101820, 0.018);
     this.scene.add(this._rig);
+  }
+
+  /**
+   * Two spots per fighter: one on the mood's cool rim azimuth, one on its warm
+   * counter-azimuth, both three-quarters behind and above. They live in the rig
+   * group rather than under the fighter so their targets stay in world space —
+   * a spot parented to a rotating root would swing its cone with the character.
+   */
+  _buildFighterRims(tier) {
+    for (let i = 0; i < FIGHTER_RIG_COUNT; i++) {
+      const lights = [];
+      for (let k = 0; k < 2; k++) {
+        const l = new THREE.SpotLight(0xffffff, 0, RIM.range, RIM.angle, RIM.penumbra, RIM.decay);
+        l.name = `fighterRim${i}${k === 0 ? 'A' : 'B'}`;
+        l.castShadow = false;
+        l.visible = k < tier.rims;
+        l.target.position.set(0, RIM.aimHeight, 0);
+        this._rig.add(l, l.target);
+        lights.push(l);
+      }
+      this.fighterRims.push({
+        index: i,
+        root: null,
+        cool: lights[0],
+        warm: lights[1],
+        lights,
+        aim: new THREE.Vector3(0, RIM.aimHeight, 0),
+      });
+    }
   }
 
   _allocateTargets(tier) {
@@ -1077,6 +1208,9 @@ export class Environment {
     for (let i = 0; i < this.practicals.length; i++) {
       this.practicals[i].visible = i < tier.practicals;
     }
+    for (const rig of this.fighterRims) {
+      for (let k = 0; k < rig.lights.length; k++) rig.lights[k].visible = k < tier.rims;
+    }
     if (this.ready) {
       this._allocateTargets(tier);
       this._bake();
@@ -1088,19 +1222,60 @@ export class Environment {
     if (this.practicalMeshes) this.practicalMeshes.visible = visible;
   }
 
+  /**
+   * Bind the per-fighter rim rigs to the objects they follow. Pass the root a
+   * fighter's visible group hangs off, in player order; the rig reads its world
+   * position every frame, so interpolated render positions are picked up for
+   * free. Roots left unset are looked up by name (`fighter0`, `fighter1`) until
+   * they appear.
+   *
+   * @param {Array<?THREE.Object3D>} roots one root per fighter
+   */
+  trackFighters(roots) {
+    for (let i = 0; i < this.fighterRims.length; i++) {
+      this.fighterRims[i].root = roots?.[i] ?? null;
+    }
+  }
+
+  /**
+   * Pin the camera the rim rigs orient against, and stop sniffing it off the
+   * scene render. Pass null to hand the job back to the sniffer.
+   * @param {?THREE.Camera} camera
+   */
+  setCamera(camera) {
+    this.camera = camera ?? null;
+    this._cameraPinned = !!camera;
+  }
+
   // -------------------------------------------------------------------------
   // Per-frame
   // -------------------------------------------------------------------------
 
   /**
+   * Per-frame drive from whoever renders the scene. Defers to the owner: if
+   * anything is already calling {@link update} directly this is a no-op, so the
+   * two can coexist without running the mood clock at double speed.
+   *
+   * @param {number} dt seconds since the last rendered frame
+   */
+  frame(dt) {
+    if (this._ownerDriven > 0) { this._ownerDriven--; return; }
+    this._inFrame = true;
+    this.update(dt);
+    this._inFrame = false;
+  }
+
+  /**
    * Advances the mood cross-fade and the animated life: practical flicker, a
-   * slow hue drift on the rim, and the breathing multiplier for light shafts.
-   * Presentation only — safe to call with any dt.
+   * slow hue drift on the rim, the per-fighter rim rigs following their
+   * fighters, and the breathing multiplier for light shafts. Presentation
+   * only — safe to call with any dt.
    *
    * @param {number} dt seconds
    */
   update(dt) {
     if (!this.ready) return;
+    if (!this._inFrame) this._ownerDriven = 2;
     const d = Math.min(dt, 0.1);
     this._time += d;
 
@@ -1164,20 +1339,121 @@ export class Environment {
     }
 
     // --- rim hue drift and breathing ---------------------------------------
+    // One budget, two consumers: the directional pair keeps DIRECTIONAL_RIM_SHARE
+    // of it for the set, the per-fighter spots carry the rest onto the fighters.
     const drift = p.rim.hueDrift * Math.sin(t * 0.17) + p.rim.hueDrift * 0.45 * Math.sin(t * 0.41 + 1.9);
     this._tmpColor.copy(p.rim.color).offsetHSL(drift, 0.02 * Math.sin(t * 0.23), 0);
     if (pulseAmount > 0) this._tmpColor.lerp(this._pulse.color, Math.min(0.85, pulseAmount));
+    const coolPower = p.rim.intensity * (0.94 + 0.06 * Math.sin(t * 0.61)) * (1 + pulseAmount * 1.2);
     this.rimLight.color.copy(this._tmpColor);
-    this.rimLight.intensity = p.rim.intensity * (0.94 + 0.06 * Math.sin(t * 0.61)) * (1 + pulseAmount * 1.2);
+    this.rimLight.intensity = coolPower * DIRECTIONAL_RIM_SHARE;
 
-    this._tmpColor.copy(p.rimB.color).offsetHSL(-drift * 0.7, 0, 0);
-    this.rimLightB.color.copy(this._tmpColor);
-    this.rimLightB.intensity = p.rimB.intensity * (0.95 + 0.05 * Math.sin(t * 0.47 + 2.1)) * (1 + pulseAmount * 0.8);
+    this._tmpColorB.copy(p.rimB.color).offsetHSL(-drift * 0.7, 0, 0);
+    const warmPower = p.rimB.intensity * (0.95 + 0.05 * Math.sin(t * 0.47 + 2.1)) * (1 + pulseAmount * 0.8);
+    this.rimLightB.color.copy(this._tmpColorB);
+    this.rimLightB.intensity = warmPower * DIRECTIONAL_RIM_SHARE;
+
+    this._acquireCooldown -= d;
+    this._updateFighterRims(coolPower, warmPower);
 
     // --- shafts breathe, ambient reacts to the pulse ------------------------
     this.shaftIntensity = p.shaft.intensity * (0.82 + 0.18 * Math.sin(t * 0.29) + 0.06 * Math.sin(t * 0.83 + 0.6)) + pulseAmount * 0.5;
     this.scene.environmentIntensity = p.envIntensity * (1 + pulseAmount * 0.45);
     this.fillLight.intensity = p.fill.intensity * (0.97 + 0.03 * Math.sin(t * 0.19)) * (1 + pulseAmount * 0.3);
+  }
+
+  /**
+   * Where a rim light sits relative to its aim point: the mood's rim azimuth,
+   * yawed into the camera's frame and re-elevated.
+   *
+   * Two corrections, both load-bearing. The mood authors its rim almost
+   * horizontally because that is correct for a light at infinity; at three
+   * metres the same azimuth shoots along the floor and lights nothing but
+   * shins. And a rim is defined relative to the eye rather than to the world —
+   * leave it pinned to a world azimuth and the moment the KO camera swings
+   * round behind a fighter the rim arrives frontally and blows the character
+   * out. `yaw` rotates the authored azimuth so "three-quarters behind" stays
+   * three-quarters behind from wherever the shot is taken.
+   *
+   * @param {THREE.Vector3} dir mood rim direction
+   * @param {number} yaw radians to rotate the azimuth about Y
+   * @param {THREE.Vector3} out receives the offset
+   */
+  _rimOffset(dir, yaw, out) {
+    const el = THREE.MathUtils.degToRad(RIM.elevationDeg);
+    const c = Math.cos(yaw);
+    const s = Math.sin(yaw);
+    out.set(dir.x * c + dir.z * s, 0, dir.z * c - dir.x * s);
+    if (out.lengthSq() < 1e-8) out.set(0, 0, -1);
+    out.normalize().multiplyScalar(Math.cos(el) * RIM.radius);
+    out.y = Math.sin(el) * RIM.radius;
+    return out;
+  }
+
+  /**
+   * How far the authored rim azimuths have to turn so they stay behind the
+   * subject as seen from `aim`. Zero when there is no camera yet, which leaves
+   * the world-space azimuths the moods author.
+   *
+   * @param {THREE.Vector3} aim world point the rig is lighting
+   */
+  _rimYaw(aim) {
+    if (!this.camera) return 0;
+    this._camPos.setFromMatrixPosition(this.camera.matrixWorld);
+    const dx = aim.x - this._camPos.x;
+    const dz = aim.z - this._camPos.z;
+    if (dx * dx + dz * dz < 1e-6) return 0;
+    // The moods are authored for an eye on +Z looking toward -Z, so the
+    // reference view direction is -Z and the correction is measured from it.
+    return Math.atan2(dx, dz) - Math.PI;
+  }
+
+  /**
+   * Move each rim rig onto its fighter and give it the current rim colours.
+   * `_tmpColor` / `_tmpColorB` carry the drifted cool and warm hues, so the
+   * spots and the directional pair are always the same two colours.
+   *
+   * @param {number} coolPower mood-space irradiance for the cool rim
+   * @param {number} warmPower mood-space irradiance for the warm rim
+   */
+  _updateFighterRims(coolPower, warmPower) {
+    if (!this.fighterRims.length) return;
+    const p = this.params;
+
+    // Nobody has to wire this up. The rigs look their fighter up by name and
+    // keep looking until it exists, so a late character swap re-acquires.
+    const acquire = this._acquireCooldown <= 0;
+    if (acquire) this._acquireCooldown = 0.4;
+
+    // The mood's rim intensity is irradiance at the subject; a spot with decay
+    // 2 delivers intensity / d², so radius² converts one to the other and a
+    // mood reads the same whichever light type carries it.
+    const falloff = RIM.gain * RIM.radius * RIM.radius;
+
+    for (const rig of this.fighterRims) {
+      if (acquire && !rig.root?.parent) {
+        rig.root = this.scene.getObjectByName(`fighter${rig.index}`) ?? null;
+      }
+      if (!rig.root) {
+        rig.cool.intensity = 0;
+        rig.warm.intensity = 0;
+        continue;
+      }
+
+      rig.root.getWorldPosition(rig.aim);
+      rig.aim.y += RIM.aimHeight;
+      const yaw = this._rimYaw(rig.aim);
+
+      rig.cool.color.copy(this._tmpColor);
+      rig.cool.intensity = coolPower * falloff;
+      rig.cool.target.position.copy(rig.aim);
+      rig.cool.position.copy(this._rimOffset(p.rim.dir, yaw, this._tmpVecB)).add(rig.aim);
+
+      rig.warm.color.copy(this._tmpColorB);
+      rig.warm.intensity = warmPower * falloff;
+      rig.warm.target.position.copy(rig.aim);
+      rig.warm.position.copy(this._rimOffset(p.rimB.dir, yaw, this._tmpVecB)).add(rig.aim);
+    }
   }
 
   /** Write the blended params onto the rig, fog and scene-level intensities. */
@@ -1190,14 +1466,18 @@ export class Environment {
     this.keyLight.position.copy(this._tmpVec).add(this.keyLight.target.position);
 
     this.rimLight.color.copy(p.rim.color);
-    this.rimLight.intensity = p.rim.intensity;
+    this.rimLight.intensity = p.rim.intensity * DIRECTIONAL_RIM_SHARE;
     this._tmpVec.copy(p.rim.dir).multiplyScalar(22);
     this.rimLight.position.copy(this._tmpVec).add(this.rimLight.target.position);
 
     this.rimLightB.color.copy(p.rimB.color);
-    this.rimLightB.intensity = p.rimB.intensity;
+    this.rimLightB.intensity = p.rimB.intensity * DIRECTIONAL_RIM_SHARE;
     this._tmpVec.copy(p.rimB.dir).multiplyScalar(22);
     this.rimLightB.position.copy(this._tmpVec).add(this.rimLightB.target.position);
+
+    this._tmpColor.copy(p.rim.color);
+    this._tmpColorB.copy(p.rimB.color);
+    this._updateFighterRims(p.rim.intensity, p.rimB.intensity);
 
     this.bounceLight.color.copy(p.bounce.color);
     this.bounceLight.intensity = p.bounce.intensity;
@@ -1236,6 +1516,10 @@ export class Environment {
     this.scene.environment = null;
     this.scene.background = null;
     if (this.scene.fog === this.fog) this.scene.fog = null;
+    if (this._prevSceneBeforeRender) this.scene.onBeforeRender = this._prevSceneBeforeRender;
+    else delete this.scene.onBeforeRender;
+    this._prevSceneBeforeRender = null;
+    this.camera = null;
 
     this._pmremTarget?.dispose();
     this._pmrem?.dispose();
@@ -1257,6 +1541,7 @@ export class Environment {
     if (this._rig) this.scene.remove(this._rig);
     if (this.practicalMeshes) this.scene.remove(this.practicalMeshes);
     this.practicals.length = 0;
+    this.fighterRims.length = 0;
     this.ready = false;
   }
 }

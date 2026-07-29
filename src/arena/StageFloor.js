@@ -61,12 +61,23 @@ function bakeFloorMaps(size) {
   const aggregate = worley(FIELD, 72, 97, 1).f1;
   const puddleCells = worley(FIELD, 11, 101, 0.95);
   const oil = fbm(FIELD, 9, { octaves: 4, seed: 107 });
+  // Two very low-frequency fields, three or four blobs across the whole 32m
+  // slab. They are what stop one material tiling across the deck: the first
+  // decides which end of the pit drains and which end holds water, the second
+  // breaks that up again so the wet and dry regions do not share an edge.
+  const region = fbm(FIELD, 3, { octaves: 3, seed: 131 });
+  const drying = fbm(FIELD, 6, { octaves: 3, seed: 137 });
 
   // --- painted markings, rasterised at full resolution ---------------------
   // 0 = line paint (bone white), 1 = hazard yellow, 2 = hazard black.
   const mark = new Float32Array(n);
   const markKind = new Uint8Array(n);
   const text = new Float32Array(n);
+  // World-space features that have to be exact rather than noisy, kept as byte
+  // masks because at 2048px a Float32 field is another sixteen megabytes each.
+  const scuff = new Uint8Array(n);      // rubber transfer from drag and skid
+  const patchTone = new Uint8Array(n);  // re-poured slab, 128 = original pour
+  const patchJoint = new Uint8Array(n); // the cold joint round each patch
 
   const px = size / FLOOR.w; // texels per metre in x
   const pz = size / FLOOR.d;
@@ -88,11 +99,68 @@ function bakeFloorMaps(size) {
     stampText(text, size, l.s, tx, ty, l.c, l.c * 0.55);
   }
 
+  /**
+   * Re-poured sections. A test cell floor gets cut open for services and the
+   * new concrete never matches the old — a patch reads as a different pour, at
+   * a different age, ringed by a cold joint. Four of them across a 32m slab is
+   * the single cheapest way to stop the macro map looking like one material.
+   */
+  const patches = [
+    { x: -5.6, z: 5.4, w: 6.6, d: 4.2, rot: 0.05, tone: 0.5 },
+    { x: 7.1, z: -3.2, w: 4.8, d: 5.8, rot: -0.08, tone: -0.34 },
+    { x: 1.4, z: 9.0, w: 8.4, d: 3.2, rot: 0.02, tone: 0.28 },
+    { x: -9.8, z: -4.4, w: 4.2, d: 3.4, rot: 0.13, tone: -0.2 },
+  ];
+  /**
+   * Drag and skid marks. Two ruts a metre and a bit apart is a tracked machine
+   * being winched across the deck; a single wide smear is something heavy being
+   * dragged. Both are arcs, because nothing is ever pulled in a straight line.
+   */
+  const drags = [
+    { x: -3.4, z: 2.0, r: 8.6, a0: -1.05, a1: 0.42, w: 0.2, ruts: 1.15, gain: 0.9 },
+    { x: 5.0, z: 1.2, r: 11.5, a0: 2.28, a1: 3.28, w: 0.17, ruts: 1.3, gain: 0.7 },
+    { x: 0.4, z: -6.0, r: 6.2, a0: 0.62, a1: 1.62, w: 0.44, ruts: 0, gain: 0.75 },
+    { x: -8.0, z: 7.5, r: 5.4, a0: -0.55, a1: 0.55, w: 0.34, ruts: 0, gain: 0.55 },
+    { x: -6.2, z: -5.4, r: 7.8, a0: 0.12, a1: 1.02, w: 0.15, ruts: 1.05, gain: 0.62 },
+    { x: 9.6, z: 4.2, r: 6.6, a0: 2.55, a1: 3.5, w: 0.28, ruts: 0, gain: 0.5 },
+  ];
+
+  for (const p of patches) { p.c = Math.cos(p.rot); p.s = Math.sin(p.rot); }
+
   for (let j = 0; j < size; j++) {
     const wz = FLOOR.cz + (0.5 - j / size) * FLOOR.d;
     for (let i = 0; i < size; i++) {
       const wx = FLOOR.cx + (i / size - 0.5) * FLOOR.w;
       const k = j * size + i;
+
+      let tone = 0;
+      let seam = 0;
+      for (const p of patches) {
+        const dx = Math.abs(p.c * (wx - p.x) + p.s * (wz - p.z)) - p.w / 2;
+        const dz = Math.abs(-p.s * (wx - p.x) + p.c * (wz - p.z)) - p.d / 2;
+        const sd = Math.max(dx, dz);
+        if (sd > 0.06) continue;
+        tone += p.tone * (1 - smoothstep(-0.06, 0.02, sd));
+        seam = Math.max(seam, 1 - smoothstep(0.006, 0.05, Math.abs(sd)));
+      }
+      patchTone[k] = Math.round(clamp01(tone * 0.5 + 0.5) * 255);
+      patchJoint[k] = Math.round(clamp01(seam) * 255);
+
+      let sc = 0;
+      for (const d of drags) {
+        const rad = Math.hypot(wx - d.x, wz - d.z);
+        const span = d.a1 - d.a0;
+        const off = d.ruts ? Math.abs(Math.abs(rad - d.r) - d.ruts * 0.5) : Math.abs(rad - d.r);
+        if (off > d.w) continue;
+        let a = Math.atan2(wz - d.z, wx - d.x) - d.a0;
+        if (a < -Math.PI) a += Math.PI * 2;
+        if (a < -0.35 || a > span + 0.35) continue;
+        // Fade at both ends of the sweep so a mark starts and stops the way a
+        // dragged edge does, rather than being cut off square.
+        const ends = smoothstep(-0.35, 0.12, a) * (1 - smoothstep(span - 0.12, span + 0.35, a));
+        sc = Math.max(sc, d.gain * ends * (1 - smoothstep(d.w * 0.35, d.w, off)));
+      }
+      scuff[k] = Math.round(clamp01(sc) * 255);
 
       let cov = 0;
       let kind = 0;
@@ -141,6 +209,10 @@ function bakeFloorMaps(size) {
   const paintYellow = hexToLinear(0xbf9218);
   const paintBlack = hexToLinear(0x141416);
   const oilCol = hexToLinear(0x0a0a0c);
+  const rubber = hexToLinear(0x131315);
+  const concWarm = hexToLinear(0x3b352e);  // an older, greyer-brown pour
+  const concFresh = hexToLinear(0x4a4c52); // a newer, colder one
+  const oilBase = new Float32Array(n);     // reused by the ORM pass
 
   for (let j = 0; j < size; j++) {
     const fy = j * s2f;
@@ -162,6 +234,11 @@ function bakeFloorMaps(size) {
       const pud = sampleWrap(puddleCells.f1, FIELD, fx, fy);
       const pid = sampleWrap(puddleCells.id, FIELD, fx, fy);
       const oi = sampleWrap(oil, FIELD, fx, fy);
+      const reg = sampleWrap(region, FIELD, fx, fy);
+      const dry = sampleWrap(drying, FIELD, fx, fy);
+      const sc = scuff[k] / 255;
+      const tone = patchTone[k] / 127.5 - 1;
+      const seam = patchJoint[k] / 255;
 
       // Slab: expansion joints on a 4m grid, aggregate popping through, a
       // long-wavelength dish so water has somewhere to collect.
@@ -170,36 +247,61 @@ function bakeFloorMaps(size) {
       const joint = Math.max(
         1 - smoothstep(0.012, 0.03, jx),
         1 - smoothstep(0.012, 0.03, jz),
+        seam * 0.85,
       );
       const crack = smoothstep(0.9, 0.995, crk) * (1 - joint);
-      const dish = (mac - 0.5) * 0.5;
+      // The region field is a genuine fall across the slab, ten metres of
+      // wavelength on top of the macro dish. It is what decides which end of
+      // the pit drains, so puddles cluster instead of speckling evenly.
+      const dish = (mac - 0.5) * 0.5 + (reg - 0.5) * 0.9;
 
       let h = fine * 0.22 + smoothstep(0.14, 0, agg) * 0.11 + dish;
       h -= joint * 0.9 + crack * 0.5;
+      h += tone * 0.06;
       height[k] = h;
+
+      // Oil finds the edges of a working floor: plant stands round the rim, and
+      // nothing gets parked in the middle of a test cell.
+      const rim = smoothstep(4.5, 10.5, Math.max(Math.abs(wx) * 0.92, Math.abs(wz - 1)));
+      const oily = smoothstep(0.6, 0.9, oi) * (0.22 + rim * 1.15);
 
       // Wetness: everything is faintly damp, cells whose id passes the
       // threshold hold standing water, and water pools where the slab dips.
+      // Three things then take water away again — a dry region, a rubber smear
+      // and an oil film all shed it — which is what breaks up the uniform sheen.
       const puddleCell = smoothstep(0.42, 0.58, pid);
       const pool = puddleCell * (1 - smoothstep(0.28, 0.62, pud)) * (1 - smoothstep(0.06, 0.34, h + 0.35));
       const damp = clamp01(0.26 + stn * 0.44 - Math.abs(wz - 1) * 0.012);
-      const puddle = clamp01(pool * 1.6 + joint * 0.35 * puddleCell);
-      wet[k] = clamp01(damp * 0.55 + puddle);
+      const puddle = clamp01(pool * 1.95 + joint * 0.35 * puddleCell);
+      const shed = clamp01(smoothstep(0.54, 0.88, dry) * 0.6 + sc * 0.55 + oily * 0.5 + clamp01(tone) * 0.28);
+      wet[k] = clamp01((damp * 0.55 + puddle) * (1 - shed * 0.62));
 
       // Water surface is flat: flatten the height that feeds the normal map.
-      height[k] = lerp(h, dish * 0.35, clamp01(puddle * 1.2));
+      height[k] = lerp(h, dish * 0.35, clamp01(puddle * 1.2 * (1 - shed)));
+      oilBase[k] = oily;
 
       // --- albedo -----------------------------------------------------------
-      const cov = mark[k] * clamp01(1 - wr * 0.95) * (1 - crack * 0.8);
+      const cov = mark[k] * clamp01(1 - wr * 0.95) * (1 - crack * 0.8) * (1 - sc * 0.7);
       const kind = markKind[k];
       const paint = kind === 1 ? paintYellow : kind === 2 ? paintBlack : paintWhite;
 
       for (let ch = 0; ch < 3; ch++) {
         let v = lerp(conc[ch], concPale[ch], fine * 0.5 + smoothstep(0.16, 0, agg) * 0.28);
-        v = lerp(v, concDark[ch], mac * 0.42 + stn * 0.3);
-        v = lerp(v, oilCol[ch], smoothstep(0.62, 0.92, oi) * 0.55);
+        // A patch is a different pour, so it shifts hue as well as value —
+        // matching the tone and missing the colour is what makes a repaired
+        // slab look like a decal instead of concrete.
+        if (tone > 0) v = lerp(v, concFresh[ch], tone * 0.55);
+        else if (tone < 0) v = lerp(v, concWarm[ch], -tone * 0.5);
+        // Region drift: ten metres of wavelength straight into albedo, on top
+        // of what it already does through the wetness. Without it the only
+        // large-scale variation on the deck is the sheen, and a floor whose
+        // tone is constant across thirty metres reads as one tiled material
+        // however much fine detail sits on top.
+        v = lerp(v, concDark[ch], mac * 0.42 + stn * 0.3 + (1 - reg) * 0.22);
+        v = lerp(v, oilCol[ch], clamp01(oily) * 0.72);
         v *= 1 - crack * 0.55 - joint * 0.45;
         v = lerp(v, paint[ch] * (0.72 + fine * 0.55), cov);
+        v = lerp(v, rubber[ch] * (0.8 + fine * 0.5), sc * 0.82);
         // Wet concrete is darker concrete. This is the single most convincing
         // cue that a floor is wet, ahead of the reflection itself.
         v *= lerp(1, 0.32, clamp01(wet[k] * 1.35));
@@ -228,6 +330,13 @@ function bakeFloorMaps(size) {
       let rough = lerp(0.78, 0.33, clamp01(w * 1.7));
       rough = lerp(rough, 0.06, clamp01((w - 0.55) * 2.6));
       rough = clamp01(rough + fine * 0.05 - mark[k] * 0.06);
+      // Rubber transfer is smoother than the concrete under it and oil is
+      // smoother still, so both catch a highlight the surrounding deck does
+      // not — two more ways for the floor to stop being one surface.
+      rough = lerp(rough, 0.34, (scuff[k] / 255) * 0.75);
+      rough = lerp(rough, 0.14, clamp01(oilBase[k]) * 0.8);
+      // A fresh pour is a rougher pour; an old one is polished by traffic.
+      rough = clamp01(rough + (patchTone[k] / 127.5 - 1) * 0.09);
       const o = k * 4;
       ormData[o] = Math.round(clamp01(ao) * 255);
       ormData[o + 1] = Math.round(rough * 255);

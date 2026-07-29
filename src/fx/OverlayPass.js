@@ -181,10 +181,15 @@ void main() {
       // Charge ripple travelling outward through the drained world.
       float ripple = sin( rad * 26.0 - uTime * 7.0 ) * 0.5 + 0.5;
       col += uSuperColor * pow( ripple, 8.0 ) * falloff * uSuper * 0.14;
-      col *= 1.0 - smoothstep( 0.3, 0.95, rad ) * uSuper * 0.55;
+      col *= 1.0 - smoothstep( 0.3, 0.95, rad ) * uSuper * 0.34;
     }
 
-    col = mix( col, uSuperColor * 0.55 + vec3( 0.92 ), uSuperFlash * 0.85 );
+    // The connect flash is a blow-out at the contact, not a gel over the frame.
+    // Washing all 1920x1080 pixels with the character colour reads as a bug in
+    // the tone mapper; masked to a couple of hundred pixels around the impact it
+    // reads as the camera being overwhelmed by it.
+    float wash = uSuperFlash * ( 0.10 + 0.62 * exp( -rad * rad * 5.0 ) );
+    col = mix( col, uSuperColor * 0.35 + vec3( 0.8 ), clamp( wash, 0.0, 1.0 ) );
   }
 
   // --- punctuation ----------------------------------------------------------

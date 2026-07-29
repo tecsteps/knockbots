@@ -116,7 +116,9 @@ void main() {
   vec3 col = vTint * prof.r * vHeat * fade * amp;
   col += vec3( 1.0, 0.96, 0.92 ) * prof.g * vHeat * 0.5 * fade * amp;
 
-  float a = prof.a * fade * uOpacity * ( 0.55 + amp * 0.5 );
+  // Coverage dies faster than emission does, so a spent ring vanishes instead
+  // of hanging around as a fat grey torus once it has stopped being hot.
+  float a = prof.a * pow( 1.0 - vT, 3.4 ) * uOpacity * ( 0.4 + amp * 0.5 );
   if ( a < 0.004 ) discard;
   gl_FragColor = vec4( col, a );
 }`;

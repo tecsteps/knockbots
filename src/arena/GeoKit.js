@@ -343,37 +343,168 @@ export function pipeRun(points, radius, opts = {}) {
 }
 
 /**
- * Low-poly onlooker. Read only as a silhouette against the practicals, so it is
- * built from the shapes a human reads as at 20 metres: shoulders wider than
- * hips, a neck, and arms that break the torso outline.
+ * A tapered capsule spanning two points. Limbs are authored as endpoints rather
+ * than as a position plus two Euler angles because a pose is easier to reason
+ * about — and easier to keep anatomically sane — as "the hand is here".
+ * @param {number[]} a
+ * @param {number[]} b
+ * @param {number} r0 radius at `a`
+ * @param {number} [r1=r0] radius at `b`
+ * @param {number} [radial=6]
+ */
+export function segment(a, b, r0, r1 = r0, radial = 6) {
+  _v.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const len = _v.length() || 1e-4;
+  const geo = new THREE.CylinderGeometry(r1, r0, len, radial, 1, false);
+  _q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), _v.divideScalar(len));
+  _m.compose(
+    _v.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2),
+    _q,
+    _s.set(1, 1, 1),
+  );
+  geo.applyMatrix4(_m);
+  return geo;
+}
+
+/**
+ * Transform that carries a geometry built along +X and centred on the origin
+ * onto the span from `a` to `b`. Beams, jib arms and runway rails are far
+ * easier to place — and far harder to get subtly wrong — when they are authored
+ * by their two ends rather than by a position and a pair of Euler angles.
+ *
+ * The rotation is `[0, yaw, pitch]` because three's default XYZ order applies Z
+ * first, so the pitch happens in the beam's own frame and the yaw then swings
+ * the whole thing round.
+ * @param {number[]} a
+ * @param {number[]} b
+ * @returns {{length:number, pos:number[], rot:number[]}}
+ */
+export function spanX(a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+  const flat = Math.hypot(dx, dz);
+  return {
+    length: Math.hypot(flat, dy),
+    pos: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2],
+    rot: [0, Math.atan2(-dz, dx), Math.atan2(dy, flat)],
+  };
+}
+
+/** Number of distinct body archetypes `crowdFigure` can build. */
+export const CROWD_ARCHETYPES = 6;
+
+/**
+ * Low-poly onlooker, read only as a silhouette against the practicals.
+ *
+ * A crowd fails on repetition long before it fails on polygon count, and a
+ * capsule with no arms repeats worse than anything: every instance shares one
+ * outline no matter how it is scaled or turned. So the figure is posed from
+ * endpoints — six archetypes covering the postures a barrier crowd actually
+ * holds — and the arms are always built, because the gap between an arm and the
+ * ribcage is the one hole that tells the eye it is looking at a person.
+ *
+ * @param {number} [seed] varies proportion, stance and headwear within an archetype
+ * @param {number} [archetype] 0 stand, 1 cheer, 2 lean on rail, 3 arms folded,
+ *   4 filming, 5 hunched with hands pocketed
  * @returns {THREE.BufferGeometry} origin at the feet, facing -Z
  */
-export function crowdFigure(seed = 0) {
+export function crowdFigure(seed = 0, archetype = 0) {
   const r = (n) => {
-    const s = Math.sin(seed * 12.9898 + n * 78.233) * 43758.5453;
+    const s = Math.sin(seed * 12.9898 + n * 78.233 + archetype * 31.7) * 43758.5453;
     return s - Math.floor(s);
   };
-  const scale = 0.92 + r(1) * 0.2;
-  const bulk = 0.85 + r(2) * 0.4;
+  const k = archetype % CROWD_ARCHETYPES;
+  const tall = 0.94 + r(1) * 0.16;
+  const bulk = (k === 3 ? 1.16 : 0.86 + r(2) * 0.34) * (0.94 + r(9) * 0.14);
+  // A forward pitch off the hips: the difference between a queue and a crowd
+  // pressed on a barrier is that half of them are leaning on it.
+  const pitch = k === 2 ? 0.34 + r(3) * 0.16 : k === 5 ? 0.16 : r(4) * 0.09;
+
+  const hipY = 0.9 * tall;
+  const chestY = 1.32 * tall;
+  const shoulderY = 1.44 * tall;
+  // Wide enough that the arm clears the ribcage. The hole between arm and body
+  // is the only part of this figure that carries any information at twenty
+  // metres — close that gap and it collapses straight back into a capsule.
+  const shoulderX = 0.26 * bulk;
   const parts = [];
 
-  const hipY = 0.92 * scale;
-  const chestY = 1.34 * scale;
-  parts.push(place(new THREE.CapsuleGeometry(0.15 * bulk, 0.34 * scale, 3, 7), { pos: [0, (hipY + chestY) / 2, 0] }));
-  parts.push(place(new THREE.CapsuleGeometry(0.19 * bulk, 0.16 * scale, 3, 7), { pos: [0, chestY + 0.1 * scale, 0], scale: [1.25, 1, 0.8] }));
-  parts.push(place(new THREE.SphereGeometry(0.105 * scale, 9, 7), { pos: [0, chestY + 0.34 * scale, 0.01] }));
-  parts.push(place(new THREE.CylinderGeometry(0.05, 0.055, 0.1 * scale, 6), { pos: [0, chestY + 0.23 * scale, 0] }));
+  // Everything above the waist is rotated about the hip pivot, so a lean moves
+  // the shoulders, the head and both hands together instead of shearing them.
+  const sp = Math.sin(pitch), cp = Math.cos(pitch);
+  const at = (x, y, z = 0) => {
+    const dy = y - hipY;
+    return [x, hipY + dy * cp + z * sp, z * cp - dy * sp];
+  };
 
+  // Legs: a stance width and a knee that is never dead straight.
+  const stance = k === 2 || k === 3 ? 0.15 : 0.1;
   for (const s of [-1, 1]) {
-    const swing = (r(3 + s) - 0.5) * 0.5;
-    parts.push(place(new THREE.CapsuleGeometry(0.055 * bulk, 0.5 * scale, 3, 6), {
-      pos: [s * 0.22 * bulk, chestY - 0.13 * scale, 0.02],
-      rot: [swing, 0, -s * 0.13],
-    }));
-    parts.push(place(new THREE.CapsuleGeometry(0.078 * bulk, 0.62 * scale, 3, 6), {
-      pos: [s * 0.1, hipY - 0.42 * scale, 0],
-      rot: [(r(7 + s) - 0.5) * 0.25, 0, 0],
-    }));
+    const foot = [s * (stance + r(10 + s) * 0.05), 0, (r(12 + s) - 0.5) * 0.14];
+    const knee = [s * (stance + 0.02), hipY * 0.5, foot[2] * 0.4 + 0.03];
+    const hip = [s * 0.085 * bulk, hipY, 0];
+    parts.push(segment(hip, knee, 0.078 * bulk, 0.062 * bulk));
+    parts.push(segment(knee, foot, 0.06 * bulk, 0.048 * bulk));
+    parts.push(place(new THREE.BoxGeometry(0.09, 0.05, 0.2), { pos: [foot[0], 0.025, foot[2] - 0.03] }));
+  }
+
+  // Torso: hips, ribcage, shoulder yoke.
+  parts.push(segment(at(0, hipY - 0.04), at(0, chestY), 0.14 * bulk, 0.15 * bulk, 7));
+  parts.push(place(new THREE.CapsuleGeometry(0.16 * bulk, 0.14 * tall, 3, 7), {
+    pos: at(0, chestY + 0.03), rot: [-pitch, 0, 0], scale: [1.08, 1, 0.76],
+  }));
+  const shL = at(-shoulderX, shoulderY);
+  const shR = at(shoulderX, shoulderY);
+  parts.push(segment(shL, shR, 0.075 * bulk, 0.075 * bulk));
+
+  // Head, neck and one of four hat silhouettes.
+  const neck = at(0, shoulderY + 0.02);
+  const head = at(0, shoulderY + 0.19 * tall, 0.02);
+  parts.push(segment(neck, head, 0.052, 0.056));
+  parts.push(place(new THREE.SphereGeometry(0.102 * tall, 9, 7), { pos: head, scale: [0.95, 1.1, 1] }));
+  const hat = (r(5) * 4) | 0;
+  if (hat === 0) {
+    parts.push(place(new THREE.CylinderGeometry(0.108 * tall, 0.104 * tall, 0.08, 9), { pos: [head[0], head[1] + 0.07, head[2]] }));
+    parts.push(place(bevelBox(0.2, 0.02, 0.13, 0.008), { pos: [head[0], head[1] + 0.035, head[2] - 0.12], rot: [0.12, 0, 0] }));
+  } else if (hat === 1) {
+    parts.push(place(new THREE.SphereGeometry(0.113 * tall, 9, 6, 0, Math.PI * 2, 0, Math.PI * 0.62), { pos: [head[0], head[1] + 0.01, head[2]] }));
+  } else if (hat === 2) {
+    // Hood: a shell behind the head that widens the silhouette at the shoulders.
+    parts.push(place(new THREE.SphereGeometry(0.145 * tall, 9, 7), { pos: [head[0], head[1] - 0.02, head[2] + 0.06], scale: [1, 1.05, 0.85] }));
+  }
+  if (r(6) > 0.72) {
+    parts.push(place(bevelBox(0.26 * bulk, 0.34 * tall, 0.16, 0.03), { pos: at(0, chestY + 0.02, 0.22 * bulk) }));
+  }
+
+  // Arms. Every archetype places the elbow and the hand explicitly; the wrong
+  // elbow height is what makes a posed figure read as a mannequin.
+  const armR = 0.052 * bulk;
+  for (const s of [-1, 1]) {
+    const sh = s < 0 ? shL : shR;
+    let elbow, hand;
+    if (k === 1) {
+      elbow = at(s * (shoulderX + 0.13), shoulderY + 0.2 * tall, -0.02);
+      hand = at(s * (shoulderX + 0.08), shoulderY + 0.42 * tall, -0.08);
+    } else if (k === 2) {
+      elbow = at(s * (shoulderX + 0.06), shoulderY - 0.28 * tall, -0.1);
+      hand = at(s * (shoulderX - 0.02), shoulderY - 0.3 * tall, -0.34);
+    } else if (k === 3) {
+      elbow = at(s * (shoulderX + 0.11), shoulderY - 0.3 * tall, 0.02);
+      hand = at(-s * 0.09, shoulderY - 0.24 * tall, -0.19 * bulk);
+    } else if (k === 4 && s > 0) {
+      elbow = at(s * (shoulderX + 0.11), shoulderY - 0.12 * tall, -0.08);
+      hand = at(s * 0.13, shoulderY + 0.16 * tall, -0.22);
+      parts.push(place(bevelBox(0.075, 0.14, 0.014, 0.005), { pos: [hand[0], hand[1] + 0.06, hand[2] - 0.02], rot: [0.2, 0, 0.1] }));
+    } else if (k === 5) {
+      elbow = at(s * (shoulderX + 0.15), shoulderY - 0.32 * tall, 0.04);
+      hand = at(s * 0.12, hipY + 0.02, -0.13);
+    } else {
+      const swing = (r(20 + s) - 0.5) * 0.4;
+      elbow = at(s * (shoulderX + 0.05), shoulderY - 0.3 * tall, -0.02 + swing * 0.2);
+      hand = at(s * (shoulderX + 0.02), shoulderY - 0.6 * tall, swing * 0.3);
+    }
+    parts.push(segment(sh, elbow, armR * 1.15, armR));
+    parts.push(segment(elbow, hand, armR, armR * 0.82));
+    parts.push(place(new THREE.SphereGeometry(armR * 1.25, 6, 5), { pos: hand }));
   }
   return mergeAll(parts);
 }

@@ -22,6 +22,12 @@
  *      field, therefore it appears in the normal map, it removes paint so
  *      metalness rises and clearcoat drops, and it polishes the steel beneath
  *      so roughness falls. There is no way for them to drift apart.
+ *   4. Everything above is projected through the model's UVs, which on a robot
+ *      of rigid plates are per-plate and therefore near-identical from one
+ *      plate to the next. The character's *history* — fade, runs, oxidation,
+ *      heat staining, sprayed markings — is therefore a separate layer sampled
+ *      triplanar in object space by a shader patch, so where a plate sits on
+ *      the body decides how it has aged. See "Surface story" below.
  *
  * Noise is a periodic Perlin lattice so every map tiles seamlessly, and the
  * octaves are synthesised at their own natural resolution and smooth-upsampled
@@ -479,27 +485,295 @@ function drawScratches(dst, size, rng, opts) {
 /**
  * Oil and coolant streaks running with gravity. V is treated as "up" on the
  * model, so streaks travel toward decreasing V and thin out as they go.
+ *
+ * `origins` seeds the run from real features — the lower lip of a louvre, the
+ * bottom edge of a plate — instead of from noise. A streak that starts nowhere
+ * reads as dirt; a streak that starts under a vent reads as history.
  */
 function drawDrips(dst, size, rng, opts) {
-  const { count, maxLen, width, strength } = opts;
+  const { count, maxLen, width, strength, origins = null } = opts;
   for (let i = 0; i < count; i++) {
-    let x = rng.next() * size;
-    let y = rng.next() * size;
+    const src = origins ? origins[i % origins.length] : null;
+    let x = src ? src[0] + (rng.next() - 0.5) * (src[2] ?? 0) : rng.next() * size;
+    let y = src ? src[1] : rng.next() * size;
     const len = Math.max(8, 16 + rng.next() * maxLen);
     const w = width * (0.4 + rng.next() * 1.3);
     const amp = strength * (0.3 + rng.next() * 0.7);
     let drift = 0;
-    // A fat pooled head where the fluid started, then a thinning tail.
-    stamp(dst, size, x, y, w * 2.1, amp);
+    // A slight swelling where the fluid gathered before it broke away, then a
+    // long thinning tail. Keep the head close to the tail width: a round blob
+    // on a thin line reads as a pin, not as a run.
+    stamp(dst, size, x, y, w * 1.25, amp * 0.8);
     for (let s = 0; s < len; s++) {
-      drift += (rng.next() - 0.5) * 0.14;
-      drift *= 0.94;
-      x += drift * 0.3;
+      drift += (rng.next() - 0.5) * 0.22;
+      drift *= 0.93;
+      x += drift * 0.45;
       y -= 1;
       const t = s / len;
-      stamp(dst, size, x, y, w * (1 - 0.55 * t), amp * Math.pow(1 - t, 1.35));
+      stamp(dst, size, x, y, w * (1.15 - 0.75 * t), amp * Math.pow(1 - t, 1.1));
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stencil markings
+//
+// A machine that has been through a factory carries writing: a unit number, a
+// hazard chevron by a moving part, an arrow at a lifting point. It is the one
+// kind of surface incident that is unmistakably *asymmetric*, which is why a
+// plate without it reads as a rendered box no matter how good the wear is.
+//
+// The glyph set is a 5x7 stroke bitmap rather than a font file, and every mark
+// is rasterised through a pen whose rotation is a whole quarter turn, so the
+// strokes stay axis-aligned and crisp at any orientation.
+// ---------------------------------------------------------------------------
+
+/** 5x7 stencil face, one number per row, bit 4 leftmost. */
+const GLYPHS = {
+  '0': [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
+  '1': [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
+  '2': [0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f],
+  '3': [0x1f, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0e],
+  '4': [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02],
+  '5': [0x1f, 0x10, 0x1e, 0x01, 0x01, 0x11, 0x0e],
+  '6': [0x06, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e],
+  '7': [0x1f, 0x11, 0x01, 0x02, 0x04, 0x04, 0x04],
+  '8': [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
+  '9': [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c],
+  A: [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+  B: [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
+  C: [0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e],
+  D: [0x1c, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1c],
+  E: [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
+  F: [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10],
+  G: [0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f],
+  H: [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+  I: [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e],
+  J: [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0c],
+  K: [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+  L: [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f],
+  M: [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
+  N: [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
+  O: [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+  P: [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
+  Q: [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d],
+  R: [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
+  S: [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
+  T: [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+  U: [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+  V: [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
+  W: [0x11, 0x11, 0x11, 0x15, 0x15, 0x1b, 0x11],
+  X: [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
+  Y: [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
+  Z: [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
+  '-': [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
+  '/': [0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10],
+};
+
+const STENCIL_WORDS = [
+  'KB', 'MK IV', 'CAUTION', 'NO STEP', 'LIFT', 'HV', 'COOLANT', 'PURGE',
+  'SERVO', 'ARM', 'A-07', 'RB-21', 'X9', 'TORQUE', 'GRND', 'VENT',
+];
+
+/**
+ * Pen writing axis-aligned marks into a field, with the origin and a quarter
+ * turn baked in. `put` clamps nothing and wraps everything, so a mark may run
+ * off the tile edge and reappear — which is correct, the field tiles.
+ */
+function stencilPen(dst, size, ox, oy, rot) {
+  const c = rot === 1 ? 0 : rot === 2 ? -1 : rot === 3 ? 0 : 1;
+  const s = rot === 1 ? 1 : rot === 2 ? 0 : rot === 3 ? -1 : 0;
+  const put = (x, y, v) => {
+    const tx = Math.round(ox + x * c - y * s);
+    const ty = Math.round(oy + x * s + y * c);
+    dst[(((ty % size) + size) % size) * size + (((tx % size) + size) % size)] = v;
+  };
+  const rect = (x, y, w, h, v) => {
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) put(x + i, y + j, v);
+  };
+  return {
+    rect,
+    /** Filled ring, used for roundels and inspection stamps. */
+    ring(cx, cy, r, thick, v) {
+      const inner = (r - thick) * (r - thick);
+      for (let j = -r; j <= r; j++) {
+        for (let i = -r; i <= r; i++) {
+          const d = i * i + j * j;
+          if (d <= r * r && d >= inner) put(cx + i, cy + j, v);
+        }
+      }
+    },
+    /** Right-pointing chevron stack: the universal "moving part" marking. */
+    chevron(x, y, w, h, thick, n, gap, v) {
+      for (let k = 0; k < n; k++) {
+        const x0 = x + k * (w + gap);
+        for (let j = 0; j < h; j++) {
+          const t = 1 - Math.abs(j - (h - 1) / 2) / ((h - 1) / 2 || 1);
+          const px = x0 + Math.round(t * (w - thick));
+          rect(px, y + j, thick, 1, v);
+        }
+      }
+    },
+    /** Diagonal hazard bar. */
+    stripes(x, y, w, h, pitch, v) {
+      for (let j = 0; j < h; j++) {
+        for (let i = 0; i < w; i++) {
+          if ((((i + j) % pitch) + pitch) % pitch < pitch * 0.5) put(x + i, y + j, v);
+        }
+      }
+    },
+    /** Hollow warning triangle with a bang inside it. */
+    warning(x, y, sz, thick, v) {
+      for (let j = 0; j < sz; j++) {
+        const t = j / (sz - 1);
+        const half = Math.round((t * sz) / 2);
+        rect(x - half, y + j, thick, 1, v);
+        rect(x + half - thick + 1, y + j, thick, 1, v);
+      }
+      rect(x - Math.round(sz / 2), y + sz - thick, sz, thick, v);
+      const bh = Math.round(sz * 0.4);
+      rect(x - ((thick / 2) | 0), y + sz - thick - bh - thick * 2, thick, bh, v);
+      rect(x - ((thick / 2) | 0), y + sz - thick * 3, thick, thick, v);
+    },
+    /** Solid arrow along +X. */
+    arrow(x, y, len, h, v) {
+      const shaft = Math.round(h * 0.34);
+      rect(x, y - ((shaft / 2) | 0), len, shaft, v);
+      for (let j = -((h / 2) | 0); j <= (h / 2) | 0; j++) {
+        const w = Math.round((1 - Math.abs(j) / ((h / 2) | 1)) * h * 0.7);
+        rect(x + len, y + j, Math.max(1, w), 1, v);
+      }
+    },
+    /** Variable-pitch bar code, the cheapest "this was inventoried" cue. */
+    barcode(x, y, w, h, seed, v) {
+      let i = 0;
+      let k = 0;
+      while (i < w) {
+        const bw = 1 + (ihash(k, seed, 8191) % 3);
+        if (k % 2 === 0) rect(x + i, y, bw, h, v);
+        i += bw;
+        k++;
+      }
+    },
+    /** Stencil text. Returns the width consumed. */
+    text(str, x, y, px, v) {
+      let cx = x;
+      for (const ch of str.toUpperCase()) {
+        if (ch === ' ') { cx += px * 3; continue; }
+        const g = GLYPHS[ch];
+        if (!g) { cx += px * 3; continue; }
+        for (let row = 0; row < 7; row++) {
+          const bits = g[row];
+          for (let col = 0; col < 5; col++) {
+            // Row 0 is the top of the glyph, and V increases upward in a
+            // DataTexture, so the rows are written bottom-up.
+            if (bits & (1 << (4 - col))) rect(cx + col * px, y + (6 - row) * px, px, px, v);
+          }
+        }
+        cx += px * 6;
+      }
+      return cx - x;
+    },
+  };
+}
+
+/**
+ * Scatters stencil markings across a field whose neutral value is 0.5. Marks
+ * above the neutral are sprayed in a light paint, marks below it in a dark one,
+ * which is how the shader gets two ink colours out of one channel.
+ */
+function drawStencils(dst, size, rng, count) {
+  const K = size / 1024;
+  const px = Math.max(1, Math.round(3 * K));
+  for (let i = 0; i < count; i++) {
+    const pen = stencilPen(dst, size, rng.next() * size, rng.next() * size, (rng.next() * 4) | 0);
+    const light = rng.next() < 0.62;
+    const ink = light ? 0.5 + 0.42 * (0.7 + rng.next() * 0.3) : 0.5 - 0.42 * (0.7 + rng.next() * 0.3);
+    switch ((rng.next() * 7) | 0) {
+      case 0: {
+        const w = STENCIL_WORDS[(rng.next() * STENCIL_WORDS.length) | 0];
+        pen.text(w, 0, 0, px + ((rng.next() * 2) | 0), ink);
+        break;
+      }
+      case 1:
+        pen.chevron(0, 0, Math.round(28 * K), Math.round(46 * K), Math.round(8 * K), 3, Math.round(7 * K), ink);
+        break;
+      case 2:
+        pen.stripes(0, 0, Math.round(150 * K), Math.round(30 * K), Math.round(17 * K), ink);
+        break;
+      case 3:
+        pen.arrow(0, 0, Math.round(58 * K), Math.round(34 * K), ink);
+        break;
+      case 4:
+        pen.warning(0, 0, Math.round(52 * K), Math.round(6 * K), ink);
+        break;
+      case 5:
+        pen.barcode(0, 0, Math.round(92 * K), Math.round(26 * K), (rng.next() * 4096) | 0, ink);
+        pen.text(String(1000 + ((rng.next() * 8999) | 0)), 0, -Math.round(24 * K), px, ink);
+        break;
+      default:
+        pen.ring(0, 0, Math.round(26 * K), Math.round(5 * K), ink);
+        pen.text(String(10 + ((rng.next() * 89) | 0)), -Math.round(11 * K), -Math.round(12 * K), px, ink);
+        break;
+    }
+  }
+}
+
+/**
+ * The object-space surface-story field.
+ *
+ * Everything else in this file is projected through the model's authored UVs,
+ * which on a hard-surface robot are per-plate and therefore identical from one
+ * plate to the next. This map is instead projected triplanar in *object space*
+ * by the shader, so where a plate sits on the body decides how it has aged. It
+ * is the octave the plate bake structurally cannot supply: 2-10cm incident that
+ * varies across the character rather than across the tile.
+ *
+ *   R  paint fade — broad value break, sun and solvent
+ *   G  gravity streaks — coolant and oil running down under their own weight
+ *   B  oxidation blotch — where the bloom out of a panel gap is allowed to be
+ *   A  stencil markings — 0.5 neutral, above it light ink, below it dark
+ */
+function buildGrungeDetail(size) {
+  const rng = new Rng(0x5eed07);
+  const n = size * size;
+
+  // The band this map exists to supply is 2-10cm, which at this tiling is 15 to
+  // 80 texels. The low octaves only set which region of the body is generally
+  // tired; the weight sits deliberately on the middle of the spectrum.
+  const fadeA = fbm(size, { octaves: 4, freq: 5, gain: 0.66, seed: 601 });
+  const fadeB = fbm(size, { octaves: 3, freq: 16, gain: 0.62, seed: 607 });
+  const patch = worley(size, Math.max(5, size >> 7), 613);
+
+  const streak = new Float32Array(n);
+  drawDrips(streak, size, rng, {
+    count: Math.round(size * 0.16), maxLen: size * 0.5,
+    width: Math.max(2, size / 200), strength: 1.0,
+  });
+  const streakN = fbm(size, { octaves: 4, freq: 22, gain: 0.55, seed: 619, aspect: 9 });
+
+  const oxide = fbm(size, { octaves: 4, freq: 9, gain: 0.55, seed: 631, ridged: true });
+  const oxCells = worley(size, Math.max(7, size >> 6), 641);
+
+  const mark = new Float32Array(n).fill(0.5);
+  drawStencils(mark, size, rng, 14);
+  // One texel of softening: the strokes are rasterised hard, and a hard edge in
+  // a map that is then magnified across a 30cm plate crawls under the camera.
+  const markSoft = boxBlurWrap(mark, size, Math.max(1, Math.round(size / 700)));
+
+  const px = new Uint8Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    const blotch = smoothstep(0.34, 0.0, patch.f1[i]);
+    const fade = clamp01(0.5 + fadeA[i] * 1.0 + fadeB[i] * 0.8 - blotch * 0.3);
+    const run = clamp01(streak[i] * 1.0 + clamp01(streakN[i] * 1.9 + 0.08) * 0.75);
+    const ox = clamp01(clamp01(oxide[i] * 1.7 - 0.16) * (0.3 + smoothstep(0.5, 0.05, oxCells.f1[i]) * 1.25));
+    px[o] = fade * 255;
+    px[o + 1] = run * 255;
+    px[o + 2] = ox * 255;
+    px[o + 3] = clamp01(markSoft[i]) * 255;
+  }
+  return { size, px };
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +891,9 @@ function buildPlateDetail(size) {
   const bead = new Float32Array(n);
 
   const rects = buildPanelLayout(rng);
+  // Where a run of fluid is allowed to start: the lower lip of a louvre, the
+  // bottom groove of a plate. Each entry is [x, y, jitter] in texels.
+  const dripOrigins = [];
 
   for (const r of rects) {
     const px0 = r.x0 * size;
@@ -630,6 +907,16 @@ function buildPlateDetail(size) {
     const step = (r.z - 0.5) * 0.2;
     const id = (r.paint + r.variation * 0.92) / 3;
     const slat = Math.max(4, size * 0.013);
+
+    // Louvres weep; so does the seam under a plate that stands proud of its
+    // neighbour. Everything else stays dry, which is what keeps the streaks
+    // reading as drainage rather than as dirt sprayed at random.
+    if (r.vent || r.glow) {
+      const w = px1 - px0;
+      for (let k = 0; k < 3; k++) dripOrigins.push([px0 + (w * (k + 0.5)) / 3, py0 + gw, w * 0.16]);
+    } else if (r.z > 0.62 && r.area > 0.01) {
+      dripOrigins.push([lerp(px0, px1, 0.2 + r.variation * 0.6), py0 + gw, (px1 - px0) * 0.22]);
+    }
 
     for (let y = iy0; y < iy1; y++) {
       const fy = y + 0.5;
@@ -701,6 +988,10 @@ function buildPlateDetail(size) {
 
   // --- surface tooth, casting texture, macro dishing --------------------
   const tooth = fbm(size, { octaves: 3, freq: 64, gain: 0.55, seed: 11 });
+  // Rolling marks left in the plate stock: a few millimetres across, strongly
+  // directional. Far too fine to see as texture, but it breaks the specular
+  // into a grain, which is the difference between "steel plate" and "surface".
+  const machining = fbm(size, { octaves: 2, freq: 180, gain: 0.5, seed: 17, aspect: 14 });
   const casting = fbm(size, { octaves: 4, freq: 12, gain: 0.5, seed: 23 });
   const macro = fbm(size, { octaves: 3, freq: 4, gain: 0.5, seed: 37 });
   const blotch = worley(size, Math.max(8, size >> 5), 53);
@@ -720,8 +1011,9 @@ function buildPlateDetail(size) {
 
   const drips = new Float32Array(n);
   drawDrips(drips, size, rng, {
-    count: Math.round(size * 0.045), maxLen: size * 0.34,
+    count: Math.max(8, dripOrigins.length), maxLen: size * 0.34,
     width: Math.max(1.8, size / 300), strength: 0.85,
+    origins: dripOrigins.length ? dripOrigins : null,
   });
 
   // --- height ------------------------------------------------------------
@@ -736,9 +1028,10 @@ function buildPlateDetail(size) {
       beadH +
       macro[i] * 0.05 +
       casting[i] * 0.022 +
-      tooth[i] * 0.008 -
-      microScratch[i] * 0.035 -
-      heroScratch[i] * 0.085;
+      tooth[i] * 0.012 +
+      machining[i] * 0.009 -
+      microScratch[i] * 0.05 -
+      heroScratch[i] * 0.1;
   }
 
   const ao = aoFromHeight(height, size, [2, 7, 24], [0.28, 0.4, 0.32], 3.4);
@@ -783,8 +1076,25 @@ function buildPlateDetail(size) {
   for (let i = 0; i < n; i++) {
     const cavity = clamp01((1 - ao[i]) * 1.5);
     const blot = clamp01(rust[i] * 1.2 - 0.15);
-    grime[i] = clamp01(cavity * 0.6 + groove[i] * 0.42 + drips[i] * 0.9 + blot * 0.2 * (0.4 + cavity));
+    grime[i] = clamp01(cavity * 0.68 + groove[i] * 0.5 + drips[i] * 0.95 + blot * 0.24 * (0.4 + cavity));
     dust[i] = clamp01(up[i] * 1.9 * (0.5 + casting[i] * 0.5) * ao[i]);
+  }
+
+  // --- panel-edge proximity, heat halo -----------------------------------
+  // Two broad fields the shader needs but cannot derive: how close a texel is
+  // to a panel gap (oxidation blooms out of gaps, never out of open field) and
+  // how close it is to something hot (temper colours ring a vent). Both are
+  // blurs of a mask already computed above, so they cost one pass each.
+  const grooveWide = boxBlurWrap(groove, size, Math.max(3, Math.round(size * 0.02)));
+  const glowNear = boxBlurWrap(glow, size, Math.max(2, Math.round(size * 0.012)));
+  const glowFar = boxBlurWrap(glow, size, Math.max(5, Math.round(size * 0.045)));
+  // Quantised, because the only consumer writes it straight into a byte channel
+  // and this array is retained for the life of the process.
+  const edgeProx = new Uint8Array(n);
+  const heat = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    edgeProx[i] = clamp01(grooveWide[i] * 3.2) * (1 - groove[i] * 0.55) * 255;
+    heat[i] = clamp01(glowNear[i] * 2.6 + glowFar[i] * 2.2) * (1 - glow[i] * 0.8);
   }
 
   // --- packed byte masks retained for per-character albedo ---------------
@@ -814,7 +1124,7 @@ function buildPlateDetail(size) {
     const s = scratch[i];
     const g = grime[i];
     const d = dust[i];
-    let rough = lerp(0.38 + casting[i] * 0.05 + tooth[i] * 0.03, 0.46, c);
+    let rough = lerp(0.38 + casting[i] * 0.05 + tooth[i] * 0.03 + machining[i] * 0.05, 0.46, c);
     rough = lerp(rough, 0.16, s * 0.8);
     rough = lerp(rough, 0.82, g * 0.75);
     rough = lerp(rough, 0.9, d * 0.45);
@@ -824,7 +1134,9 @@ function buildPlateDetail(size) {
     ormPainted[o] = clamp01(ao[i] * (1 - g * 0.25)) * 255;
     ormPainted[o + 1] = clamp01(rough) * 255;
     ormPainted[o + 2] = clamp01(metal) * 255;
-    ormPainted[o + 3] = 255; // sheen roughness, unused by paint
+    // Paint has no sheen, so the channel three would read as sheen roughness is
+    // free and carries the heat halo for the story shader instead.
+    ormPainted[o + 3] = heat[i] * 255;
   }
 
   // --- ORM, bare/worn ---------------------------------------------------
@@ -839,7 +1151,7 @@ function buildPlateDetail(size) {
     ormWorn[o] = ao[i] * 255;
     ormWorn[o + 1] = clamp01(rough) * 255;
     ormWorn[o + 2] = clamp01(1 - g * 0.75) * 255;
-    ormWorn[o + 3] = 255;
+    ormWorn[o + 3] = heat[i] * 255;
   }
 
   // --- clearcoat: lacquer survives only where the paint does -------------
@@ -863,7 +1175,7 @@ function buildPlateDetail(size) {
     emPx[o + 3] = 255;
   }
 
-  return { size, maskA, maskB, normalPx, ormPainted, ormWorn, ccPx, emPx };
+  return { size, maskA, maskB, edgeProx, normalPx, ormPainted, ormWorn, ccPx, emPx };
 }
 
 /**
@@ -1220,7 +1532,7 @@ const V_DUST = 0.86;                 // settled pale grit
  * @param {number} wearFloor baseline wear applied everywhere, for battle-stripped plate
  */
 function composePlateAlbedo(detail, wear, wearFloor = 0) {
-  const { size, maskA, maskB } = detail;
+  const { size, maskA, maskB, edgeProx } = detail;
   const n = size * size;
   const px = new Uint8Array(n * 4);
 
@@ -1249,9 +1561,12 @@ function composePlateAlbedo(detail, wear, wearFloor = 0) {
 
     // Layered edge wear: paint -> thin primer ring -> bare steel.
     const w = clamp01(chip * wear + wearFloor * (0.55 + grm * 0.45));
-    const primer = smoothstep(0.15, 0.6, w) * (1 - smoothstep(0.6, 0.95, w));
+    const primer = smoothstep(0.08, 0.55, w) * (1 - smoothstep(0.58, 0.94, w));
     v = lerp(v, V_BARE, w);
-    v = lerp(v, v * 0.58, primer * 0.7);
+    // The dark primer ring is what makes a chip read as a chip and not as a
+    // highlight: bare steel is only legible when something separates it from
+    // the paint it broke out of.
+    v = lerp(v, v * 0.42, primer * 0.9);
 
     v = lerp(v, V_CUT, clamp01(scr * (0.34 + wear * 0.34)));
     v = lerp(v, v * 0.25 + V_GRIME, clamp01(grm * 0.9));
@@ -1263,7 +1578,10 @@ function composePlateAlbedo(detail, wear, wearFloor = 0) {
     px[o] = b;
     px[o + 1] = b;
     px[o + 2] = b;
-    px[o + 3] = 255;
+    // Alpha is not opacity here — these materials never blend. It carries panel
+    // edge proximity for the story shader, which is the only spare channel on
+    // the albedo and the cheapest possible way to get the mask to the GPU.
+    px[o + 3] = edgeProx[i];
   }
   return px;
 }
@@ -1312,6 +1630,7 @@ function getShared(sizes, maxAniso) {
   const carbon = cachedDetail(`carbon:${sizes.carbon}`, () => buildCarbonDetail(sizes.carbon));
   const peel = cachedDetail(`peel:${sizes.peel}`, () => buildOrangePeel(sizes.peel));
   const glass = cachedDetail(`glass:${sizes.soft}`, () => buildGlassDetail(sizes.soft));
+  const grunge = cachedDetail(`grunge:${sizes.grunge}`, () => buildGrungeDetail(sizes.grunge));
 
   /**
    * Each role is stored at the resolution its content needs, not at the
@@ -1326,8 +1645,8 @@ function getShared(sizes, maxAniso) {
 
   s = {
     detail: { plate, metal, soft, carbon },
-    plateAlbedo: t(composePlateAlbedo(plate, 1.0), plate.size, 1, { srgb: true }),
-    plateAlbedoTrim: t(composePlateAlbedo(plate, 0.8), plate.size, 2, { srgb: true }),
+    plateAlbedo: t(composePlateAlbedo(plate, 1.35, 0.06), plate.size, 1, { srgb: true }),
+    plateAlbedoTrim: t(composePlateAlbedo(plate, 1.0), plate.size, 2, { srgb: true }),
     plateAlbedoWorn: t(composePlateAlbedo(plate, 2.4, 0.45), plate.size, 2, { srgb: true }),
     plateNormal: t(plate.normalPx, plate.size, 1),
     plateOrmPainted: t(plate.ormPainted, plate.size, 1),
@@ -1348,9 +1667,238 @@ function getShared(sizes, maxAniso) {
     peelNormal: t(peel.normalPx, peel.size, 1, { repeat: 3 }),
     glassNormal: t(glass.normalPx, glass.size, 1),
     glassOrm: t(glass.orm, glass.size, 1),
+    // Sampled triplanar in object space, never through the model UVs, so it must
+    // keep its full resolution: it is magnified over ~1.3m of body, not tiled.
+    grunge: t(grunge.px, grunge.size, 1, { maxAniso: 4 }),
   };
   SHARED_CACHE.set(key, s);
   return s;
+}
+
+// ---------------------------------------------------------------------------
+// Surface story
+//
+// The plate bake is projected through the model's authored UVs. On a robot
+// assembled from rigid plates those UVs are per-plate and origin-centred, so
+// every plate samples very nearly the same patch of the same texture: forty
+// panels wearing one identical surface. No amount of detail in that bake can
+// fix it, because the problem is the projection, not the content.
+//
+// So the octave that carries the character's history — paint fade, coolant
+// runs, oxidation creeping out of the panel gaps, heat staining round the
+// vents, sprayed unit markings — is sampled triplanar in *object space*
+// instead. Where a plate sits on the body then decides how it has aged, the
+// story crosses panel boundaries the way real weathering does, and the tile is
+// magnified over a metre of body so its 2-10cm features land exactly in the
+// band a closeup reads.
+//
+// It rides on the stock physical shader through three small injections, and it
+// costs three texture fetches; every mask it needs from the plate bake is
+// already in a channel that was being uploaded as a constant 255.
+// ---------------------------------------------------------------------------
+
+const STORY_PARS_VERTEX = /* glsl */`
+varying vec3 vKbObjPos;
+varying vec3 vKbObjNrm;
+`;
+
+const STORY_PARS_FRAGMENT = /* glsl */`
+uniform sampler2D kbGrungeMap;
+uniform float kbGrungeScale;
+uniform vec4 kbStory;      // grime, oxide, fade, marking
+uniform vec4 kbStoryB;     // bare-metal neutralisation, heat, dust, plate masks
+uniform vec3 kbSootColor;
+uniform vec3 kbOxideColor;
+uniform vec3 kbHeatColor;
+uniform vec3 kbSteelColor;
+uniform vec3 kbInkLight;
+uniform vec3 kbInkDark;
+varying vec3 vKbObjPos;
+varying vec3 vKbObjNrm;
+
+// The three projections are flipped to face outward, or every stencil on the
+// far half of the body would come out mirrored — the one artefact that gives a
+// triplanar projection away instantly. V stays object +Y on the side planes so
+// the streak channel still runs downhill.
+vec4 kbTriplanar( sampler2D t, vec3 p, vec3 n, vec3 w, float s ) {
+	vec3 f = vec3( n.x < 0.0 ? 1.0 : -1.0, n.y < 0.0 ? 1.0 : -1.0, n.z < 0.0 ? -1.0 : 1.0 );
+	return texture2D( t, vec2( p.z * f.x, p.y ) * s ) * w.x
+		+ texture2D( t, vec2( p.x, p.z * f.y ) * s ) * w.y
+		+ texture2D( t, vec2( p.x * f.z, p.y ) * s ) * w.z;
+}
+`;
+
+const STORY_BODY_FRAGMENT = /* glsl */`
+vec3 kbN = normalize( vKbObjNrm );
+vec3 kbA = abs( kbN );
+vec3 kbW = kbA * kbA * kbA;
+kbW /= max( kbW.x + kbW.y + kbW.z, 1e-4 );
+vec4 kbG = kbTriplanar( kbGrungeMap, vKbObjPos, kbN, kbW, kbGrungeScale );
+
+// Masks the plate bake already carries in channels three would otherwise
+// ignore: albedo alpha is panel-edge proximity, ORM alpha is the heat halo.
+float kbEdge = 0.4;
+float kbHeatM = 0.0;
+float kbCavity = 0.0;
+#ifdef USE_MAP
+	kbEdge = mix( kbEdge, sampledDiffuseColor.a, kbStoryB.w );
+#endif
+#ifdef USE_ROUGHNESSMAP
+	kbCavity = clamp( ( 1.0 - texelRoughness.r ) * 1.6, 0.0, 1.0 );
+	kbHeatM = texelRoughness.a * kbStoryB.w;
+#endif
+diffuseColor.a = 1.0;
+
+float kbUp = clamp( kbN.y, 0.0, 1.0 );
+float kbDown = clamp( - kbN.y, 0.0, 1.0 );
+float kbSide = 1.0 - kbA.y;
+
+// Where the ORM says the paint has failed, the diffuse is still the paint
+// colour, because the bake is hue-neutral and tinted per character. Steel is
+// not orange: pull the exposed metal back to a neutral alloy so an edge chip
+// reads as an edge chip instead of as a bright spot of the same paint.
+float kbBare = clamp( metalnessFactor * kbStoryB.x, 0.0, 1.0 );
+float kbLum = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
+diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * ( 0.3 + 1.5 * kbLum ), kbBare );
+
+// Paint fade. The broad value break that stops forty plates reading as one
+// sprayed batch, and the single term that does most of the work here. The
+// gloss break matters more than the value break: under a hot key light a
+// change in roughness is far more legible than a change in albedo, and a
+// weathered lacquer varies in gloss long before it varies in colour.
+diffuseColor.rgb *= mix( 1.0, 0.44 + 0.78 * kbG.r, kbStory.z );
+roughnessFactor = clamp( roughnessFactor + ( 0.55 - kbG.r ) * 0.6 * kbStory.z, 0.04, 1.0 );
+
+// Oxidation, gated on proximity to a panel gap: rust starts at an edge where
+// water sits, never in the middle of an unbroken plate.
+float kbOx = smoothstep( 0.26, 0.78, kbG.b * ( 0.35 + 1.3 * kbEdge ) ) * kbStory.y;
+diffuseColor.rgb = mix( diffuseColor.rgb, kbOxideColor * ( 0.5 + 0.9 * kbG.r ), kbOx );
+roughnessFactor = mix( roughnessFactor, 0.94, kbOx * 0.85 );
+metalnessFactor = mix( metalnessFactor, 0.08, kbOx * 0.8 );
+
+// Grime: pooled in the cavities, run down the vertical faces under gravity,
+// settled thickest where a seam has been leaking, sooty on the undersides.
+float kbRun = kbG.g * kbSide * ( 0.45 + 1.1 * kbEdge );
+float kbGrime = clamp( kbCavity * 1.1 + kbRun + kbDown * kbG.r * 0.6, 0.0, 1.0 ) * kbStory.x;
+diffuseColor.rgb = mix( diffuseColor.rgb, kbSootColor * ( 0.45 + 0.8 * kbG.r ), kbGrime * 0.9 );
+roughnessFactor = mix( roughnessFactor, 0.92, kbGrime * 0.78 );
+metalnessFactor *= 1.0 - kbGrime * 0.5;
+
+// Heat staining ringing every vent and light strip.
+float kbHeat = clamp( kbHeatM * ( 0.5 + 0.75 * kbG.r ) * kbStoryB.y, 0.0, 1.0 );
+diffuseColor.rgb = mix( diffuseColor.rgb, kbHeatColor, kbHeat * 0.85 );
+roughnessFactor = mix( roughnessFactor, 0.44, kbHeat * 0.5 );
+
+// Pale grit on the up-facing lips, which is what separates a top surface from
+// a side surface when the key light is doing nothing to help.
+float kbDust = kbUp * smoothstep( 0.42, 0.95, kbG.r ) * kbStoryB.z;
+diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.20, 0.19, 0.17 ), kbDust * 0.55 );
+roughnessFactor = mix( roughnessFactor, 0.96, kbDust * 0.6 );
+
+// Sprayed markings, worn back by everything that landed on top of them.
+float kbInkL = smoothstep( 0.56, 0.78, kbG.a );
+float kbInkD = smoothstep( 0.44, 0.22, kbG.a );
+float kbMark = clamp( ( kbInkL + kbInkD ) * kbStory.w * ( 1.0 - kbGrime * 0.55 ) * ( 1.0 - kbOx * 0.85 ) * ( 1.0 - kbBare * 0.8 ), 0.0, 1.0 );
+diffuseColor.rgb = mix( diffuseColor.rgb, kbInkL > kbInkD ? kbInkLight : kbInkDark, kbMark );
+roughnessFactor = mix( roughnessFactor, 0.6, kbMark );
+metalnessFactor *= 1.0 - kbMark * 0.9;
+`;
+
+const STORY_CLEARCOAT_FRAGMENT = /* glsl */`
+#ifdef USE_CLEARCOAT
+	// A lacquer that has been through what this plate has been through does not
+	// survive evenly, and the patchiness of the coat is most of what reads: a
+	// dulled patch next to a glossy one says "weathered" louder than any amount
+	// of albedo variation can, because the specular carries far more energy.
+	material.clearcoat = saturate( material.clearcoat * ( 0.34 + 0.78 * kbG.r ) * ( 1.0 - kbGrime * 0.82 ) * ( 1.0 - kbOx * 0.95 ) * ( 1.0 - kbMark * 0.55 ) );
+	material.clearcoatRoughness = clamp( material.clearcoatRoughness + ( 0.55 - kbG.r ) * 0.45 + kbGrime * 0.35 + kbOx * 0.45 + kbDust * 0.3, 0.0525, 1.0 );
+#endif
+`;
+
+/** Colours the story layer paints with, in sRGB; every one is a real substance. */
+const STORY_INK = {
+  soot: 0x151210,   // carbon and oil
+  oxide: 0x6b3418,  // iron oxide
+  heat: 0x4b382c,   // scorched steel round a vent
+  steel: 0xc2c6cb,  // bare cast alloy under failed paint
+  light: 0xd8dbdd,  // stencil paint
+  dark: 0x14161a,
+};
+
+const STORY_DEFAULTS = {
+  scale: 0.8,     // grunge tiles per metre of object space
+  grime: 1,
+  oxide: 1,
+  fade: 1,
+  marking: 1,
+  bare: 0.75,
+  heat: 1,
+  dust: 0.6,
+  plateMasks: true,
+};
+
+/**
+ * `MeshPhysicalMaterial` with the surface-story layer welded on.
+ *
+ * It exists as a subclass rather than a bare `onBeforeCompile` assignment
+ * because `RobotBuilder` clones these materials to re-tint them, and
+ * `Material.copy` does not carry an own-property compile hook across. On the
+ * prototype it survives any number of clones, and `copy` brings the per-material
+ * story settings with it.
+ */
+class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
+  /**
+   * @param {Object} [params] standard MeshPhysicalMaterial parameters, plus
+   *   `story`: a partial override of {@link STORY_DEFAULTS} whose `grunge` field
+   *   carries the shared object-space grunge texture. Without it the material
+   *   compiles as a stock physical material.
+   */
+  constructor(params = {}) {
+    const { story, ...rest } = params;
+    super(rest);
+    this.kbStory = { ...STORY_DEFAULTS, grunge: null, ...(story || {}) };
+  }
+
+  copy(source) {
+    super.copy(source);
+    if (source.kbStory) this.kbStory = { ...source.kbStory };
+    return this;
+  }
+
+  /**
+   * A material whose grunge map never arrived leaves the shader untouched, so
+   * it must not be allowed to share a program with one that patched it — that
+   * would bind a story shader to a material carrying none of its uniforms.
+   */
+  customProgramCacheKey() {
+    return this.kbStory?.grunge ? 'kb-story' : 'kb-story-off';
+  }
+
+  onBeforeCompile(shader) {
+    const s = this.kbStory;
+    if (!s || !s.grunge) return;
+    const u = shader.uniforms;
+    u.kbGrungeMap = { value: s.grunge };
+    u.kbGrungeScale = { value: s.scale };
+    u.kbStory = { value: new THREE.Vector4(s.grime, s.oxide, s.fade, s.marking) };
+    u.kbStoryB = { value: new THREE.Vector4(s.bare, s.heat, s.dust, s.plateMasks ? 1 : 0) };
+    u.kbSootColor = { value: new THREE.Color(STORY_INK.soot) };
+    u.kbOxideColor = { value: new THREE.Color(STORY_INK.oxide) };
+    u.kbHeatColor = { value: new THREE.Color(STORY_INK.heat) };
+    u.kbSteelColor = { value: new THREE.Color(STORY_INK.steel) };
+    u.kbInkLight = { value: new THREE.Color(STORY_INK.light) };
+    u.kbInkDark = { value: new THREE.Color(STORY_INK.dark) };
+
+    // Object space, captured before skinning, so the weathering is welded to
+    // the model the way a baked texture would be and never swims under motion.
+    shader.vertexShader = STORY_PARS_VERTEX + shader.vertexShader
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n\tvKbObjNrm = objectNormal;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvKbObjPos = position;');
+
+    shader.fragmentShader = STORY_PARS_FRAGMENT + shader.fragmentShader
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\n${STORY_BODY_FRAGMENT}`)
+      .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>\n${STORY_CLEARCOAT_FRAGMENT}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1393,7 +1941,7 @@ function paletteKey(p, sizes) {
 
 function resolveSizes(scale) {
   const q = (n) => Math.max(128, Math.round((n * scale) / 128) * 128);
-  return { plate: q(1024), metal: q(512), soft: q(512), carbon: q(512), peel: q(256) };
+  return { plate: q(1024), metal: q(512), soft: q(512), carbon: q(512), peel: q(256), grunge: q(1024) };
 }
 
 /**
@@ -1449,8 +1997,14 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
   const cableBase = linearColor(alloy([0.017, 0.017, 0.019], accent, 0.3));
 
   // --- materials ---------------------------------------------------------
-  const armor = new THREE.MeshPhysicalMaterial({
+  // How hard the object-space story runs on each surface is characterisation,
+  // not decoration: painted armour carries the most history, a hydraulic rod
+  // that slides through a wiper on every step carries almost none.
+  const story = (over) => ({ grunge: shared.grunge, ...over });
+
+  const armor = new StoryPhysicalMaterial({
     name: 'kb.armor',
+    story: story({}),
     color: paintPrimary,
     map: armorAlbedo,
     normalMap: shared.plateNormal,
@@ -1475,8 +2029,9 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     envMapIntensity: 1,
   });
 
-  const trimMat = new THREE.MeshPhysicalMaterial({
+  const trimMat = new StoryPhysicalMaterial({
     name: 'kb.trim',
+    story: story({ marking: 0.55, oxide: 0.8, fade: 1.1 }),
     color: paintAccent,
     map: trimAlbedo,
     normalMap: shared.plateNormal,
@@ -1499,8 +2054,9 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     envMapIntensity: 1.05,
   });
 
-  const worn = new THREE.MeshPhysicalMaterial({
+  const worn = new StoryPhysicalMaterial({
     name: 'kb.worn',
+    story: story({ grime: 1.25, oxide: 1.4, bare: 0.3, marking: 0.4, dust: 0.8 }),
     color: wornSteel,
     map: wornAlbedo,
     normalMap: shared.plateNormal,
@@ -1517,8 +2073,11 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     envMapIntensity: 1.1,
   });
 
-  const darkMetal = new THREE.MeshPhysicalMaterial({
+  const darkMetal = new StoryPhysicalMaterial({
     name: 'kb.darkMetal',
+    // The frame is unpainted, so there is no paint to fade and no stencil to
+    // spray: it only collects what runs down onto it out of the armour above.
+    story: story({ plateMasks: false, fade: 0.35, marking: 0, oxide: 0.7, bare: 0, grime: 1.15, heat: 0, dust: 0.5 }),
     color: gunmetal,
     map: shared.metalMod,
     normalMap: shared.metalNormal,
@@ -1571,8 +2130,11 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     envMapIntensity: 1.4,
   });
 
-  const carbon = new THREE.MeshPhysicalMaterial({
+  const carbon = new StoryPhysicalMaterial({
     name: 'kb.carbon',
+    // Lacquered weave sheds almost everything; what it keeps is dust and a
+    // little soot in the cavities, which is exactly what sells the lacquer.
+    story: story({ plateMasks: false, fade: 0.25, marking: 0, oxide: 0, bare: 0, grime: 0.5, heat: 0, dust: 0.35 }),
     map: shared.carbonAlbedo,
     normalMap: shared.carbonNormal,
     normalScale: new THREE.Vector2(1.0, 1.0),
@@ -1731,6 +2293,7 @@ export function disposeSharedTextures() {
   for (const tex of SHARED_TEXTURES) tex.dispose();
   SHARED_TEXTURES.clear();
   SHARED_CACHE.clear();
+  MARKING_CACHE.clear();
   DETAIL_CACHE.clear();
 }
 
@@ -1808,6 +2371,166 @@ export function makeFloorMaterial(renderer, opts = {}) {
   });
   mat.userData.ownedTextures = [normal, orm];
   return mat;
+}
+
+/**
+ * Cell index -> marking, for {@link makeMarkingAtlas}. The order is fixed and
+ * matches `RobotBuilder`'s decal enum, so a quad UV'd into cell `n` gets the
+ * marking named here. Cells run left to right, top to bottom, 4x4.
+ *
+ * @type {Readonly<Record<string, number>>}
+ */
+export const MARKINGS = Object.freeze({
+  HAZARD: 0, SERIAL: 1, TRIANGLE: 2, ARROW: 3,
+  BARCODE: 4, ROUNDEL: 5, CHEVRON: 6, GAUGE: 7,
+  GRID: 8, NAMEPLATE: 9, RIVETS: 10, CAUTION: 11,
+  UNIT: 12, NOSTEP: 13, LIFT: 14, ARROWS: 15,
+});
+
+/** Draws one atlas cell into the greyscale ink field. Cell space is 0..1 square. */
+function drawMarkingCell(ink, size, cell, rng) {
+  const C = size >> 2;
+  const ox = (cell % 4) * C;
+  // Cell 0 is the top-left of the atlas, and V runs up the texture.
+  const oy = size - (Math.floor(cell / 4) + 1) * C;
+  const pen = stencilPen(ink, size, ox, oy, 0);
+  const k = C / 256;
+  const R = (v) => Math.round(v * k);
+  const px = Math.max(1, R(6));
+  switch (cell) {
+    case MARKINGS.HAZARD:
+      pen.stripes(R(10), R(88), R(236), R(80), R(46), 1);
+      break;
+    case MARKINGS.SERIAL:
+      pen.text('KB', R(18), R(150), px, 1);
+      pen.text(`${100 + (rng.int(899) || 0)}-${10 + (rng.int(89) || 0)}`, R(18), R(66), px, 1);
+      break;
+    case MARKINGS.TRIANGLE:
+      pen.warning(R(128), R(40), R(170), R(16), 1);
+      break;
+    case MARKINGS.ARROW:
+      pen.arrow(R(30), R(128), R(150), R(96), 1);
+      break;
+    case MARKINGS.BARCODE:
+      pen.barcode(R(20), R(120), R(216), R(90), 17, 1);
+      pen.text(String(100000 + rng.int(899999)), R(20), R(60), px, 1);
+      break;
+    case MARKINGS.ROUNDEL:
+      pen.ring(R(128), R(128), R(104), R(16), 1);
+      pen.ring(R(128), R(128), R(58), R(46), 1);
+      break;
+    case MARKINGS.GAUGE:
+      pen.ring(R(128), R(128), R(110), R(12), 1);
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        pen.rect(R(128) + Math.round(Math.cos(a) * R(86)) - R(6), R(128) + Math.round(Math.sin(a) * R(86)) - R(6), R(12), R(12), 1);
+      }
+      break;
+    case MARKINGS.GRID:
+      for (let i = 0; i <= 4; i++) {
+        pen.rect(R(16), R(16) + i * R(56), R(224), R(6), 1);
+        pen.rect(R(16) + i * R(56), R(16), R(6), R(224), 1);
+      }
+      break;
+    case MARKINGS.NAMEPLATE:
+      pen.rect(R(12), R(96), R(232), R(6), 1);
+      pen.rect(R(12), R(158), R(232), R(6), 1);
+      pen.text('KNOCKBOTS', R(20), R(112), Math.max(1, R(4)), 1);
+      break;
+    case MARKINGS.RIVETS:
+      for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) pen.ring(R(40) + i * R(58), R(40) + j * R(58), R(14), R(5), 1);
+      break;
+    case MARKINGS.CAUTION:
+      pen.text('CAUTION', R(14), R(140), Math.max(1, R(5)), 1);
+      pen.stripes(R(14), R(80), R(228), R(40), R(30), 1);
+      break;
+    case MARKINGS.UNIT:
+      pen.text(String(10 + rng.int(89)), R(60), R(96), Math.max(1, R(18)), 1);
+      break;
+    case MARKINGS.NOSTEP:
+      pen.text('NO', R(70), R(148), px, 1);
+      pen.text('STEP', R(34), R(72), px, 1);
+      break;
+    case MARKINGS.LIFT:
+      pen.text('LIFT', R(48), R(150), px, 1);
+      pen.arrow(R(48), R(80), R(110), R(70), 1);
+      break;
+    default:
+      pen.chevron(R(24), R(80), R(56), R(96), R(18), 3, R(14), 1);
+      break;
+  }
+}
+
+const MARKING_CACHE = new Map();
+
+/**
+ * A 4x4 atlas of stencil markings — unit numbers, hazard chevrons, arrows,
+ * warning triangles, roundels — for `RobotBuilder` to place as decal quads.
+ * Index the cells through {@link MARKINGS}; cell `n` occupies
+ * `u = [n%4, n%4+1] / 4`, `v = [3 - floor(n/4), 4 - floor(n/4)] / 4`, and a
+ * consumer should inset a texel or two so bilinear filtering cannot bleed
+ * between neighbours.
+ *
+ * The atlas is RGBA with a real alpha channel, so it belongs on a transparent,
+ * depth-write-off decal quad laid a millimetre proud of its plate. RGB is the
+ * ink colour and is palette-driven; alpha is coverage.
+ *
+ * @param {THREE.WebGLRenderer|null} renderer used only for the anisotropy cap
+ * @param {{accent?:number|string, trim?:number|string}} [palette]
+ * @param {{resolution?:number}} [opts] scales the atlas, 1 = 1024 (256 per cell)
+ * @returns {THREE.DataTexture} cached and shared; do not dispose it directly
+ */
+export function makeMarkingAtlas(renderer, palette = DEFAULT_PALETTE, opts = {}) {
+  const p = { ...DEFAULT_PALETTE, ...(palette || {}) };
+  const size = Math.max(256, Math.round((1024 * (opts.resolution ?? 1)) / 256) * 256);
+  const key = `${size}_${(p.accent >>> 0).toString(16)}_${(p.trim >>> 0).toString(16)}`;
+  const hit = MARKING_CACHE.get(key);
+  if (hit) return hit;
+
+  let maxAniso = 8;
+  try {
+    const cap = renderer?.capabilities?.getMaxAnisotropy?.();
+    if (Number.isFinite(cap) && cap > 0) maxAniso = Math.min(16, cap);
+  } catch { /* headless: default */ }
+
+  const n = size * size;
+  const ink = new Float32Array(n);
+  const rng = new Rng(0x5eed09);
+  for (let cell = 0; cell < 16; cell++) drawMarkingCell(ink, size, cell, rng);
+  // One texel of softening: a decal is magnified far harder than a tiling map,
+  // and a raw rasterised edge crawls badly under a moving camera.
+  const soft = boxBlurWrap(ink, size, Math.max(1, Math.round(size / 900)));
+
+  // Hazard and caution are painted in the character's accent; everything else
+  // is stencil paint, so the markings still read as one applied system.
+  const accent = hexToLinear(p.accent);
+  const trim = hexToLinear(p.trim);
+  const grit = fbm(size, { octaves: 3, freq: 40, gain: 0.5, seed: 733 });
+  const px = new Uint8Array(n * 4);
+  const cellsInAccent = new Set([MARKINGS.HAZARD, MARKINGS.CAUTION, MARKINGS.TRIANGLE]);
+  const C = size >> 2;
+  for (let y = 0; y < size; y++) {
+    const cy = 3 - ((y / C) | 0);
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const cell = cy * 4 + ((x / C) | 0);
+      const c = cellsInAccent.has(cell) ? accent : trim;
+      // The spray is thin where the grit says so, which is what stops a decal
+      // reading as a sticker.
+      const a = clamp01(soft[i] * (0.72 + grit[i] * 0.85));
+      const o = i * 4;
+      px[o] = encodeSrgb(c[0]);
+      px[o + 1] = encodeSrgb(c[1]);
+      px[o + 2] = encodeSrgb(c[2]);
+      px[o + 3] = a * 255;
+    }
+  }
+
+  const tex = markShared(makeTexture(px, size, { srgb: true, maxAniso }));
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.needsUpdate = true;
+  MARKING_CACHE.set(key, tex);
+  return tex;
 }
 
 /**

@@ -329,6 +329,199 @@ export function chamferCyl(radius, height, segments = 22, chamfer = 0.008, opts 
   ], segments, opts);
 }
 
+/**
+ * Rounded-rectangle cross-section with an exact outward normal per sample.
+ *
+ * Sampling by quadrant rather than by uniform angle is the whole point: every
+ * sample on a straight run carries the same normal, so the swept surface shades
+ * as one plane, while each sample on a corner arc carries its own, so the corner
+ * shades smoothly. Planar faces meeting radiused corners is the difference
+ * between a machined part and a box, and no amount of chamfering a cuboid gets
+ * there.
+ *
+ * @param {number} hw half-width (X)
+ * @param {number} hd half-depth (Z)
+ * @param {number} radius corner radius in metres
+ * @param {number} perQuad arc samples per quadrant
+ * @returns {Array<{x:number,z:number,nx:number,nz:number}>} counter-clockwise
+ */
+function roundedRectRing(hw, hd, radius, perQuad) {
+  const rr = Math.max(1e-4, Math.min(radius, hw * 0.98, hd * 0.98));
+  const ring = [];
+  for (let q = 0; q < 4; q++) {
+    const sx = (q === 0 || q === 3) ? 1 : -1;
+    const sz = (q === 0 || q === 1) ? 1 : -1;
+    const cx = sx * (hw - rr), cz = sz * (hd - rr);
+    for (let i = 0; i <= perQuad; i++) {
+      const a = (q + i / perQuad) * Math.PI * 0.5;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      ring.push({ x: cx + ca * rr, z: cz + sa * rr, nx: ca, nz: sa });
+    }
+  }
+  return ring;
+}
+
+/**
+ * Hull lofted through a stack of rounded-rectangle stations.
+ *
+ * This is the primary mass primitive and it exists because `bevelBox` cannot
+ * make a *volume*: stacking cuboids gives stacked cuboids however carefully they
+ * are tapered, and the critic reads that instantly. A loft can taper, shift,
+ * roll and swell between stations, so one call produces a torso that narrows at
+ * the waist and flares at the ribs, a thigh that is oval at the hip and
+ * rectangular at the knee, or a pauldron that sweeps.
+ *
+ * Normals are analytic rather than averaged: the 2D ring normal is known
+ * exactly, the segment rise is measured, and the two are crossed. Corners
+ * between stations stay crisp unless the station is flagged `smooth`.
+ *
+ * @param {Array<{y:number, w:number, d:number, x?:number, z?:number,
+ *   round?:number, roll?:number, smooth?:boolean}>} stations bottom-to-top;
+ *   `round` is the corner radius as a fraction of the smaller half-extent
+ * @param {{perQuad?:number, capBottom?:boolean, capTop?:boolean, uv?:number}} [opts]
+ * @returns {THREE.BufferGeometry}
+ */
+export function loftHull(stations, opts = {}) {
+  const { perQuad = 3, capBottom = true, capTop = true, uv = 1.4 } = opts;
+  const s = new Surf();
+  const n = stations.length;
+  if (n < 2) return s.geometry();
+
+  const rings = stations.map((st) => {
+    const hw = Math.max(1e-4, st.w * 0.5), hd = Math.max(1e-4, st.d * 0.5);
+    const rr = (st.round ?? 0.30) * Math.min(hw, hd);
+    const roll = st.roll ?? 0;
+    const c = Math.cos(roll), si = Math.sin(roll);
+    const ox = st.x ?? 0, oz = st.z ?? 0;
+    return roundedRectRing(hw, hd, rr, perQuad).map((p) => ({
+      p: [p.x * c - p.z * si + ox, st.y, p.x * si + p.z * c + oz],
+      n: [p.nx * c - p.nz * si, p.nx * si + p.nz * c],
+    }));
+  });
+
+  const m = rings[0].length;
+
+  // one 3D normal per (segment, ring sample): the exact 2D normal crossed with
+  // the segment's own rise, which is what carries the taper into the shading
+  const segN = [];
+  for (let j = 0; j < n - 1; j++) {
+    const row = [];
+    for (let i = 0; i < m; i++) {
+      const a = rings[j][i], b = rings[j + 1][i];
+      const up = [b.p[0] - a.p[0], b.p[1] - a.p[1], b.p[2] - a.p[2]];
+      const around = [-a.n[1], 0, a.n[0]];
+      let nx = up[1] * around[2] - up[2] * around[1];
+      let ny = up[2] * around[0] - up[0] * around[2];
+      let nz = up[0] * around[1] - up[1] * around[0];
+      const l = Math.hypot(nx, ny, nz);
+      if (l < 1e-9) { nx = a.n[0]; ny = 0; nz = a.n[1]; } else { nx /= l; ny /= l; nz /= l; }
+      if (nx * a.n[0] + nz * a.n[1] < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      row.push([nx, ny, nz]);
+    }
+    segN.push(row);
+  }
+
+  /** Normals for one end of one segment, averaged across the seam if smooth. */
+  const nAt = (j, end) => {
+    const other = end === 0 ? segN[j - 1] : segN[j + 1];
+    if (!stations[j + end].smooth || !other) return segN[j];
+    return segN[j].map((c, i) => {
+      const o = other[i];
+      const x = c[0] + o[0], y = c[1] + o[1], z = c[2] + o[2];
+      const l = Math.hypot(x, y, z) || 1;
+      return [x / l, y / l, z / l];
+    });
+  };
+
+  // U runs around the perimeter, V up the loft, both in metres — so one texture
+  // scale covers a shin and a chest without per-part tuning
+  const uAt = rings.map((ring) => {
+    const acc = [0];
+    for (let i = 1; i <= m; i++) {
+      const a = ring[i - 1].p, b = ring[i % m].p;
+      acc.push(acc[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]));
+    }
+    return acc;
+  });
+  const vAt = [0];
+  for (let j = 1; j < n; j++) vAt.push(vAt[j - 1] + Math.abs(stations[j].y - stations[j - 1].y));
+
+  for (let j = 0; j < n - 1; j++) {
+    const N0 = nAt(j, 0), N1 = nAt(j, 1);
+    const v0 = vAt[j] * uv, v1 = vAt[j + 1] * uv;
+    for (let i = 0; i < m; i++) {
+      const i2 = (i + 1) % m;
+      s.quad(
+        rings[j][i].p, rings[j][i2].p, rings[j + 1][i2].p, rings[j + 1][i].p,
+        N0[i], N0[i2], N1[i2], N1[i],
+        [uAt[j][i] * uv, v0], [uAt[j][i + 1] * uv, v0],
+        [uAt[j + 1][i + 1] * uv, v1], [uAt[j + 1][i] * uv, v1],
+      );
+    }
+  }
+  if (capBottom) s.flatPoly(rings[0].map((r) => r.p), [0, -1, 0], uv);
+  if (capTop) s.flatPoly(rings[n - 1].map((r) => r.p), [0, 1, 0], uv);
+  return s.geometry();
+}
+
+/** Inward normal offset of a lathe profile, used to give a swept plate thickness. */
+function offsetProfile(profile, t) {
+  const segN = [];
+  for (let i = 0; i < profile.length - 1; i++) {
+    const dr = profile[i + 1].r - profile[i].r, dy = profile[i + 1].y - profile[i].y;
+    const l = Math.hypot(dr, dy) || 1;
+    segN.push([dy / l, -dr / l]);
+  }
+  return profile.map((p, i) => {
+    const a = segN[i - 1], b = segN[i];
+    let nx = (a ? a[0] : 0) + (b ? b[0] : 0);
+    let ny = (a ? a[1] : 0) + (b ? b[1] : 0);
+    const l = Math.hypot(nx, ny) || 1;
+    nx /= l; ny /= l;
+    return { r: Math.max(5e-4, p.r - nx * t), y: p.y - ny * t, smooth: p.smooth };
+  });
+}
+
+/**
+ * Curved armour shell — a lathe profile given real thickness and swept over a
+ * partial arc, so the plate has an outer face, an inner face and a rim you can
+ * see the frame through.
+ *
+ * A pauldron built from boxes is the single most obvious tell of a procedural
+ * robot. A pauldron built from two of these, offset and overlapping, reads as
+ * layered plate armour on a machine, which is what the reference does.
+ *
+ * @param {Array<{r:number,y:number,smooth?:boolean}>} profile outer surface
+ * @param {number} thickness plate thickness in metres
+ * @param {number} [segments=20] angular subdivisions across the arc
+ * @param {{arc?:number, phase?:number, uvV?:number, caps?:boolean}} [opts]
+ * @returns {THREE.BufferGeometry}
+ */
+export function shellLathe(profile, thickness, segments = 20, opts = {}) {
+  const { arc = Math.PI, phase = 0, uvV = 1.4, caps = true } = opts;
+  if (profile.length < 2) return new Surf().geometry();
+  const inner = offsetProfile(profile, thickness);
+  // Closing the profile loop lets one lathe call emit the outer face, both rims
+  // and the inner face with correct analytic normals throughout.
+  const closed = profile.concat(inner.slice().reverse());
+  closed.push({ r: profile[0].r, y: profile[0].y });
+  const shell = latheProfile(closed, segments, { arc, phase, uvV });
+  if (!caps || arc >= Math.PI * 2 - 1e-4) return shell;
+
+  const s = new Surf();
+  const k = profile.length;
+  for (const [ang, dir] of [[phase, -1], [phase + arc, 1]]) {
+    const c = Math.cos(ang), si = Math.sin(ang);
+    const nrm = [-si * dir, 0, c * dir];
+    const P = (q) => [q.r * c, q.y, q.r * si];
+    for (let i = 0; i < k - 1; i++) {
+      s.quad(P(profile[i]), P(profile[i + 1]), P(inner[i + 1]), P(inner[i]),
+        nrm, nrm, nrm, nrm, [0, 0], [1, 0], [1, 1], [0, 1]);
+    }
+  }
+  return joinGeometries([shell, s.geometry()]);
+}
+
 /** Hex fastener head, base at y = 0. */
 function hexBolt(size, height) {
   return latheProfile([
@@ -981,6 +1174,10 @@ class Rig {
     this.maxTier = maxTier;
     /** Uniform author-space scale applied by `scaled()`. */
     this.autoScale = 1;
+    /** Unscaled bone-local Y shift applied by `lifted()`. */
+    this.autoLift = 0;
+    /** Monotonic plate counter; seeds the per-plate vertex attributes. */
+    this.plateCount = 0;
     /** Rest-pose metrics of this particular skeleton; see `measure()`. */
     this.dim = measure(this);
     /** @type {Array<{geo:THREE.BufferGeometry, mat:string, tier:number}>} */
@@ -1003,12 +1200,29 @@ class Rig {
     try { fn(); } finally { this.autoScale = prev; }
   }
 
+  /**
+   * Run `fn` with every placement raised by `dy` in the bone's local Y, without
+   * scaling it. The head uses this: the skull has to clear the shoulder line
+   * whatever the roster's `arms` and `torso` multipliers did to the pauldrons,
+   * and that offset is a clearance in metres, not a proportion.
+   * @param {number} dy
+   * @param {() => void} fn
+   */
+  lifted(dy, fn) {
+    const prev = this.autoLift;
+    this.autoLift = prev + dy;
+    try { fn(); } finally { this.autoLift = prev; }
+  }
+
   /** Local frame matrix for a part attached to `bone`. */
   frame(bone, o) {
     const rw = this.restWorld[bone];
     if (!rw) return null;
     const k = this.autoScale;
-    const p = o.p ? new THREE.Vector3(o.p[0] * k, o.p[1] * k, o.p[2] * k) : new THREE.Vector3();
+    const lift = this.autoLift;
+    const p = o.p
+      ? new THREE.Vector3(o.p[0] * k, o.p[1] * k + lift, o.p[2] * k)
+      : new THREE.Vector3(0, lift, 0);
     const q = new THREE.Quaternion();
     if (o.r) q.setFromEuler(new THREE.Euler(o.r[0], o.r[1], o.r[2], o.order || 'XYZ'));
     const sv = o.s === undefined ? new THREE.Vector3(k, k, k)
@@ -1046,6 +1260,7 @@ class Rig {
     g.applyMatrix4(m);
     if (m.determinant() < 0) flipWinding(g);
     bindRigid(g, this.index[bone]);
+    tagPlate(g, this.plateCount++, o.wear ?? WEAR_BY_MAT[mat] ?? 0.6, tier);
     this.parts.push({ geo: g, mat, tier });
     return this;
   }
@@ -1067,16 +1282,76 @@ class Rig {
   section(bone, o) {
     const h = Math.abs(o.y1 - o.y0);
     if (h < 1e-5) return this;
-    const e0 = o.d0 ?? o.w0, e1 = o.d1 ?? o.w1;
-    const w = Math.max(o.w0, o.w1), d = Math.max(e0, e1);
-    const geo = bevelBox(w, h, d, o.bevel ?? 0.014, {
-      topX: o.w1 / w, topZ: e1 / d,
-      botX: o.w0 / w, botZ: e0 / d,
-      shearX: o.shearX, shearZ: o.shearZ,
-    });
+    // Stations are authored about the section's own centre so that `r` still
+    // rolls the section in place, exactly as the box version did.
+    const cy = (o.y0 + o.y1) * 0.5;
+    const geo = loftHull(this.stations(o, cy), { perQuad: o.perQuad ?? 3, uv: 1.4 });
     return this.add(bone, geo, o.mat, {
-      p: [o.x ?? 0, (o.y0 + o.y1) * 0.5, o.z ?? 0],
-      r: o.r, mirror: o.mirror, tier: o.tier ?? TIER.PRIMARY,
+      p: [o.x ?? 0, cy, o.z ?? 0],
+      r: o.r, mirror: o.mirror, tier: o.tier ?? TIER.PRIMARY, wear: o.wear,
+    });
+  }
+
+  /**
+   * Station list for a `section`-shaped description.
+   *
+   * A section is authored by its two ends; the middle station is what turns it
+   * from a truncated pyramid into a *volume*. `swell` pushes the waist of the
+   * loft out (or in) so a thigh bulges at the quadriceps and a waist pinches,
+   * which is the read a stack of tapered boxes can never produce.
+   */
+  stations(o, cy = 0) {
+    const e0 = o.d0 ?? o.w0, e1 = o.d1 ?? o.w1;
+    const sx = o.shearX ?? 0, sz = o.shearZ ?? 0;
+    const round = o.round ?? 0.34;
+    const at = (t, extra = 1) => ({
+      y: o.y0 + (o.y1 - o.y0) * t - cy,
+      w: (o.w0 + (o.w1 - o.w0) * t) * extra,
+      d: (e0 + (e1 - e0) * t) * extra,
+      x: sx * (t * 2 - 1),
+      z: sz * (t * 2 - 1),
+      round,
+      smooth: true,
+    });
+    const swell = o.swell ?? 0;
+    if (Math.abs(swell) < 1e-4) return [at(0), at(0.5), at(1)];
+    return [at(0), at(o.swellAt ?? 0.42, 1 + swell), at(1)];
+  }
+
+  /**
+   * Armour band over a visible frame.
+   *
+   * The single change that stops a robot reading as its own chassis: the dark
+   * structural hull runs the full length of the bone, and the painted plate
+   * covers only the middle of it, so a shadowed groove of machine shows at both
+   * ends. Panel gaps that hold shadow are what the reference has and a
+   * continuous painted column does not.
+   *
+   * @param {string} bone
+   * @param {Object} o same shape as `section`, plus:
+   *   `gap` metres of frame left exposed at each end, `inset` frame
+   *   cross-section as a fraction of the armour's.
+   */
+  plated(bone, o) {
+    const gap = o.gap ?? 0.016;
+    const inset = o.inset ?? 0.86;
+    const dir = Math.sign(o.y1 - o.y0) || 1;
+    const over = gap * 0.7 * dir;
+    this.section(bone, {
+      ...o,
+      y0: o.y0 - over, y1: o.y1 + over,
+      w0: o.w0 * inset, w1: o.w1 * inset,
+      d0: (o.d0 ?? o.w0) * inset, d1: (o.d1 ?? o.w1) * inset,
+      mat: 'darkMetal', round: 0.5, perQuad: 2, swell: 0,
+      tier: TIER.PRIMARY,
+    });
+    const t0 = gap * dir / (o.y1 - o.y0);
+    const lerp = (a, b, t) => a + (b - a) * t;
+    return this.section(bone, {
+      ...o,
+      y0: lerp(o.y0, o.y1, t0), y1: lerp(o.y1, o.y0, t0),
+      w0: lerp(o.w0, o.w1, t0), w1: lerp(o.w1, o.w0, t0),
+      d0: lerp(o.d0 ?? o.w0, o.d1 ?? o.w1, t0), d1: lerp(o.d1 ?? o.w1, o.d0 ?? o.w0, t0),
     });
   }
 
@@ -1111,6 +1386,7 @@ class Rig {
     geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
     const g = geo.index ? geo.toNonIndexed() : geo;
     if (g !== geo) geo.dispose();
+    tagPlate(g, this.plateCount++, WEAR_BY_MAT[mat] ?? 0.6, tier);
     this.parts.push({ geo: g, mat, tier });
     return this;
   }
@@ -1225,6 +1501,69 @@ function bindRigid(geo, boneIndex) {
   geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
 }
 
+/**
+ * How exposed a plate is to the world, by material role. Drives the wear channel
+ * of the per-plate seed: a leading-edge armour plate collects scuffs, a bracket
+ * buried under three layers of it does not, and shading them identically is what
+ * makes procedural hard-surface read as one extruded lump.
+ */
+const WEAR_BY_MAT = {
+  armorPrimary: 0.86, armorSecondary: 0.68, armorAccent: 1.0, trim: 0.92,
+  darkMetal: 0.30, piston: 0.55, rubber: 0.62, carbon: 0.44, glass: 0.15, decal: 0.5,
+};
+
+/** Two decorrelated 0..1 hashes from one 32-bit plate index. */
+function plateHash(i) {
+  let h = Math.imul(i ^ 0x9e3779b9, 0x85ebca6b) >>> 0;
+  h ^= h >>> 13;
+  const a = (Math.imul(h, 0xc2b2ae35) >>> 0) / 4294967295;
+  let g = Math.imul(i + 0x7feb352d, 0x27d4eb2f) >>> 0;
+  g ^= g >>> 15;
+  const b = (Math.imul(g, 0x165667b1) >>> 0) / 4294967295;
+  return [a, b];
+}
+
+/**
+ * Stamp a plate's identity onto every one of its vertices.
+ *
+ * Two attributes, because two consumers are plausible and neither should have to
+ * guess. `plateSeed` is the rich signal a shader injection wants; `color` is the
+ * same seed pre-baked into a near-unity albedo multiplier so that a material
+ * which merely flips `vertexColors: true` gets sane per-plate variation instead
+ * of a rainbow.
+ *
+ *   attribute vec4 plateSeed;  // Uint8 normalised, 0..1
+ *     .x  per-plate hash A
+ *     .y  per-plate hash B, decorrelated from A
+ *     .z  exposure / wear likelihood, 0 = buried bracket, 1 = leading edge
+ *     .w  detail tier: 0.0 primary silhouette, 0.5 panelling, 1.0 greeble
+ *
+ *   attribute vec3 color;      // Float32, 0.90 .. 1.10, mean 1.0
+ *     per-channel albedo multiplier derived from the same hashes; recover the
+ *     seed with `(color - 1.0) / 0.20 + 0.5` if the raw value is wanted.
+ */
+function tagPlate(geo, index, wear, tier) {
+  const n = geo.getAttribute('position').count;
+  if (!n) return;
+  const [a, b] = plateHash(index);
+  const seed = new Uint8Array(n * 4);
+  const col = new Float32Array(n * 3);
+  const sx = Math.round(a * 255), sy = Math.round(b * 255);
+  const sz = Math.round(Math.min(1, Math.max(0, wear)) * 255);
+  const sw = Math.round(Math.min(1, tier * 0.5) * 255);
+  // Channels are pulled apart so the jitter is a slight hue shift as well as a
+  // value shift — real paint batches differ in both.
+  const cr = 1 + (a - 0.5) * 0.20;
+  const cg = 1 + (a * 0.6 + b * 0.4 - 0.5) * 0.20;
+  const cb = 1 + (b - 0.5) * 0.20;
+  for (let i = 0; i < n; i++) {
+    seed[i * 4] = sx; seed[i * 4 + 1] = sy; seed[i * 4 + 2] = sz; seed[i * 4 + 3] = sw;
+    col[i * 3] = cr; col[i * 3 + 1] = cg; col[i * 3 + 2] = cb;
+  }
+  geo.setAttribute('plateSeed', new THREE.Uint8BufferAttribute(seed, 4, true));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+}
+
 // ---------------------------------------------------------------------------
 // Chassis design table
 //
@@ -1334,7 +1673,7 @@ function buildPelvis(rig, spec) {
     y0: floor, y1: 0.0,
     w0: P.pelvis.w * 0.80, w1: P.pelvis.w,
     d0: P.pelvis.d * 0.84, d1: P.pelvis.d,
-    mat: 'armorPrimary', bevel: 0.018,
+    mat: 'armorPrimary',
   });
   // Upper girdle — carries up past the spine01 origin so the lumbar section
   // lands inside it whatever `torso` multiplier the roster chose.
@@ -1342,7 +1681,7 @@ function buildPelvis(rig, spec) {
     y0: -0.004, y1: m.lumbar * 0.68,
     w0: P.pelvis.w, w1: P.waistLo.w,
     d0: P.pelvis.d, d1: P.waistLo.d,
-    mat: 'armorPrimary', bevel: 0.018,
+    mat: 'armorPrimary',
   });
 
   // crotch guard, angled forward-down
@@ -1424,40 +1763,44 @@ function buildTorso(rig, spec, def) {
   const m = rig.dim;
   const P = torsoStations(spec);
 
-  // --- lower spine: ribbed articulated column -----------------------------
-  // Every section below is authored end-to-end against the measured bone
-  // spacing and overlaps its neighbour by ~12% of a segment, so the column is
-  // airtight from the girdle to the collar on any set of proportions.
-  rig.add('spine01', latheProfile([
-    { r: P.waistLo.w * 0.40, y: -m.lumbar * 0.30 },
-    { r: P.waistLo.w * 0.44, y: -m.lumbar * 0.10, smooth: true },
-    { r: P.waistLo.w * 0.42, y: m.mid * 0.16 },
-    { r: P.waistHi.w * 0.46, y: m.mid * 0.30 },
-    { r: P.waistHi.w * 0.46, y: m.mid * 0.48 },
-    { r: P.waistHi.w * 0.40, y: m.mid * 0.60 },
-  ], 16), 'darkMetal', { s: [1, 1, P.waistLo.d / P.waistLo.w * 1.12], tier: TIER.PRIMARY });
-
-  rig.section('spine01', {
+  // --- lower spine: armour banded over a visible frame --------------------
+  // Every band is authored end-to-end against the measured bone spacing and
+  // overlaps its neighbour, so the column is airtight from the girdle to the
+  // collar on any set of proportions — but the *painted* plate stops short at
+  // both ends, leaving a shadowed groove of dark machine at each joint. That
+  // groove is what stops the torso reading as one extruded prism.
+  rig.plated('spine01', {
     y0: -m.lumbar * 0.46, y1: m.mid * 0.66,
     w0: P.waistLo.w * 0.98, w1: P.waistHi.w,
     d0: P.waistLo.d * 0.98, d1: P.waistHi.d,
-    // primary paint, not the dark underskin: on a dark-secondary palette a
-    // shaded waist reads as a hole straight through the robot
-    mat: 'armorPrimary', bevel: 0.014,
+    mat: 'armorPrimary', gap: 0.020, inset: 0.82, round: 0.30, swell: -0.06,
   });
-
-  // abdominal segment plates
+  // articulated ribs, proud of the frame in the gap the armour leaves
   for (let i = 0; i < 3; i++) {
-    rig.add('spine01', bevelBox(P.waistLo.w * (0.62 + i * 0.05), 0.035, 0.03, 0.008), 'armorPrimary',
-      { p: [0, -m.lumbar * 0.30 + i * m.mid * 0.30, FRONT * (P.waistLo.d * 0.5 + 0.005)], r: [(6 - i * 5) * DEG, 0, 0], tier: TIER.SECONDARY });
+    const y = -m.lumbar * 0.40 + i * (m.lumbar * 0.40 + m.mid * 0.60) * 0.5;
+    rig.add('spine01', latheProfile([
+      { r: P.waistLo.w * 0.42, y: -0.010 }, { r: P.waistLo.w * 0.46, y: -0.004, smooth: true },
+      { r: P.waistLo.w * 0.46, y: 0.004, smooth: true }, { r: P.waistLo.w * 0.42, y: 0.010 },
+    ], 18), 'trim', { p: [0, y, 0], s: [1, 1, P.waistLo.d / P.waistLo.w * 1.10], tier: TIER.SECONDARY });
+  }
+
+  // abdominal segment plates, floating off the frame on a visible standoff
+  for (let i = 0; i < 3; i++) {
+    rig.add('spine01', loftHull([
+      { y: -0.019, w: P.waistLo.w * (0.60 + i * 0.05), d: 0.026, round: 0.34 },
+      { y: 0.019, w: P.waistLo.w * (0.64 + i * 0.05), d: 0.030, round: 0.30 },
+    ]), 'armorPrimary', {
+      p: [0, -m.lumbar * 0.30 + i * m.mid * 0.30, FRONT * (P.waistLo.d * 0.5 + 0.010)],
+      r: [(6 - i * 5) * DEG, 0, 0], tier: TIER.SECONDARY,
+    });
   }
 
   // --- mid spine ----------------------------------------------------------
-  rig.section('spine02', {
+  rig.plated('spine02', {
     y0: -m.mid * 0.46, y1: m.thorax * 0.70,
     w0: P.waistHi.w * 0.98, w1: P.ribs.w,
     d0: P.waistHi.d * 0.98, d1: P.ribs.d,
-    mat: 'armorPrimary', bevel: 0.016,
+    mat: 'armorPrimary', gap: 0.018, inset: 0.84, round: 0.28, swell: 0.03,
   });
 
   // dorsal spine strip — the reactor line running up the back
@@ -1479,25 +1822,61 @@ function buildTorso(rig, spec, def) {
   // hangs off this rather than a literal, so it follows the `torso` multiplier
   const cy = m.collar * 0.25;
 
-  // ribcage: flares from the mid-spine handover width out to full chest
+  // Structural frame. It runs the full height of the chest at a reduced
+  // cross-section, so every gap the armour leaves shows dark machine rather than
+  // sky, and the plates above have something to sit proud of.
   rig.section('chest', {
-    y0: -m.thorax * 0.42, y1: m.collar * 0.34,
-    w0: P.ribs.w * 0.98, w1: P.chest.w,
-    d0: P.ribs.d * 0.98, d1: P.chest.d,
-    mat: 'armorPrimary', bevel: 0.020,
-  });
-  // shoulder deck: narrows back in toward the gorget
-  rig.section('chest', {
-    y0: m.collar * 0.30, y1: m.collar * 0.86,
-    w0: P.chest.w, w1: P.yoke.w,
-    d0: P.chest.d, d1: P.yoke.d,
-    mat: 'armorPrimary', bevel: 0.018,
+    y0: -m.thorax * 0.52, y1: m.collar * 0.92,
+    w0: P.ribs.w * 0.80, w1: P.yoke.w * 0.82,
+    d0: P.ribs.d * 0.84, d1: P.yoke.d * 0.84,
+    mat: 'darkMetal', round: 0.5, perQuad: 2, swell: 0.05,
   });
 
-  // pectoral plates angled off the centre line
+  // Ribcage: one continuous lofted volume rather than two stacked boxes. It
+  // flares off the mid-spine handover, swells at the pectoral line and necks
+  // back in toward the gorget, and the whole run reads as one machined part.
+  rig.add('chest', loftHull([
+    { y: -m.thorax * 0.42, w: P.ribs.w * 0.98, d: P.ribs.d * 0.98, round: 0.32 },
+    { y: -m.thorax * 0.04, w: P.chest.w * 0.93, d: P.chest.d * 0.95, round: 0.27, smooth: true },
+    { y: m.collar * 0.22, w: P.chest.w, d: P.chest.d, round: 0.24, smooth: true },
+    { y: m.collar * 0.48, w: P.chest.w * 0.94, d: P.chest.d * 0.92, round: 0.26 },
+  ]), 'armorPrimary', { tier: TIER.PRIMARY });
+  // shoulder deck, lifted clear of the ribcage so the seam holds a shadow
+  rig.add('chest', loftHull([
+    { y: m.collar * 0.52, w: P.chest.w * 0.90, d: P.chest.d * 0.90, round: 0.28 },
+    { y: m.collar * 0.72, w: P.chest.w * 0.88, d: P.chest.d * 0.86, round: 0.28, smooth: true },
+    { y: m.collar * 0.90, w: P.yoke.w, d: P.yoke.d, round: 0.34 },
+  ]), 'armorPrimary', { tier: TIER.PRIMARY });
+
+  // Front planes. Two facets at different rakes with a shadowed split between
+  // them: the deck catches the key light square on, the sternum sits in half
+  // shade, and the chest finally reads as a form instead of the face of a box.
+  rig.add('chest', loftHull([
+    { y: -m.thorax * 0.26, w: cw * 0.52, d: 0.034, round: 0.32 },
+    { y: 0, w: cw * 0.62, d: 0.044, round: 0.26, smooth: true },
+    { y: m.collar * 0.22, w: cw * 0.58, d: 0.040, round: 0.30 },
+  ]), 'armorSecondary', {
+    p: [0, 0, FRONT * (cd * 0.48)], r: [9 * DEG, 0, 0], tier: TIER.PRIMARY,
+  });
+  rig.add('chest', loftHull([
+    { y: m.collar * 0.28, w: cw * 0.66, d: 0.036, round: 0.28 },
+    { y: m.collar * 0.56, w: cw * 0.62, d: 0.030, round: 0.30, smooth: true },
+    { y: m.collar * 0.82, w: cw * 0.44, d: 0.024, round: 0.36 },
+  ]), 'armorSecondary', {
+    p: [0, 0, FRONT * (cd * 0.44)], r: [-19 * DEG, 0, 0], tier: TIER.PRIMARY,
+  });
+  rig.add('chest', channelStrip(cw * 0.60, 0.020, 0.014), 'darkMetal', {
+    p: [0, m.collar * 0.25, FRONT * (cd * 0.50)], r: FACE_FRONT, tier: TIER.SECONDARY,
+  });
+
+  // pectoral plates, floated off the ribcage on a standoff so the gap reads
   for (const { sign, mirror } of SIDES) {
-    rig.add('chest', bevelBox(cw * 0.38, ch * 0.68, cd * 0.34, 0.014, { topX: 0.86, botX: 0.7 }), 'armorPrimary', {
-      p: [sign * cw * 0.27, m.collar * 0.20, FRONT * cd * 0.44],
+    rig.add('chest', loftHull([
+      { y: -ch * 0.34, w: cw * 0.30, d: cd * 0.26, round: 0.34 },
+      { y: 0, w: cw * 0.38, d: cd * 0.34, round: 0.26, smooth: true },
+      { y: ch * 0.34, w: cw * 0.33, d: cd * 0.28, round: 0.32 },
+    ]), 'armorPrimary', {
+      p: [sign * cw * 0.28, m.collar * 0.20, FRONT * cd * 0.44],
       r: [-6 * DEG, sign * 14 * DEG, sign * -8 * DEG],
       mirror, tier: TIER.PRIMARY,
     });
@@ -1657,25 +2036,33 @@ function buildChestCore(rig, spec, cw, cd, ch, cy) {
   }
 }
 
-function buildBackHardware(rig, spec, cy) {
+function buildBackHardware(rig, spec, cyIn) {
   const t = spec.torso;
   const zb = -FRONT * (t.chestD * 0.5 + 0.03);
+  // Everything on the back hangs from here, dropped clear of the collar: a
+  // reactor pack level with the head is a reactor pack in front of the head from
+  // three quarters of the angles the fight camera ever chooses.
+  const cy = cyIn - 0.055;
 
   switch (spec.back) {
     case 'radiators': {
       for (const { sign, mirror } of SIDES) {
         const x = sign * t.chestW * 0.26;
-        rig.add('chest', bevelBox(0.13, 0.30, 0.11, 0.012, { topX: 0.82, topZ: 0.75 }), 'armorSecondary',
-          { p: [x, cy + 0.04, zb + 0.05 * -FRONT], r: [-14 * DEG, 0, sign * -5 * DEG], mirror, tier: TIER.PRIMARY });
+        rig.add('chest', loftHull([
+          { y: -0.130, w: 0.126, d: 0.104, round: 0.30 },
+          { y: 0.020, w: 0.134, d: 0.112, round: 0.26, smooth: true },
+          { y: 0.128, w: 0.106, d: 0.084, round: 0.34 },
+        ]), 'armorSecondary',
+        { p: [x, cy + 0.02, zb + 0.05 * -FRONT], r: [-14 * DEG, 0, sign * -5 * DEG], mirror, tier: TIER.PRIMARY });
         for (let i = 0; i < 6; i++) {
           rig.add('chest', bevelBox(0.145, 0.012, 0.115, 0.004), 'darkMetal', {
-            p: [x, cy - 0.068 + i * 0.045, zb + 0.05 * -FRONT + (0.10 - i * 0.028) * -FRONT * 0.14],
+            p: [x, cy - 0.086 + i * 0.040, zb + 0.05 * -FRONT + (0.10 - i * 0.028) * -FRONT * 0.14],
             r: [-14 * DEG, 0, 0], mirror, tier: TIER.SECONDARY,
           });
         }
-        rig.glow('chest', bevelBox(0.10, 0.24, 0.012, 0.004), 'vents',
-          { p: [x, cy + 0.04, zb + 0.115 * -FRONT], r: [-14 * DEG, 0, 0], mirror });
-        rig.emitter('exhaust', 'chest', [x, cy + 0.19, zb + 0.05 * -FRONT], [0, 0.4, -FRONT], 0.05);
+        rig.glow('chest', bevelBox(0.10, 0.21, 0.012, 0.004), 'vents',
+          { p: [x, cy + 0.02, zb + 0.115 * -FRONT], r: [-14 * DEG, 0, 0], mirror });
+        rig.emitter('exhaust', 'chest', [x, cy + 0.15, zb + 0.05 * -FRONT], [0, 0.4, -FRONT], 0.05);
       }
       rig.add('chest', bevelBox(t.chestW * 0.46, 0.14, 0.12, 0.014, { topX: 0.8 }), 'armorPrimary',
         { p: [0, cy - 0.08, zb + 0.03 * -FRONT], tier: TIER.PRIMARY });
@@ -1705,17 +2092,17 @@ function buildBackHardware(rig, spec, cy) {
       for (const { sign, mirror } of SIDES) {
         const x = sign * t.chestW * 0.30;
         const pipe = latheProfile([
-          { r: 0.040, y: 0 }, { r: 0.040, y: 0.28 }, { r: 0.050, y: 0.30, smooth: true },
-          { r: 0.050, y: 0.335 }, { r: 0.036, y: 0.345 }, { r: 0.036, y: 0.30 }, { r: 0.030, y: 0.28 }, { r: 0.030, y: 0 },
+          { r: 0.042, y: 0 }, { r: 0.042, y: 0.20 }, { r: 0.053, y: 0.22, smooth: true },
+          { r: 0.053, y: 0.252 }, { r: 0.038, y: 0.262 }, { r: 0.038, y: 0.22 }, { r: 0.031, y: 0.20 }, { r: 0.031, y: 0 },
         ], 20);
         rig.add('chest', pipe, 'darkMetal',
-          { p: [x, cy, zb], r: [-16 * DEG, 0, sign * -8 * DEG], mirror, tier: TIER.PRIMARY });
+          { p: [x, cy, zb], r: [-18 * DEG, 0, sign * -22 * DEG], mirror, tier: TIER.PRIMARY });
         rig.add('chest', latheProfile([
           { r: 0.046, y: 0 }, { r: 0.056, y: 0.008, smooth: true }, { r: 0.056, y: 0.026 }, { r: 0.046, y: 0.034 },
-        ], 20), 'trim', { p: [x, cy + 0.08, zb + 0.03 * FRONT], r: [-16 * DEG, 0, 0], mirror, tier: TIER.SECONDARY });
+        ], 20), 'trim', { p: [x, cy + 0.07, zb + 0.03 * FRONT], r: [-18 * DEG, 0, sign * -22 * DEG], mirror, tier: TIER.SECONDARY });
         rig.glow('chest', latheProfile([{ r: 0, y: 0 }, { r: 0.030, y: 0 }, { r: 0.030, y: 0.006 }, { r: 0, y: 0.006 }], 16), 'vents',
-          { p: [x + sign * 0.048, cy + 0.335, zb + 0.10 * FRONT], r: [-16 * DEG, 0, 0], mirror });
-        rig.emitter('exhaust', 'chest', [x + sign * 0.05, cy + 0.34, zb + 0.10 * FRONT], [0.1 * sign, 1, -0.28 * FRONT], 0.04);
+          { p: [x + sign * 0.128, cy + 0.245, zb + 0.10 * FRONT], r: [-18 * DEG, 0, sign * -22 * DEG], mirror });
+        rig.emitter('exhaust', 'chest', [x + sign * 0.13, cy + 0.25, zb + 0.10 * FRONT], [0.3 * sign, 1, -0.28 * FRONT], 0.04);
       }
       rig.add('chest', bevelBox(t.chestW * 0.62, 0.22, 0.10, 0.014, { topX: 0.86 }), 'armorSecondary',
         { p: [0, cy - 0.01, zb], tier: TIER.PRIMARY });
@@ -1749,7 +2136,7 @@ function buildBackHardware(rig, spec, cy) {
       break;
     }
     default: { // halo
-      const R = 0.30;
+      const R = 0.255;
       // A segmented ring of chamfered blocks rather than a lathed torus: the
       // facets catch the rim light and read as forged metal, not a smooth donut.
       const blocks = [];
@@ -1894,19 +2281,98 @@ function addPipeRun(rig, bone, points, o = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Head
+// Shoulder armour plan
+//
+// Shared between the arm builder, which emits it, and the head builder, which
+// has to clear it. One description means a chassis cannot grow its pauldrons and
+// silently bury its own head — which is exactly what used to happen.
 // ---------------------------------------------------------------------------
+
+/** Pauldron dimensions with the roster's `arms` multiplier already applied. */
+function scaledPauldron(spec, m) {
+  const s = spec.pauldron;
+  return {
+    w: s.w * m.armK, h: s.h * m.armK, d: s.d * m.armK,
+    out: s.out * m.armS, up: s.up * m.armS,
+    taper: s.taper, tilt: s.tilt, layers: s.layers,
+  };
+}
+
+/**
+ * Stacked curved lames for one shoulder, in clavicle-local terms.
+ *
+ * Each lame is a shell swept about the fore-aft axis: `R` is its radius from the
+ * shoulder pivot, `[a0,a1]` the arc it covers measured from straight out (0)
+ * through straight up (90 degrees), and `dy`/`dz` the step that clears the lame
+ * above it. Overlapping shells with air between them is what reads as plate
+ * armour; three nested boxes read as one block with grooves in it.
+ */
+function pauldronLames(pd) {
+  const out = [];
+  // `taper` sets how full the shells are: a brute's wrap most of the way around
+  // the joint, an arcane frame's are shallow blades that barely touch it.
+  const full = 0.78 + pd.taper * 0.34;
+  for (let i = 0; i < pd.layers; i++) {
+    out.push({
+      R: pd.h * (0.86 - i * 0.11) * full,
+      half: pd.d * (0.46 - i * 0.05),
+      a0: (-56 - pd.taper * 22 + i * 10) * DEG,
+      a1: (40 + pd.taper * 20 - i * 20) * DEG,
+      dx: pd.w * (0.02 + i * 0.30),
+      dy: pd.up - i * pd.h * 0.40,
+      dz: -i * pd.d * 0.03,
+      thick: pd.h * (0.17 - i * 0.025),
+    });
+  }
+  return out;
+}
+
+/** Highest point of the shoulder armour in clavicle-local Y. */
+function pauldronTop(pd) {
+  let top = pd.up;
+  for (const l of pauldronLames(pd)) {
+    const s = l.a1 > Math.PI * 0.5 ? 1 : Math.sin(l.a1);
+    top = Math.max(top, l.dy + l.R * s);
+  }
+  return top;
+}
+
+/** Top of the shoulder armour in chest-local Y — the line the head must clear. */
+function shoulderLineY(rig, spec) {
+  const m = rig.dim;
+  const cl = rig.restPos.clavicle_L;
+  const base = cl ? cl.y - rig.restPos.chest.y : 0.13 * m.armS;
+  return base + pauldronTop(scaledPauldron(spec, m));
+}
+
+// ---------------------------------------------------------------------------
+// Head
+//
+// A fighting-game character is read at the head: it is where the eye lands, it
+// carries the identity, and it is the one shape that has to survive being forty
+// pixels tall. Every skull below is therefore authored to three rules:
+//
+//   1. The jaw clears the shoulder line. Not "usually" — the clearance is solved
+//      against the actual pauldron geometry, so it holds for any chassis and any
+//      set of roster proportions.
+//   2. There is a visible neck. A skull sitting straight on a torso reads as a
+//      lump; a skull on an exposed dark column reads as a machine's head.
+//   3. There is a bright optic under a dark overhang, wide enough to survive
+//      being one pixel tall.
+// ---------------------------------------------------------------------------
+
+/** Head-local Y of the lowest point of every skull authored below. */
+const HEAD_JAW = -0.05;
 
 function buildHead(rig, spec, def) {
   const m = rig.dim;
-  // Neck column: spans from inside the gorget all the way into the skull, so
-  // however far the `torso` multiplier pushes the head up there is never bare
-  // air between collar and jaw.
-  const nr = 0.050 * m.torsoK;
+  // Neck column: spans from inside the gorget up into the riser, so however far
+  // the `torso` multiplier pushes the head there is never bare air at the collar.
+  const nr = 0.048 * m.torsoK;
   rig.add('neck', latheProfile([
-    { r: nr * 0.96, y: -m.collar * 0.22 }, { r: nr * 1.04, y: -m.collar * 0.06, smooth: true },
-    { r: nr * 0.92, y: m.nape * 0.42 }, { r: nr * 1.08, y: m.nape * 0.62, smooth: true },
-    { r: nr, y: m.nape * 0.98 },
+    { r: nr * 0.96, y: -m.collar * 0.22 }, { r: nr * 1.06, y: -m.collar * 0.06, smooth: true },
+    { r: nr * 0.88, y: m.nape * 0.46 }, { r: nr * 1.02, y: m.nape * 0.70, smooth: true },
+    { r: nr * 0.94, y: m.nape * 1.04 },
   ], 16), 'darkMetal', { tier: TIER.PRIMARY });
   rig.add('neck', bevelBox(0.10 * m.torsoK, 0.05, 0.09 * m.torsoK, 0.010, { topX: 0.8 }), 'armorSecondary',
     { p: [0, m.nape * 0.24, -FRONT * 0.012], tier: TIER.SECONDARY });
@@ -1914,10 +2380,44 @@ function buildHead(rig, spec, def) {
   // The head shapes are authored at reference size; `scaled` applies the
   // roster's head multiplier to their placement as well as their geometry, the
   // same way the bone hierarchy applies it to `head` and `headTop`.
-  // The 1.1 is deliberate: a head sized strictly to its bone disappears behind
-  // the pauldrons of the wider chassis, and a silhouette without a head does not
-  // read at 100 pixels tall.
-  rig.scaled(m.headK * 1.1, () => {
+  const k = m.headK * 1.16;
+
+  // Clearance solve. `lift` is a distance in metres, not a proportion, so it is
+  // applied unscaled — the head sits exactly far enough above the pauldrons for
+  // the whole skull to be sky, whatever this character's arms multiplier did.
+  const headAboveChest = rig.restPos.head.y - rig.restPos.chest.y;
+  const want = shoulderLineY(rig, spec) - 0.014;
+  // Capped: past about seven centimetres the riser stops reading as a neck and
+  // starts reading as a giraffe, the pauldron cap has already fallen away toward
+  // the spine by then, and the camera's headroom above `headTop` is finite.
+  const lift = Math.min(0.075, Math.max(0, want - (headAboveChest + HEAD_JAW * k)));
+
+  // Neck riser: the visible column the skull stands on. Authored in metres in
+  // the head's own frame so it always reaches from the collar to the jaw, and
+  // thickened with its own length so a tall one never reads as a drinking straw.
+  const rr = (0.050 + lift * 0.16) * m.torsoK;
+  const top = lift + HEAD_JAW * k + 0.012;
+  rig.add('head', latheProfile([
+    { r: rr * 0.80, y: -m.nape * 0.70 },
+    { r: rr * 0.94, y: -m.nape * 0.34, smooth: true },
+    { r: rr * 0.74, y: top - 0.052 },
+    { r: rr * 0.74, y: top - 0.030 },
+    { r: rr * 0.96, y: top - 0.020, smooth: true },
+    { r: rr * 0.92, y: top },
+  ], 16), 'darkMetal', { tier: TIER.PRIMARY });
+  // spine of the riser, and a pair of guards that keep it from reading as a pipe
+  for (const { sign, mirror } of SIDES) {
+    rig.add('head', loftHull([
+      { y: -m.nape * 0.5, w: 0.022, d: 0.052, round: 0.4 },
+      { y: top - 0.020, w: 0.018, d: 0.040, round: 0.4 },
+    ]), 'trim', { p: [sign * rr * 0.88, 0, -FRONT * 0.006], r: [0, 0, sign * -3 * DEG], mirror, tier: TIER.SECONDARY });
+  }
+  rig.glow('head', loftHull([
+    { y: -m.nape * 0.3, w: 0.012, d: 0.010, round: 0.5 },
+    { y: top - 0.030, w: 0.010, d: 0.008, round: 0.5 },
+  ]), 'spine', { p: [0, 0, -FRONT * (rr * 0.78)] });
+
+  rig.lifted(lift, () => rig.scaled(k, () => {
     switch (spec.head) {
       case 'slab': headSlab(rig, spec); break;
       case 'wedge': headWedge(rig, spec); break;
@@ -1925,191 +2425,358 @@ function buildHead(rig, spec, def) {
       case 'tower': headTower(rig, spec, def); break;
       default: headCrown(rig, spec); break;
     }
+  }));
+}
+
+/**
+ * Recessed optic band: a shadowed well, a lens with rounded ends sitting inside
+ * it, a brow that overhangs far enough to keep the well dark under a top key,
+ * and temple posts that stop the band running off the sides of the face.
+ *
+ * @param {Rig} rig
+ * @param {{w:number, h:number, y:number, z:number, tilt?:number, group?:string,
+ *   brow?:number, posts?:boolean}} o head-local placement in authoring units
+ */
+function addVisor(rig, o) {
+  const { w, h, y, z, tilt = 0, group = 'visor', brow = 0.034, posts = true } = o;
+  rig.add('head', channelStrip(w, h * 2.1, 0.026), 'darkMetal',
+    { p: [0, y, z], r: [FACE_FRONT[0] + tilt, 0, 0], tier: TIER.SECONDARY });
+  rig.glow('head', loftHull([
+    { y: -h * 0.5, w: w * 0.74, d: 0.011, round: 0.5 },
+    { y: -h * 0.18, w: w * 0.96, d: 0.015, round: 0.45, smooth: true },
+    { y: h * 0.18, w: w * 0.96, d: 0.015, round: 0.45, smooth: true },
+    { y: h * 0.5, w: w * 0.74, d: 0.011, round: 0.5 },
+  ]), group, { p: [0, y, z + FRONT * 0.005], r: [tilt, 0, 0] });
+  // brow: overhang plus a hard lower edge for the shadow to break on
+  rig.add('head', loftHull([
+    { y: 0, w: w * 1.10, d: brow, round: 0.28 },
+    { y: 0.014, w: w * 1.06, d: brow * 0.80, round: 0.32, smooth: true },
+    { y: 0.030, w: w * 0.90, d: brow * 0.40, round: 0.40 },
+  ]), 'armorSecondary', {
+    p: [0, y + h * 0.72, z + FRONT * (brow * 0.22)], r: [-14 * DEG + tilt, 0, 0], tier: TIER.PRIMARY,
   });
+  if (posts) {
+    for (const { sign, mirror } of SIDES) {
+      rig.add('head', loftHull([
+        { y: -h * 0.85, w: 0.017, d: 0.034, round: 0.4 },
+        { y: h * 0.85, w: 0.021, d: 0.042, round: 0.4 },
+      ]), 'trim', {
+        p: [sign * w * 0.52, y, z - FRONT * 0.006], r: [tilt, 0, sign * -5 * DEG], mirror, tier: TIER.SECONDARY,
+      });
+    }
+  }
 }
 
 function headSlab(rig) {
-  // wide, low, armoured — reads as a bunker at 100px
-  rig.add('head', bevelBox(0.25, 0.15, 0.22, 0.016, { topX: 0.90, topZ: 0.86, botX: 0.86, botZ: 0.92 }), 'armorPrimary',
-    { p: [0, 0.055, 0], tier: TIER.PRIMARY });
-  // brow ridge, overhanging the visor
-  rig.add('head', bevelBox(0.24, 0.045, 0.06, 0.010, { botX: 0.9, shearZ: 0.018 }), 'armorSecondary',
-    { p: [0, 0.10, FRONT * 0.10], r: [-16 * DEG, 0, 0], tier: TIER.PRIMARY });
-  // recessed visor band
-  rig.add('head', channelStrip(0.20, 0.058, 0.020), 'darkMetal',
-    { p: [0, 0.055, FRONT * 0.108], r: FACE_FRONT, tier: TIER.SECONDARY });
-  rig.glow('head', bevelBox(0.175, 0.022, 0.010, 0.004, { topX: 0.94 }), 'visor',
-    { p: [0, 0.058, FRONT * 0.112] });
-  // chin / vocoder grille
-  rig.add('head', bevelBox(0.13, 0.045, 0.05, 0.008, { botX: 0.7 }), 'darkMetal',
-    { p: [0, 0.0, FRONT * 0.10], r: [12 * DEG, 0, 0], tier: TIER.SECONDARY });
+  // Bunker: a wide low vault over a raked face plate. The vault is a loft, not a
+  // box, so the crown catches a moving highlight and the cheeks fall away into
+  // shadow instead of stopping at a chamfer.
+  rig.add('head', loftHull([
+    { y: -0.050, w: 0.170, d: 0.170, round: 0.34 },
+    { y: -0.008, w: 0.238, d: 0.212, round: 0.26, smooth: true },
+    { y: 0.078, w: 0.252, d: 0.220, round: 0.24, smooth: true },
+    { y: 0.140, w: 0.222, d: 0.192, round: 0.28, smooth: true },
+    { y: 0.172, w: 0.146, d: 0.126, round: 0.42 },
+  ]), 'armorPrimary', { tier: TIER.PRIMARY });
+
+  // face plate, raked back from the jaw so the light breaks across three planes
+  rig.add('head', loftHull([
+    { y: -0.046, w: 0.132, d: 0.052, round: 0.36 },
+    { y: 0.008, w: 0.196, d: 0.062, round: 0.26, smooth: true },
+    { y: 0.086, w: 0.214, d: 0.058, round: 0.24 },
+    { y: 0.122, w: 0.196, d: 0.044, round: 0.30 },
+  ]), 'armorSecondary', { p: [0, 0, FRONT * 0.088], r: [-7 * DEG, 0, 0], tier: TIER.PRIMARY });
+
+  addVisor(rig, { w: 0.176, h: 0.030, y: 0.062, z: FRONT * 0.122, tilt: -7 * DEG });
+
+  // vocoder jaw under the visor
+  rig.add('head', loftHull([
+    { y: -0.052, w: 0.098, d: 0.052, z: FRONT * 0.020, round: 0.40 },
+    { y: -0.014, w: 0.134, d: 0.062, z: FRONT * 0.006, round: 0.32, smooth: true },
+    { y: 0.016, w: 0.142, d: 0.052, round: 0.30 },
+  ]), 'darkMetal', { p: [0, 0, FRONT * 0.112], r: [11 * DEG, 0, 0], tier: TIER.PRIMARY });
   for (let i = 0; i < 3; i++) {
-    rig.add('head', bevelBox(0.10, 0.006, 0.008, 0.002), 'trim',
-      { p: [0, -0.008 + i * 0.014, FRONT * 0.126], r: [12 * DEG, 0, 0], tier: TIER.GREEBLE });
+    rig.add('head', bevelBox(0.104 - i * 0.010, 0.006, 0.008, 0.002), 'trim',
+      { p: [0, -0.028 + i * 0.015, FRONT * 0.132], r: [11 * DEG, 0, 0], tier: TIER.GREEBLE });
   }
-  // ear blocks with vents
+
+  // ear housings: curved shells, not boxes, with intake louvres inside them
   for (const { sign, mirror } of SIDES) {
-    rig.add('head', bevelBox(0.05, 0.10, 0.13, 0.010, { topX: 0.7 }), 'armorSecondary',
-      { p: [sign * 0.122, 0.055, -FRONT * 0.01], r: [0, 0, sign * -6 * DEG], mirror, tier: TIER.PRIMARY });
+    rig.add('head', loftHull([
+      { y: -0.056, w: 0.044, d: 0.098, round: 0.36 },
+      { y: 0.004, w: 0.052, d: 0.128, round: 0.28, smooth: true },
+      { y: 0.070, w: 0.048, d: 0.120, round: 0.30, smooth: true },
+      { y: 0.104, w: 0.032, d: 0.078, round: 0.42 },
+    ]), 'armorSecondary', {
+      p: [sign * 0.122, 0.040, -FRONT * 0.004], r: [0, 0, sign * -7 * DEG], mirror, tier: TIER.PRIMARY,
+    });
     addLouvres(rig, 'head', {
-      p: [sign * 0.148, 0.055, -FRONT * 0.01], r: [0, sign * 90 * DEG, 0],
-      w: 0.09, h: 0.06, n: 3, depth: 0.014, mirror, glow: 'joints',
+      p: [sign * 0.132, 0.048, -FRONT * 0.006], r: [0, sign * 90 * DEG, 0],
+      w: 0.084, h: 0.052, n: 3, depth: 0.014, mirror, glow: 'joints',
     });
   }
-  // crest fin
-  rig.add('head', bevelBox(0.026, 0.05, 0.17, 0.006, { topX: 0.4, topZ: 0.8 }), 'armorAccent',
-    { p: [0, 0.135, -FRONT * 0.015], tier: TIER.SECONDARY });
-  rig.add('head', bevelBox(0.008, 0.055, 0.008, 0.002), 'trim',
-    { p: [0.055, 0.145, -FRONT * 0.06], r: [-20 * DEG, 0, 8 * DEG], tier: TIER.GREEBLE });
+
+  // Dorsal crest, swept back well past the nape. This is the whole profile read:
+  // seen from the side a fighting-game character is a chin and a crest, and
+  // without both the head is just the top of the torso.
+  rig.add('head', loftHull([
+    { y: 0.098, w: 0.032, d: 0.170, z: -FRONT * 0.020, round: 0.30 },
+    { y: 0.158, w: 0.027, d: 0.212, z: -FRONT * 0.052, round: 0.26, smooth: true },
+    { y: 0.206, w: 0.014, d: 0.150, z: -FRONT * 0.108, round: 0.40 },
+  ]), 'armorAccent', { tier: TIER.PRIMARY });
+  rig.glow('head', loftHull([
+    { y: 0.116, w: 0.008, d: 0.128, z: -FRONT * 0.024, round: 0.5 },
+    { y: 0.194, w: 0.006, d: 0.098, z: -FRONT * 0.100, round: 0.5 },
+  ]), 'spine', { p: [0, 0, 0] });
+  // nape armour, closing the back of the vault down onto the riser
+  rig.add('head', loftHull([
+    { y: -0.052, w: 0.140, d: 0.048, round: 0.36 },
+    { y: 0.030, w: 0.186, d: 0.056, round: 0.30, smooth: true },
+    { y: 0.104, w: 0.166, d: 0.048, round: 0.34 },
+  ]), 'armorSecondary', { p: [0, 0, -FRONT * 0.096], r: [6 * DEG, 0, 0], tier: TIER.PRIMARY });
 }
 
 function headWedge(rig) {
-  // forward-raked wedge with a single cyclops optic
-  rig.add('head', bevelBox(0.155, 0.155, 0.215, 0.012,
-    { topX: 0.72, topZ: 0.80, botX: 0.60, botZ: 0.55, shearZ: FRONT * 0.030 }), 'armorPrimary',
-  { p: [0, 0.06, FRONT * 0.012], tier: TIER.PRIMARY });
-  // cheek intakes
+  // Raptor: a forward-raked wedge with one big optic. The whole skull leans into
+  // the strike, which is the read for a rushdown chassis.
+  rig.add('head', loftHull([
+    { y: -0.050, w: 0.106, d: 0.128, z: FRONT * 0.030, round: 0.42 },
+    { y: 0.006, w: 0.152, d: 0.196, z: FRONT * 0.014, round: 0.30, smooth: true },
+    { y: 0.084, w: 0.158, d: 0.214, z: -FRONT * 0.004, round: 0.26, smooth: true },
+    { y: 0.146, w: 0.122, d: 0.170, z: -FRONT * 0.022, round: 0.34 },
+  ]), 'armorPrimary', { tier: TIER.PRIMARY });
+
+  // cheek mandibles, curved and swept forward
   for (const { sign, mirror } of SIDES) {
-    rig.add('head', bevelBox(0.030, 0.075, 0.10, 0.006, { topX: 0.6, topZ: 0.7 }), 'darkMetal',
-      { p: [sign * 0.072, 0.035, FRONT * 0.045], r: [0, sign * 12 * DEG, sign * -10 * DEG], mirror, tier: TIER.SECONDARY });
-    rig.glow('head', bevelBox(0.010, 0.045, 0.012, 0.003), 'joints',
-      { p: [sign * 0.085, 0.035, FRONT * 0.055], r: [0, sign * 12 * DEG, 0], mirror });
+    rig.add('head', shellLathe([
+      { r: 0.062, y: -0.050 }, { r: 0.070, y: -0.020, smooth: true },
+      { r: 0.068, y: 0.028, smooth: true }, { r: 0.054, y: 0.052 },
+    ], 0.016, 14, { arc: 128 * DEG, phase: -74 * DEG }), 'armorSecondary', {
+      p: [sign * 0.062, 0.030, FRONT * 0.028], r: [-90 * DEG, sign * 12 * DEG, sign * -8 * DEG],
+      order: 'YXZ', mirror, tier: TIER.PRIMARY,
+    });
+    rig.glow('head', loftHull([
+      { y: -0.024, w: 0.010, d: 0.042, round: 0.5 },
+      { y: 0.026, w: 0.010, d: 0.034, round: 0.5 },
+    ]), 'joints', { p: [sign * 0.082, 0.028, FRONT * 0.040], r: [0, sign * 14 * DEG, 0], mirror });
   }
-  // optic housing and lens
+
+  // optic: a real housing with a lens set deep inside it
   rig.add('head', latheProfile([
-    { r: 0.052, y: 0 }, { r: 0.052, y: 0.014 }, { r: 0.040, y: 0.026 }, { r: 0.034, y: 0.026 }, { r: 0.034, y: 0 },
-  ], 20), 'darkMetal', { p: [0, 0.062, FRONT * 0.108], r: [-90 * DEG * -FRONT, 0, 0], tier: TIER.PRIMARY });
+    { r: 0.062, y: 0 }, { r: 0.062, y: 0.012 }, { r: 0.056, y: 0.024, smooth: true },
+    { r: 0.040, y: 0.034 }, { r: 0.032, y: 0.034 }, { r: 0.032, y: 0 },
+  ], 20), 'darkMetal', { p: [0, 0.058, FRONT * 0.096], r: [-90 * DEG * -FRONT, 0, 0], tier: TIER.PRIMARY });
   rig.glow('head', latheProfile([
-    { r: 0, y: 0 }, { r: 0.031, y: 0 }, { r: 0.030, y: 0.010, smooth: true }, { r: 0, y: 0.016 },
-  ], 20), 'visor', { p: [0, 0.062, FRONT * 0.120], r: [-90 * DEG * -FRONT, 0, 0] });
-  // swept crest sweeping back over the neck
-  rig.add('head', bevelBox(0.030, 0.055, 0.26, 0.006, { topX: 0.35, topZ: 0.7, shearZ: -FRONT * 0.05 }), 'armorAccent',
-    { p: [0, 0.125, -FRONT * 0.06], r: [12 * DEG, 0, 0], tier: TIER.PRIMARY });
+    { r: 0, y: 0 }, { r: 0.034, y: 0 }, { r: 0.033, y: 0.011, smooth: true }, { r: 0, y: 0.019 },
+  ], 20), 'visor', { p: [0, 0.058, FRONT * 0.108], r: [-90 * DEG * -FRONT, 0, 0] });
+  rig.add('head', boltRing(6, 0.058, 0.006, 0.008), 'trim',
+    { p: [0, 0.058, FRONT * 0.100], r: FACE_FRONT, tier: TIER.GREEBLE });
+
+  // chin spike and the brow shelf over the optic
+  rig.add('head', loftHull([
+    { y: -0.062, w: 0.038, d: 0.052, round: 0.40 },
+    { y: -0.014, w: 0.078, d: 0.076, round: 0.32 },
+  ]), 'trim', { p: [0, 0, FRONT * 0.086], r: [16 * DEG, 0, 0], tier: TIER.PRIMARY });
+  rig.add('head', loftHull([
+    { y: 0, w: 0.150, d: 0.042, round: 0.28 },
+    { y: 0.022, w: 0.120, d: 0.020, round: 0.40 },
+  ]), 'armorSecondary', { p: [0, 0.092, FRONT * 0.086], r: [-24 * DEG, 0, 0], tier: TIER.PRIMARY });
+
+  // twin crest blades sweeping back past the nape
   for (const { sign, mirror } of SIDES) {
-    rig.add('head', bevelBox(0.014, 0.030, 0.19, 0.004, { topX: 0.4, shearZ: -FRONT * 0.04 }), 'armorSecondary',
-      { p: [sign * 0.05, 0.115, -FRONT * 0.05], r: [16 * DEG, sign * -8 * DEG, sign * 16 * DEG], mirror, tier: TIER.SECONDARY });
-  }
-  // antennae
-  for (const { sign, mirror } of SIDES) {
+    rig.add('head', loftHull([
+      { y: 0, w: 0.026, d: 0.096, round: 0.30 },
+      { y: 0.052, w: 0.022, d: 0.150, z: -FRONT * 0.048, round: 0.26, smooth: true },
+      { y: 0.088, w: 0.010, d: 0.096, z: -FRONT * 0.118, round: 0.40 },
+    ]), 'armorAccent', {
+      p: [sign * 0.040, 0.116, -FRONT * 0.020], r: [18 * DEG, sign * -10 * DEG, sign * 14 * DEG],
+      order: 'YXZ', mirror, tier: TIER.PRIMARY,
+    });
     rig.add('head', latheProfile([
-      { r: 0.008, y: 0 }, { r: 0.008, y: 0.06 }, { r: 0.004, y: 0.062 }, { r: 0.004, y: 0.16 }, { r: 0, y: 0.17 },
-    ], 12), 'trim', { p: [sign * 0.055, 0.125, -FRONT * 0.02], r: [-18 * DEG, 0, sign * 14 * DEG], mirror, tier: TIER.GREEBLE });
+      { r: 0.007, y: 0 }, { r: 0.007, y: 0.05 }, { r: 0.0035, y: 0.053 }, { r: 0.0035, y: 0.15 }, { r: 0, y: 0.16 },
+    ], 10), 'trim', {
+      p: [sign * 0.052, 0.126, -FRONT * 0.020], r: [-20 * DEG, 0, sign * 16 * DEG], mirror, tier: TIER.GREEBLE,
+    });
   }
 }
 
 function headSunken(rig) {
-  // small head sunk between the shoulders behind a caged mask
-  rig.add('head', latheProfile([
-    { r: 0.052, y: -0.01 }, { r: 0.080, y: 0.028, smooth: true }, { r: 0.086, y: 0.075, smooth: true },
-    { r: 0.070, y: 0.115, smooth: true }, { r: 0.032, y: 0.135 }, { r: 0, y: 0.135 },
-  ], 20), 'armorPrimary', { p: [0, 0.01, 0], tier: TIER.PRIMARY });
-  // face cage
+  // Bulldog: broad, low, and thrust forward on a heavy jaw. It never gets tall,
+  // so it earns its silhouette by being wider than the neck and hanging out over
+  // the chest with a caged furnace face.
+  rig.add('head', loftHull([
+    { y: -0.056, w: 0.144, d: 0.150, round: 0.40 },
+    { y: -0.004, w: 0.196, d: 0.190, round: 0.30, smooth: true },
+    { y: 0.062, w: 0.204, d: 0.196, round: 0.28, smooth: true },
+    { y: 0.116, w: 0.168, d: 0.164, round: 0.34, smooth: true },
+    { y: 0.146, w: 0.112, d: 0.112, round: 0.44 },
+  ]), 'armorPrimary', { tier: TIER.PRIMARY });
+
+  // brow shelf, heavy enough to throw the whole face into shadow
+  rig.add('head', loftHull([
+    { y: 0, w: 0.210, d: 0.062, round: 0.24 },
+    { y: 0.026, w: 0.190, d: 0.040, round: 0.32 },
+  ]), 'armorSecondary', { p: [0, 0.086, FRONT * 0.070], r: [-20 * DEG, 0, 0], tier: TIER.PRIMARY });
+
+  // jaw, jutting forward and down
+  rig.add('head', loftHull([
+    { y: -0.062, w: 0.132, d: 0.078, z: FRONT * 0.020, round: 0.34 },
+    { y: -0.020, w: 0.176, d: 0.096, z: FRONT * 0.006, round: 0.28, smooth: true },
+    { y: 0.026, w: 0.184, d: 0.088, round: 0.28 },
+  ]), 'armorSecondary', { p: [0, 0, FRONT * 0.060], r: [8 * DEG, 0, 0], tier: TIER.PRIMARY });
+
+  // face cage over the furnace
   for (let i = -2; i <= 2; i++) {
-    rig.add('head', bevelBox(0.011, 0.115, 0.024, 0.003, { topX: 0.7, botX: 0.7 }), 'darkMetal', {
-      p: [i * 0.021, 0.055, FRONT * (0.078 - Math.abs(i) * 0.006)],
-      r: [0, i * -8 * DEG, 0], tier: TIER.PRIMARY,
+    rig.add('head', loftHull([
+      { y: -0.052, w: 0.013, d: 0.026, round: 0.4 },
+      { y: 0.052, w: 0.011, d: 0.024, round: 0.4 },
+    ]), 'darkMetal', {
+      p: [i * 0.026, 0.020, FRONT * (0.108 - Math.abs(i) * 0.009)], r: [0, i * -9 * DEG, 0], tier: TIER.PRIMARY,
     });
   }
-  rig.add('head', bevelBox(0.14, 0.016, 0.03, 0.004), 'trim',
-    { p: [0, 0.108, FRONT * 0.070], r: [-14 * DEG, 0, 0], tier: TIER.SECONDARY });
-  rig.add('head', bevelBox(0.13, 0.016, 0.03, 0.004), 'trim',
-    { p: [0, 0.008, FRONT * 0.070], r: [14 * DEG, 0, 0], tier: TIER.SECONDARY });
-  // three furnace eyes behind the cage
+  rig.add('head', loftHull([
+    { y: 0, w: 0.170, d: 0.030, round: 0.35 },
+    { y: 0.014, w: 0.158, d: 0.022, round: 0.4 },
+  ]), 'trim', { p: [0, 0.070, FRONT * 0.096], r: [-14 * DEG, 0, 0], tier: TIER.SECONDARY });
+  rig.add('head', loftHull([
+    { y: 0, w: 0.156, d: 0.028, round: 0.35 },
+    { y: 0.014, w: 0.148, d: 0.020, round: 0.4 },
+  ]), 'trim', { p: [0, -0.030, FRONT * 0.098], r: [16 * DEG, 0, 0], tier: TIER.SECONDARY });
   for (let i = -1; i <= 1; i++) {
     rig.glow('head', latheProfile([
-      { r: 0, y: 0 }, { r: 0.014 - Math.abs(i) * 0.004, y: 0 }, { r: 0.012 - Math.abs(i) * 0.004, y: 0.008 }, { r: 0, y: 0.010 },
-    ], 14), 'visor', { p: [i * 0.030, 0.062, FRONT * 0.060], r: [-90 * DEG * -FRONT, 0, 0] });
+      { r: 0, y: 0 }, { r: 0.019 - Math.abs(i) * 0.005, y: 0 },
+      { r: 0.016 - Math.abs(i) * 0.005, y: 0.009 }, { r: 0, y: 0.012 },
+    ], 14), 'visor', { p: [i * 0.040, 0.026, FRONT * 0.084], r: [-90 * DEG * -FRONT, 0, 0] });
   }
-  // skull cap and exhaust nubs
-  rig.add('head', bevelBox(0.14, 0.05, 0.15, 0.010, { topX: 0.7, topZ: 0.7 }), 'armorSecondary',
-    { p: [0, 0.118, -FRONT * 0.012], tier: TIER.PRIMARY });
+
+  // riveted skull cap and a pair of exhaust nubs
+  rig.add('head', shellLathe([
+    { r: 0.096, y: -0.062 }, { r: 0.104, y: -0.024, smooth: true },
+    { r: 0.104, y: 0.024, smooth: true }, { r: 0.088, y: 0.060 },
+  ], 0.022, 18, { arc: 190 * DEG, phase: -5 * DEG }), 'armorSecondary', {
+    p: [0, 0.086, -FRONT * 0.014], r: [-90 * DEG, 0, 0], tier: TIER.PRIMARY,
+  });
+  rig.add('head', boltRing(7, 0.086, 0.008, 0.010), 'trim',
+    { p: [0, 0.148, -FRONT * 0.014], tier: TIER.GREEBLE });
   for (const { sign, mirror } of SIDES) {
     rig.add('head', latheProfile([
-      { r: 0.018, y: 0 }, { r: 0.018, y: 0.05 }, { r: 0.022, y: 0.054, smooth: true }, { r: 0.014, y: 0.062 }, { r: 0, y: 0.062 },
-    ], 14), 'darkMetal', { p: [sign * 0.052, 0.135, -FRONT * 0.05], r: [-24 * DEG, 0, sign * 10 * DEG], mirror, tier: TIER.SECONDARY });
-    rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.011, y: 0 }, { r: 0, y: 0.006 }], 14), 'vents',
-      { p: [sign * 0.075, 0.190, -FRONT * 0.077], r: [-24 * DEG, 0, sign * 10 * DEG], mirror });
+      { r: 0.022, y: 0 }, { r: 0.022, y: 0.058 }, { r: 0.027, y: 0.063, smooth: true },
+      { r: 0.017, y: 0.072 }, { r: 0, y: 0.072 },
+    ], 14), 'darkMetal', {
+      p: [sign * 0.062, 0.126, -FRONT * 0.058], r: [-26 * DEG, 0, sign * 12 * DEG], mirror, tier: TIER.PRIMARY,
+    });
+    rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.013, y: 0 }, { r: 0, y: 0.008 }], 14), 'vents',
+      { p: [sign * 0.085, 0.190, -FRONT * 0.090], r: [-26 * DEG, 0, sign * 12 * DEG], mirror });
   }
 }
 
 function headTower(rig, spec, def) {
-  // narrow head plus a sensor mast: unmistakable long-range silhouette
-  rig.add('head', bevelBox(0.135, 0.155, 0.185, 0.012, { topX: 0.85, topZ: 0.85, botX: 0.68, botZ: 0.7 }), 'armorPrimary',
-    { p: [0, 0.058, 0], tier: TIER.PRIMARY });
-  rig.add('head', channelStrip(0.115, 0.030, 0.014), 'darkMetal',
-    { p: [0, 0.072, FRONT * 0.094], r: FACE_FRONT, tier: TIER.SECONDARY });
-  rig.glow('head', bevelBox(0.10, 0.016, 0.008, 0.003), 'visor', { p: [0, 0.074, FRONT * 0.098] });
-  // targeting monocle on one side, on a swing arm
-  rig.add('head', bevelBox(0.036, 0.036, 0.08, 0.006), 'darkMetal',
-    { p: [0.078, 0.085, FRONT * 0.045], r: [0, 12 * DEG, 8 * DEG], tier: TIER.SECONDARY });
+  // Sentry: narrow, tall, sensor-dense. The mast is the silhouette — you should
+  // be able to name this chassis from the top eighth of the frame alone.
+  rig.add('head', loftHull([
+    { y: -0.050, w: 0.104, d: 0.122, round: 0.40 },
+    { y: 0.004, w: 0.138, d: 0.176, round: 0.28, smooth: true },
+    { y: 0.096, w: 0.142, d: 0.186, round: 0.26, smooth: true },
+    { y: 0.158, w: 0.112, d: 0.146, round: 0.34 },
+  ]), 'armorPrimary', { tier: TIER.PRIMARY });
+  rig.add('head', loftHull([
+    { y: -0.040, w: 0.092, d: 0.040, round: 0.38 },
+    { y: 0.028, w: 0.132, d: 0.050, round: 0.28, smooth: true },
+    { y: 0.106, w: 0.136, d: 0.044, round: 0.28 },
+  ]), 'armorSecondary', { p: [0, 0, FRONT * 0.078], r: [-5 * DEG, 0, 0], tier: TIER.PRIMARY });
+
+  addVisor(rig, { w: 0.116, h: 0.024, y: 0.070, z: FRONT * 0.104, tilt: -5 * DEG, brow: 0.028 });
+
+  // targeting monocle on a swing arm, deliberately asymmetric
+  rig.add('head', loftHull([
+    { y: -0.020, w: 0.034, d: 0.070, round: 0.35 },
+    { y: 0.020, w: 0.040, d: 0.082, round: 0.32 },
+  ]), 'darkMetal', { p: [0.076, 0.088, FRONT * 0.040], r: [0, 12 * DEG, 9 * DEG], tier: TIER.SECONDARY });
   rig.add('head', latheProfile([
-    { r: 0.026, y: 0 }, { r: 0.026, y: 0.02 }, { r: 0.020, y: 0.028 }, { r: 0.016, y: 0.028 }, { r: 0.016, y: 0 },
-  ], 16), 'trim', { p: [0.086, 0.085, FRONT * 0.088], r: [-90 * DEG * -FRONT, 0, 0], tier: TIER.SECONDARY });
-  rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.015, y: 0 }, { r: 0, y: 0.008 }], 16), 'visor',
-    { p: [0.086, 0.085, FRONT * 0.100], r: [-90 * DEG * -FRONT, 0, 0] });
+    { r: 0.028, y: 0 }, { r: 0.028, y: 0.020 }, { r: 0.022, y: 0.030 }, { r: 0.017, y: 0.030 }, { r: 0.017, y: 0 },
+  ], 16), 'trim', { p: [0.084, 0.088, FRONT * 0.086], r: [-90 * DEG * -FRONT, 0, 0], tier: TIER.SECONDARY });
+  rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.016, y: 0 }, { r: 0, y: 0.009 }], 16), 'visor',
+    { p: [0.084, 0.088, FRONT * 0.100], r: [-90 * DEG * -FRONT, 0, 0] });
+
   // sensor drum on the other side
   rig.add('head', latheProfile([
-    { r: 0, y: 0 }, { r: 0.034, y: 0 }, { r: 0.038, y: 0.010, smooth: true }, { r: 0.038, y: 0.034 },
-    { r: 0.028, y: 0.042 }, { r: 0, y: 0.042 },
-  ], 20), 'darkMetal', { p: [-0.072, 0.06, 0], r: [0, 0, 90 * DEG], tier: TIER.SECONDARY });
-  rig.decal('head', DECAL.GAUGE, 0.055, 0.055, { p: [-0.116, 0.06, 0], r: [0, -90 * DEG, 0], tier: TIER.GREEBLE });
-  // mast + antennae
-  rig.add('head', bevelBox(0.05, 0.20, 0.06, 0.008, { topX: 0.5, topZ: 0.5 }), 'armorSecondary',
-    { p: [0, 0.20, -FRONT * 0.035], r: [-8 * DEG, 0, 0], tier: TIER.PRIMARY });
+    { r: 0, y: 0 }, { r: 0.036, y: 0 }, { r: 0.040, y: 0.011, smooth: true }, { r: 0.040, y: 0.038 },
+    { r: 0.030, y: 0.046 }, { r: 0, y: 0.046 },
+  ], 20), 'darkMetal', { p: [-0.070, 0.066, 0], r: [0, 0, 90 * DEG], tier: TIER.SECONDARY });
+  rig.decal('head', DECAL.GAUGE, 0.058, 0.058, { p: [-0.118, 0.066, 0], r: [0, -90 * DEG, 0], tier: TIER.GREEBLE });
+
+  // mast: a tapered tower, not a stick
+  rig.add('head', loftHull([
+    { y: 0.130, w: 0.058, d: 0.070, round: 0.30 },
+    { y: 0.214, w: 0.046, d: 0.058, z: -FRONT * 0.010, round: 0.32, smooth: true },
+    { y: 0.268, w: 0.024, d: 0.030, z: -FRONT * 0.018, round: 0.42 },
+  ]), 'armorSecondary', { p: [0, 0, -FRONT * 0.030], r: [-7 * DEG, 0, 0], tier: TIER.PRIMARY });
   for (const { sign, mirror } of SIDES) {
     rig.add('head', latheProfile([
       { r: 0.006, y: 0 }, { r: 0.006, y: 0.10 }, { r: 0.003, y: 0.105 }, { r: 0.003, y: 0.24 }, { r: 0, y: 0.25 },
-    ], 12), 'trim', { p: [sign * 0.024, 0.28, -FRONT * 0.045], r: [-12 * DEG, 0, sign * 9 * DEG], mirror, tier: TIER.SECONDARY });
+    ], 12), 'trim', { p: [sign * 0.026, 0.272, -FRONT * 0.044], r: [-12 * DEG, 0, sign * 10 * DEG], mirror, tier: TIER.SECONDARY });
   }
-  rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.010, y: 0 }, { r: 0, y: 0.012 }], 12), 'joints',
-    { p: [0, 0.31, -FRONT * 0.035] });
-  if (def) rig.decal('head', DECAL.BARCODE, 0.06, 0.03, { p: [0, 0.02, -FRONT * 0.096], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE });
+  rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.011, y: 0 }, { r: 0, y: 0.014 }], 12), 'joints',
+    { p: [0, 0.276, -FRONT * 0.046] });
+  if (def) rig.decal('head', DECAL.BARCODE, 0.062, 0.030, { p: [0, 0.016, -FRONT * 0.098], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE });
 }
 
 function headCrown(rig) {
-  // smooth ceremonial helm, faceted forehead crystal, four flared horn spines
+  // Hierarch: a smooth ceremonial helm, a veiled face and four flared horns. The
+  // only skull in the cast with no hard corner on it, which is the point.
   rig.add('head', latheProfile([
-    { r: 0.038, y: -0.02 }, { r: 0.072, y: 0.015, smooth: true }, { r: 0.086, y: 0.062, smooth: true },
-    { r: 0.078, y: 0.115, smooth: true }, { r: 0.046, y: 0.155, smooth: true }, { r: 0, y: 0.168 },
-  ], 24), 'armorPrimary', { p: [0, 0.01, 0], s: [1, 1, 1.12], tier: TIER.PRIMARY });
-  // face veil
-  rig.add('head', bevelBox(0.115, 0.13, 0.055, 0.008, { topX: 0.92, botX: 0.58, botZ: 0.7, shearZ: FRONT * 0.016 }), 'trim',
-    { p: [0, 0.055, FRONT * 0.070], tier: TIER.PRIMARY });
-  rig.add('head', channelStrip(0.09, 0.020, 0.010), 'darkMetal',
-    { p: [0, 0.078, FRONT * 0.098], r: FACE_FRONT, tier: TIER.SECONDARY });
-  rig.glow('head', bevelBox(0.076, 0.012, 0.008, 0.003), 'visor', { p: [0, 0.079, FRONT * 0.101] });
+    { r: 0.042, y: -0.050 }, { r: 0.078, y: -0.008, smooth: true }, { r: 0.094, y: 0.048, smooth: true },
+    { r: 0.088, y: 0.110, smooth: true }, { r: 0.052, y: 0.158, smooth: true }, { r: 0, y: 0.176 },
+  ], 24), 'armorPrimary', { s: [1, 1, 1.12], tier: TIER.PRIMARY });
+  // veil
+  rig.add('head', loftHull([
+    { y: -0.052, w: 0.072, d: 0.048, round: 0.44 },
+    { y: 0.010, w: 0.116, d: 0.060, round: 0.34, smooth: true },
+    { y: 0.078, w: 0.126, d: 0.056, round: 0.30, smooth: true },
+    { y: 0.116, w: 0.104, d: 0.044, round: 0.38 },
+  ]), 'trim', { p: [0, 0, FRONT * 0.062], r: [-4 * DEG, 0, 0], tier: TIER.PRIMARY });
+
+  addVisor(rig, { w: 0.098, h: 0.022, y: 0.070, z: FRONT * 0.090, brow: 0.026, posts: false });
+
   // forehead crystal
   rig.glow('head', latheProfile([
-    { r: 0, y: -0.030 }, { r: 0.020, y: -0.008 }, { r: 0.022, y: 0.004 }, { r: 0, y: 0.034 },
+    { r: 0, y: -0.032 }, { r: 0.022, y: -0.008 }, { r: 0.024, y: 0.005 }, { r: 0, y: 0.038 },
   ], 6, { faceted: true, phase: Math.PI / 6 }), 'core',
-  { p: [0, 0.122, FRONT * 0.062], r: [-70 * DEG * -FRONT, 0, 0] });
+  { p: [0, 0.124, FRONT * 0.062], r: [-70 * DEG * -FRONT, 0, 0] });
+
   // horns
   for (const { sign, mirror } of SIDES) {
-    for (let k = 0; k < 2; k++) {
-      const len = k === 0 ? 0.22 : 0.15;
-      rig.add('head', bevelBox(0.024, len, 0.030, 0.005, { topX: 0.22, topZ: 0.3, shearZ: -FRONT * 0.05 }), 'armorAccent', {
-        p: [sign * (0.052 + k * 0.026), 0.115 + k * 0.012, -FRONT * (0.01 + k * 0.035)],
-        r: [(26 + k * 14) * DEG, 0, sign * (24 + k * 16) * DEG],
+    for (let j = 0; j < 2; j++) {
+      const len = j === 0 ? 0.23 : 0.16;
+      rig.add('head', loftHull([
+        { y: 0, w: 0.028, d: 0.036, round: 0.34 },
+        { y: len * 0.58, w: 0.020, d: 0.026, z: -FRONT * len * 0.16, round: 0.36, smooth: true },
+        { y: len, w: 0.007, d: 0.009, z: -FRONT * len * 0.34, round: 0.45 },
+      ]), 'armorAccent', {
+        p: [sign * (0.056 + j * 0.026), 0.108 + j * 0.012, -FRONT * (0.012 + j * 0.036)],
+        r: [(26 + j * 14) * DEG, 0, sign * (24 + j * 16) * DEG],
         mirror, tier: TIER.PRIMARY,
       });
     }
-    rig.glow('head', bevelBox(0.006, 0.12, 0.006, 0.002), 'spine', {
-      p: [sign * 0.058, 0.16, -FRONT * 0.035], r: [26 * DEG, 0, sign * 24 * DEG], mirror,
-    });
+    rig.glow('head', loftHull([
+      { y: 0, w: 0.007, d: 0.007, round: 0.5 },
+      { y: 0.125, w: 0.005, d: 0.005, round: 0.5 },
+    ]), 'spine', { p: [sign * 0.060, 0.152, -FRONT * 0.036], r: [26 * DEG, 0, sign * 24 * DEG], mirror });
   }
+
   // circlet
   const circlet = [];
   for (let i = 0; i < 14; i++) {
     const a = (i / 14) * Math.PI * 2;
-    const g = bevelBox(0.018, 0.020, 0.014, 0.004);
+    const g = bevelBox(0.020, 0.022, 0.015, 0.004);
     g.applyMatrix4(new THREE.Matrix4().compose(
-      new THREE.Vector3(Math.cos(a) * 0.084, 0, Math.sin(a) * 0.094),
+      new THREE.Vector3(Math.cos(a) * 0.090, 0, Math.sin(a) * 0.100),
       new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -a, 0)),
       new THREE.Vector3(1, 1, 1),
     ));
     circlet.push(g);
   }
-  rig.add('head', joinGeometries(circlet), 'trim', { p: [0, 0.052, 0], tier: TIER.SECONDARY });
+  rig.add('head', joinGeometries(circlet), 'trim', { p: [0, 0.046, 0], tier: TIER.SECONDARY });
 }
 
 // ---------------------------------------------------------------------------
@@ -2123,11 +2790,7 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   // Pauldron geometry rides on the clavicle, which roster.js scales with the
   // `arms` group — so its offsets have to be scaled the same way or the shoulder
   // armour drifts off the joint it is supposed to cap.
-  const pd = {
-    w: pdSrc.w * m.armK, h: pdSrc.h * m.armK, d: pdSrc.d * m.armK,
-    taper: pdSrc.taper, out: pdSrc.out * m.armS, up: pdSrc.up * m.armS,
-    tilt: pdSrc.tilt, layers: pdSrc.layers,
-  };
+  const pd = scaledPauldron(spec, m);
   const S = side;
   const gaunt = opts.gauntlet ?? a.gauntlet;
   const upper = a.upper * m.armK * (opts.scale ?? 1);
@@ -2136,43 +2799,59 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   const uLen = m.upper;
   const fLen = m.fore;
 
-  // --- pauldron, on the clavicle so big shoulder armour does not spin with the arm
-  const layers = pd.layers;
-  for (let i = 0; i < layers; i++) {
-    const f = 1 - i * 0.24;
-    rig.add(`clavicle_${S}`, bevelBox(pd.w * f, pd.h * (1 - i * 0.16), pd.d * f, 0.016,
-      { topX: pd.taper, topZ: pd.taper * 1.05, botX: 1.02 }), i === 0 ? 'armorPrimary' : 'armorSecondary', {
-      p: [sign * (pd.out + pd.w * 0.28 + i * 0.006), pd.up - i * pd.h * 0.30, -FRONT * i * pd.d * 0.06],
-      r: [0, 0, sign * -(pd.tilt + i * 7) * DEG],
-      mirror, tier: TIER.PRIMARY,
+  // --- pauldron, on the clavicle so big shoulder armour does not spin with the
+  // arm. Each lame is a swept shell with an inner face and a rim, stepped clear
+  // of the one above it; the air between the layers is the whole read.
+  const lameSeg = rig.maxTier >= 2 ? 18 : 11;
+  const lames = pauldronLames(pd);
+  // Centre the shells on the shoulder ball, not on the collarbone: an arc struck
+  // from the wrong pivot hovers over the torso like a handle instead of capping
+  // the joint it is supposed to protect.
+  const ballX = Math.abs((rig.restPos[`shoulder_${S}`]?.x ?? 0.155 * m.armS)
+    - (rig.restPos[`clavicle_${S}`]?.x ?? 0)) * 0.58;
+  lames.forEach((l, i) => {
+    const at = [sign * (ballX + l.dx), l.dy, l.dz];
+    rig.add(`clavicle_${S}`, shellLathe([
+      { r: l.R * 0.93, y: -l.half },
+      { r: l.R, y: -l.half * 0.62, smooth: true },
+      { r: l.R, y: l.half * 0.62, smooth: true },
+      { r: l.R * 0.93, y: l.half },
+    ], l.thick, lameSeg, { arc: l.a1 - l.a0, phase: l.a0 }),
+    i === 0 ? 'armorPrimary' : 'armorSecondary', {
+      // the lathe sweeps about +Y; -90 about X lays that sweep into the frontal
+      // plane so the arc runs from under the arm up over the top of the shoulder
+      p: at, r: [-90 * DEG, 0, 0], mirror, tier: TIER.PRIMARY,
     });
-  }
-  // pauldron rim and rivets
-  rig.add(`clavicle_${S}`, bevelBox(pd.w * 0.30, 0.016, pd.d * 1.02, 0.005), 'trim', {
-    p: [sign * (pd.out + pd.w * 0.62), pd.up + pd.h * 0.42, 0],
-    r: [0, 0, sign * -pd.tilt * DEG], mirror, tier: TIER.SECONDARY,
+    // Rolled edge along the leading rim of each lame: a thin band standing proud
+    // of the plate right where a real one would be ground bright, and the only
+    // thing on the shoulder that reliably catches the rim light.
+    const mid = (l.a0 + l.a1) * 0.5;
+    rig.add(`clavicle_${S}`, shellLathe([
+      { r: l.R * 1.03, y: -l.half * 0.99 }, { r: l.R * 1.05, y: -l.half * 0.86, smooth: true },
+      { r: l.R * 1.05, y: l.half * 0.86, smooth: true }, { r: l.R * 1.03, y: l.half * 0.99 },
+    ], l.thick * 0.55, Math.max(6, Math.round(lameSeg * 0.45)),
+    { arc: (l.a1 - l.a0) * 0.42, phase: mid - (l.a1 - l.a0) * 0.21 }),
+    'trim', { p: at, r: [-90 * DEG, 0, 0], mirror, tier: TIER.SECONDARY });
   });
+
+  // shoulder cap: the block the lames hang off, closing the gap to the neck
+  const cap = lames[0];
+  rig.add(`clavicle_${S}`, loftHull([
+    { y: -pd.h * 0.40, w: pd.w * 0.70, d: pd.d * 0.80, round: 0.36 },
+    { y: pd.up + pd.h * 0.06, w: pd.w * 0.92, d: pd.d * 0.86, round: 0.30, smooth: true },
+    { y: pd.up + pd.h * 0.40, w: pd.w * 0.58, d: pd.d * 0.62, round: 0.40 },
+  ]), 'armorSecondary', {
+    p: [sign * (ballX * 0.55), 0, -FRONT * pd.d * 0.02],
+    r: [0, 0, sign * -pd.tilt * 0.5 * DEG], mirror, tier: TIER.PRIMARY,
+  });
+
   addPanelDetail(rig, `clavicle_${S}`, {
-    p: [sign * (pd.out + pd.w * 0.30), pd.up + pd.h * 0.10, FRONT * (pd.d * 0.50 + 0.004)],
-    r: [0, YAW_FRONT, sign * -pd.tilt * DEG],
-    w: pd.w * 0.78, h: pd.h * 0.72, bolts: 3, splitsY: [0.24], splitsX: [-0.18], mirror,
+    p: [sign * (ballX + cap.dx + cap.R * 0.30), cap.dy + cap.R * 0.58, FRONT * (cap.half + 0.006)],
+    r: [0, YAW_FRONT, sign * -34 * DEG],
+    w: pd.w * 0.46, h: pd.h * 0.42, bolts: 3, splitsY: [0.22], splitsX: [-0.18], mirror,
   });
-  addPanelDetail(rig, `clavicle_${S}`, {
-    p: [sign * (pd.out + pd.w * 0.86), pd.up + pd.h * 0.06, 0],
-    r: [0, sign * 90 * DEG, sign * -pd.tilt * DEG],
-    w: pd.d * 0.72, h: pd.h * 0.64, bolts: 4, splitsY: [0.26], splitsX: [-0.22], mirror,
-    accent: 'armorAccent',
-  });
-  rig.add(`clavicle_${S}`, bevelBox(0.014, pd.h * 0.84, pd.d * 0.92, 0.004, { topX: 0.6 }), 'trim', {
-    p: [sign * (pd.out + pd.w * 0.90), pd.up + pd.h * 0.04, 0],
-    r: [0, 0, sign * -pd.tilt * DEG], mirror, tier: TIER.SECONDARY,
-  });
-  rig.decal(`clavicle_${S}`, DECAL.HAZARD, pd.d * 0.7, 0.038, {
-    p: [sign * (pd.out + pd.w * 0.30), pd.up + pd.h * 0.50, 0],
-    r: [-90 * DEG, 0, sign * -pd.tilt * DEG], mirror, tier: TIER.GREEBLE,
-  });
-  rig.add(`clavicle_${S}`, boltRing(5, pd.w * 0.26, 0.008, 0.010), 'trim', {
-    p: [sign * (pd.out + pd.w * 0.36), pd.up - pd.h * 0.05, FRONT * pd.d * 0.42],
+  rig.add(`clavicle_${S}`, boltRing(5, pd.w * 0.22, 0.008, 0.010), 'trim', {
+    p: [sign * (ballX + cap.dx), cap.dy, FRONT * (cap.half + 0.008)],
     r: FACE_FRONT, mirror, tier: TIER.GREEBLE,
   });
 
@@ -2190,11 +2869,22 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   // --- upper arm: one section running from inside the shoulder housing down to
   // just short of the elbow pivot, sized at each end to match its neighbour
   const elbowW = fore * 1.52;
-  rig.section(`shoulder_${S}`, {
+
+  // Deltoid shell, on the shoulder so it swings with the arm. The pauldron
+  // hanging above needs something to overlap; without it the shoulder armour
+  // stops in mid-air and the arm reads as a separate object bolted on nearby.
+  rig.add(`shoulder_${S}`, shellLathe([
+    { r: upper * 0.80, y: -uLen * 0.66 },
+    { r: upper * 0.90, y: -uLen * 0.46, smooth: true },
+    { r: upper * 0.94, y: -uLen * 0.08, smooth: true },
+    { r: upper * 0.86, y: upper * 0.24 },
+  ], upper * 0.17, rig.maxTier >= 2 ? 16 : 10, { arc: 186 * DEG, phase: -93 * DEG }),
+  'armorSecondary', { mirror, tier: TIER.PRIMARY });
+  rig.plated(`shoulder_${S}`, {
     y0: -uLen * 0.90, y1: upper * 0.40,
     w0: elbowW * 0.94, w1: upper * 1.52,
     d0: elbowW * 0.96, d1: upper * 1.56,
-    mat: 'armorPrimary', bevel: 0.012, mirror,
+    mat: 'armorPrimary', gap: 0.013, inset: 0.88, round: 0.36, swell: 0.05, mirror,
   });
   rig.add(`shoulder_${S}`, bevelBox(upper * 1.1, uLen * 0.40, upper * 0.5, 0.008, { topX: 0.9, botX: 0.7 }), 'armorSecondary',
     { p: [0, -uLen * 0.52, FRONT * upper * 0.82], r: [0, 0, 0], mirror, tier: TIER.SECONDARY });
@@ -2218,11 +2908,11 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
 
   // --- forearm: from inside the elbow barrel down to the wrist cuff
   const cuffW = fore * 1.36 * (1 + gaunt * 0.18);
-  rig.section(`elbow_${S}`, {
+  rig.plated(`elbow_${S}`, {
     y0: -fLen * 0.90, y1: fore * 0.34,
     w0: cuffW, w1: fore * 1.55,
     d0: cuffW * 0.98, d1: fore * 1.55,
-    mat: 'armorPrimary', bevel: 0.012, mirror,
+    mat: 'armorPrimary', gap: 0.012, inset: 0.88, round: 0.34, swell: 0.04, mirror,
   });
   // forearm panel with fasteners
   rig.add(`elbow_${S}`, bevelBox(fore * 1.0, fLen * 0.44, 0.012, 0.005), 'carbon',
@@ -2257,12 +2947,12 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   rig.section(`hand_${S}`, {
     y0: -m.grip * 0.34, y1: m.palm * 0.62,
     w0: hw * 0.64, w1: hw * 0.72, d0: hw * 0.86, d1: hw * 0.95,
-    mat: 'armorPrimary', bevel: 0.012, mirror,
+    mat: 'armorPrimary', mirror,
   });
   rig.section(`fingers_${S}`, {
     y0: -m.grip * 0.58, y1: m.grip * 0.42,
     w0: hw * 0.58, w1: hw * 0.70, d0: hw * 0.76, d1: hw * 0.90,
-    mat: 'armorSecondary', bevel: 0.010, mirror,
+    mat: 'armorSecondary', mirror,
   });
   for (let i = 0; i < 4; i++) {
     rig.add(`fingers_${S}`, latheProfile([
@@ -2403,11 +3093,12 @@ function buildLeg(rig, spec, side, sign, mirror) {
   const ankleW = kneeW * 0.78;
 
   // --- thigh: one section from inside the hip ball down to the knee barrel
-  rig.section(`hip_${S}`, {
+  rig.plated(`hip_${S}`, {
     y0: -tLen * 0.90, y1: L.thigh * 0.42,
     w0: kneeW * 0.96, w1: thighW,
     d0: kneeW * 1.00, d1: thighW * 1.03,
-    mat: 'armorPrimary', bevel: 0.016, r: [0, 0, sign * (splay ? 4 : 2) * DEG], mirror,
+    mat: 'armorPrimary', gap: 0.017, inset: 0.86, round: 0.36, swell: 0.07, swellAt: 0.62,
+    r: [0, 0, sign * (splay ? 4 : 2) * DEG], mirror,
   });
   // outer thigh panel + channel
   rig.add(`hip_${S}`, bevelBox(0.026, tLen * 0.52, L.thigh * 1.0, 0.006, { topX: 0.8 }), 'carbon',
@@ -2449,14 +3140,14 @@ function buildLeg(rig, spec, side, sign, mirror) {
       y0: -sLen * 0.50, y1: L.shin * 0.40,
       w0: kneeW * 0.80, w1: kneeW,
       d0: kneeW * 1.05, d1: kneeW * 1.55,
-      mat: 'armorPrimary', bevel: 0.012, z: -FRONT * L.shin * 0.30,
+      mat: 'armorPrimary', z: -FRONT * L.shin * 0.30,
       shearZ: -FRONT * 0.05, mirror,
     });
     rig.section(`knee_${S}`, {
       y0: -sLen * 0.94, y1: -sLen * 0.44,
       w0: ankleW, w1: kneeW * 0.82,
       d0: ankleW * 1.02, d1: kneeW * 0.94,
-      mat: 'armorPrimary', bevel: 0.010, z: -FRONT * L.shin * 0.05,
+      mat: 'armorPrimary', z: -FRONT * L.shin * 0.05,
       shearZ: FRONT * 0.045, mirror,
     });
     // calf thruster
@@ -2468,11 +3159,11 @@ function buildLeg(rig, spec, side, sign, mirror) {
       { p: [0, -sLen * 0.38, -FRONT * L.shin * 1.02], r: [(160 * DEG) * -FRONT, 0, 0], mirror });
     rig.emitter('thruster', `knee_${S}`, [0, -sLen * 0.40, -FRONT * L.shin * 1.05], [0, -0.4, -FRONT], 0.04);
   } else {
-    rig.section(`knee_${S}`, {
+    rig.plated(`knee_${S}`, {
       y0: -sLen * 0.92, y1: L.shin * 0.44,
       w0: ankleW, w1: kneeW,
       d0: ankleW * 1.04, d1: kneeW * 1.06,
-      mat: 'armorPrimary', bevel: 0.014, mirror,
+      mat: 'armorPrimary', gap: 0.016, inset: 0.86, round: 0.34, swell: 0.08, swellAt: 0.66, mirror,
     });
     // calf vent stack
     addLouvres(rig, `knee_${S}`, {
@@ -2598,19 +3289,54 @@ function buildVariation(rig, spec, def) {
   const pd = spec.pauldron;
   const back = -FRONT;
 
+  const scaled = scaledPauldron(spec, rig.dim);
+  const lame = pauldronLames(scaled)[0];
+
   // 1. shoulder crest blades — 0, 1 or 2 per side, swept back over the pauldron
   const blades = rng.int(3);
   for (let i = 0; i < blades; i++) {
     const len = 0.16 + rng.range(0, 0.12);
     for (const { s, sign, mirror } of SIDES) {
-      rig.add(`clavicle_${s}`, bevelBox(0.020, len, 0.05, 0.005,
-        { topX: 0.28, topZ: 0.42, shearZ: back * 0.05 }), 'armorAccent', {
-        p: [sign * (pd.out + pd.w * (0.30 + i * 0.22)), pd.up + pd.h * 0.56, back * pd.d * 0.14],
-        r: [(-24 - i * 12) * DEG, 0, sign * -(pd.tilt + 14 + i * 10) * DEG],
+      const ballX = Math.abs((rig.restPos[`shoulder_${s}`]?.x ?? 0.155)
+        - (rig.restPos[`clavicle_${s}`]?.x ?? 0)) * 0.58;
+      rig.add(`clavicle_${s}`, loftHull([
+        { y: 0, w: 0.024, d: 0.052, round: 0.32 },
+        { y: len * 0.55, w: 0.019, d: 0.062, z: back * len * 0.14, round: 0.30, smooth: true },
+        { y: len, w: 0.007, d: 0.026, z: back * len * 0.34, round: 0.42 },
+      ]), 'armorAccent', {
+        p: [sign * (ballX + lame.dx + lame.R * (0.22 + i * 0.26)),
+          lame.dy + lame.R * (0.86 - i * 0.10), back * lame.half * 0.30],
+        r: [(-20 - i * 10) * DEG, 0, sign * -(40 + i * 14) * DEG],
         mirror, tier: TIER.PRIMARY,
       });
     }
   }
+
+  // 1b. asymmetric shoulder markings.
+  //
+  // Real hardware is not stencilled symmetrically: the unit roundel goes on one
+  // side, the tally chevrons on the other, and that single asymmetry is worth
+  // more to the read than another twenty greebles. Materials.js exports no
+  // marking atlas as of this writing — if it ever does, swap `DECAL` for it and
+  // keep these placements. Until then the flat quad reserves the UV space: each
+  // sits on its own atlas cell with a 0.002 edge trim, and the surface under it
+  // is left clear of panel strips so a larger marking can grow into it.
+  const numberSide = rng.sign();
+  for (const { s, sign, mirror } of SIDES) {
+    const ballX = Math.abs((rig.restPos[`shoulder_${s}`]?.x ?? 0.155)
+      - (rig.restPos[`clavicle_${s}`]?.x ?? 0)) * 0.58;
+    const marked = sign === numberSide;
+    rig.decal(`clavicle_${s}`, marked ? DECAL.ROUNDEL : DECAL.CHEVRON,
+      lame.R * 0.62, lame.R * 0.62, {
+        p: [sign * (ballX + lame.dx + lame.R * 0.34), lame.dy + lame.R * 0.30,
+          FRONT * (lame.half + 0.008)],
+        r: [0, YAW_FRONT, sign * (marked ? -14 : 8) * DEG], mirror, tier: TIER.GREEBLE,
+      });
+  }
+  rig.decal(`clavicle_${numberSide > 0 ? 'R' : 'L'}`, DECAL.HAZARD, scaled.d * 0.44, 0.034, {
+    p: [-numberSide * (scaled.out + scaled.w * 0.30), lame.dy + lame.R * 0.70, 0],
+    r: [-72 * DEG, 0, numberSide * 18 * DEG], mirror: numberSide > 0, tier: TIER.GREEBLE,
+  });
 
   // 2. hip stowage: an ammo drum or a utility block on one side
   const stow = rng.int(3);
@@ -2902,7 +3628,11 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
       merged.computeBoundingBox();
       const mesh = new THREE.SkinnedMesh(merged, mat);
       mesh.name = `${suffix}:${matName}`;
-      mesh.castShadow = matName !== 'decal';
+      // Shadow-caster budget. Every mesh here is one more draw call per cascade,
+      // and the emissive strips and decal quads are recessed millimetres-thin
+      // surfaces that cannot throw a shadow anyone will ever see — so they stay
+      // out of the depth pass entirely. That is ten draw calls per fighter.
+      mesh.castShadow = matName !== 'decal' && !matName.startsWith('glow_');
       mesh.receiveShadow = !matName.startsWith('glow_') && matName !== 'decal';
       mesh.bind(skeleton, new THREE.Matrix4());
       if (matName.startsWith('glow_')) {

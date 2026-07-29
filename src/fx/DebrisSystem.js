@@ -12,9 +12,18 @@
  * take the stage key light, the coloured rim, and the environment reflection
  * exactly like the fighters do. That shared lighting response is what sells them
  * as pieces of the robot rather than as particles.
+ *
+ * A shard torn off armour by a launcher leaves at the temperature the impact put
+ * into it, so each one carries its own cooling emission on the same blackbody
+ * ramp the sparks use. That is the longest-lived bright element a hit produces:
+ * the flare is gone in four frames and the sparks in a second, but a glowing
+ * fragment is still tumbling and bouncing across the floor while the reaction
+ * animation finishes, which is what stops a heavy hit from leaving nothing
+ * behind it.
  */
 
 import * as THREE from 'three';
+import { GLSL_TEMPERATURE } from './FxShaders.js';
 
 const _q = new THREE.Quaternion();
 const _dq = new THREE.Quaternion();
@@ -23,6 +32,9 @@ const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _axis = new THREE.Vector3();
 const _color = new THREE.Color();
+
+/** Seconds a fresh shard takes to cool from white-hot to dead metal. */
+const COOL_TIME = 1.8;
 
 /**
  * An irregular faceted shard. Built from a subdivided tetrahedron whose vertices
@@ -73,6 +85,23 @@ export class DebrisSystem {
       clearcoat: 0.15,
       clearcoatRoughness: 0.4,
     });
+
+    // Per-instance residual heat, injected into the standard emissive path so
+    // the shards still get the full physical lighting model on top of it.
+    this.heatGain = { value: 2.4 };
+    this.heat = new Float32Array(capacity);
+    this.geometry.setAttribute('aHeat', new THREE.InstancedBufferAttribute(this.heat, 1));
+    this.geometry.attributes.aHeat.setUsage(THREE.DynamicDrawUsage);
+    this.material.onBeforeCompile = (shader) => {
+      shader.uniforms.uHeatGain = this.heatGain;
+      shader.vertexShader = `attribute float aHeat;\nvarying float vHeat;\n${shader.vertexShader}`
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvHeat = aHeat;');
+      shader.fragmentShader = `uniform float uHeatGain;\nvarying float vHeat;\n${GLSL_TEMPERATURE}\n${shader.fragmentShader}`
+        .replace(
+          '#include <emissivemap_fragment>',
+          '#include <emissivemap_fragment>\n\ttotalEmissiveRadiance += sparkEmission( 1.0 - vHeat, uHeatGain );',
+        );
+    };
 
     this.mesh = new THREE.InstancedMesh(this.geometry, this.material, capacity);
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -171,6 +200,7 @@ export class DebrisSystem {
 
       this.maxLife[i] = life * (0.7 + Math.random() * 0.6);
       this.life[i] = this.maxLife[i];
+      this.heat[i] = 0.75 + Math.random() * 0.25;
       this.tint[o] = col.r; this.tint[o + 1] = col.g; this.tint[o + 2] = col.b;
     }
   }
@@ -238,6 +268,8 @@ export class DebrisSystem {
       const c = this.mesh.instanceColor.array;
       c[o] = this.tint[o]; c[o + 1] = this.tint[o + 1]; c[o + 2] = this.tint[o + 2];
 
+      if (this.heat[i] > 0) this.heat[i] = Math.max(0, this.heat[i] - dt / COOL_TIME);
+
       this.life[i] = l;
       if (l <= 0) {
         _m.makeScale(0, 0, 0);
@@ -251,15 +283,18 @@ export class DebrisSystem {
     if (any) {
       this.mesh.instanceMatrix.needsUpdate = true;
       this.mesh.instanceColor.needsUpdate = true;
+      this.geometry.attributes.aHeat.needsUpdate = true;
     }
   }
 
   reset() {
     for (let i = 0; i < this.capacity; i++) {
       this.life[i] = 0;
+      this.heat[i] = 0;
       _m.makeScale(0, 0, 0);
       this.mesh.setMatrixAt(i, _m);
     }
+    this.geometry.attributes.aHeat.needsUpdate = true;
     this.mesh.instanceMatrix.needsUpdate = true;
     this.cursor = 0;
     this.active = 0;
