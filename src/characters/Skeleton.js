@@ -6,9 +6,19 @@
  * hitbox anchors from these bones. Do not rename bones. Adding bones is fine.
  *
  * Coordinate convention (three.js, Y-up, right-handed):
- *   +Y is up, +X is the fighter's LEFT, -Z is the direction the fighter FACES
+ *   +Y is up, +X is the fighter's LEFT, +Z is the direction the fighter FACES
  *   when its root rotation is identity. Fighters are mirrored by rotating the
  *   root about Y, never by negative scale.
+ *
+ * The forward axis is read off the geometry below, not off prose: `toe_*` sits
+ * at +Z of the foot, `neck`, `fingers_*` and `thumb_*` all lean +Z, and
+ * `IK_CHAINS` aims the knee poles at +Z so the knee breaks forward. Every
+ * animation clip and `Fighter.FORWARD_SIGN` agree. This header said -Z until
+ * round 7 and the error propagated: `RobotBuilder.js` was written from it and
+ * builds its plating with `FRONT = -1`, which puts the visor and the chest core
+ * on the fighter's back. Measured on the live rig, the visor centroid sits
+ * 0.139m BEHIND the head origin along the facing axis while the toe sits 0.19m
+ * in front of the ankle. That is a mesh defect, not a rig one.
  *
  * Rest pose is a relaxed A-pose (arms ~40deg down from horizontal) which skins
  * far better at the shoulder than a T-pose.
@@ -32,11 +42,14 @@ import * as THREE from 'three';
  */
 
 /**
+ * Field names are `Spring3`'s, not prose ones: the animator spreads this block
+ * straight over its own defaults, so a key it does not read is dead data.
  * @typedef {Object} SpringDef
- * @property {number} stiffness  pull back toward the rest direction, 1/s^2
- * @property {number} damping    velocity damping, 1/s
- * @property {number} drag       how strongly the parent's motion drives it, 0..1.5
- * @property {number} limit      largest deflection from rest, radians
+ * @property {number} k         pull back toward the rest direction, 1/s^2
+ * @property {number} c         velocity damping, 1/s
+ * @property {number} driveRot  how strongly the parent's ROTATION drives it, 0..1.5
+ * @property {number} driveAcc  how strongly the body's ACCELERATION drives it, 0..1
+ * @property {number} limit     largest deflection from rest, radians
  */
 
 const D = Math.PI / 180;
@@ -97,23 +110,35 @@ export const BONES = [
   // sliding rather than swinging.
   //
   // `spring` is authoring data for the secondary-motion layer and is ignored by
-  // everything else. `stiffness` is how hard the bone is pulled back to its
-  // rest direction, `damping` how fast the swing dies, `drag` how much the
-  // parent's motion drives it and `limit` the largest deflection in radians.
-  // The numbers say what the part is: an antenna is a light whip that keeps
-  // ringing, a reactor pack is heavy and settles in one swing.
+  // everything else. `k` is how hard the bone is pulled back to its rest
+  // direction, `c` how fast the swing dies, `driveRot` how much the parent's
+  // rotation drives it, `driveAcc` how much the BODY'S acceleration does, and
+  // `limit` the largest deflection in radians. The last one is what makes a
+  // reactor pack lag a dash rather than a head turn, so a pack carries the most
+  // of it and an antenna the least.
+  //
+  // The numbers also say what the part is: an antenna is a light whip that keeps
+  // ringing (damping ratio ~0.2), a reactor pack is heavy and settles in one
+  // swing (~0.65). L and R are deliberately NOT equal — a matched pair swings in
+  // phase and stops reading as two independent parts, it reads as cloth. The
+  // sides are split 0.7x / 1.3x on `k`, a 1.36x frequency ratio, so they are a
+  // half-cycle apart within two swings.
+  //
+  // Everything here hangs off -Z, the fighter's BACK: +Z is the facing axis, per
+  // the header. `RobotBuilder.js` currently builds its hardware on the opposite
+  // convention; these follow the rig.
   //
   // 20cm up the skull splits the difference between the two chassis that carry
   // head hardware: a crown's horns root at about 12cm and a sentry's mast whips
   // at about 32cm, and one shared rig cannot sit at both.
-  { name: 'antenna_L', parent: 'head', pos: [0.062, 0.200, -0.012], spring: { stiffness: 26, damping: 3.2, drag: 1.0, limit: 0.5 } },
-  { name: 'antenna_R', parent: 'head', pos: [-0.062, 0.200, -0.012], spring: { stiffness: 26, damping: 3.2, drag: 1.0, limit: 0.5 } },
-  { name: 'pack_L', parent: 'chest', pos: [0.132, 0.02, 0.158], spring: { stiffness: 62, damping: 11, drag: 0.55, limit: 0.16 } },
-  { name: 'pack_R', parent: 'chest', pos: [-0.132, 0.02, 0.158], spring: { stiffness: 62, damping: 11, drag: 0.55, limit: 0.16 } },
-  { name: 'cable_L', parent: 'spine02', pos: [0.098, 0.05, 0.148], spring: { stiffness: 15, damping: 2.4, drag: 1.15, limit: 0.75 } },
-  { name: 'cable_R', parent: 'spine02', pos: [-0.098, 0.05, 0.148], spring: { stiffness: 15, damping: 2.4, drag: 1.15, limit: 0.75 } },
-  { name: 'skirt_L', parent: 'hips', pos: [0.118, -0.038, 0.018], spring: { stiffness: 34, damping: 5.5, drag: 0.85, limit: 0.34 } },
-  { name: 'skirt_R', parent: 'hips', pos: [-0.118, -0.038, 0.018], spring: { stiffness: 34, damping: 5.5, drag: 0.85, limit: 0.34 } },
+  { name: 'antenna_L', parent: 'head', pos: [0.062, 0.200, -0.012], spring: { k: 18.2, c: 1.36, driveRot: 1.00, driveAcc: 0.28, limit: 0.5 } },
+  { name: 'antenna_R', parent: 'head', pos: [-0.062, 0.200, -0.012], spring: { k: 33.8, c: 2.56, driveRot: 0.92, driveAcc: 0.32, limit: 0.5 } },
+  { name: 'pack_L', parent: 'chest', pos: [0.132, 0.02, -0.158], spring: { k: 43.4, c: 8.17, driveRot: 0.62, driveAcc: 0.42, limit: 0.16 } },
+  { name: 'pack_R', parent: 'chest', pos: [-0.132, 0.02, -0.158], spring: { k: 80.6, c: 12.02, driveRot: 0.68, driveAcc: 0.48, limit: 0.16 } },
+  { name: 'cable_L', parent: 'spine02', pos: [0.098, 0.05, -0.148], spring: { k: 10.5, c: 1.17, driveRot: 0.96, driveAcc: 0.33, limit: 0.75 } },
+  { name: 'cable_R', parent: 'spine02', pos: [-0.098, 0.05, -0.148], spring: { k: 19.5, c: 2.30, driveRot: 1.00, driveAcc: 0.37, limit: 0.75 } },
+  { name: 'skirt_L', parent: 'hips', pos: [0.118, -0.038, -0.018], spring: { k: 23.8, c: 2.34, driveRot: 0.78, driveAcc: 0.20, limit: 0.34 } },
+  { name: 'skirt_R', parent: 'hips', pos: [-0.118, -0.038, -0.018], spring: { k: 44.2, c: 3.99, driveRot: 0.84, driveAcc: 0.24, limit: 0.34 } },
 ];
 
 export const BONE_NAMES = BONES.map((b) => b.name);
@@ -176,13 +201,13 @@ export function createSkeleton(proportions = null) {
  */
 function scaleFor(def, p) {
   const n = def.name;
-  if (/^(hip_|knee_|ankle_|foot_|toe_|skirt_)/.test(n)) return p.legs ?? 1;
+  if (/^(hip_|knee_|ankle_|foot_|toe_)/.test(n)) return p.legs ?? 1;
   if (/^(shoulder_|elbow_|wrist_|hand_|fingers_|thumb_|clavicle_)/.test(n)) return p.arms ?? 1;
   // A spring leaf hangs off the mass it belongs to, so it has to follow the
   // same multiplier that moved its parent or the hardware detaches.
   if (/^(spine|chest|neck|pack_|cable_)/.test(n)) return p.torso ?? 1;
   if (/^(head|headTop|antenna_)/.test(n)) return p.head ?? 1;
-  if (n === 'hips') return p.height ?? 1;
+  if (n === 'hips' || n.startsWith('skirt_')) return p.height ?? 1;
   return 1;
 }
 

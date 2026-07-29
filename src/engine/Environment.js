@@ -99,11 +99,31 @@ const ENV_QUAD_LAYER = 3;
  * them. It is baked only on a mood change, so the cost is memory and a couple of
  * milliseconds on a cross-fade, not per frame.
  */
+// Area-light budget, and it is the whole frame. Measured at 1080p headless
+// (ANGLE/Metal) with a slow ladder — 4s settle per step, repeated four times,
+// because hiding a RectAreaLight changes NUM_RECT_AREA_LIGHTS and recompiles
+// every material, so a fast A/B measures the recompile and not the light:
+//
+//     0 area lights   16.5 ms   61 fps
+//     4 area lights   26.9 ms   37 fps
+//     8 area lights   40.3 ms   25 fps
+//
+// Linear, ~3.0ms each. For comparison the entire post chain is 5.8ms and the
+// whole shadow pass 1.5ms — nothing else in the renderer is within an order of
+// magnitude, and the game is light-shader-bound rather than triangle-bound.
+//
+// So the count below is a deliberate spend, not a default. The one that earns
+// its 3ms is the per-fighter key box: it draws the long bar down the plate that
+// the player actually looks at. The four stage practicals sit at the same
+// positions as the brightest emissive quads in the cube, so PMREM already
+// carries their soft contribution — dropping them loses the crisp rectangular
+// specular on the *set*, which the camera is not pointed at. The ceiling strips
+// go for the same reason.
 const TIERS = {
-  ultra: { cube: 512, bg: 1024, shadow: 2048, practicals: 4, rims: 2, boxes: 1, strips: 2 },
-  high: { cube: 512, bg: 768, shadow: 2048, practicals: 4, rims: 2, boxes: 1, strips: 2 },
-  medium: { cube: 256, bg: 384, shadow: 1024, practicals: 3, rims: 2, boxes: 1, strips: 1 },
-  low: { cube: 128, bg: 256, shadow: 512, practicals: 2, rims: 1, boxes: 0, strips: 0 },
+  ultra: { cube: 512, bg: 1024, shadow: 2048, practicals: 1, rims: 2, boxes: 1, strips: 0 },
+  high: { cube: 512, bg: 768, shadow: 2048, practicals: 1, rims: 2, boxes: 1, strips: 0 },
+  medium: { cube: 256, bg: 384, shadow: 1024, practicals: 0, rims: 2, boxes: 1, strips: 0 },
+  low: { cube: 128, bg: 256, shadow: 512, practicals: 0, rims: 1, boxes: 0, strips: 0 },
 };
 
 /** One rim rig per fighter; the game runs two. */

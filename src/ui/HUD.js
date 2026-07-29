@@ -71,6 +71,8 @@ const PORTRAIT_SIZE = 128;
 
 /** Reusable scratch vector for world -> screen projection. */
 const _proj = new THREE.Vector3();
+/** Scratch for saving the renderer's clear colour across a portrait pass. */
+const _clearColor = new THREE.Color();
 
 export class HUD {
   /**
@@ -112,11 +114,26 @@ export class HUD {
     this.visible = null; // last hud--hidden state written, to avoid redundant class writes
     this.tenseState = null;
 
+    /**
+     * Cached bounds of `uiRoot`, used by `#worldToScreen`. Reading this
+     * per callout per frame was a forced synchronous layout of the whole
+     * document — measured at 0.20ms a call against the live HUD, versus
+     * 0.008ms for the cached read. Invalidated on resize and whenever the
+     * HUD is shown, which is the only time the overlay can have been
+     * relaid out without a resize event.
+     */
+    this.rootRect = null;
+    window.addEventListener('resize', () => { this.rootRect = null; });
+
     /** Lazily-created offscreen render target + camera for `#capturePortrait`. */
     this.portraitRT = null;
+    this.portraitBuffer = null;
     this.portraitCamera = new THREE.PerspectiveCamera(26, 1, 0.05, 4);
     this.portraitCamera.layers.set(PORTRAIT_LAYER);
     this._portraitPos = new THREE.Vector3();
+    /** One capture in flight at a time, at most one started per frame. */
+    this.portraitPending = fighters.map(() => false);
+    this.portraitBusy = false;
 
     this.#wireBus();
   }
@@ -306,7 +323,80 @@ export class HUD {
     this.uiRoot.appendChild(layer);
     this.announceBanner = banner;
     this.announceText = text;
-    banner.addEventListener('animationend', () => this.#advanceAnnounceQueue());
+    banner.addEventListener('animationend', (e) => {
+      // `.announce-banner::before` runs its own flare of exactly the same
+      // length, and CSS dispatches a pseudo-element's animation events at
+      // the *originating* element — so this listener fires twice per
+      // banner. The second one advanced the queue again on the same frame,
+      // which is why a queued pair ("PERFECT" then "K.O.") could drop the
+      // second word: it was started and immediately superseded.
+      if (e.pseudoElement) return;
+      this.#advanceAnnounceQueue();
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Restarting one-shot CSS animations
+  //
+  // The usual idiom for replaying a keyframe animation — drop the class,
+  // read `offsetWidth` to flush, put the class back — buys its style flush
+  // with a *forced synchronous layout of the whole document*. Measured
+  // against this HUD with the render loop live it costs 0.21ms a call, and
+  // the hit flash and the combo slam both fire on every hit, so a five-hit
+  // juggle spends over a millisecond of the frame budget doing nothing but
+  // relayout.
+  //
+  // Two cheaper flushes do not survive measurement and are not used here.
+  // `getComputedStyle(el).animationName` is *worse*, at 0.31ms — it skips
+  // layout but still resolves style for the whole element. And the Web
+  // Animations restart, `for (const a of el.getAnimations()) { a.cancel();
+  // a.play(); }`, does not restart anything: tested against both the hit
+  // flash (`fill: none`) and the announcement banner (`fill: forwards`,
+  // restarted from inside its own `animationend`), `getAnimations()`
+  // returned an empty list both times, so it is a silent no-op that would
+  // simply stop the effect playing.
+  //
+  // The two techniques below replace it, chosen per site by how hot the
+  // site is.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Hot path (per hit). Alternates between two classes that differ only in
+   * which of a pair of identical `@keyframes` they name, so the computed
+   * `animation-name` changes and the animation restarts with no style read
+   * of any kind. Measured at 0.010ms a call — 21x cheaper than the reflow.
+   * @param {HTMLElement} el
+   * @param {string} base class stem; `${base}-a` / `${base}-b` must exist in ui.css
+   */
+  #restartAnim(el, base) {
+    const prev = el._kbAlt === 'a' ? 'a' : 'b';
+    const next = prev === 'a' ? 'b' : 'a';
+    el.classList.remove(`${base}-${prev}`);
+    el.classList.add(`${base}-${next}`);
+    el._kbAlt = next;
+  }
+
+  /**
+   * Cold path (a handful of times a round). Lets the class removal reach a
+   * style update on its own before putting the class back — no layout, no
+   * duplicated keyframes. The cost is two frames of latency, which a
+   * half-second meter burst and a 1.5s announcement can afford and a
+   * per-hit flash cannot.
+   *
+   * Two frames, not one. `animationend` is dispatched inside the same
+   * "update the rendering" step that goes on to run that frame's
+   * animation-frame callbacks, so a restart triggered from an
+   * `animationend` handler — which is exactly how the announcement queue
+   * advances — lands its `requestAnimationFrame` callback in the *same*
+   * frame as the removal. The computed `animation-name` never changes and
+   * the replay is silently dropped: measured one start for two requests.
+   * The second frame guarantees a style update in between.
+   * @param {HTMLElement} el
+   * @param {string} cls
+   */
+  #restartAnimDeferred(el, cls) {
+    el.classList.remove(cls);
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add(cls)));
   }
 
   // -------------------------------------------------------------------------
@@ -326,9 +416,7 @@ export class HUD {
   #onMeterFull(i) {
     const el = this.meters[i]?.frame;
     if (!el) return;
-    el.classList.remove('meter--burst');
-    void el.offsetWidth; // restart the CSS animation
-    el.classList.add('meter--burst');
+    this.#restartAnimDeferred(el, 'meter--burst');
   }
 
   #onPhase({ phase }) {
@@ -336,10 +424,7 @@ export class HUD {
   }
 
   #onHit({ attacker, defender, damage, counter, point, comboCount }) {
-    const flash = this.sides[defender.index].flash;
-    flash.classList.remove('hp-flash--go');
-    void flash.offsetWidth; // restart the CSS animation
-    flash.classList.add('hp-flash--go');
+    this.#restartAnim(this.sides[defender.index].flash, 'hp-flash--go');
 
     // Prime the drain/hold state straight off the event instead of waiting
     // for `#updateHealth`'s next polled frame to notice the drop. A single
@@ -414,6 +499,7 @@ export class HUD {
     if (showHud !== this.visible) {
       this.root.classList.toggle('hud--hidden', !showHud);
       this.visible = showHud;
+      this.rootRect = null;
     }
     if (!showHud) return;
 
@@ -423,6 +509,7 @@ export class HUD {
     this.#updateMeters(dt);
     this.#updateCombos();
     this.#updateCallouts(dt, game.camera);
+    this.#servicePortraits(game);
   }
 
   #updateHealth() {
@@ -472,7 +559,7 @@ export class HUD {
         applyKbText(el.name, nm);
         applyKbText(el.portraitMono, nm.slice(0, 1));
         this.lastName[i] = nm;
-        this.#capturePortrait(game, i);
+        this.portraitPending[i] = true;
       }
       const wins = game.wins?.[i] ?? 0;
       if (this.lastWins[i] !== wins) {
@@ -483,21 +570,55 @@ export class HUD {
   }
 
   /**
+   * Starts at most one portrait capture per frame, and never a second while
+   * one is still in flight.
+   *
+   * This scheduling is not tidiness — it is the fix for the worst stall in
+   * the build. Both fighters' names land on the same frame (the first frame
+   * of a match, straight out of character select), so the old code ran two
+   * captures back to back inside a single `update()`, and each one ended in
+   * a *synchronous* `readRenderTargetPixels`. That call flushes the whole GL
+   * command queue and blocks the main thread until the driver hands the
+   * pixels back; against a 650k-triangle, 230-draw-call frame it measured
+   * 316ms to 1382ms **per call**. The scene render feeding it costs
+   * 0.4-0.9ms, so the readback was essentially the entire cost. Two of them
+   * in one frame is the multi-second freeze players hit when a fight starts.
+   * @param {import('../core/Game.js').Game} game
+   */
+  #servicePortraits(game) {
+    if (this.portraitBusy) return;
+    const i = this.portraitPending.indexOf(true);
+    if (i < 0) return;
+    if (this.#capturePortrait(game, i)) this.portraitPending[i] = false;
+  }
+
+  /**
    * Renders fighter `i`'s head to `PORTRAIT_SIZE`x`PORTRAIT_SIZE` and paints
    * it into that side's portrait canvas — a bonus, not a dependency: any
    * failure (renderer without readback support, robot not built yet, no
    * `head` bone) is swallowed and just leaves the monogram fallback chip
    * showing, never crashes the HUD.
+   *
+   * The readback goes through `readRenderTargetPixelsAsync`, which issues
+   * the same `readPixels` into a pixel-buffer object and then resolves off a
+   * GPU fence instead of spinning the main thread on it — the pixels are
+   * captured into the PBO at issue time, so the frames drawn while the fence
+   * is outstanding cannot corrupt them. The synchronous call is kept only as
+   * a fallback for a context that has no async path at all.
    * @param {import('../core/Game.js').Game} game
    * @param {number} i fighter index
+   * @returns {boolean} true once the capture has been issued (or is
+   *   impossible); false while the fighter is not ready and it should be
+   *   retried on a later frame.
    */
   #capturePortrait(game, i) {
     const fighter = this.fighters[i];
-    const side = this.sides[i];
     const renderer = game.renderer?.renderer;
     const scene = game.scene;
     const head = fighter?.robot?.parts?.byName?.head;
-    if (!renderer || !scene || !head || typeof renderer.readRenderTargetPixels !== 'function') return;
+    if (!renderer || !scene || !head) return false;
+    const canReadAsync = typeof renderer.readRenderTargetPixelsAsync === 'function';
+    if (!canReadAsync && typeof renderer.readRenderTargetPixels !== 'function') return true;
 
     try {
       if (!this.portraitRT) {
@@ -505,6 +626,7 @@ export class HUD {
           colorSpace: THREE.SRGBColorSpace,
         });
       }
+      if (!this.portraitBuffer) this.portraitBuffer = new Uint8Array(PORTRAIT_SIZE * PORTRAIT_SIZE * 4);
 
       fighter.group.traverse((o) => o.layers?.enable(PORTRAIT_LAYER));
 
@@ -517,8 +639,7 @@ export class HUD {
 
       const prevTarget = renderer.getRenderTarget();
       const prevBackground = scene.background;
-      const prevClearColor = new THREE.Color();
-      renderer.getClearColor(prevClearColor);
+      renderer.getClearColor(_clearColor);
       const prevClearAlpha = renderer.getClearAlpha();
 
       scene.background = null;
@@ -528,27 +649,48 @@ export class HUD {
       renderer.render(scene, this.portraitCamera);
       renderer.setRenderTarget(prevTarget);
       scene.background = prevBackground;
-      renderer.setClearColor(prevClearColor, prevClearAlpha);
+      renderer.setClearColor(_clearColor, prevClearAlpha);
 
       fighter.group.traverse((o) => o.layers?.disable(PORTRAIT_LAYER));
 
-      const buf = new Uint8Array(PORTRAIT_SIZE * PORTRAIT_SIZE * 4);
-      renderer.readRenderTargetPixels(this.portraitRT, 0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE, buf);
-
-      // WebGL render targets read back bottom-to-top; canvas ImageData is
-      // top-to-bottom, so flip rows on the way in.
-      const img = side.portraitCtx.createImageData(PORTRAIT_SIZE, PORTRAIT_SIZE);
-      const rowBytes = PORTRAIT_SIZE * 4;
-      for (let y = 0; y < PORTRAIT_SIZE; y++) {
-        const src = (PORTRAIT_SIZE - 1 - y) * rowBytes;
-        img.data.set(buf.subarray(src, src + rowBytes), y * rowBytes);
+      const buf = this.portraitBuffer;
+      if (canReadAsync) {
+        this.portraitBusy = true;
+        renderer.readRenderTargetPixelsAsync(this.portraitRT, 0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE, buf)
+          .then(() => this.#paintPortrait(i, buf))
+          .catch(() => {})
+          .finally(() => { this.portraitBusy = false; });
+      } else {
+        renderer.readRenderTargetPixels(this.portraitRT, 0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE, buf);
+        this.#paintPortrait(i, buf);
       }
-      side.portraitCtx.putImageData(img, 0, 0);
-      side.portrait.classList.add('portrait-chip--ready');
+      return true;
     } catch {
       // Portraits are a finishing touch; the monogram fallback already
       // covers this case, so there is nothing else to do here.
+      return true;
     }
+  }
+
+  /**
+   * Paints a completed readback into side `i`'s portrait canvas. WebGL
+   * render targets read back bottom-to-top; canvas ImageData is
+   * top-to-bottom, so flip rows on the way in.
+   * @param {number} i
+   * @param {Uint8Array} buf
+   */
+  #paintPortrait(i, buf) {
+    const side = this.sides[i];
+    if (!side?.portraitCtx) return;
+    const img = side.portraitImage
+      ?? (side.portraitImage = side.portraitCtx.createImageData(PORTRAIT_SIZE, PORTRAIT_SIZE));
+    const rowBytes = PORTRAIT_SIZE * 4;
+    for (let y = 0; y < PORTRAIT_SIZE; y++) {
+      const src = (PORTRAIT_SIZE - 1 - y) * rowBytes;
+      img.data.set(buf.subarray(src, src + rowBytes), y * rowBytes);
+    }
+    side.portraitCtx.putImageData(img, 0, 0);
+    side.portrait.classList.add('portrait-chip--ready');
   }
 
   #updateTimer(game) {
@@ -587,10 +729,7 @@ export class HUD {
   }
 
   #punchCombo(i) {
-    const el = this.comboEls[i].el;
-    el.classList.remove('combo--punch');
-    void el.offsetWidth;
-    el.classList.add('combo--punch');
+    this.#restartAnim(this.comboEls[i].el, 'combo--punch');
   }
 
   #updateCombos() {
@@ -631,7 +770,7 @@ export class HUD {
     if (!camera || !point) return null;
     _proj.copy(point).project(camera);
     if (_proj.z > 1) return null; // behind the camera
-    const rect = this.uiRoot.getBoundingClientRect();
+    const rect = this.rootRect ?? (this.rootRect = this.uiRoot.getBoundingClientRect());
     return {
       x: (_proj.x * 0.5 + 0.5) * rect.width,
       y: (1 - (_proj.y * 0.5 + 0.5)) * rect.height,
@@ -650,6 +789,7 @@ export class HUD {
       if (this.calloutPool.length >= MAX_CALLOUTS) return;
       node = document.createElement('div');
       node.className = 'callout';
+      node._point = new THREE.Vector3();
       node.addEventListener('animationend', () => {
         node._busy = false;
         node.style.opacity = '0';
@@ -663,19 +803,23 @@ export class HUD {
     node.className = `callout ${cls}`;
     node.textContent = text;
     node.style.opacity = '';
-    node._pending = { point: point.clone(), xBias };
+    // The spawn point is copied into the node's own vector rather than
+    // cloned, so a dense combo does not allocate a Vector3 per hit.
+    node._point.copy(point);
+    node._bias = xBias;
+    node._pending = true;
   }
 
   #updateCallouts(dt, camera) {
     for (const node of this.calloutPool) {
       if (!node._pending) continue;
-      const screen = this.#worldToScreen(node._pending.point, camera);
+      const screen = this.#worldToScreen(node._point, camera);
       if (screen) {
-        const jitter = node._pending.xBias * 22;
+        const jitter = node._bias * 22;
         node.style.left = `${screen.x + jitter}px`;
         node.style.top = `${screen.y}px`;
       }
-      node._pending = null; // project once at spawn time; the CSS animation drives motion from there
+      node._pending = false; // project once at spawn time; the CSS animation drives motion from there
     }
   }
 
@@ -695,7 +839,6 @@ export class HUD {
     this.announceBusy = true;
     this.announceBanner.dataset.kind = next.kind;
     applyKbText(this.announceText, next.text);
-    void this.announceBanner.offsetWidth;
-    this.announceBanner.classList.add('announce--run');
+    this.#restartAnimDeferred(this.announceBanner, 'announce--run');
   }
 }

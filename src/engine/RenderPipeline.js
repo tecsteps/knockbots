@@ -43,26 +43,90 @@
  *    animation pop into a permanent, visible double image. The camera delta is
  *    smooth by construction because a spring-damper produces it.
  *
- * 5. **Where the frame time actually goes.** Measured at 1080p on an M4, in a
- *    live round at the default fight framing, by toggling one thing at a time
- *    and comparing the interval between `render` calls. The frame is 41.8ms.
- *    Removing the eight `RectAreaLight`s that `Environment` puts in the scene
- *    takes it to 16.1ms — 62fps — and adding them back two at a time walks it
- *    straight back up: 16.1, 22.2, 27.4, 32.9, 41.8. That is 3.2ms per area
- *    light, every frame, forever. Each of the three live `PointLight`s costs a
- *    further 3ms, and all three sit at zero intensity except on the frames an
- *    impact flashes them. Everything this
- *    file owns is small beside that: the shadow pass is 23 draw calls and under
- *    a millisecond, PCSS costs 1.8ms against stock PCF, halving the shadow map
- *    changes nothing measurable, and the whole post chain — GTAO, bloom, DOF,
- *    motion blur, grade, SMAA — is about 9ms together. The planar reflection is
- *    4.1ms, and 3.5ms of that is the second set of fragments being shaded
- *    through those same lights. So the pipeline is not what is slow: every
- *    fragment in the frame is being lit by twenty-three forward lights, eight
- *    of them running three's LTC area-light integral, and no amount of
- *    resolution, tap-count or pass-count tuning in this file recovers that.
- *    Adaptive resolution is the only knob here that touches it, and on the
- *    ultra tier it is deliberately pinned — see the note on `QUALITY_TIERS`.
+ * 5. **Where the frame time actually goes.** Per-pass, 1080p ultra, native
+ *    scale, default fight framing.
+ *
+ *    How, because it decides whether the table is worth anything.
+ *    `EXT_disjoint_timer_query_webgl2` is exposed under ANGLE/Metal and returns
+ *    nonsense: every inner pass reported ~37ms against a 40ms whole frame,
+ *    because the driver times the command buffer rather than the range. A
+ *    `gl.finish()` either side of a pass fails differently — Chromium's command
+ *    buffer is asynchronous, so the first sync in a frame absorbs the entire
+ *    backlog and the beauty pass reads 115ms while every pass after it reads
+ *    0.0. What does work is running one pass K=16 times in a frame and reading
+ *    the slope, `( frameMs(K) - frameMs(1) ) / ( K - 1 )`, with the two blocks
+ *    interleaved so drift cancels. The added work is fifteen more copies of
+ *    exactly the thing being measured, which puts the signal an order of
+ *    magnitude above the noise.
+ *
+ *      scene (beauty) pass    72.0 ms   including the reflection below
+ *      planar reflection       7.5 ms
+ *      bloom                   6.4 ms
+ *      shadow map              1.5 ms   the whole pass, both draws
+ *      grade                   0.5 ms
+ *      GTAO, DOF, motion blur, SMAA, output, overlay   <= 1 ms, several
+ *                                                      negative — free
+ *
+ *    A second run using block-paired toggling of `pass.enabled` on a paused
+ *    simulation (see `docs/PROFILING.md`) agrees within its intervals: bloom
+ *    3.4ms (IQR 0.5..5.7), GTAO 2.0 (-1..8), SMAA 2.0 (-2.9..3.9), DOF 1.0
+ *    (-0.6..3), motion blur 0.3 (-2.8..4.3), grade -0.1 (-5.8..2.3), overlay
+ *    0.3 (0..0.6) — and the whole post chain disabled together saves 5.8ms
+ *    (IQR 5.1..6.8), which is the number to trust, because it is the only one
+ *    whose interval is tight. The shadow pass measured 1.5ms (IQR 1.2..2.1).
+ *    Drawing the shadow map once per frame instead of twice — the fix in the
+ *    constructor below — measured -0.1ms (IQR -0.6..0.4): it is correct, it is
+ *    free, and it buys nothing. Halving the map to 2048 measured -0.2ms
+ *    (IQR -1.2..0.8), i.e. nothing.
+ *
+ *    Then the 72ms scene pass, one thing disabled at a time inside it:
+ *
+ *      stock                             59.7 ms
+ *      RectAreaLights hidden             25.6 ms   -34.1
+ *      all punctual lights hidden        18.1 ms   a further -7.5
+ *      PCSS -> hardware PCF              60.3 ms   no change
+ *      shadows off entirely              65.2 ms   no change
+ *      floor reflection gather off       62.4 ms   no change
+ *      backdrop hidden                   63.6 ms   no change
+ *      apron hidden                      57.6 ms   -2, at the noise floor
+ *
+ *    The eight `RectAreaLight`s `Environment` puts in the scene are 34ms of a
+ *    60ms scene pass. With them hidden the whole frame — every post effect on,
+ *    native resolution — measures 15.3ms, 65fps, against 37.6ms stock. The
+ *    planar reflection falls from 7.5ms to 1.7ms at the same time: the mirror
+ *    is not expensive, the second set of fragments it shades through those
+ *    lights is. So the pipeline is not what is slow. Every fragment in the
+ *    frame is lit by twenty-three forward lights, eight of them running three's
+ *    LTC area-light integral, and no amount of resolution, tap-count or
+ *    pass-count tuning in this file recovers that.
+ *
+ *    That claim is worth more than an on/off, because an on/off of a light is
+ *    also a shader recompile — hiding a `RectAreaLight` changes
+ *    NUM_RECT_AREA_LIGHTS and three rebuilds every material in the scene, so a
+ *    fast A/B of lights measures compilation. Measured slowly instead, four
+ *    seconds of settle per step and repeated, the count walks linearly:
+ *
+ *      0 area lights   16.5 ms   61 fps
+ *      4 area lights   26.9 ms   37 fps
+ *      8 area lights   40.3 ms   25 fps
+ *
+ *    ~3.0ms per area light, and 24ms of a 40ms frame for the eight of them.
+ *    This is the one number in this file that was carried for several rounds as
+ *    a comment before anyone measured it; it turned out to be right, which is
+ *    luck rather than method. Do not quote it without re-running the ladder.
+ *
+ *    Two things follow for anyone tempted to tune this file for frames. GTAO,
+ *    DOF, motion blur and SMAA are already free — GTAO measured -1.8ms and
+ *    -3.3ms in two runs, because it is half-res and DOF early-outs on the
+ *    fragments it would not blur. And PCSS tap count and shadow map size are
+ *    both at zero delta, so there is nothing to win by softening the shadows.
+ *    Bloom's 6.4ms is the one real post cost; a half-resolution pyramid returns
+ *    about 2.7ms of it and doubles the halo width, which is not a trade worth
+ *    making while the frame is 20fps clear of target.
+ *
+ *    Adaptive resolution is the only knob here that touches the light cost, and
+ *    on the ultra tier it is deliberately pinned — see the note on
+ *    `QUALITY_TIERS`.
  *
  * Externally this class only needs the charter API, but it also listens for a
  * `cameraFocus` bus event (emitted by `FightCamera`) carrying the focus point
@@ -1385,7 +1449,17 @@ export class RenderPipeline {
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.setClearColor(0x000000, 1);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.autoUpdate = true;
+    // Driven manually, once per frame. three renders the shadow map at the top
+    // of *every* `renderer.render`, and this frame contains two of them: the
+    // beauty pass, and the planar reflection that `StageFloor.onBeforeRender`
+    // fires from inside it. With `autoUpdate` on, the identical 4096 map — same
+    // light, same fitted ortho, same casters — was being drawn twice a frame
+    // for one usable copy. `render()` arms `needsUpdate` and the first draw of
+    // the frame clears it, so the mirror inherits the map the beauty pass just
+    // built. `Game.#frame` is the only caller, so there is no other render path
+    // that could go a frame without one.
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.shadowMap.type = this.pcssAvailable ? THREE.BasicShadowMap : THREE.PCFShadowMap;
     this.renderer.info.autoReset = false;
 
@@ -1822,6 +1896,8 @@ export class RenderPipeline {
 
     this.#fitShadows(scene, cam);
     this.#syncPasses(scene, cam);
+    // One shadow draw per frame; see the note in the constructor.
+    this.renderer.shadowMap.needsUpdate = true;
 
     if (this.composer) {
       this.composer.render(dt || 1 / 60);
@@ -1875,6 +1951,7 @@ export class RenderPipeline {
     const scene = this._lastScene || this.scene;
     const cam = this._lastCamera || this.camera;
     this.#syncPasses(scene, cam);
+    this.renderer.shadowMap.needsUpdate = true;
     if (this.composer) this.composer.render(1 / 60);
     else this.renderer.render(scene, cam);
     return this.canvas.toDataURL('image/png');

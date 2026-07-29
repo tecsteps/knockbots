@@ -393,8 +393,21 @@
   opacity: 0;
   mix-blend-mode: screen;
 }
-.hp-flash.hp-flash--go { animation: hpFlash 0.32s ease-out; }
-@keyframes hpFlash {
+/*
+ * Double-buffered animation name. `HUD#restartAnim` alternates between these
+ * two classes on every hit; because they name *different* keyframes the
+ * computed `animation-name` changes and the flash replays, with no forced
+ * layout. The identical pair is deliberate — see the note above
+ * `#restartAnim` in HUD.js for the measurements that made it worth 5 lines
+ * of duplication. Keep the two blocks in sync; they are one effect.
+ */
+.hp-flash.hp-flash--go-a { animation: hpFlashA 0.32s ease-out; }
+.hp-flash.hp-flash--go-b { animation: hpFlashB 0.32s ease-out; }
+@keyframes hpFlashA {
+  0% { opacity: 0.9; }
+  100% { opacity: 0; }
+}
+@keyframes hpFlashB {
   0% { opacity: 0.9; }
   100% { opacity: 0; }
 }
@@ -685,8 +698,17 @@
 .combo--p0 { left: 5%; align-items: flex-start; }
 .combo--p1 { right: 5%; align-items: flex-end; }
 .combo.combo--show { opacity: 1; transform: scale(1); }
-.combo.combo--punch { animation: comboPunch 0.36s cubic-bezier(0.2, 1.8, 0.4, 1); }
-@keyframes comboPunch {
+/* Double-buffered animation name, same technique and reason as
+ * `.hp-flash--go-a/-b` above: the slam replays on every hit of a combo, so
+ * the restart cannot afford a synchronous reflow. Keep the pair in sync. */
+.combo.combo--punch-a { animation: comboPunchA 0.36s cubic-bezier(0.2, 1.8, 0.4, 1); }
+.combo.combo--punch-b { animation: comboPunchB 0.36s cubic-bezier(0.2, 1.8, 0.4, 1); }
+@keyframes comboPunchA {
+  0% { transform: scale(1.75) rotate(-2deg); }
+  55% { transform: scale(0.92) rotate(1deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+@keyframes comboPunchB {
   0% { transform: scale(1.75) rotate(-2deg); }
   55% { transform: scale(0.92) rotate(1deg); }
   100% { transform: scale(1) rotate(0deg); }

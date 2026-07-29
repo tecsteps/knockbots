@@ -45,7 +45,7 @@ import {
 } from '../core/Constants.js';
 import { bus } from '../core/Bus.js';
 import { Rng } from '../core/Rng.js';
-import { BONES, HURTBOX_BONES, IK_CHAINS, createSkeleton } from '../characters/Skeleton.js';
+import { BONES, HURTBOX_BONES, IK_CHAINS, SPRING_BONES, SPRING_DEFS, createSkeleton } from '../characters/Skeleton.js';
 import { activeBoxes, isActive, isInvulnerable } from './MoveSchema.js';
 import { MOVES, findMove } from './Moves.js';
 import { Animator } from '../characters/Animator.js';
@@ -107,11 +107,45 @@ const ROLL_CAPACITY = 0.05;     // penetration the roll can absorb before the le
 // centimetres, not fifteen. Footfall thresholds have to live inside that.
 const FOOTFALL_DOWN = 0.02;     // sole below this, and falling, is a footfall
 const FOOTFALL_UP = 0.035;      // and above this the foot has left again
+// --- pelvis lift -----------------------------------------------------------
+// Ceiling and per-tick approach for the pelvis correction. 0.3m covers the
+// worst measured case (k.stomp's landing, both boots 288mm under) with nothing
+// spare; the rate closes 95% of a correction in nine ticks, which is inside the
+// window a landing squat actually lasts.
+const PELVIS_LIFT_MAX = 0.32;
+// Metres the correction may move in one tick. Taking it on is capped at the
+// speed the body legitimately moves anyway (0.10m/tick is 6m/s, a jump's launch
+// speed), because growing the lift only ever SLOWS a descent the clip is already
+// driving — it cannot push the body up. Giving it back is capped lower, since
+// that direction does move the body, and 45mm/tick reads as settling.
+const PELVIS_LIFT_RISE = 0.10;
+const PELVIS_LIFT_FALL = 0.045;
+// Below this the correction is not worth carrying and is snapped away, so the
+// pelvis is not left riding a fraction of a millimetre high forever.
+const PELVIS_LIFT_EPS = 0.0008;
 // How much of the animation's authored root translation the body actually takes.
 const ROOT_MOTION_SCALE = 1.0;
 // Per-tick share of the leftover animation yaw that unwinds once no clip is
 // driving it. A move may spin the chassis; it may not decide where it ends up.
 const ANIM_YAW_RELEASE = 0.22;
+
+/**
+ * States whose clips are authored to keep the fighter on its feet, and so the
+ * only ones the pelvis correction may run in.
+ *
+ * The exclusions are the point. A reaction clip puts the body on the FLOOR: a
+ * crumple drops the trunk while the boots come up, which reads to a sole-height
+ * test as "both feet buried" for a few frames and then as "both feet in the
+ * air". Correcting it built the lift to its ceiling and then hovered a fallen
+ * fighter 174mm off the concrete on the way back out. There is no release curve
+ * that fixes that, because the premise — that the boot is the lowest part of the
+ * body — stops being true the moment the fighter goes down.
+ */
+const PELVIS_LIFT_STATES = new Set([
+  STATE.IDLE, STATE.WALK, STATE.DASH, STATE.BACKDASH, STATE.CROUCH, STATE.SIDESTEP,
+  STATE.ATTACK, STATE.BLOCK_HIGH, STATE.BLOCK_LOW, STATE.BLOCKSTUN, STATE.THROW,
+  STATE.INTRO, STATE.VICTORY,
+]);
 
 /** +1 when the rig's local +Z is its front. See the file header. */
 export const FORWARD_SIGN = 1;
@@ -314,6 +348,8 @@ export class Fighter {
       R: { contact: 0, weight: 0, target: new THREE.Vector3(), sole: [] },
     };
     this.legLength = 0.86;
+    /** Metres the pelvis is being held above where the clip put it. */
+    this.pelvisLift = 0;
     this.currentClip = '';
     this.ready = false;
   }
@@ -402,6 +438,11 @@ export class Fighter {
     }
 
     this.animator = new Animator(bundle, CLIPS);
+    // The rig declares its own secondary-motion leaves; the animator ships the
+    // integrator but registers nothing on its own, so hand them over here. Cost
+    // is eight extra `Spring3.step` calls per fighter per tick.
+    for (const name of SPRING_BONES) this.animator.addSpringBone(name, SPRING_DEFS[name]);
+    this.#installPelvisLift();
     this.#installFootRoll();
     this.#collectVisualParts();
     this.#play('idle.fight', 0, true);
@@ -526,6 +567,7 @@ export class Fighter {
     this.pendingSidestep = 0;
     this.lastDamageTick = -999;
     this.impactTick = -999;
+    this.pelvisLift = 0;
     for (const side of ['L', 'R']) {
       const st = this.plantState[side];
       st.contact = 0;
@@ -1777,6 +1819,86 @@ export class Fighter {
       }
       this.animator.setIkTarget(chain, null, 0);
     }
+  }
+
+  /**
+   * Hold the pelvis at a height its legs can actually stand at.
+   *
+   * A large share of the floor penetration in this game is not a foot problem at
+   * all. Measured across the 89 clips, 39 drive a sole more than 5cm under the
+   * concrete, and on the worst of them BOTH boots are under it at once with both
+   * legs already straight — `k.stomp`'s landing sits 288mm down with the hip-to-
+   * ankle span at 805mm of an 808mm leg. No foot solver can fix that: there is no
+   * leg length left to spend. The clip simply authored a root track lower than
+   * the rig can stand at, and the only correction is to move the root.
+   *
+   * So this lifts by the SMALLER of the two boots' penetration, which is exactly
+   * the amount that is the pelvis's fault. One boot under and one in the air is a
+   * swing-arc problem and the minimum is negative, so the lift bleeds back out —
+   * a walk is never touched. It writes `pose.rootPos.y` from a `pre` layer, ahead
+   * of both IK and the ankle roll, so both of those then solve against a body
+   * that is standing at a plausible height instead of fighting for the same
+   * centimetres.
+   *
+   * It runs against the CLIP's own forward kinematics rather than against last
+   * tick's bone matrices, and so carries no feedback lag. A servo reading its
+   * own output one tick late was measured overshooting a crouch entry by 108mm
+   * — the fighter visibly hovered for four frames on the way down — because the
+   * error it was chasing collapsed faster than it could integrate. Read the need
+   * fresh, rate-limit the response, and the overshoot cannot exist.
+   */
+  #installPelvisLift() {
+    if (!this.animator?.addProceduralLayer) return;
+    this.animator.addProceduralLayer((pose, ctx) => {
+      const need = this.#pelvisNeed(ctx);
+      // A body that has left its feet gives the correction back at once rather
+      // than easing it out. Ramping down through a knockdown was measured
+      // floating a fallen fighter 320mm off the concrete for eight frames: on a
+      // prone chassis the boot is not the lowest point and the smoothing that
+      // makes a landing read has nothing left to smooth.
+      if (need === null) { this.pelvisLift = 0; return; }
+      const want = THREE.MathUtils.clamp(need, 0, PELVIS_LIFT_MAX);
+      const d = want - this.pelvisLift;
+      // Falling is normally eased, but a negative need means the correction is
+      // now holding the fighter off the floor, and that is not a thing to ease
+      // out of: give back most of the measured gap at once. A `r.crumple` was
+      // measured hovering 173mm for six frames on the fixed rate alone.
+      const step = d > 0 ? PELVIS_LIFT_RISE : Math.max(PELVIS_LIFT_FALL, -need * 0.9);
+      this.pelvisLift += Math.abs(d) <= step ? d : Math.sign(d) * step;
+      if (this.pelvisLift < PELVIS_LIFT_EPS) this.pelvisLift = 0;
+      if (this.pelvisLift !== 0) pose.rootPos.y += this.pelvisLift;
+    }, { stage: 'pre' });
+  }
+
+  /**
+   * How far the pelvis is below a height its legs can stand at, this tick.
+   *
+   * The lift is the penetration of the boot that is LEAST buried, because that
+   * is the part of the error the pelvis is responsible for. One boot under and
+   * one in the air is a swing-arc problem, the minimum goes negative and the
+   * correction releases — a walk cycle is therefore never touched.
+   *
+   * @returns {?number} metres, or null when this state may not be corrected
+   */
+  #pelvisNeed(ctx) {
+    if (this.airborne || !PELVIS_LIFT_STATES.has(this.state)) return null;
+    let shared = Infinity;
+    for (const side of ['L', 'R']) {
+      const pts = this.plantState[side].sole;
+      if (!pts.length) return null;
+      let low = Infinity;
+      for (const s of pts) {
+        const wp = ctx.worldPos(s.bone.name);
+        const wq = ctx.worldQuat(s.bone.name);
+        if (!wp || !wq) continue;
+        const y = _v3.copy(s.local).applyQuaternion(wq).add(wp).y + this.position.y;
+        if (y < low) low = y;
+      }
+      if (!Number.isFinite(low)) return null;
+      const bury = this.floorY - low;
+      if (bury < shared) shared = bury;
+    }
+    return Number.isFinite(shared) ? shared : null;
   }
 
   /**
