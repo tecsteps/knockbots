@@ -28,6 +28,15 @@ import * as THREE from 'three';
  * @property {number}   [radius]  capsule radius used for hurtbox generation
  * @property {number}   [length]  capsule length toward the child, for hurtboxes
  * @property {string}   [region]  hurtbox region: head|torso|arm|leg
+ * @property {SpringDef} [spring] secondary-motion authoring for a spring leaf
+ */
+
+/**
+ * @typedef {Object} SpringDef
+ * @property {number} stiffness  pull back toward the rest direction, 1/s^2
+ * @property {number} damping    velocity damping, 1/s
+ * @property {number} drag       how strongly the parent's motion drives it, 0..1.5
+ * @property {number} limit      largest deflection from rest, radians
  */
 
 const D = Math.PI / 180;
@@ -77,6 +86,34 @@ export const BONES = [
   { name: 'ankle_R', parent: 'knee_R', pos: [0, -0.42, 0], radius: 0.085, length: 0.1, region: 'leg' },
   { name: 'foot_R', parent: 'ankle_R', pos: [0, -0.06, 0.06], radius: 0.09, length: 0.16, region: 'leg' },
   { name: 'toe_R', parent: 'foot_R', pos: [0, -0.045, 0.14] },
+
+  // --- spring leaves ----------------------------------------------------
+  // Non-hurtbox tips for the hardware that should still be moving after the
+  // body has stopped: whip antennae, a reactor pack's inertia, the cable tails
+  // off the back, the hip flaps. They carry no `region`, so nothing about
+  // combat sees them, and they are declared last so no existing bone index
+  // moves. Each sits at the PIVOT of the mass it carries, not at its centre —
+  // a spring bone is a hinge, and a hinge in the wrong place reads as a part
+  // sliding rather than swinging.
+  //
+  // `spring` is authoring data for the secondary-motion layer and is ignored by
+  // everything else. `stiffness` is how hard the bone is pulled back to its
+  // rest direction, `damping` how fast the swing dies, `drag` how much the
+  // parent's motion drives it and `limit` the largest deflection in radians.
+  // The numbers say what the part is: an antenna is a light whip that keeps
+  // ringing, a reactor pack is heavy and settles in one swing.
+  //
+  // 20cm up the skull splits the difference between the two chassis that carry
+  // head hardware: a crown's horns root at about 12cm and a sentry's mast whips
+  // at about 32cm, and one shared rig cannot sit at both.
+  { name: 'antenna_L', parent: 'head', pos: [0.062, 0.200, -0.012], spring: { stiffness: 26, damping: 3.2, drag: 1.0, limit: 0.5 } },
+  { name: 'antenna_R', parent: 'head', pos: [-0.062, 0.200, -0.012], spring: { stiffness: 26, damping: 3.2, drag: 1.0, limit: 0.5 } },
+  { name: 'pack_L', parent: 'chest', pos: [0.132, 0.02, 0.158], spring: { stiffness: 62, damping: 11, drag: 0.55, limit: 0.16 } },
+  { name: 'pack_R', parent: 'chest', pos: [-0.132, 0.02, 0.158], spring: { stiffness: 62, damping: 11, drag: 0.55, limit: 0.16 } },
+  { name: 'cable_L', parent: 'spine02', pos: [0.098, 0.05, 0.148], spring: { stiffness: 15, damping: 2.4, drag: 1.15, limit: 0.75 } },
+  { name: 'cable_R', parent: 'spine02', pos: [-0.098, 0.05, 0.148], spring: { stiffness: 15, damping: 2.4, drag: 1.15, limit: 0.75 } },
+  { name: 'skirt_L', parent: 'hips', pos: [0.118, -0.038, 0.018], spring: { stiffness: 34, damping: 5.5, drag: 0.85, limit: 0.34 } },
+  { name: 'skirt_R', parent: 'hips', pos: [-0.118, -0.038, 0.018], spring: { stiffness: 34, damping: 5.5, drag: 0.85, limit: 0.34 } },
 ];
 
 export const BONE_NAMES = BONES.map((b) => b.name);
@@ -84,6 +121,18 @@ export const BONE_INDEX = Object.fromEntries(BONE_NAMES.map((n, i) => [n, i]));
 
 /** Bones that carry a hurtbox capsule, in the order the combat system tests them. */
 export const HURTBOX_BONES = BONES.filter((b) => b.region).map((b) => b.name);
+
+/**
+ * Leaves driven by secondary motion rather than by a clip. Nothing in combat
+ * touches them; the animator integrates them after the pose is written and the
+ * mesh builder skins the hardware that should trail to them.
+ */
+export const SPRING_BONES = BONES.filter((b) => b.spring).map((b) => b.name);
+
+/** Spring parameters by bone name, for the secondary-motion layer. */
+export const SPRING_DEFS = Object.freeze(Object.fromEntries(
+  BONES.filter((b) => b.spring).map((b) => [b.name, Object.freeze({ ...b.spring })]),
+));
 
 /** Limb chains used for two-bone IK: [rootBone, midBone, endBone, poleAxis]. */
 export const IK_CHAINS = {
@@ -127,10 +176,12 @@ export function createSkeleton(proportions = null) {
  */
 function scaleFor(def, p) {
   const n = def.name;
-  if (/^(hip_|knee_|ankle_|foot_|toe_)/.test(n)) return p.legs ?? 1;
+  if (/^(hip_|knee_|ankle_|foot_|toe_|skirt_)/.test(n)) return p.legs ?? 1;
   if (/^(shoulder_|elbow_|wrist_|hand_|fingers_|thumb_|clavicle_)/.test(n)) return p.arms ?? 1;
-  if (/^(spine|chest|neck)/.test(n)) return p.torso ?? 1;
-  if (n === 'head' || n === 'headTop') return p.head ?? 1;
+  // A spring leaf hangs off the mass it belongs to, so it has to follow the
+  // same multiplier that moved its parent or the hardware detaches.
+  if (/^(spine|chest|neck|pack_|cable_)/.test(n)) return p.torso ?? 1;
+  if (/^(head|headTop|antenna_)/.test(n)) return p.head ?? 1;
   if (n === 'hips') return p.height ?? 1;
   return 1;
 }

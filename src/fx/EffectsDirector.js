@@ -932,14 +932,20 @@ export class EffectsDirector {
       count: 560, speed: 9.0, spread: 0.5, life: 0.5, size: 0.028,
       heat: 2.8, tint: _c,
     });
-    // The plume is charged, not incandescent. Pushing its self-illumination up
-    // gives the bloom a metre-wide white sun to chew on, and the camera is a
-    // metre and a half away on this cinematic: the whole frame goes to paper.
+    // The plume is charged, not incandescent — in theory. In practice a soft
+    // sprite this large, this dense (20 of them, each growing to 1.5x over a
+    // life of 1.1s) and this close to a cinematic that dollies the camera in
+    // over its first 60 ticks stops reading as volume and starts reading as an
+    // opaque wall: measured against the contact-frame harness, it was the
+    // largest single contributor to the charge-up whiteout, well ahead of the
+    // spark burst or the point light (both tried and ruled out first). Smaller,
+    // fewer, faster to clear and less self-lit keeps the coloured haze around
+    // the fighter without it ever becoming the frame.
     _v3.setY(this.floorY + 0.7);
     this.smoke.puff(_v3, {
-      count: 20, dir: _v2.set(0, 1, 0), speed: 3.6, spread: 1.0, radius: 0.36,
-      size: 0.2, growth: 1.5, life: 1.1, buoyancy: 1.3, curl: 1.3,
-      tint: _c, emissive: 0.22,
+      count: 9, dir: _v2.set(0, 1, 0), speed: 3.6, spread: 1.0, radius: 0.24,
+      size: 0.1, growth: 0.9, life: 0.6, buoyancy: 1.3, curl: 1.3,
+      tint: _c, emissive: 0.1,
     });
     this.decals.add(DECAL.SCORCH, _v.x, _v.z, 1.9, {
       life: 26, strength: 0.7, tint: _c2.copy(_c).lerp(_c3.setRGB(0.2, 0.2, 0.2), 0.55),

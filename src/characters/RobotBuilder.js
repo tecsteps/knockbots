@@ -1195,6 +1195,14 @@ class Rig {
    * Rigid plate: geometry authored in `bone`'s local rest frame (or, with
    * `world: true`, a world-axis-aligned frame anchored at that bone) bound
    * 100% to that bone.
+   *
+   * `sprung` binds the finished plate to a different bone without moving it.
+   * That works because a rigid plate is baked into bind space and skinning
+   * multiplies it by `boneWorld * boneRestWorld^-1`, which is the identity at
+   * rest for *any* bone: the plate stays exactly where it was authored and
+   * simply follows a different hinge. So a reactor pack keeps being placed
+   * against the chest in chest coordinates, the way it has to be to line up
+   * with the plates around it, and still trails off `pack_L`.
    */
   add(bone, geo, mat, o = {}) {
     if (!geo) return this;
@@ -1215,7 +1223,7 @@ class Rig {
     tagPlateSurface(g, this.plateCount, m.getMaxScaleOnAxis(), mat !== 'decal');
     g.applyMatrix4(m);
     if (m.determinant() < 0) flipWinding(g);
-    bindRigid(g, this.index[bone]);
+    bindRigid(g, this.index[o.sprung != null && this.byName[o.sprung] ? o.sprung : bone]);
     tagPlate(g, this.plateCount++, o.wear ?? WEAR_BY_MAT[mat] ?? 0.6, tier);
     this.parts.push({ geo: g, mat, tier });
     return this;
@@ -1871,11 +1879,15 @@ function buildPelvis(rig, spec) {
     ];
     for (const pl of plates) {
       const ang = Math.atan2(pl.x, pl.z * -FRONT);
+      // The flanking plates hang off the belt and should still be settling when
+      // the hips have stopped; the front plate is bolted through the crotch
+      // guard and does not move, so it stays on `hips`.
       rig.add('hips', bevelBox(pl.w, drop, 0.035, 0.010, { botX: 0.74 }), 'armorAccent', {
         p: [pl.x * w * 0.50, floor + drop * 0.34, pl.z * d * 0.60 * -FRONT],
         r: [pl.rot * DEG, ang, 0],
         order: 'YXZ',
         tier: TIER.PRIMARY,
+        sprung: pl.x === 0 ? null : `skirt_${pl.x > 0 ? 'L' : 'R'}`,
       });
     }
   }
@@ -2185,22 +2197,23 @@ function buildBackHardware(rig, spec, cyIn) {
 
   switch (spec.back) {
     case 'radiators': {
-      for (const { sign, mirror } of SIDES) {
+      for (const { s: side, sign, mirror } of SIDES) {
         const x = sign * t.chestW * 0.26;
+        const pack = `pack_${side}`;
         rig.add('chest', loftHull([
           { y: -0.130, w: 0.126, d: 0.104, round: 0.30 },
           { y: 0.020, w: 0.134, d: 0.112, round: 0.26, smooth: true },
           { y: 0.128, w: 0.106, d: 0.084, round: 0.34 },
         ]), 'armorSecondary',
-        { p: [x, cy + 0.02, zb + 0.05 * -FRONT], r: [-14 * DEG, 0, sign * -5 * DEG], mirror, tier: TIER.PRIMARY });
+        { p: [x, cy + 0.02, zb + 0.05 * -FRONT], r: [-14 * DEG, 0, sign * -5 * DEG], mirror, tier: TIER.PRIMARY, sprung: pack });
         for (let i = 0; i < 6; i++) {
           rig.add('chest', bevelBox(0.145, 0.012, 0.115, 0.004), 'darkMetal', {
             p: [x, cy - 0.086 + i * 0.040, zb + 0.05 * -FRONT + (0.10 - i * 0.028) * -FRONT * 0.14],
-            r: [-14 * DEG, 0, 0], mirror, tier: TIER.SECONDARY,
+            r: [-14 * DEG, 0, 0], mirror, tier: TIER.SECONDARY, sprung: pack,
           });
         }
         rig.glow('chest', bevelBox(0.10, 0.21, 0.012, 0.004), 'vents',
-          { p: [x, cy + 0.02, zb + 0.115 * -FRONT], r: [-14 * DEG, 0, 0], mirror });
+          { p: [x, cy + 0.02, zb + 0.115 * -FRONT], r: [-14 * DEG, 0, 0], mirror, sprung: pack });
         rig.emitter('exhaust', 'chest', [x, cy + 0.15, zb + 0.05 * -FRONT], [0, 0.4, -FRONT], 0.05);
       }
       rig.add('chest', bevelBox(t.chestW * 0.46, 0.14, 0.12, 0.014, { topX: 0.8 }), 'armorPrimary',
@@ -2208,19 +2221,20 @@ function buildBackHardware(rig, spec, cyIn) {
       break;
     }
     case 'thrusters': {
-      for (const { sign, mirror } of SIDES) {
+      for (const { s: side, sign, mirror } of SIDES) {
         const x = sign * t.chestW * 0.30;
+        const pack = `pack_${side}`;
         rig.add('chest', bevelBox(0.11, 0.20, 0.14, 0.012, { topX: 0.8, topZ: 0.7 }), 'armorPrimary',
-          { p: [x, cy + 0.04, zb], r: [10 * DEG, 0, sign * -6 * DEG], mirror, tier: TIER.PRIMARY });
+          { p: [x, cy + 0.04, zb], r: [10 * DEG, 0, sign * -6 * DEG], mirror, tier: TIER.PRIMARY, sprung: pack });
         const nozzle = latheProfile([
           { r: 0.030, y: 0 }, { r: 0.030, y: 0.05 }, { r: 0.044, y: 0.075, smooth: true },
           { r: 0.062, y: 0.115 }, { r: 0.056, y: 0.118 }, { r: 0.040, y: 0.082, smooth: true },
           { r: 0.026, y: 0.05 }, { r: 0.026, y: 0 },
         ], 22);
         rig.add('chest', nozzle, 'darkMetal',
-          { p: [x, cy - 0.04, zb + 0.02 * -FRONT], r: [(90 + 28) * DEG * -FRONT, 0, 0], mirror, tier: TIER.PRIMARY });
+          { p: [x, cy - 0.04, zb + 0.02 * -FRONT], r: [(90 + 28) * DEG * -FRONT, 0, 0], mirror, tier: TIER.PRIMARY, sprung: pack });
         rig.glow('chest', latheProfile([{ r: 0, y: 0 }, { r: 0.040, y: 0 }, { r: 0.040, y: 0.008 }, { r: 0, y: 0.008 }], 22), 'vents',
-          { p: [x, cy - 0.08, zb + 0.10 * -FRONT], r: [(90 + 28) * DEG * -FRONT, 0, 0], mirror });
+          { p: [x, cy - 0.08, zb + 0.10 * -FRONT], r: [(90 + 28) * DEG * -FRONT, 0, 0], mirror, sprung: pack });
         rig.emitter('thruster', 'chest', [x, cy - 0.09, zb + 0.12 * -FRONT], [0, -0.35, -FRONT], 0.055);
       }
       rig.add('chest', bevelBox(t.chestW * 0.4, 0.22, 0.09, 0.012, { topX: 0.7, botX: 0.86 }), 'carbon',
@@ -2228,19 +2242,20 @@ function buildBackHardware(rig, spec, cyIn) {
       break;
     }
     case 'stacks': {
-      for (const { sign, mirror } of SIDES) {
+      for (const { s: side, sign, mirror } of SIDES) {
         const x = sign * t.chestW * 0.30;
+        const pack = `pack_${side}`;
         const pipe = latheProfile([
           { r: 0.042, y: 0 }, { r: 0.042, y: 0.20 }, { r: 0.053, y: 0.22, smooth: true },
           { r: 0.053, y: 0.252 }, { r: 0.038, y: 0.262 }, { r: 0.038, y: 0.22 }, { r: 0.031, y: 0.20 }, { r: 0.031, y: 0 },
         ], 20);
         rig.add('chest', pipe, 'darkMetal',
-          { p: [x, cy, zb], r: [-18 * DEG, 0, sign * -22 * DEG], mirror, tier: TIER.PRIMARY });
+          { p: [x, cy, zb], r: [-18 * DEG, 0, sign * -22 * DEG], mirror, tier: TIER.PRIMARY, sprung: pack });
         rig.add('chest', latheProfile([
           { r: 0.046, y: 0 }, { r: 0.056, y: 0.008, smooth: true }, { r: 0.056, y: 0.026 }, { r: 0.046, y: 0.034 },
-        ], 20), 'trim', { p: [x, cy + 0.07, zb + 0.03 * FRONT], r: [-18 * DEG, 0, sign * -22 * DEG], mirror, tier: TIER.SECONDARY });
+        ], 20), 'trim', { p: [x, cy + 0.07, zb + 0.03 * FRONT], r: [-18 * DEG, 0, sign * -22 * DEG], mirror, tier: TIER.SECONDARY, sprung: pack });
         rig.glow('chest', latheProfile([{ r: 0, y: 0 }, { r: 0.030, y: 0 }, { r: 0.030, y: 0.006 }, { r: 0, y: 0.006 }], 16), 'vents',
-          { p: [x + sign * 0.128, cy + 0.245, zb + 0.10 * FRONT], r: [-18 * DEG, 0, sign * -22 * DEG], mirror });
+          { p: [x + sign * 0.128, cy + 0.245, zb + 0.10 * FRONT], r: [-18 * DEG, 0, sign * -22 * DEG], mirror, sprung: pack });
         rig.emitter('exhaust', 'chest', [x + sign * 0.13, cy + 0.25, zb + 0.10 * FRONT], [0.3 * sign, 1, -0.28 * FRONT], 0.04);
       }
       rig.add('chest', bevelBox(t.chestW * 0.62, 0.22, 0.10, 0.014, { topX: 0.86 }), 'armorSecondary',
@@ -2249,18 +2264,19 @@ function buildBackHardware(rig, spec, cyIn) {
       break;
     }
     case 'sensorWings': {
-      for (const { sign, mirror } of SIDES) {
+      for (const { s: side, sign, mirror } of SIDES) {
         const x = sign * t.chestW * 0.24;
+        const pack = `pack_${side}`;
         rig.add('chest', bevelBox(0.16, 0.30, 0.026, 0.008, { topX: 0.55, botX: 0.9, shearZ: 0.03 }), 'armorPrimary', {
           p: [x + sign * 0.06, cy + 0.06, zb + 0.04 * -FRONT],
-          r: [-22 * DEG, sign * 26 * DEG, sign * -12 * DEG], mirror, tier: TIER.PRIMARY,
+          r: [-22 * DEG, sign * 26 * DEG, sign * -12 * DEG], mirror, tier: TIER.PRIMARY, sprung: pack,
         });
         rig.add('chest', bevelBox(0.11, 0.20, 0.014, 0.005, { topX: 0.5 }), 'carbon', {
           p: [x + sign * 0.075, cy + 0.07, zb + 0.055 * -FRONT],
-          r: [-22 * DEG, sign * 26 * DEG, sign * -12 * DEG], mirror, tier: TIER.SECONDARY,
+          r: [-22 * DEG, sign * 26 * DEG, sign * -12 * DEG], mirror, tier: TIER.SECONDARY, sprung: pack,
         });
         rig.glow('chest', bevelBox(0.012, 0.16, 0.008, 0.003), 'spine', {
-          p: [x + sign * 0.028, cy + 0.07, zb + 0.05 * -FRONT], r: [-22 * DEG, sign * 26 * DEG, 0], mirror,
+          p: [x + sign * 0.028, cy + 0.07, zb + 0.05 * -FRONT], r: [-22 * DEG, sign * 26 * DEG, 0], mirror, sprung: pack,
         });
       }
       // dorsal sensor drum
@@ -2731,19 +2747,20 @@ function headWedge(rig) {
   ]), 'armorSecondary', { p: [0, 0.092, FRONT * 0.086], r: [-24 * DEG, 0, 0], tier: TIER.PRIMARY });
 
   // twin crest blades sweeping back past the nape
-  for (const { sign, mirror } of SIDES) {
+  for (const { s: side, sign, mirror } of SIDES) {
+    const whip = `antenna_${side}`;
     rig.add('head', loftHull([
       { y: 0, w: 0.026, d: 0.096, round: 0.30 },
       { y: 0.052, w: 0.022, d: 0.150, z: -FRONT * 0.048, round: 0.26, smooth: true },
       { y: 0.088, w: 0.010, d: 0.096, z: -FRONT * 0.118, round: 0.40 },
     ]), 'armorAccent', {
       p: [sign * 0.040, 0.116, -FRONT * 0.020], r: [18 * DEG, sign * -10 * DEG, sign * 14 * DEG],
-      order: 'YXZ', mirror, tier: TIER.PRIMARY,
+      order: 'YXZ', mirror, tier: TIER.PRIMARY, sprung: whip,
     });
     rig.add('head', latheProfile([
       { r: 0.007, y: 0 }, { r: 0.007, y: 0.05 }, { r: 0.0035, y: 0.053 }, { r: 0.0035, y: 0.15 }, { r: 0, y: 0.16 },
     ], 10), 'trim', {
-      p: [sign * 0.052, 0.126, -FRONT * 0.020], r: [-20 * DEG, 0, sign * 16 * DEG], mirror, tier: TIER.GREEBLE,
+      p: [sign * 0.052, 0.126, -FRONT * 0.020], r: [-20 * DEG, 0, sign * 16 * DEG], mirror, tier: TIER.GREEBLE, sprung: whip,
     });
   }
 }
@@ -2806,15 +2823,17 @@ function headSunken(rig) {
   });
   rig.add('head', boltRing(7, 0.086, 0.008, 0.010), 'trim',
     { p: [0, 0.148, -FRONT * 0.014], tier: TIER.GREEBLE });
-  for (const { sign, mirror } of SIDES) {
+  for (const { s: side, sign, mirror } of SIDES) {
+    const stack = `antenna_${side}`;
     rig.add('head', latheProfile([
       { r: 0.022, y: 0 }, { r: 0.022, y: 0.058 }, { r: 0.027, y: 0.063, smooth: true },
       { r: 0.017, y: 0.072 }, { r: 0, y: 0.072 },
     ], 14), 'darkMetal', {
       p: [sign * 0.062, 0.126, -FRONT * 0.058], r: [-26 * DEG, 0, sign * 12 * DEG], mirror, tier: TIER.PRIMARY,
+      sprung: stack,
     });
     rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.013, y: 0 }, { r: 0, y: 0.008 }], 14), 'vents',
-      { p: [sign * 0.085, 0.190, -FRONT * 0.090], r: [-26 * DEG, 0, sign * 12 * DEG], mirror });
+      { p: [sign * 0.085, 0.190, -FRONT * 0.090], r: [-26 * DEG, 0, sign * 12 * DEG], mirror, sprung: stack });
   }
 }
 
@@ -2859,10 +2878,13 @@ function headTower(rig, spec, def) {
     { y: 0.214, w: 0.046, d: 0.058, z: -FRONT * 0.010, round: 0.32, smooth: true },
     { y: 0.268, w: 0.024, d: 0.030, z: -FRONT * 0.018, round: 0.42 },
   ]), 'armorSecondary', { p: [0, 0, -FRONT * 0.030], r: [-7 * DEG, 0, 0], tier: TIER.PRIMARY });
-  for (const { sign, mirror } of SIDES) {
+  for (const { s: side, sign, mirror } of SIDES) {
     rig.add('head', latheProfile([
       { r: 0.006, y: 0 }, { r: 0.006, y: 0.10 }, { r: 0.003, y: 0.105 }, { r: 0.003, y: 0.24 }, { r: 0, y: 0.25 },
-    ], 12), 'trim', { p: [sign * 0.026, 0.272, -FRONT * 0.044], r: [-12 * DEG, 0, sign * 10 * DEG], mirror, tier: TIER.SECONDARY });
+    ], 12), 'trim', {
+      p: [sign * 0.026, 0.272, -FRONT * 0.044], r: [-12 * DEG, 0, sign * 10 * DEG], mirror,
+      tier: TIER.SECONDARY, sprung: `antenna_${side}`,
+    });
   }
   rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.011, y: 0 }, { r: 0, y: 0.014 }], 12), 'joints',
     { p: [0, 0.276, -FRONT * 0.046] });
@@ -2893,7 +2915,8 @@ function headCrown(rig) {
   { p: [0, 0.124, FRONT * 0.062], r: [-70 * DEG * -FRONT, 0, 0] });
 
   // horns
-  for (const { sign, mirror } of SIDES) {
+  for (const { s: side, sign, mirror } of SIDES) {
+    const whip = `antenna_${side}`;
     for (let j = 0; j < 2; j++) {
       const len = j === 0 ? 0.23 : 0.16;
       rig.add('head', loftHull([
@@ -2903,13 +2926,13 @@ function headCrown(rig) {
       ]), 'armorAccent', {
         p: [sign * (0.056 + j * 0.026), 0.108 + j * 0.012, -FRONT * (0.012 + j * 0.036)],
         r: [(26 + j * 14) * DEG, 0, sign * (24 + j * 16) * DEG],
-        mirror, tier: TIER.PRIMARY,
+        mirror, tier: TIER.PRIMARY, sprung: whip,
       });
     }
     rig.glow('head', loftHull([
       { y: 0, w: 0.007, d: 0.007, round: 0.5 },
       { y: 0.125, w: 0.005, d: 0.005, round: 0.5 },
-    ]), 'spine', { p: [sign * 0.060, 0.152, -FRONT * 0.036], r: [26 * DEG, 0, sign * 24 * DEG], mirror });
+    ]), 'spine', { p: [sign * 0.060, 0.152, -FRONT * 0.036], r: [26 * DEG, 0, sign * 24 * DEG], mirror, sprung: whip });
   }
 
   // circlet
@@ -3674,6 +3697,16 @@ function buildMechanism(rig, spec) {
     { sag: 0.031, radius: 0.0079 * k * fat, strands: braid, twists: 2.0 });
 
   for (const { s, sign } of SIDES) {
+    // Free tail. Every other loom in here is a run between two anchors and is
+    // therefore fully determined by the pose; this one terminates on a spring
+    // leaf, so it is the one length of cable on the machine that is still
+    // moving after the fighter has stopped. Only chassis that carry enough of a
+    // loom budget to have spare cable get one.
+    if (loom >= 4) {
+      rig.cable('spine02', [sign * t.waistD * 0.30, m.lumbar * 0.60, back * t.waistD * 0.56],
+        `cable_${s}`, [0, -0.185, back * 0.055],
+        { sag: 0.055, radius: 0.0068 * k * fat, strands: braid, twists: 2.4 });
+    }
     rig.cable('chest', [sign * t.chestW * 0.26, m.collar * 0.10, back * t.chestD * 0.44],
       `shoulder_${s}`, [0, -m.upper * 0.48, back * a.upper * 0.55], { sag: 0.020, radius: 0.0072 * k * fat, strands: braid });
     rig.cable(`shoulder_${s}`, [sign * a.upper * 0.5, -m.upper * 0.76, back * a.upper * 0.7],

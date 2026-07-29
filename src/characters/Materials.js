@@ -1730,9 +1730,11 @@ function getShared(sizes, maxAniso) {
 
 const STORY_PARS_VERTEX = /* glsl */`
 attribute vec4 plateFrame;
+attribute vec4 plateSeed;
 varying vec3 vKbObjPos;
 varying vec3 vKbObjNrm;
 varying vec4 vKbFrame;
+varying vec4 vKbSeed;
 `;
 
 const STORY_PARS_FRAGMENT = /* glsl */`
@@ -1742,6 +1744,7 @@ uniform vec4 kbStory;      // grime, oxide, fade, marking
 uniform vec4 kbStoryB;     // bare-metal neutralisation, heat, dust, plate masks
 uniform vec4 kbSurface;    // form curvature scale, micro curvature scale, hollow, seam
 uniform vec4 kbSurfaceB;   // burnish, direct occlusion, occlusion sharpness, polish
+uniform vec4 kbLattice;    // panel lattice: strength, gap half-width, occlusion reach, panel span
 uniform vec3 kbSootColor;
 uniform vec3 kbOxideColor;
 uniform vec3 kbHeatColor;
@@ -1751,6 +1754,7 @@ uniform vec3 kbInkDark;
 varying vec3 vKbObjPos;
 varying vec3 vKbObjNrm;
 varying vec4 vKbFrame;
+varying vec4 vKbSeed;
 
 // The three projections are flipped to face outward, or every stencil on the
 // far half of the body would come out mirrored — the one artefact that gives a
@@ -1902,21 +1906,81 @@ float kbHol = kbHollow * kbSurface.z;
 roughnessFactor = clamp( roughnessFactor + 0.34 * kbHol, 0.06, 1.0 );
 diffuseColor.rgb *= 1.0 - 0.32 * kbHol;
 
+// Metres per pixel at this fragment, from the same view-space footprint the
+// curvature terms measure with. Every gap below is authored in millimetres, and
+// a 4mm feature is sub-pixel at fighting range: without this it would shimmer
+// its way across the plate instead of fading into the surface tone.
+float kbPx = sqrt( 1.0 / kbInvFoot );
+
 // Plate perimeter. The plateFrame attribute carries the vertex's coordinate on
 // its own face and that face's half-extents, both in metres, so this seam lands
 // on the plate's real boundary instead of wherever the shared atlas happened to
 // draw one. The ramp is clamped to a fifth of the smallest half-extent: a 4cm
 // greeble outlined on all four sides by shading meant to bed a 40cm chest plate
 // into its frame stops reading as metal and starts reading as quilting.
+//
+// The halo is the half that makes it a gap rather than a stripe. A line of
+// uniform darkness on an otherwise flat plate is a line painted on the plate;
+// what says "there is a recess here" is the gradient beside it, where the plate
+// is still lit but progressively less of the room can reach it.
 float kbSeam = 0.0;
+float kbSeamH = 0.0;
 if ( vKbFrame.z > 0.0 && vKbFrame.w > 0.0 ) {
 	vec2 kbToEdge = vKbFrame.zw - abs( vKbFrame.xy );
 	float kbSeamW = min( 0.011, min( vKbFrame.z, vKbFrame.w ) * 0.2 );
-	kbSeam = 1.0 - smoothstep( 0.0, kbSeamW, min( kbToEdge.x, kbToEdge.y ) );
+	float kbEdgeD = min( kbToEdge.x, kbToEdge.y );
+	kbSeam = 1.0 - smoothstep( 0.0, max( kbSeamW, kbPx ), kbEdgeD );
+	kbSeamH = ( 1.0 - smoothstep( kbSeamW, kbSeamW * 3.0, kbEdgeD ) ) * ( 1.0 - kbSeam );
 }
 kbSeam *= kbSurface.w;
-diffuseColor.rgb *= 1.0 - 0.30 * kbSeam;
-roughnessFactor = clamp( roughnessFactor + 0.16 * kbSeam, 0.06, 1.0 );
+kbSeamH *= kbSurface.w;
+diffuseColor.rgb *= 1.0 - 0.30 * kbSeam - 0.11 * kbSeamH;
+roughnessFactor = clamp( roughnessFactor + 0.16 * kbSeam + 0.06 * kbSeamH, 0.06, 1.0 );
+
+// Panel lattice.
+//
+// The plate bake is one atlas shared by the whole roster, so a groove in it has
+// no relation to the part it lands on: a chest plate and a wrist bracket wear
+// the same cell at the same pitch, and forty of them read as patterned sheet
+// rather than as parts somebody laid out. This divides the plate's OWN face —
+// the bounds RobotBuilder measured and handed down in plateFrame — into a
+// handful of panels, so a groove falls where a panel edge would really be on
+// this part and scales with it.
+//
+// An axis is only divided if it is long enough to carry a panel, and the count
+// is capped: a 1.4m back plate cut at a fixed pitch is a brick wall again. The
+// phase comes off the plate hash so the division is not symmetric about the
+// centre, which is the giveaway of a generated grid. Greebles are excluded — a
+// 4cm bracket is one machined part and has no panels on it.
+float kbLat = 0.0;
+float kbLatH = 0.0;
+float kbLatL = 0.0;
+if ( kbLattice.x > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 && vKbSeed.w < 0.75 ) {
+	vec2 kbSpan = vKbFrame.zw * 2.0;
+	vec2 kbCells = min( floor( kbSpan / kbLattice.w ), vec2( 4.0 ) );
+	vec2 kbT = vKbFrame.xy / vKbFrame.zw * 0.5 + 0.5;
+	vec2 kbF = fract( kbT * kbCells + vKbSeed.xy * 0.5 );
+	vec2 kbD = ( 0.5 - abs( kbF - 0.5 ) ) * kbSpan / max( kbCells, vec2( 1.0 ) );
+	// An axis with no room for a panel is pushed out of range rather than
+	// clamped to one division, or every narrow lame gets a line down its middle.
+	kbD = mix( vec2( 1e3 ), kbD, step( 1.0, kbCells ) );
+	float kbDm = min( kbD.x, kbD.y );
+	float kbGw = kbLattice.y;
+	float kbFe = max( kbGw * 0.6, kbPx * 0.8 );
+	kbLat = 1.0 - smoothstep( kbGw - kbFe, kbGw + kbFe, kbDm );
+	kbLatH = ( 1.0 - smoothstep( kbGw, kbLattice.z, kbDm ) ) * ( 1.0 - kbLat );
+	// The rolled lip either side of the gap. A panel edge is broken by the press
+	// and then rubbed by everything that passes it, so it holds a tighter
+	// highlight than the field does — and it is that pair of bright lines either
+	// side of a dark one, not the dark one alone, that reads as two plates.
+	kbLatL = smoothstep( kbGw * 1.3, kbGw * 2.1, kbDm ) * ( 1.0 - smoothstep( kbGw * 2.1, kbGw * 3.4, kbDm ) );
+	kbLat *= kbLattice.x;
+	kbLatH *= kbLattice.x;
+	kbLatL *= kbLattice.x * ( 1.0 - kbGrime * 0.6 );
+	diffuseColor.rgb *= 1.0 - 0.58 * kbLat - 0.17 * kbLatH;
+	roughnessFactor = clamp( roughnessFactor + 0.30 * kbLat + 0.09 * kbLatH - 0.13 * kbLatL, 0.06, 1.0 );
+	metalnessFactor *= 1.0 - 0.35 * kbLat;
+}
 `;
 
 /**
@@ -1931,7 +1995,7 @@ roughnessFactor = clamp( roughnessFactor + 0.16 * kbSeam, 0.06, 1.0 );
  * each other and nothing gets in between them.
  */
 const STORY_OCCLUSION_FRAGMENT = /* glsl */`
-float kbSeamOcc = 1.0 - kbSeam * 0.48;
+float kbSeamOcc = clamp( 1.0 - kbSeam * 0.48 - kbSeamH * 0.17 - kbLat * 0.70 - kbLatH * 0.30, 0.0, 1.0 );
 float kbOcc = kbSeamOcc;
 #ifdef USE_AOMAP
 	kbOcc *= mix( 1.0, pow( clamp( ambientOcclusion, 0.0, 1.0 ), kbSurfaceB.z ), kbSurfaceB.y );
@@ -1954,8 +2018,8 @@ const STORY_CLEARCOAT_FRAGMENT = /* glsl */`
 	// rolled edge gets polished and a panel gap never gets waxed. Keeping the two
 	// lobes in agreement is what stops the chamfer highlight reading as two
 	// unrelated specular events stacked on one another.
-	material.clearcoatRoughness = clamp( material.clearcoatRoughness * ( 1.0 - 0.55 * kbPolish ) + 0.3 * kbHol + 0.22 * kbSeam, 0.0525, 1.0 );
-	material.clearcoat = saturate( material.clearcoat * ( 1.0 - 0.5 * kbSeam ) );
+	material.clearcoatRoughness = clamp( material.clearcoatRoughness * ( 1.0 - 0.55 * kbPolish - 0.3 * kbLatL ) + 0.3 * kbHol + 0.22 * kbSeam + 0.3 * kbLat + 0.1 * kbLatH, 0.0525, 1.0 );
+	material.clearcoat = saturate( material.clearcoat * ( 1.0 - 0.5 * kbSeam - 0.8 * kbLat ) );
 #endif
 `;
 
@@ -1992,6 +2056,18 @@ const STORY_DEFAULTS = {
   occlusion: 0.75,
   occlusionPower: 1.7,
   polish: 1,
+  // Panel lattice, driven off the plate's own bounds. `latticePanel` is the
+  // shortest span an axis needs before it is divided at all, and therefore also
+  // the panel pitch: at 18cm a chest plate carries two or three panels and a
+  // forearm cuff carries none, which is how the part would really be made. The
+  // window is narrow in both directions — at 24cm a big plate still reads as one
+  // unbroken sheet, and below about 14cm the grid comes back and the plate reads
+  // as tiling again. The gap is 4.5mm, which is what a panel gap on a machine
+  // this size is, and the occlusion out of it reaches six times that.
+  lattice: 1,
+  latticeGap: 0.0045,
+  latticeOcclusion: 0.026,
+  latticePanel: 0.18,
 };
 
 /**
@@ -2041,6 +2117,7 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
     u.kbStoryB = { value: new THREE.Vector4(s.bare, s.heat, s.dust, s.plateMasks ? 1 : 0) };
     u.kbSurface = { value: new THREE.Vector4(s.form, s.micro, s.hollow, s.seam) };
     u.kbSurfaceB = { value: new THREE.Vector4(s.burnish, s.occlusion, s.occlusionPower, s.polish) };
+    u.kbLattice = { value: new THREE.Vector4(s.lattice, s.latticeGap, s.latticeOcclusion, s.latticePanel) };
     u.kbSootColor = { value: new THREE.Color(STORY_INK.soot) };
     u.kbOxideColor = { value: new THREE.Color(STORY_INK.oxide) };
     u.kbHeatColor = { value: new THREE.Color(STORY_INK.heat) };
@@ -2053,12 +2130,14 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
 
     // Object space, captured before skinning, so the weathering is welded to
     // the model the way a baked texture would be and never swims under motion.
-    // `plateFrame` is passed straight through: a geometry that carries none
-    // reads the generic attribute, whose Z is zero, which the seam treats as
-    // "this part has no face to bound" and skips.
+    // `plateFrame` and `plateSeed` are passed straight through: a geometry that
+    // carries neither reads the generic attribute, which is (0,0,0,1), so the
+    // frame's zero Z reads as "this part has no face to bound" and the seed's
+    // unit W reads as "greeble". Both terms then skip it, which is the right
+    // answer for a part RobotBuilder never described.
     shader.vertexShader = STORY_PARS_VERTEX + shader.vertexShader
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n\tvKbObjNrm = objectNormal;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvKbObjPos = position;\n\tvKbFrame = plateFrame;');
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvKbObjPos = position;\n\tvKbFrame = plateFrame;\n\tvKbSeed = plateSeed;');
 
     // The whole layer moves down to `normal_fragment_maps`, because the form
     // response needs both normals: the geometric one for the chamfers and the
@@ -2255,7 +2334,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // exactly what polishes on an edge.
     story: story({
       plateMasks: false, fade: 0.35, marking: 0, oxide: 0.7, bare: 0, grime: 1.15, heat: 0, dust: 0.5,
-      seam: 0.45, burnish: 0.8,
+      seam: 0.45, burnish: 0.8, lattice: 0.45,
     }),
     color: gunmetal,
     map: shared.metalMod,
@@ -2276,7 +2355,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
   // own seal on every stroke — but they do have chamfers, and a chamfer that
   // does not answer the light is the one thing that still reads as a rendered
   // cylinder. They take the form response and nothing else.
-  const bareSteel = { plateMasks: false, fade: 0, marking: 0, oxide: 0, bare: 0, heat: 0 };
+  const bareSteel = { plateMasks: false, fade: 0, marking: 0, oxide: 0, bare: 0, heat: 0, lattice: 0 };
 
   const piston = new StoryPhysicalMaterial({
     name: 'kb.piston',
@@ -2302,7 +2381,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
 
   const chrome = new StoryPhysicalMaterial({
     name: 'kb.chrome',
-    story: story({ ...bareSteel, grime: 0.25, dust: 0.1, seam: 0.3, burnish: 0.3, hollow: 0.5 }),
+    story: story({ ...bareSteel, grime: 0.25, dust: 0.1, seam: 0.3, burnish: 0.3, hollow: 0.5, lattice: 0.3 }),
     color: chromeAlloy,
     map: shared.metalMod,
     normalMap: shared.metalNormal,
@@ -2323,7 +2402,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // little soot in the cavities, which is exactly what sells the lacquer.
     story: story({
       plateMasks: false, fade: 0.25, marking: 0, oxide: 0, bare: 0, grime: 0.5, heat: 0, dust: 0.35,
-      seam: 0.5, burnish: 0.12, hollow: 0.7,
+      seam: 0.5, burnish: 0.12, hollow: 0.7, lattice: 0.5,
     }),
     map: shared.carbonAlbedo,
     normalMap: shared.carbonNormal,

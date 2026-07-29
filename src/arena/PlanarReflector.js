@@ -30,6 +30,21 @@
  * frame where a decimated silhouette is legible as decimated, and the far level
  * is a level the game already considers acceptable at thirteen metres.
  *
+ * What the pass actually costs, measured at 1080p on an M4 with the shipping
+ * lighting rig: 51 draw calls and 4.1ms of a 41.8ms frame. Almost none of that
+ * is the mirror's own geometry — deleting every merged stage mesh and the whole
+ * hangar structure from it removes 27 of those draw calls and returns 1.2ms.
+ * The cost is that a second set of fragments is shaded through the scene's
+ * twenty-three real-time lights, eight of which are `RectAreaLight`s running
+ * three's LTC integral. With those eight removed the entire reflection stack —
+ * this pass plus the floor's gather — costs 0.6ms of a 16.4ms frame. The mirror
+ * is not expensive; the shading it repeats is, and most of that repetition is
+ * per-draw rather than per-pixel — rendering the same materials under a second
+ * camera makes three refresh every material's uniforms, and with twenty-three
+ * lights in the block that is not a small refresh. Hence `setSize` is not worth
+ * tuning, and the only lever left here is the object list, which belongs to
+ * whoever calls `exclude`.
+ *
  * The pass is driven from the floor mesh's `onBeforeRender`, exactly as
  * three's stock `Reflector` does, so it always sees the final camera transform
  * for the frame and never runs when the floor is culled. The RenderPipeline
@@ -102,6 +117,13 @@ export class PlanarReflector {
    * Resizes the reflection buffer. Half the drawing buffer is enough: the
    * result is blurred by the floor's roughness anyway, and the saving buys the
    * second scene render.
+   *
+   * Do not spend effort here. A cap was tried and reverted: at 1080p, taking
+   * the buffer from 540 lines down to 360 returned 0.04ms, and taking it all
+   * the way down to 120 — a twentieth of the pixels — returned 1.19ms of a
+   * 40.5ms frame, while switching the pass off entirely returned 6.42ms. Five
+   * of those six milliseconds are therefore fixed per-frame cost, not fill, and
+   * shrinking the buffer only trades reflection sharpness for nothing.
    */
   setSize(width, height) {
     const w = Math.max(64, Math.round(width));

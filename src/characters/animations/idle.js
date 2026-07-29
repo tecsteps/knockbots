@@ -210,14 +210,22 @@ export function mix(a, b, u) {
 /**
  * Transpose a list of whole-body keyframes into a Clip.
  *
- * A frame is `{ t, pose, ease?, root?, ry? }`. `ease` describes the segment that
- * LEAVES that frame, matching how `sampleClip` reads it. Looping clips get their
- * opening pose re-stamped at `t === duration` automatically, so a loop can never
- * pop. Bones that hold one value for the whole clip collapse to a single key.
+ * A frame is `{ t, pose, ease?, easeBy?, root?, ry? }`. `ease` describes the
+ * segment that LEAVES that frame, matching how `sampleClip` reads it. Looping
+ * clips get their opening pose re-stamped at `t === duration` automatically, so
+ * a loop can never pop. Bones that hold one value for the whole clip collapse to
+ * a single key.
+ *
+ * `easeBy` overrides `ease` for named bones on that one segment — `{ shoulder_R:
+ * 'snap' }` snaps the striking arm out while everything else rides the frame's
+ * sine. The runtime has always read `ease` per key PER TRACK; without this a
+ * whole-body keyframe could only ever stamp one curve onto every bone it
+ * touched, which is the mechanical reason almost nothing in the library releases
+ * faster than a `quad`. `easeBy.root` does the same for the root track.
  *
  * @param {string} name
  * @param {{duration:number, loop?:boolean, blendIn?:number, blendOut?:number, mask?:string[]}} opts
- * @param {Array<{t:number, pose:Record<string,number[]>, ease?:string, root?:number[], ry?:number}>} frames
+ * @param {Array<{t:number, pose:Record<string,number[]>, ease?:string, easeBy?:Record<string,string>, root?:number[], ry?:number}>} frames
  * @returns {import('../AnimationFormat.js').Clip}
  */
 export function makeClip(name, opts, frames) {
@@ -235,7 +243,8 @@ export function makeClip(name, opts, frames) {
     const keys = fs.map((f, i) => {
       const r = f.pose[b] || ZERO;
       const k = { t: f.t, r: [r[0], r[1], r[2]] };
-      if (f.ease && i < fs.length - 1) k.ease = f.ease;
+      const e = (f.easeBy && f.easeBy[b]) || f.ease;
+      if (e && i < fs.length - 1) k.ease = e;
       return k;
     });
     const flat = keys.every((k) => k.r[0] === keys[0].r[0] && k.r[1] === keys[0].r[1] && k.r[2] === keys[0].r[2]);
@@ -254,7 +263,8 @@ export function makeClip(name, opts, frames) {
       const p = f.root || ZERO;
       const k = { t: f.t, p: [p[0], p[1], p[2]] };
       if (f.ry) k.ry = f.ry;
-      if (f.ease && i < fs.length - 1) k.ease = f.ease;
+      const e = (f.easeBy && f.easeBy.root) || f.ease;
+      if (e && i < fs.length - 1) k.ease = e;
       return k;
     });
   }

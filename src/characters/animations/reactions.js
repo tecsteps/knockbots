@@ -141,11 +141,20 @@ const blockImpact = makeClip('r.blockImpact', { duration: 18, blendIn: 1, blendO
 
 // ---------------------------------------------------------------------------
 // Flinches — the whip chain
+//
+// The whip is what `easeBy` is for. A flinch is one event arriving at different
+// parts of the body at different speeds: the head is thrown before the ribcage
+// knows about it, and the ribcage is thrown before the pelvis does. Timing the
+// keys apart gets the ORDER right but not the character — with one curve per
+// keyframe the head and the hips both accelerate the same way, which reads as
+// the whole chassis being pushed rather than as a blow landing on a head. So the
+// part the blow is arriving at snaps on its segment while everything else keeps
+// the frame's own curve.
 // ---------------------------------------------------------------------------
 const flinchHigh = makeClip('r.flinchHigh', { duration: 18, blendIn: 1, blendOut: 5 }, [
   { t: 0, ease: 'snap', pose: STANCE, root: [0, STANCE_Y, 0] },
-  { t: 2, ease: 'quad', pose: add(STANCE, { neck: [-15, -5, -5], head: [-27, -11, -9], clavicle_L: [0, 0, 3], shoulder_L: [-4, 0, 0] }), root: [0, STANCE_Y, -0.025] },
-  { t: 4, ease: 'quad', pose: add(STANCE, { spine02: [-7, 2, 2], chest: [-13, 5, 4], neck: [-16, -4, -5], head: [-30, -10, -9], clavicle_L: [-3, 0, 6], clavicle_R: [-3, 0, -4], shoulder_L: [8, 0, 6], shoulder_R: [6, 0, -5], elbow_L: [10, 0, 0] }), root: [0, STANCE_Y - 0.008, -0.075] },
+  { t: 2, ease: 'quad', easeBy: { head: 'snap', neck: 'snap' }, pose: add(STANCE, { neck: [-15, -5, -5], head: [-27, -11, -9], clavicle_L: [0, 0, 3], shoulder_L: [-4, 0, 0] }), root: [0, STANCE_Y, -0.025] },
+  { t: 4, ease: 'quad', easeBy: { spine01: 'snap', spine02: 'snap', chest: 'snap', hips: 'snap', head: 'sine', neck: 'sine' }, pose: add(STANCE, { spine02: [-7, 2, 2], chest: [-13, 5, 4], neck: [-16, -4, -5], head: [-30, -10, -9], clavicle_L: [-3, 0, 6], clavicle_R: [-3, 0, -4], shoulder_L: [8, 0, 6], shoulder_R: [6, 0, -5], elbow_L: [10, 0, 0] }), root: [0, STANCE_Y - 0.008, -0.075] },
   { t: 6, ease: 'cubic', pose: add(over(STANCE, L_SKATE), { hips: [-7, 5, 2], spine01: [-6, 2, 1], spine02: [-8, 3, 2], chest: [-14, 6, 5], neck: [-11, -2, -4], head: [-23, -7, -7], clavicle_L: [-3, 0, 5], clavicle_R: [-3, 0, -4], shoulder_L: [10, 0, 7], shoulder_R: [8, 0, -6], elbow_L: [12, 0, 0], elbow_R: [8, 0, 0] }), root: [0, STANCE_Y - 0.012, -0.115] },
   { t: 10, ease: 'cubic', pose: add(over(STANCE, L_SKATE), { hips: [2, 1, 0], chest: [4, -2, -2], neck: [3, 1, 1], head: [9, 3, 3], shoulder_L: [-6, 0, -4], shoulder_R: [-4, 0, 3] }), root: [0, STANCE_Y - 0.004, -0.13] },
   { t: 13, ease: 'sine', pose: add(STANCE, { chest: [-2, 0, 0], head: [-4, -1, -1], shoulder_L: [2, 0, 2] }), root: [0, STANCE_Y, -0.135] },
@@ -154,7 +163,7 @@ const flinchHigh = makeClip('r.flinchHigh', { duration: 18, blendIn: 1, blendOut
 
 const flinchMid = makeClip('r.flinchMid', { duration: 18, blendIn: 1, blendOut: 5 }, [
   { t: 0, ease: 'snap', pose: STANCE, root: [0, STANCE_Y, 0] },
-  { t: 2, ease: 'quad', pose: add(STANCE, { hips: [6, 2, 0], spine01: [7, 0, 0], spine02: [8, 0, 0], chest: [7, 2, 0], neck: [4, 0, 0], head: [7, 0, 0], clavicle_L: [4, 0, -4], clavicle_R: [4, 0, 4], elbow_L: [-8, 0, 0], elbow_R: [-4, 0, 0] }), root: [0, STANCE_Y - 0.03, -0.045] },
+  { t: 2, ease: 'quad', easeBy: { hips: 'snap', spine01: 'snap', spine02: 'snap', chest: 'snap' }, pose: add(STANCE, { hips: [6, 2, 0], spine01: [7, 0, 0], spine02: [8, 0, 0], chest: [7, 2, 0], neck: [4, 0, 0], head: [7, 0, 0], clavicle_L: [4, 0, -4], clavicle_R: [4, 0, 4], elbow_L: [-8, 0, 0], elbow_R: [-4, 0, 0] }), root: [0, STANCE_Y - 0.03, -0.045] },
   { t: 5, ease: 'cubic', pose: add(over(STANCE, L_BUCKLE, A_CLUTCH), T_FOLDED), root: [0, -0.2, -0.1] },
   { t: 9, ease: 'cubic', pose: add(over(STANCE, L_BUCKLE, A_CLUTCH), add(T_FOLDED, { hips: [-4, 0, 0], spine01: [-4, 0, 0], spine02: [-5, 0, 0], chest: [-5, 0, 0], head: [-5, 0, 0] })), root: [0, -0.175, -0.125] },
   { t: 13, ease: 'sine', pose: add(STANCE, { hips: [4, 2, 0], spine01: [4, 0, 0], chest: [4, 1, 0], head: [3, 0, 0], elbow_L: [-6, 0, 0] }), root: [0, STANCE_Y - 0.02, -0.13] },
@@ -163,7 +172,7 @@ const flinchMid = makeClip('r.flinchMid', { duration: 18, blendIn: 1, blendOut: 
 
 const flinchLow = makeClip('r.flinchLow', { duration: 16, blendIn: 1, blendOut: 5 }, [
   { t: 0, ease: 'snap', pose: STANCE, root: [0, STANCE_Y, 0] },
-  { t: 2, ease: 'quad', pose: add(STANCE, { hip_L: [-8, 0, -6], knee_L: [12, 0, 0], hips: [3, 0, 4], chest: [3, 0, -2], head: [4, 0, -2] }), root: [0, STANCE_Y - 0.045, -0.02] },
+  { t: 2, ease: 'quad', easeBy: { hip_L: 'snap', knee_L: 'snap', ankle_L: 'snap' }, pose: add(STANCE, { hip_L: [-8, 0, -6], knee_L: [12, 0, 0], hips: [3, 0, 4], chest: [3, 0, -2], head: [4, 0, -2] }), root: [0, STANCE_Y - 0.045, -0.02] },
   { t: 4, ease: 'cubic', pose: add(over(STANCE, L_BUCKLE), { hips: [9, 4, 7], spine01: [7, 0, -2], spine02: [8, 0, -3], chest: [9, 2, -5], neck: [4, 0, 0], head: [10, 0, -4], clavicle_L: [5, 0, -4], shoulder_L: [10, 0, 6], elbow_L: [12, 0, 0], shoulder_R: [6, 0, -5] }), root: [0, -0.205, -0.055] },
   { t: 8, ease: 'cubic', pose: add(over(STANCE, L_BUCKLE), { hips: [4, 2, 3], spine01: [3, 0, -1], chest: [4, 1, -2], head: [4, 0, -2], shoulder_L: [4, 0, 2] }), root: [0, -0.16, -0.07] },
   { t: 12, ease: 'sine', pose: add(STANCE, { hips: [-2, 0, 0], chest: [-2, 0, 0], head: [-3, 0, 0], knee_L: [-4, 0, 0] }), root: [0, STANCE_Y - 0.008, -0.075] },

@@ -98,6 +98,18 @@ const RIPPLE = {
 /** Bones whose per-tick delta feeds the "how busy is the body" estimate. */
 const ENERGY_BONES = ['chest', 'head', 'shoulder_L', 'shoulder_R', 'hip_L', 'hip_R'];
 
+/**
+ * Ceiling on the inertialization offset's opening rate, as a multiple of
+ * `x0 / t1`. The quintic bulges past its start value when the offset is still
+ * growing — which is follow-through and wanted — but the bulge is 1.27x at 2
+ * and 1.64x at 4, so it is capped where a fast retraction still reads as
+ * carry-through rather than as a lurch.
+ */
+const INERTIA_RISE_CAP = 2.5;
+
+/** Offsets under this many radians are not worth arming (~0.023 degrees). */
+const INERTIA_EPS = 4e-4;
+
 // --- scratch, module-level so simulate() allocates nothing -------------------
 const _v0 = new THREE.Vector3();
 const _v1 = new THREE.Vector3();
@@ -322,6 +334,27 @@ export class Animator {
     this.layers = new Map();
     this.base = this.#layer('base');
 
+    // --- inertialization ----------------------------------------------------
+    /**
+     * A transition is not a crossfade: the incoming clip takes over whole, and
+     * what decays is the OFFSET between it and the pose the body was actually
+     * in. `pending` is armed by play() and solved against the next composed
+     * pose. Everything below is a scalar advanced at the fixed tick rate, so
+     * the same inputs replay to the same pose.
+     */
+    this.inertia = { enabled: true, scale: 1, active: false, pending: 0, t: 0, t1: 0 };
+    this._inSrc = Array.from({ length: this.count }, () => new THREE.Quaternion());
+    this._inSrcPrev = Array.from({ length: this.count }, () => new THREE.Quaternion());
+    this._inAxis = Array.from({ length: this.count }, () => new THREE.Vector3());
+    this._inX0 = new Float64Array(this.count);
+    this._inV0 = new Float64Array(this.count);
+    this._inA = new Float64Array(this.count);
+    this._inB = new Float64Array(this.count);
+    this._inC = new Float64Array(this.count);
+    this._inT1 = new Float64Array(this.count);
+    this._inLive = new Uint8Array(this.count);
+    this._inPrevPose = new Pose(this.names);
+
     // --- forward kinematics caches -----------------------------------------
     this.worldQuat = Array.from({ length: this.count }, () => new THREE.Quaternion());
     this.worldPos = Array.from({ length: this.count }, () => new THREE.Vector3());
@@ -397,6 +430,8 @@ export class Animator {
       enabled: true,
       rate: 0.055,           // cycles per tick, ~3.3s per breath
       amplitude: 1,
+      /** Scale on the below-the-waist weight shift and the arm micro-drift. */
+      stance: 1,
       phase: 0,
       idleness: 1,
       _energy: 0,
@@ -543,8 +578,17 @@ export class Animator {
    * Retriggering the same clip pushes a *new* entry and fades the old one out,
    * which is what makes a repeated jab restart cleanly instead of snapping.
    *
+   * `inertia` is the better transition and the one to reach for: instead of
+   * mixing two poses for a few ticks it hands the layer straight to the new
+   * clip and decays the difference, so the body leaves the old pose at the
+   * speed it was already moving. A crossfade cannot do that — it blends
+   * positions and knows nothing about velocity, which is why even a long one
+   * still has a corner in it at both ends.
+   *
    * @param {string} clipId
    * @param {Object} [opts]
+   * @param {number}  [opts.inertia]   inertialize over this many ticks; replaces
+   *   the crossfade entirely (the incoming clip starts at full weight)
    * @param {number}  [opts.blend]     crossfade length in ticks (default clip.blendIn ?? 4)
    * @param {number}  [opts.speed]     playback rate multiplier (default 1)
    * @param {string}  [opts.layer]     layer name (default 'base')
@@ -577,7 +621,11 @@ export class Animator {
     if (opts.restart === false && top && !top.dying && top.clipId === clipId) return top;
 
     const easeFn = typeof opts.ease === 'function' ? opts.ease : (EASE[opts.ease] || EASE.sine);
-    const blend = Math.max(0, opts.blend ?? clip.blendIn ?? 4);
+    // An inertialized transition owns the whole cut, so the crossfade that
+    // would otherwise run underneath it is turned off rather than layered on.
+    const inertiaTicks = this.inertia.enabled ? Math.max(0, opts.inertia ?? 0) : 0;
+    const armed = inertiaTicks > 0 && this.#armInertia(inertiaTicks);
+    const blend = armed ? 0 : Math.max(0, opts.blend ?? clip.blendIn ?? 4);
 
     // A retrigger inside the same tick reuses the entry rather than stacking.
     if (top && !top.dying && top.clipId === clipId && top.fadeElapsed === 0 && top.weight <= 0) {
@@ -721,6 +769,29 @@ export class Animator {
     if (!layer) return false;
     for (const e of layer.entries) if (e.clipId === clipId && e.weight > 0.001) return true;
     return false;
+  }
+
+  /**
+   * Snapshot the pose the body is actually in, and the one before it, so the
+   * next composed pose can be met with an offset that starts where the body was
+   * AND is moving the way the body was moving. `cur` and `prev` are already one
+   * tick apart, so the outgoing angular velocity costs nothing to obtain.
+   *
+   * Re-arming mid-decay is safe and is the common case — a cancel into another
+   * move — because the offset is written into `cur`, so the snapshot is the
+   * pose on screen rather than the clip's idea of it.
+   * @param {number} ticks
+   */
+  #armInertia(ticks) {
+    const dur = ticks * this.inertia.scale;
+    if (!(dur > 0)) return false;
+    for (let i = 0; i < this.count; i++) {
+      const n = this.names[i];
+      this._inSrc[i].copy(this.cur.rot[n]);
+      this._inSrcPrev[i].copy(this.prev.rot[n]);
+    }
+    this.inertia.pending = dur;
+    return true;
   }
 
   #trimEntries(layer) {
@@ -961,6 +1032,7 @@ export class Animator {
     // 2 — advance and compose the clip layers.
     this.#advanceEntries();
     this.#composeLayers(cur);
+    this.#applyInertia(cur);
     this.#trackEnergy(cur);
 
     // 3 — world transforms of the clip pose.
@@ -1080,7 +1152,25 @@ export class Animator {
     }
   }
 
-  #composeLayers(out) {
+  /**
+   * Where an entry stood one tick ago, through its own retime map. Used only by
+   * the rewound compose that inertialization needs — knowing where the incoming
+   * animation *came from* is what separates its velocity from the outgoing
+   * pose's, and without that separation the offset velocity double-counts.
+   */
+  #prevTime(e) {
+    const clock = e.clock - e.speed;
+    const t = e.retime ? retimeClip(e.retime, clock) : clock;
+    return e.clip.loop ? t : Math.max(0, t);
+  }
+
+  /**
+   * @param {Pose} out
+   * @param {boolean} [rewind] sample every entry one tick earlier and extract no
+   *   root motion; the result is the pose the current clips would have produced
+   *   last tick, which is a velocity reference, not something to render.
+   */
+  #composeLayers(out, rewind = false) {
     // --- base layer -------------------------------------------------------
     //
     // Entries are sampled with their RAW weight, not a weight normalised across
@@ -1097,7 +1187,7 @@ export class Animator {
     if (total > 1e-6) {
       for (const e of base.entries) {
         if (e.weight <= 1e-6) continue;
-        sampleClip(e.clip, e.time, out, e.weight);
+        sampleClip(e.clip, rewind ? this.#prevTime(e) : e.time, out, e.weight);
       }
       for (let i = 0; i < this.count; i++) {
         const n = this.names[i];
@@ -1109,7 +1199,7 @@ export class Animator {
       // Root motion is extracted from the base layer only, weight-normalised so
       // a crossfade blends the two clips' motion instead of summing it.
       let yawDrive = 0;
-      for (const e of base.entries) {
+      if (!rewind) for (const e of base.entries) {
         if (e.weight <= 1e-6) continue;
         const w = e.weight / total;
         if (this.rootMotionAxes.x) this._rootAccum.x += e.dPos.x * w;
@@ -1118,8 +1208,8 @@ export class Animator {
         if (this.rootMotionAxes.yaw) this._rootYawAccum += e.dYaw * w;
         if (this.#authorsYaw(e.clip)) yawDrive += w;
       }
-      this.rootYawDrive = yawDrive;
-    } else {
+      if (!rewind) this.rootYawDrive = yawDrive;
+    } else if (!rewind) {
       this.rootYawDrive = 0;
     }
     // Zero the axes we extracted so the visual root never double-applies them.
@@ -1136,7 +1226,7 @@ export class Animator {
       let live = false;
       for (const e of layer.entries) {
         if (e.weight <= 1e-6) continue;
-        sampleClip(e.clip, e.time, pose, e.weight);
+        sampleClip(e.clip, rewind ? this.#prevTime(e) : e.time, pose, e.weight);
         live = true;
       }
       if (!live) continue;
@@ -1156,6 +1246,90 @@ export class Animator {
           if (w > out.weight[bone]) out.weight[bone] = w;
         }
       }
+    }
+  }
+
+  /**
+   * Decay the transition offset onto the composed pose.
+   *
+   * `Pose.rot` is a rest-relative delta, so the offset is just another delta
+   * and composes by pre-multiplication — it rides in the bone's rest frame and
+   * does not get dragged around by the clip that is now playing. The whole
+   * state is per-bone scalars plus a fixed axis, advanced at TICK_DT, so it
+   * re-simulates exactly.
+   */
+  #applyInertia(pose) {
+    const I = this.inertia;
+    if (I.pending > 0) {
+      // Where the incoming clips stood one tick ago. The offset's rate of
+      // change is the difference of two velocities, and this is the half of it
+      // the outgoing snapshots cannot supply.
+      this._inPrevPose.reset();
+      this.#composeLayers(this._inPrevPose, true);
+      this.#solveInertia(pose, I.pending * TICK_DT);
+      I.pending = 0;
+    }
+    if (!I.active) return;
+    // Advance first: the tick the transition was armed on should already show
+    // one tick of the outgoing motion carried through, not a repeat of the
+    // frame before it.
+    I.t += TICK_DT;
+    if (I.t >= I.t1) { I.active = false; return; }
+    const t = I.t, t2 = t * t, t3 = t2 * t;
+    for (let i = 0; i < this.count; i++) {
+      if (!this._inLive[i]) continue;
+      if (t >= this._inT1[i]) { this._inLive[i] = 0; continue; }
+      const x = (this._inA[i] * t2 + this._inB[i] * t + this._inC[i]) * t3
+        + this._inV0[i] * t + this._inX0[i];
+      if (Math.abs(x) < 1e-5) continue;
+      _q0.setFromAxisAngle(this._inAxis[i], x);
+      pose.rot[this.names[i]].premultiply(_q0);
+    }
+  }
+
+  /**
+   * Bollo's quintic, fitted per bone on the tick a clip is armed.
+   *
+   * The offset that takes the new pose back to the pose the body was in has
+   * magnitude `x0` about a fixed axis; `v0` is the rate that magnitude was
+   * changing, measured along the same axis from the snapshot one tick earlier.
+   * The curve satisfies x(0)=x0, x'(0)=v0 and x(t1)=x'(t1)=x''(t1)=0, so
+   * position and velocity are continuous across the cut and the offset arrives
+   * at zero with no residual motion for the next layer to fight.
+   *
+   * `t1` is shortened per bone when the offset is already closing fast enough
+   * to reach zero early — otherwise the quintic would drive it past the target
+   * and swing back, which is the one artefact this technique can introduce.
+   * @param {Pose} pose the freshly composed incoming pose
+   * @param {number} dur decay window in seconds
+   */
+  #solveInertia(pose, dur) {
+    const I = this.inertia;
+    I.t = 0;
+    I.t1 = 0;
+    I.active = false;
+    for (let i = 0; i < this.count; i++) {
+      this._inLive[i] = 0;
+      _q1.copy(pose.rot[this.names[i]]).invert();
+      quatToVec(_q0.copy(this._inSrc[i]).multiply(_q1), _v0);
+      const x0 = _v0.length();
+      if (x0 < INERTIA_EPS) continue;
+      const axis = this._inAxis[i].copy(_v0).divideScalar(x0);
+      _q1.copy(this._inPrevPose.rot[this.names[i]]).invert();
+      quatToVec(_q0.copy(this._inSrcPrev[i]).multiply(_q1), _v1);
+      let v0 = (x0 - _v1.dot(axis)) / TICK_DT;
+      if (v0 > 0) v0 = Math.min(v0, INERTIA_RISE_CAP * x0 / dur);
+      const t1 = v0 < 0 ? Math.min(dur, -5 * x0 / v0) : dur;
+      const t3 = t1 * t1 * t1, t4 = t3 * t1, t5 = t4 * t1;
+      this._inA[i] = -(6 * v0 * t1 + 12 * x0) / (2 * t5);
+      this._inB[i] = (16 * v0 * t1 + 30 * x0) / (2 * t4);
+      this._inC[i] = -(12 * v0 * t1 + 20 * x0) / (2 * t3);
+      this._inX0[i] = x0;
+      this._inV0[i] = v0;
+      this._inT1[i] = t1;
+      this._inLive[i] = 1;
+      if (t1 > I.t1) I.t1 = t1;
+      I.active = true;
     }
   }
 
@@ -1243,6 +1417,36 @@ export class Animator {
     addEuler(pose, 'hips', swayX, swayY * 0.4, swayZ, amp);
     addEuler(pose, 'spine01', swayX * 0.4, swayY * 0.3, -swayZ * 0.5, amp);
     addEuler(pose, 'head', noise1(n * 1.7, 71) * 1.1 * DEG, noise1(n * 1.3, 83) * 1.6 * DEG, 0, amp);
+
+    const st = amp * b.stance;
+    if (st <= 1e-4) return;
+
+    // Nothing else in the pipeline writes a bone below the hips or past the
+    // clavicles, so a standing frame holds the legs and the forearms perfectly
+    // still while the chest breathes — which is the tell. The weight shift uses
+    // the same joint relationship the authored idle rock does (loaded side
+    // extends and its ankle rolls under the pelvis, free side softens) at a
+    // third of the amplitude, driven by noise rather than the breath phase so
+    // the two never beat together.
+    const shift = noise1(n * 0.95, 103);
+    addEuler(pose, 'hip_L', -2.6 * DEG * shift, 0, 1.1 * DEG * shift, st);
+    addEuler(pose, 'knee_L', 3.8 * DEG * shift, 0, 0, st);
+    addEuler(pose, 'ankle_L', -2.4 * DEG * shift, 0, 0, st);
+    addEuler(pose, 'hip_R', 2.2 * DEG * shift, 0, -0.6 * DEG * shift, st);
+    addEuler(pose, 'knee_R', -3.3 * DEG * shift, 0, 0, st);
+    addEuler(pose, 'ankle_R', 2.7 * DEG * shift, 0, 0, st);
+
+    // The arms drift on their own clocks: a guard being held, not parked. The
+    // two sides get separate seeds AND separate rates, or the hands move as one
+    // rigid object and the whole thing reads as the camera shaking.
+    const dl = noise1(n * 2.1, 131), dl2 = noise1(n * 1.5, 149);
+    const dr = noise1(n * 1.9, 167), dr2 = noise1(n * 1.65, 181);
+    addEuler(pose, 'shoulder_L', 1.2 * DEG * dl, 0.85 * DEG * dl2, -1.0 * DEG * dl2, st);
+    addEuler(pose, 'elbow_L', 1.6 * DEG * dl2, 0, 0.7 * DEG * dl, st);
+    addEuler(pose, 'wrist_L', 1.3 * DEG * dl, 1.1 * DEG * dl2, 0, st);
+    addEuler(pose, 'shoulder_R', 1.2 * DEG * dr, 0.85 * DEG * dr2, 1.0 * DEG * dr2, st);
+    addEuler(pose, 'elbow_R', 1.6 * DEG * dr2, 0, -0.7 * DEG * dr, st);
+    addEuler(pose, 'wrist_R', 1.3 * DEG * dr, 1.1 * DEG * dr2, 0, st);
   }
 
   #applyLookAt(pose) {
@@ -1572,6 +1776,11 @@ export class Animator {
     this.prev = this._poseA;
     this.cur = this._poseB;
     this.clearRootMotion();
+    this.inertia.active = false;
+    this.inertia.pending = 0;
+    this.inertia.t = 0;
+    this.inertia.t1 = 0;
+    this._inLive.fill(0);
     this._ripple.length = 0;
     for (const b in this.springs) this.springs[b].reset();
     for (const q of this._prevParentQuat) q.identity();

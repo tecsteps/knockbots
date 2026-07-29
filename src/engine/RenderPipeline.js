@@ -43,6 +43,27 @@
  *    animation pop into a permanent, visible double image. The camera delta is
  *    smooth by construction because a spring-damper produces it.
  *
+ * 5. **Where the frame time actually goes.** Measured at 1080p on an M4, in a
+ *    live round at the default fight framing, by toggling one thing at a time
+ *    and comparing the interval between `render` calls. The frame is 41.8ms.
+ *    Removing the eight `RectAreaLight`s that `Environment` puts in the scene
+ *    takes it to 16.1ms — 62fps — and adding them back two at a time walks it
+ *    straight back up: 16.1, 22.2, 27.4, 32.9, 41.8. That is 3.2ms per area
+ *    light, every frame, forever. Each of the three live `PointLight`s costs a
+ *    further 3ms, and all three sit at zero intensity except on the frames an
+ *    impact flashes them. Everything this
+ *    file owns is small beside that: the shadow pass is 23 draw calls and under
+ *    a millisecond, PCSS costs 1.8ms against stock PCF, halving the shadow map
+ *    changes nothing measurable, and the whole post chain — GTAO, bloom, DOF,
+ *    motion blur, grade, SMAA — is about 9ms together. The planar reflection is
+ *    4.1ms, and 3.5ms of that is the second set of fragments being shaded
+ *    through those same lights. So the pipeline is not what is slow: every
+ *    fragment in the frame is being lit by twenty-three forward lights, eight
+ *    of them running three's LTC area-light integral, and no amount of
+ *    resolution, tap-count or pass-count tuning in this file recovers that.
+ *    Adaptive resolution is the only knob here that touches it, and on the
+ *    ultra tier it is deliberately pinned — see the note on `QUALITY_TIERS`.
+ *
  * Externally this class only needs the charter API, but it also listens for a
  * `cameraFocus` bus event (emitted by `FightCamera`) carrying the focus point
  * and radius of the fighter pair, which drives shadow fitting and DOF focus.

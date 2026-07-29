@@ -283,6 +283,8 @@ export class Fighter {
     this.stunTicks = 0;
     this.reaction = null;
     this.lastDamageTick = -999;
+    /** Tick a blow last landed or was blocked; see #inertiaFor. */
+    this.impactTick = -999;
     this.damageLevel = 0;
     this.brokenParts = new Set();
 
@@ -523,6 +525,7 @@ export class Fighter {
     this.upHeldTicks = 0;
     this.pendingSidestep = 0;
     this.lastDamageTick = -999;
+    this.impactTick = -999;
     for (const side of ['L', 'R']) {
       const st = this.plantState[side];
       st.contact = 0;
@@ -1116,6 +1119,7 @@ export class Fighter {
     this.health = Math.max(0, this.health - dmg);
     this.recoverable = Math.min(this.recoverable + dmg * RECOVERABLE_RATIO, MAX_HEALTH - this.health);
     this.lastDamageTick = this.simTick;
+    this.impactTick = this.simTick;
     this.addMeter(dmg * METER_ON_TAKE);
     this.#checkDamageThresholds(point);
 
@@ -1226,6 +1230,7 @@ export class Fighter {
     this.hitboxes.length = 0;
     this.#enter(STATE.BLOCKSTUN);
     this.stunTicks = info.blockStun ?? move.blockStun;
+    this.impactTick = this.simTick;
     this.#play('r.blockImpact', 2, false);
     return chip;
   }
@@ -1843,7 +1848,12 @@ export class Fighter {
     let delta = targetYaw - this.visualYaw;
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
-    this.visualYaw += delta * Math.min(1, dt * 14);
+    // Exponential decay, not `dt * k`: the linear form converges at a different
+    // rate on a 60Hz display than on a 144Hz one, so the turn looked slower the
+    // better the machine. This is the only frame-rate-dependent smoothing on
+    // this class — everything inside simulate() runs on the fixed tick and its
+    // constants must stay as they are.
+    this.visualYaw += delta * (1 - Math.exp(-14 * dt));
     // The animation's own yaw rides on top, interpolated the short way round so
     // the frame a spin wraps at is not rendered as a full turn backwards.
     this.group.rotation.y = this.visualYaw + this.prevAnimYaw + wrapPi(this.animYaw - this.prevAnimYaw) * alpha;
@@ -1930,7 +1940,24 @@ export class Fighter {
     }
     if (loop && this.currentClip === clipId) return;
     this.currentClip = clipId;
-    this.animator.play(clipId, { blend, loop, speed, retime });
+    this.animator.play(clipId, { blend, loop, speed, retime, inertia: this.#inertiaFor(blend) });
+  }
+
+  /**
+   * How long the transition into a clip should inertialize for.
+   *
+   * A blow is a cut, not a blend. The frame after contact has to show the body
+   * already thrown, so anything played on the tick a hit landed or was blocked
+   * keeps the hard transition and the impact reads at full force. Every other
+   * transition decays the difference from the pose the body was actually in,
+   * over a window scaled by the crossfade the call site asked for — that number
+   * is already the site's statement of how urgent the change is, so it drives
+   * the decay instead of being replaced by one constant for the whole game.
+   * @param {number} blend the crossfade length the call site asked for
+   */
+  #inertiaFor(blend) {
+    if (blend <= 0 || this.impactTick === this.simTick) return 0;
+    return THREE.MathUtils.clamp(Math.round(blend * 2.4), 6, 14);
   }
 
   /** Round bookends. */
