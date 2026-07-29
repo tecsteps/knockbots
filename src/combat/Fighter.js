@@ -78,6 +78,8 @@ const JUGGLE_GRAVITY = 0.42;
 // they need trimming or the victim floats above the camera framing.
 const LAUNCH_SCALE = 0.85;
 const FOOT_CLEAR = 0.055;       // ankle height above the floor when planted
+// How much of the animation's authored root translation the body actually takes.
+const ROOT_MOTION_SCALE = 1.0;
 
 /** +1 when the rig's local +Z is its front. See the file header. */
 export const FORWARD_SIGN = 1;
@@ -229,10 +231,13 @@ export class Fighter {
     for (let i = 0; i < 8; i++) {
       this.hitboxPool.push({
         bone: '', radius: 0, windowIndex: 0, move: null,
-        p0: new THREE.Vector3(), p1: new THREE.Vector3(),
+        p0: new THREE.Vector3(), p1: new THREE.Vector3(), tip: new THREE.Vector3(),
       });
     }
     this.hitboxes = [];
+    /** Per-bone world position this tick and last, for swept hitboxes. */
+    this.boneTrack = Object.create(null);
+    this.moveBones = null;
 
     this.robot = buildRobot(this.def, bundle, this.environment);
     if (this.robot?.group) this.group.add(this.robot.group);
@@ -688,10 +693,21 @@ export class Fighter {
     if (n === 0) return;
     this.moveTick += n;
     if (this.animator) {
-      for (let i = 0; i < n; i++) this.animator.simulate();
+      for (let i = 0; i < n; i++) {
+        this.animator.simulate();
+        // Take the root motion the skipped frames would have produced, so the
+        // fighter ends up where the animation actually put it.
+        if (this.animator.consumeRootMotion) {
+          const rm = this.animator.consumeRootMotion();
+          _v.set(rm.x * ROOT_MOTION_SCALE, 0, rm.z * ROOT_MOTION_SCALE).applyAxisAngle(UP, yawForFacing(this.facing));
+          this.position.x += _v.x;
+          this.position.z += _v.z;
+        }
+      }
       this.animator.applyTo(this.bones, 1);
     }
-    this.group.updateMatrixWorld(true);
+    this.prevPosition.copy(this.position);
+    this.#writePose();
     this.#buildHurtboxes();
     this.#buildHitboxes();
   }
@@ -708,6 +724,9 @@ export class Fighter {
     this.connected.clear();
     this.hitConnectedThisMove = false;
     this.isBlocking = false;
+    // Fresh sweep history: the bones this move strikes with, tracked from tick 0.
+    this.moveBones = [...new Set(move.active.flatMap((w) => w.boxes.map((b) => b.bone)))];
+    for (const n of this.moveBones) if (this.boneTrack[n]) this.boneTrack[n].valid = false;
     this.velocity.x *= 0.4;
     this.velocity.z *= 0.3;
     this.#play(move.clip, move.startup > 16 ? 4 : 2, false);
@@ -1270,14 +1289,42 @@ export class Fighter {
   // Pose, hurtboxes, hitboxes
   // -------------------------------------------------------------------------
 
-  #drivePose() {
+  /**
+   * Advance the animation one tick and fold its root motion into the physical
+   * position. The Animator extracts horizontal root translation rather than
+   * baking it into the bones (see its header) precisely so the body follows the
+   * animation instead of sliding under it — a lunging jab has to actually close
+   * the distance it appears to close, or the hitbox arrives somewhere the
+   * fighter is not.
+   */
+  #advanceAnimation() {
+    if (!this.animator) return;
+    this.animator.simulate(this.simTick);
+    if (!this.animator.consumeRootMotion) return;
+    const rm = this.animator.consumeRootMotion();
+    if (this.state === STATE.THROW || this.state === STATE.THROWN || this.state === STATE.KO) return;
+    if (!rm.x && !rm.z) return;
+    _v.set(rm.x * ROOT_MOTION_SCALE, 0, rm.z * ROOT_MOTION_SCALE)
+      .applyAxisAngle(UP, yawForFacing(this.facing));
+    this.position.x += _v.x;
+    this.position.z += _v.z;
+  }
+
+  /** Write the simulated transform and the canonical pose onto the scene graph. */
+  #writePose() {
     this.group.position.copy(this.position);
     this.group.rotation.y = yawForFacing(this.facing);
+    if (this.animator) this.animator.applyTo(this.bones, 1);
+    this.group.updateMatrixWorld(true);
+  }
+
+  /** Pose without advancing time — used on reset and during the intro. */
+  #drivePose() {
     if (this.animator) {
       this.animator.simulate(this.simTick);
-      this.animator.applyTo(this.bones, 1);
+      this.animator.clearRootMotion?.();
     }
-    this.group.updateMatrixWorld(true);
+    this.#writePose();
   }
 
   #buildHurtboxes() {
@@ -1293,34 +1340,60 @@ export class Fighter {
     }
   }
 
+  /**
+   * Record where every bone this move strikes with was last tick. A fist can
+   * travel 30cm in a single frame — more than its own radius — so without a
+   * swept test it will tunnel clean through a defender and whiff a punch that
+   * visibly connected. Tracking runs on every tick of the move, not just the
+   * active ones, so the *first* active frame sweeps correctly too.
+   */
+  #trackMoveBones() {
+    if (!this.moveBones) return;
+    for (const name of this.moveBones) {
+      const bone = this.boneByName[name];
+      if (!bone) continue;
+      let rec = this.boneTrack[name];
+      if (!rec) rec = this.boneTrack[name] = { prev: new THREE.Vector3(), cur: new THREE.Vector3(), valid: false };
+      rec.prev.copy(rec.cur);
+      rec.cur.setFromMatrixPosition(bone.matrixWorld);
+      if (!rec.valid) { rec.prev.copy(rec.cur); rec.valid = true; }
+    }
+  }
+
   #buildHitboxes() {
     this.hitboxes.length = 0;
     const mv = this.currentMove;
     if (!mv || this.state !== STATE.ATTACK) return;
+    this.#trackMoveBones();
     if (!isActive(mv, this.moveTick)) return;
     const boxes = activeBoxes(mv, this.moveTick);
     if (!boxes) return;
     const windowIndex = mv.active.findIndex((w) => this.moveTick >= w.from && this.moveTick <= w.to);
     const bonus = mv.props.homing ? 0.09 : 0;
+    const lead = this.facing;
 
     for (let i = 0; i < boxes.length && i < this.hitboxPool.length; i++) {
       const b = boxes[i];
       const bone = this.boneByName[b.bone];
       if (!bone) continue;
       const hb = this.hitboxPool[i];
-      hb.p0.set(b.offset[0], b.offset[1], b.offset[2]).applyMatrix4(bone.matrixWorld);
-      if (b.length > 0) {
-        hb.p1.set(b.offset[0], b.offset[1] - b.length, b.offset[2]).applyMatrix4(bone.matrixWorld);
-      } else {
-        hb.p1.copy(hb.p0);
-      }
+
+      // Anchor and far tip in world space.
+      _v.set(b.offset[0], b.offset[1], b.offset[2]).applyMatrix4(bone.matrixWorld);
+      if (b.length > 0) _v2.set(b.offset[0], b.offset[1] - b.length, b.offset[2]).applyMatrix4(bone.matrixWorld);
+      else _v2.copy(_v);
       // The authored forward lead is in fighter space, not bone space, so a
       // strike reaches where the player expects regardless of limb orientation.
-      if (b.fwd) {
-        const lead = this.facing * b.fwd;
-        hb.p0.x += lead;
-        hb.p1.x += lead;
-      }
+      if (b.fwd) { _v.x += lead * b.fwd; _v2.x += lead * b.fwd; }
+      hb.tip.copy(_v2);
+
+      // Sweep the capsule back to where the anchor was last tick.
+      const rec = this.boneTrack[b.bone];
+      if (rec && rec.valid) _v3.copy(_v).sub(rec.cur).add(rec.prev);
+      else _v3.copy(_v);
+      hb.p0.copy(_v3);
+      hb.p1.copy(_v2);
+
       hb.radius = b.radius + bonus;
       hb.bone = b.bone;
       hb.windowIndex = windowIndex;

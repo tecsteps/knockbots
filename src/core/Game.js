@@ -28,6 +28,7 @@ import { MenuSystem } from '../ui/MenuSystem.js';
 import { AudioDirector } from '../audio/AudioDirector.js';
 import { CPU } from '../ai/CPU.js';
 import { ROSTER } from '../characters/roster.js';
+import { makeTestHarness } from '../combat/TestHarness.js';
 
 export const PHASE = {
   BOOT: 'boot',
@@ -102,6 +103,10 @@ export class Game {
 
     this.hud = await step('Drawing interface', 0.85, () => new HUD(this.uiRoot, this.fighters));
     this.menus = new MenuSystem(this.uiRoot, this);
+
+    // Scripted entry points used by tools/capture.mjs to drive the game into
+    // specific visual states for the automated critic pass.
+    this.testHarness = makeTestHarness(this);
 
     this.renderer.warmup(this.scene, this.camera);
     this.onProgress('Ready', 1);

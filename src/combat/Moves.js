@@ -61,13 +61,13 @@ const W = (from, to, boxes, damage) =>
  * most of all because the chest bone is buried inside the torso.
  */
 const DEFAULT_FWD = [
-  [/^(hand|wrist|fingers)_/, 0.19],
-  [/^elbow_/, 0.17],
-  [/^(foot|ankle|toe)_/, 0.20],
-  [/^knee_/, 0.16],
-  [/^(shoulder|clavicle)_/, 0.24],
-  [/^(chest|spine|hips)/, 0.36],
-  [/^(head|neck)/, 0.22],
+  [/^(hand|wrist|fingers)_/, 0.24],
+  [/^elbow_/, 0.24],
+  [/^(foot|ankle|toe)_/, 0.31],
+  [/^knee_/, 0.27],
+  [/^(shoulder|clavicle)_/, 0.32],
+  [/^(chest|spine|hips)/, 0.44],
+  [/^(head|neck)/, 0.24],
 ];
 
 // Reusable hitbox shapes, so a "right straight" reads the same on every set.
@@ -77,7 +77,11 @@ const ELBOW_R = (r = 0.24) => [B('elbow_R', r, [0, -0.06, 0]), B('wrist_R', r * 
 const FOOT_R = (r = 0.24) => [B('foot_R', r, [0, -0.02, 0.04]), B('ankle_R', r * 0.85, [0, 0, 0])];
 const FOOT_L = (r = 0.24) => [B('foot_L', r, [0, -0.02, 0.04]), B('ankle_L', r * 0.85, [0, 0, 0])];
 const KNEE_R = (r = 0.25) => [B('knee_R', r, [0, -0.08, 0.05]), B('ankle_R', r * 0.7, [0, 0, 0])];
-const SHIN_L = (r = 0.23) => [B('ankle_L', r, [0, 0, 0.03]), B('foot_L', r, [0, -0.02, 0.05])];
+// Low attacks sweep the whole lower leg, so the box is a capsule down the shin
+// rather than a ball at the toe — otherwise a sweep passes under the target's
+// leg hurtboxes and connects with nothing.
+const SHIN_L = (r = 0.23) => [B('knee_L', r, [0, -0.04, 0.04], 0.42), B('foot_L', r, [0, -0.02, 0.05])];
+const SHIN_R = (r = 0.23) => [B('knee_R', r, [0, -0.04, 0.04], 0.42), B('foot_R', r, [0, -0.02, 0.05])];
 
 const MOTIONS = new Set(['qcf', 'qcb', 'dp', 'hcf', 'dd', 'ff', 'bb']);
 const DIRS = new Set(['f', 'b', 'u', 'd', 'df', 'db', 'uf', 'ub']);
@@ -338,7 +342,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'sweep', name: 'Rotor Sweep', input: 'db+3', clip: 'k.sweep', tag: 'sweep',
-    active: [W(19, 21, [B('foot_L', 0.27, [0, -0.02, 0.06]), B('ankle_L', 0.24, [0, 0, 0])])], total: 47,
+    active: [W(19, 21, [B('knee_L', 0.25, [0, -0.04, 0.04], 0.44), B('foot_L', 0.27, [0, -0.02, 0.06])])], total: 47,
     height: HEIGHT.LOW, weight: WEIGHT.MEDIUM, damage: 21,
     adv: { block: -14, hit: 6 }, reaction: REACTION.SWEEP,
     knockback: [3.6, 0.6, 0], blockPush: [2.0, 0, 0], meterGain: 7, trail: 'foot_L',
@@ -411,7 +415,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'stomp', name: 'Servo Stomp', input: 'd+3+4', clip: 'k.stomp', tag: 'heavy',
-    active: [W(20, 22, [B('foot_R', 0.3, [0, -0.04, 0.02])])], total: 48,
+    active: [W(20, 22, [B('foot_R', 0.3, [0, -0.04, 0.02]), B('knee_R', 0.26, [0, -0.04, 0.04], 0.4)])], total: 48,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 22,
     adv: { block: -16, hit: 0 }, reaction: REACTION.KNOCKDOWN,
     knockback: [1.4, -2.0, 0], blockPush: [1.8, 0, 0], meterGain: 8,
@@ -549,7 +553,7 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'groundSpike', name: 'Fault Line', input: 'dd+3', clip: 'sp.groundSpike', tag: 'low',
-    active: [W(24, 28, [B('foot_R', 0.3, [0, -0.02, 0.3]), B('foot_L', 0.28, [0, -0.02, 0.1])])], total: 60,
+    active: [W(24, 28, [B('foot_R', 0.3, [0, -0.02, 0.3], 0, 0.5), B('knee_R', 0.26, [0, -0.04, 0.05], 0.44, 0.42), B('foot_L', 0.28, [0, -0.02, 0.1])])], total: 60,
     height: HEIGHT.LOW, weight: WEIGHT.HEAVY, damage: 27,
     adv: { block: -16, hit: 8 }, reaction: REACTION.SWEEP,
     knockback: [3.0, 2.2, 0], blockPush: [2.4, 0, 0], meterGain: 12,
@@ -652,7 +656,7 @@ function heavyExtras(mv, cfg, set) {
   });
   mv({
     id: 'quakeStomp', name: 'Quake Stomp', input: 'd+3+4,3', clip: 'k.stomp', tag: 'string',
-    active: [W(22, 25, [B('foot_L', 0.34, [0, -0.04, 0.04])])], total: 56,
+    active: [W(22, 25, [B('foot_L', 0.34, [0, -0.04, 0.04]), B('knee_L', 0.28, [0, -0.04, 0.04], 0.4)])], total: 56,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 26,
     adv: { block: -18, hit: 0 }, reaction: REACTION.KNOCKDOWN,
     knockback: [2.0, -2.6, 0], blockPush: [2.4, 0, 0], meterGain: 10,
@@ -662,7 +666,7 @@ function heavyExtras(mv, cfg, set) {
   set.stomp.cancelWindow = [set.stomp.startup, set.stomp.total - 2];
   mv({
     id: 'grinderLow', name: 'Grinder Low', input: 'db+1+2', clip: 'sp.groundSpike', tag: 'low',
-    active: [W(24, 27, [B('hand_R', 0.3, [0, -0.06, 0.16]), B('foot_R', 0.28, [0, -0.02, 0.1])])], total: 58,
+    active: [W(24, 27, [B('hand_R', 0.3, [0, -0.06, 0.16], 0, 0.4), B('knee_R', 0.26, [0, -0.04, 0.04], 0.44), B('foot_R', 0.28, [0, -0.02, 0.1])])], total: 58,
     height: HEIGHT.LOW, weight: WEIGHT.HEAVY, damage: 28,
     adv: { block: -15, hit: 5 }, reaction: REACTION.SWEEP,
     knockback: [3.4, 1.6, 0], blockPush: [2.6, 0, 0], meterGain: 12,

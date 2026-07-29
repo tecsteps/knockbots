@@ -169,6 +169,7 @@ export class PlanarReflector {
     const prevXr = renderer.xr.enabled;
     const prevShadowAuto = renderer.shadowMap.autoUpdate;
     const prevOverride = this.scene.overrideMaterial;
+    const prevAutoClear = renderer.autoClear;
 
     // Shadow maps were built by the main pass a moment ago and are valid for
     // any camera; rebuilding them for the mirror would double the cost of the
@@ -181,14 +182,16 @@ export class PlanarReflector {
     if (self) self.visible = false;
     for (const o of this._hidden) o.visible = false;
 
+    // The composer leaves autoClear off between passes; the mirror buffer must
+    // clear itself or it accumulates last frame's image.
+    renderer.autoClear = true;
     renderer.setRenderTarget(this.target);
-    renderer.state.buffers.depth.setMask(true);
-    if (!renderer.autoClear) renderer.clear();
     renderer.render(this.scene, cam);
 
     for (const o of this._hidden) o.visible = true;
     if (self) self.visible = selfVisible;
 
+    renderer.autoClear = prevAutoClear;
     this.scene.overrideMaterial = prevOverride;
     renderer.xr.enabled = prevXr;
     renderer.shadowMap.autoUpdate = prevShadowAuto;
