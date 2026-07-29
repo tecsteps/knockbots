@@ -154,3 +154,50 @@ compression (the flat-span data says we want more keys, not fewer); morph target
 5. Follow-through authoring pass
 6. Foot X/Z lock and pelvis solve — strictly after 1
 7. Spring bones and the `visualYaw` fix
+
+---
+
+## Pending: spring-bone defects (apply immediately after round 6)
+
+Eight spring leaf bones were added to `Skeleton.js` in round 6 — structurally correct (no
+`region`, so they stay out of `HURTBOX_BONES`; appended last, so no bone index moves; parents
+are all heads of the animator's ripple chains, so they inherit impact motion for free). Four
+defects remain. `Skeleton.js` was being edited concurrently, so these are queued rather than
+applied.
+
+**1. The forward axis in the rig header was wrong, and it caused a real defect.**
+`+Z is FORWARD`. Verified from data, not comments: `loco.dashFwd`'s root track ends at
+z = +0.94 and `loco.dashBack` at z = −1.08; `toe_L` sits at z = +0.14 from the foot.
+`AnimationFormat.js` has been corrected. **`Skeleton.js:9` still claims "−Z is the direction
+the fighter FACES" and must be fixed** — `animations/idle.js` had it right all along.
+
+Consequently `pack_L/R` (z = +0.158) and `cable_L/R` (z = +0.148) are mounted on the fighter's
+chest rather than its back. Negate both. `antenna_*` and `skirt_*` are fine.
+
+**2. The `spring` field names are dead data.** `Spring3` reads exactly `k`, `c`, `driveRot`,
+`driveAcc`, `limit`. The bones author `stiffness`, `damping`, `drag`, `limit`, so only `limit`
+lands. Rename in `Skeleton.js` (`stiffness→k`, `damping→c`, `drag→driveRot`) rather than
+translating at the call site — `addSpringBone` already spreads over defaults so partial blocks
+work.
+
+`driveAcc` is missing entirely and matters most for `pack_*`: it responds to body acceleration
+rather than parent rotation, which is what makes a reactor pack lag a *dash* rather than a head
+turn. Suggested: antenna 0.30, pack 0.45, cable 0.35, skirt 0.22.
+
+The authored stiffness/damping ratios are well judged and should be kept once renamed —
+antenna at k26/c3.2 is a damping ratio of ~0.31 (rings), pack at k62/c11 is ~0.70 (settles in
+one swing). That contrast is right. But L and R are identical on all four pairs, which makes
+both sides wobble in phase and read as cloth; split `k` by ~10% per side.
+
+**3. Nothing is wired up.** Export `SPRING_BONES` from `Skeleton.js` parallel to
+`HURTBOX_BONES`, and loop it at rig build calling `Animator.addSpringBone(name, def.spring)`.
+`addSpringBone` is fully implemented and still called from nowhere.
+
+**4. `scaleFor` does not scale the new bones.** None of the four prefixes match its branches,
+so on a chassis with `torso: 1.1` the chest grows and the pack/cable offsets do not — the
+hardware detaches. Add `pack_|cable_` to the torso branch, `antenna_` to head, `skirt_` to
+hips/height.
+
+**Not a defect, but required for the feature to read:** a leaf spring bone only shows if the
+skinned geometry extends *away* from the bone origin. The bone is a hinge; geometry centred on
+the origin rotates in place and does nothing visible.

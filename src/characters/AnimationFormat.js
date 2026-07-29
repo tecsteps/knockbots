@@ -17,7 +17,12 @@
  *
  * @typedef {Object} RootKey
  * @property {number} t
- * @property {[number,number,number]} [p] root offset in metres, +Z is BACKWARD
+ * @property {[number,number,number]} [p] root offset in metres, +Z is FORWARD
+ *   (the direction the fighter faces). Verified against the data rather than
+ *   asserted: loco.dashFwd's root track ends at z = +0.94 and loco.dashBack at
+ *   z = -1.08, and toe_L sits at z = +0.14 from the foot. This comment
+ *   previously claimed the opposite and caused hardware to be mounted on the
+ *   front of the chest instead of the back.
  * @property {number} [ry]                root yaw offset in degrees
  * @property {string} [ease]
  *
