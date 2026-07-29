@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.6.0",
-    "commits": 22,
+    "rev": "0.7.0",
+    "commits": 26,
     "modules": 64,
-    "lines": "38k",
+    "lines": "40k",
     "clips": 89,
     "moves": 191,
     "characters": 10
@@ -11,27 +11,27 @@
   "verdicts": [
     {
       "axis": "Stage detail",
-      "score": 70
-    },
-    {
-      "axis": "Lighting & atmosphere",
-      "score": 63
+      "score": 72
     },
     {
       "axis": "Interface craft",
-      "score": 63
+      "score": 69
+    },
+    {
+      "axis": "Lighting & atmosphere",
+      "score": 62
     },
     {
       "axis": "Impact & effects",
-      "score": 58
+      "score": 61
     },
     {
       "axis": "Character rendering",
-      "score": 55
+      "score": 58
     },
     {
       "axis": "Animation quality",
-      "score": 43
+      "score": 48
     }
   ],
   "log": [
@@ -308,11 +308,45 @@
           "state": "run"
         }
       ]
+    },
+    {
+      "phase": "PHASE 09",
+      "when": "Round 5",
+      "rev": "rev 0.7.0",
+      "title": "The clip that was never played",
+      "paras": [
+        "Interface 63 to 69, animation 43 to 48, impact 58 to 61, character 55 to 58, stage 70 to 72, lighting 63 to 62. The average crossed 60 for the first time.",
+        "The animation workstream retired the global time-warp entirely. Its probe had been guessing badly \u2014 for one 66-tick clip it placed contact at frame 52 when the punch lands on 26 \u2014 and only 12 of 125 move-clip pairs were playing within five percent of correct, with eight pinned at the clamp. Authored contact metadata plus a two-segment anchored retime now stretches wind-up and recovery independently, so hand-authored easing survives; 181 of 191 moves retime exactly. 829 dead-hold plateaus became moving holds.",
+        "It also found that the foot planter had never fired once. It tested the ankle against a threshold five centimetres above the floor, but the ankle rests at twenty-six centimetres with the sole hanging below it \u2014 so no footstep event had ever been emitted in the history of the project. And when it tested the X/Z lock it had been asked to add, penetration got four times worse, so it shipped the measurement and not the feature.",
+        "The skating had a simpler cause than any of that. The walk clip is authored for a stride of 0.46 metres per second and the body was driven at 2.75. The run clip, authored at 2.69, was referenced only by its own export map. Forward movement now plays the run."
+      ],
+      "tags": [
+        {
+          "label": "interface +6",
+          "state": "done"
+        },
+        {
+          "label": "animation +5",
+          "state": "done"
+        },
+        {
+          "label": "time-warp retired",
+          "state": "done"
+        },
+        {
+          "label": "skating fixed",
+          "state": "done"
+        },
+        {
+          "label": "live build",
+          "state": "done"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.6.0",
-    "note": "Static Vite build on Vercel. Redeployed from main after each iteration."
+    "rev": "0.7.0",
+    "note": "Redeployed after each iteration. Bundle hash verified against the local build."
   }
 }
