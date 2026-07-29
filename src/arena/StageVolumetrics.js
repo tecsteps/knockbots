@@ -399,5 +399,3 @@ export class StageVolumetrics {
     this.steam.dispose();
   }
 }
-
-const _poolColor = new THREE.Color();
