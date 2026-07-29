@@ -21,11 +21,36 @@
  * nearer than the shaft's front surface occludes it correctly. The last metre
  * above the floor fades out and is replaced by an additive pool on the deck,
  * which is what a real light does and also hides the hard intersection.
+ *
+ * **Every emitter in this file obeys the same three budgets**, because additive
+ * atmosphere with no ceiling is the single fastest way to destroy a frame's
+ * contrast — it lifts the blacks everywhere at once and the result reads as
+ * fogged rather than lit:
+ *
+ *   1. **Distance.** Density decays exponentially away from the emitter, so a
+ *      shaft is a shaft and not a wedge of uniform paint.
+ *   2. **The lens.** Everything fades to nothing over the last few metres in
+ *      front of the camera, so the fight camera never flies through a wall of
+ *      white on a push-in.
+ *   3. **The fight plane.** A 15 x 9 x 5.6m box around the play area is carved
+ *      out of every ambient emitter. That box holds the deepest blacks and the
+ *      brightest speculars in the frame and nothing ambient may touch it. Haze
+ *      lives behind the barriers and out on the flanks, where it separates the
+ *      background instead of veiling the fighters.
  */
 
 import * as THREE from 'three';
 import { GROUND_Y, LAYER } from '../core/Constants.js';
 import { DustMotes, SteamJets } from './StageParticles.js';
+
+/**
+ * The protected volume: half extents about `FIGHT_CLEAR_CENTER`, metres. A
+ * 13 x 5.8 x 6.8m box around the play area, feathered out to 1.9x — which puts
+ * the far barrier at z = -6.2 just outside it, so the gantry shafts hanging
+ * over the back of the pit still read at nearly full strength.
+ */
+const FIGHT_CLEAR_CENTER = [0, 1.9, 0];
+const FIGHT_CLEAR_HALF = [6.5, 2.9, 3.4];
 
 const _poolColor = new THREE.Color();
 
@@ -33,9 +58,11 @@ const SHAFT_VERT = /* glsl */ `
   uniform mat4 uInvModel;
   varying vec3 vLocal;
   varying vec3 vLocalEye;
+  varying vec3 vWorld;
   void main() {
     vLocal = position;
     vLocalEye = ( uInvModel * vec4( cameraPosition, 1.0 ) ).xyz;
+    vWorld = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
   }
 `;
@@ -55,8 +82,12 @@ const SHAFT_FRAG = /* glsl */ `
   uniform float uNoiseScale;
   uniform float uNoiseAmp;
   uniform float uFloorFade;
+  uniform vec2 uNearFade;    // view distances over which the shaft fades in
+  uniform vec3 uClearCenter;
+  uniform vec3 uClearHalf;
   varying vec3 vLocal;
   varying vec3 vLocalEye;
+  varying vec3 vWorld;
 
   float hash12( vec2 p ) {
     vec3 p3 = fract( vec3( p.xyx ) * 0.1031 );
@@ -94,6 +125,13 @@ const SHAFT_FRAG = /* glsl */ `
     tEnter = max( tEnter, 0.0 );
     if ( tExit <= tEnter ) discard;
 
+    // The march runs in the shaft's own space but the carve is authored in
+    // world space. The shaft mesh is only ever placed and rotated, never
+    // scaled, so t measures the same metres in both frames and the world ray
+    // is just the eye plus the world-space direction — no per-sample matrix,
+    // and modelMatrix is not available to a fragment shader anyway.
+    vec3 wd = normalize( vWorld - cameraPosition );
+
     float span = tExit - tEnter;
     const int STEPS = 12;
     float stepLen = span / float( STEPS );
@@ -115,6 +153,16 @@ const SHAFT_FRAG = /* glsl */ `
       float edge = pow( max( 0.0, 1.0 - r ), uEdge );
       if ( edge <= 0.0 ) continue;
 
+      // Fade in over the first metres of view distance, so a push-in never
+      // drives the camera into a solid sheet of scatter.
+      float lens = smoothstep( uNearFade.x, uNearFade.y, t );
+      if ( lens <= 0.0 ) continue;
+
+      vec3 w = cameraPosition + wd * t;
+      vec3 q = abs( w - uClearCenter ) / max( uClearHalf, vec3( 1e-3 ) );
+      float carve = smoothstep( 1.0, 1.9, max( q.x, max( q.y, q.z ) ) );
+      if ( carve <= 0.0 ) continue;
+
       // Two noise layers crawling down the beam at different rates.
       float n1 = texture2D( uNoise, vec2( p.x, p.z ) * uNoiseScale + vec2( 0.03, -0.02 ) * uTime ).r;
       float n2 = texture2D( uNoise, vec2( p.z * 0.7, d ) * uNoiseScale * 1.9 - vec2( 0.0, 0.05 * uTime ) ).g;
@@ -122,11 +170,13 @@ const SHAFT_FRAG = /* glsl */ `
 
       float fall = exp( -d * uExtinction );
       float floorFade = smoothstep( uLength, uLength - uFloorFade, d );
-      acc += edge * dust * fall * floorFade * stepLen;
+      acc += edge * dust * fall * floorFade * lens * carve * stepLen;
     }
 
     if ( acc <= 0.0005 ) discard;
-    gl_FragColor = vec4( uColor * ( acc * uIntensity ), 1.0 );
+    // Saturating rather than linear: an eye looking straight down a beam sees
+    // a bright shaft, not an unbounded one.
+    gl_FragColor = vec4( uColor * ( 1.0 - exp( -acc * uIntensity ) ), 1.0 );
   }
 `;
 
@@ -163,19 +213,36 @@ export class StageVolumetrics {
     this.quality = quality;
     this.floorY = GROUND_Y;
 
+    this.clear = { center: FIGHT_CLEAR_CENTER, half: FIGHT_CLEAR_HALF };
+
     /**
      * Shaft placement. The two big ones hang off the cross-gantry above the
      * back of the pit, at the same coordinates as the Environment's overhead
      * practicals; the rest rake in through the shell wall's blown-out panels.
+     *
+     * `extinction` is per-metre density decay and it is the parameter that
+     * decides whether a shaft reads as light or as paint: the beam has to be
+     * visibly weaker at the deck than at the fitting. Short throws carry a
+     * steep decay, the long raking ones a gentle one or they never arrive.
+     *
+     * `pool` is the deck splash and it is an **absolute** peak in linear
+     * radiance, deliberately decoupled from the beam's own density. Deriving
+     * it from `intensity` is how a plausible shaft turns into a floodlit
+     * floor: a beam is integrated along the whole view ray and can afford to
+     * be bright, a splash is a flat additive sprite on the most detailed
+     * surface in the frame and cannot.
      */
     this.specs = [
-      { pos: [-6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.09, round: 0.15, edge: 2.4 },
-      { pos: [6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.09, round: 0.15, edge: 2.4 },
-      { pos: [-9.5, 22.0, -18.4], rot: [0.34, 0.12, 0.16], half: [3.4, 2.6], spread: [0.05, 0.05], length: 23, color: 0x8fb4e8, intensity: 0.024, round: 0.55, edge: 1.7 },
-      { pos: [2.0, 24.0, -18.4], rot: [0.4, -0.1, -0.13], half: [4.4, 3.4], spread: [0.05, 0.05], length: 25, color: 0x9dc0ee, intensity: 0.02, round: 0.55, edge: 1.6 },
-      { pos: [-10.2, 4.6, -8.4], rot: [0.1, 0, -0.55], half: [1.5, 1.2], spread: [0.12, 0.12], length: 6.5, color: 0x9fdcff, intensity: 0.05, round: 0.8, edge: 2.0 },
+      { pos: [-6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.32, round: 0.15, edge: 2.2, extinction: 0.16, pool: 0.05 },
+      { pos: [6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.32, round: 0.15, edge: 2.2, extinction: 0.16, pool: 0.05 },
+      { pos: [-9.5, 22.0, -18.4], rot: [0.34, 0.12, 0.16], half: [1.9, 1.5], spread: [0.035, 0.035], length: 23, color: 0x8fb4e8, intensity: 0.055, round: 0.55, edge: 2.1, extinction: 0.038, pool: 0.02 },
+      { pos: [2.0, 24.0, -18.4], rot: [0.4, -0.1, -0.13], half: [2.4, 1.9], spread: [0.035, 0.035], length: 25, color: 0x9dc0ee, intensity: 0.05, round: 0.55, edge: 2.0, extinction: 0.034, pool: 0.018 },
+      { pos: [-10.2, 4.6, -8.4], rot: [0.1, 0, -0.55], half: [1.1, 0.9], spread: [0.1, 0.1], length: 6.5, color: 0x9fdcff, intensity: 0.2, round: 0.85, edge: 2.2, extinction: 0.14, pool: 0.032 },
     ];
     const budget = quality === 'low' ? 2 : quality === 'medium' ? 3 : this.specs.length;
+
+    const clearCenter = new THREE.Vector3(...FIGHT_CLEAR_CENTER);
+    const clearHalf = new THREE.Vector3(...FIGHT_CLEAR_HALF);
 
     this.shafts = [];
     for (let i = 0; i < budget; i++) {
@@ -193,10 +260,13 @@ export class StageVolumetrics {
           uLength: { value: s.length },
           uEdge: { value: s.edge },
           uRound: { value: s.round },
-          uExtinction: { value: 0.06 },
+          uExtinction: { value: s.extinction },
           uNoiseScale: { value: 0.07 },
           uNoiseAmp: { value: 0.75 },
           uFloorFade: { value: 1.4 },
+          uNearFade: { value: new THREE.Vector2(1.2, 4.5) },
+          uClearCenter: { value: clearCenter },
+          uClearHalf: { value: clearHalf },
         },
         vertexShader: SHAFT_VERT,
         fragmentShader: SHAFT_FRAG,
@@ -224,26 +294,49 @@ export class StageVolumetrics {
     this.#lightPools(textures, budget);
     this.#deckHaze(textures);
 
-    this.motes = new DustMotes(textures.dust, { x: 26, y: 9, z: 22, cx: 0, cy: 0.2, cz: 0 }, {
-      count: quality === 'low' ? 260 : quality === 'medium' ? 520 : 1000,
+    this.motes = new DustMotes(textures.dust, { x: 28, y: 8.5, z: 22, cx: 0, cy: 1.1, cz: -3 }, {
+      count: quality === 'low' ? 110 : quality === 'medium' ? 220 : 420,
       color: 0xd6e6ff,
-      size: 0.03,
+      size: 0.024,
       drift: 0.19,
+      intensity: 0.2,
+      maxPixels: 9,
+      nearFade: [1.4, 4.0],
+      floorY: this.floorY,
+      clear: this.clear,
     });
     this.group.add(this.motes.points);
 
+    // The plumes are pushed to the flanks and the far end of the hall. A jet
+    // venting into the pit would be exactly the uniform veil this file exists
+    // to avoid, however good the reference photo of one looks.
     this.steam = new SteamJets(textures.steam, [
-      { origin: [-15.4, 2.2, -3.2], dir: [0.85, 0.3, 0.1], rate: 1, speed: 1.5, life: 4.2, size: 0.85 },
-      { origin: [15.4, 3.4, 7.4], dir: [-0.8, 0.35, -0.2], rate: 1, speed: 1.2, life: 4.8, size: 0.95 },
-      { origin: [-3.0, 0.05, -12.4], dir: [0.05, 1.0, 0.1], rate: 1, speed: 0.5, life: 7.0, size: 1.5 },
-      { origin: [9.4, 5.2, -12.9], dir: [-0.2, 0.9, 0.35], rate: 1, speed: 0.8, life: 5.5, size: 1.1 },
-    ], { perJet: quality === 'low' ? 10 : 24, opacity: 0.16, color: 0x9fb3c8 });
+      { origin: [-16.2, 2.2, -4.6], dir: [0.75, 0.4, 0.1], rate: 1, speed: 1.4, life: 4.2, size: 0.7 },
+      { origin: [16.2, 3.4, 8.2], dir: [-0.7, 0.45, -0.2], rate: 1, speed: 1.2, life: 4.8, size: 0.8 },
+      { origin: [-6.5, 0.05, -15.5], dir: [0.05, 1.0, 0.1], rate: 1, speed: 0.55, life: 7.0, size: 1.0 },
+      { origin: [9.4, 5.2, -13.6], dir: [-0.2, 0.9, 0.35], rate: 1, speed: 0.8, life: 5.5, size: 0.9 },
+    ], {
+      perJet: quality === 'low' ? 8 : 16,
+      opacity: 0.075,
+      color: 0x9fb3c8,
+      maxPixels: 120,
+      nearFade: [3.0, 8.0],
+      floorY: this.floorY,
+      clear: this.clear,
+    });
     this.group.add(this.steam.points);
   }
 
   /**
    * Additive pools where each shaft meets the deck. Cheap, and they carry the
    * light onto a surface the shaft itself has been faded out of.
+   *
+   * The footprint is deliberately close to the shaft's own — 1.2x, not the
+   * several-times-over that turns four pools into a floodlit floor — and the
+   * gain is set so the brightest pool sits a little above the lit concrete
+   * around it rather than several stops over it. A pool that outshines the
+   * floor is a white blob, and a white blob under a fighter's feet costs more
+   * contrast than the pool ever buys in atmosphere.
    */
   #lightPools(textures, count) {
     const geo = new THREE.PlaneGeometry(1, 1);
@@ -278,12 +371,12 @@ export class StageVolumetrics {
       const dir = new THREE.Vector3(0, -1, 0).applyEuler(new THREE.Euler(spec.rot[0], spec.rot[1], spec.rot[2]));
       const k = dir.y < -1e-3 ? drop / -dir.y : drop;
       p.set(spec.pos[0] + dir.x * k, this.floorY + 0.012 + i * 0.002, spec.pos[2] + dir.z * k);
-      const width = (spec.half[0] + spec.spread[0] * spec.length) * 4.2;
-      const depth = (spec.half[1] + spec.spread[1] * spec.length) * 4.2;
+      const width = (spec.half[0] + spec.spread[0] * spec.length) * 2.4;
+      const depth = (spec.half[1] + spec.spread[1] * spec.length) * 2.4;
       s.set(width, 1, Math.max(depth, width * 0.35));
       m.compose(p, q, s);
       this.pools.setMatrixAt(i, m);
-      this._poolBase.push(new THREE.Color(spec.color).multiplyScalar(spec.intensity * 5.5));
+      this._poolBase.push(new THREE.Color(spec.color).multiplyScalar(spec.pool));
       this.pools.setColorAt(i, this._poolBase[i]);
     }
     this.pools.instanceMatrix.needsUpdate = true;
@@ -292,12 +385,19 @@ export class StageVolumetrics {
   }
 
   /**
-   * A single low slab of drifting mist. It sits just above the deck, fades out
-   * over the fight plane so it never obscures a fighter's feet, and gives the
-   * shafts something to terminate into.
+   * Ground mist, confined to the far end of the hall and the flanks outside
+   * the barriers. It exists to separate the back wall from the mid-ground, not
+   * to sit in front of the fighters.
+   *
+   * Two details keep a horizontal mist plane from becoming a wall of white the
+   * moment a fight camera drops to eye level. The optical depth through the
+   * slab saturates — `1 - exp(-tau)` rather than a linear accumulation — so a
+   * grazing view cannot integrate without bound; and the whole thing fades out
+   * inside twelve metres of the lens, because mist you are standing in is just
+   * a lens filter.
    */
   #deckHaze(textures) {
-    const geo = new THREE.PlaneGeometry(52, 44, 1, 1);
+    const geo = new THREE.PlaneGeometry(64, 56, 1, 1);
     geo.rotateX(-Math.PI / 2);
     this.hazeMaterial = new THREE.ShaderMaterial({
       name: 'arena.deckHaze',
@@ -305,7 +405,8 @@ export class StageVolumetrics {
         uNoise: { value: textures.noise },
         uTime: { value: 0 },
         uColor: { value: new THREE.Color(0x7d94b4) },
-        uIntensity: { value: 0.11 },
+        uIntensity: { value: 0.5 },
+        uThickness: { value: 1.6 },
       },
       vertexShader: /* glsl */ `
         varying vec3 vWorld;
@@ -320,16 +421,27 @@ export class StageVolumetrics {
         uniform float uTime;
         uniform vec3 uColor;
         uniform float uIntensity;
+        uniform float uThickness;
         varying vec3 vWorld;
         void main() {
+          vec3 toEye = cameraPosition - vWorld;
+          float dist = length( toEye );
+          vec3 dir = toEye / max( dist, 1e-3 );
+
           vec2 uv = vWorld.xz * 0.026;
           float a = texture2D( uNoise, uv + vec2( uTime * 0.004, uTime * 0.0026 ) ).r;
           float b = texture2D( uNoise, uv * 2.3 - vec2( uTime * 0.0031, uTime * 0.005 ) ).g;
-          float n = smoothstep( 0.32, 0.92, a * 0.65 + b * 0.55 );
-          // Clear of the fight plane, thick toward the back of the hall.
-          float clear = smoothstep( 3.0, 11.0, length( vec2( vWorld.x * 0.62, vWorld.z - 1.0 ) ) );
-          float far = 1.0 - smoothstep( 16.0, 26.0, abs( vWorld.z + 6.0 ) );
-          float k = n * clear * far * uIntensity;
+          float n = smoothstep( 0.30, 0.95, a * 0.65 + b * 0.55 );
+
+          // Behind the barrier or out past the flanks — never in the pit.
+          float behind = smoothstep( -5.5, -12.0, vWorld.z );
+          float flank = smoothstep( 10.0, 16.0, abs( vWorld.x ) );
+          float band = max( behind, flank );
+          float lens = smoothstep( 5.0, 12.0, dist );
+          float far = 1.0 - smoothstep( 32.0, 50.0, dist );
+
+          float tau = uIntensity * n * uThickness / max( abs( dir.y ), 0.16 );
+          float k = ( 1.0 - exp( -tau ) ) * band * lens * far;
           if ( k <= 0.002 ) discard;
           gl_FragColor = vec4( uColor * k, 1.0 );
         }
@@ -342,7 +454,7 @@ export class StageVolumetrics {
     });
     this.haze = new THREE.Mesh(geo, this.hazeMaterial);
     this.haze.name = 'arena.deckHaze';
-    this.haze.position.set(0, this.floorY + 0.55, -2);
+    this.haze.position.set(0, this.floorY + 0.5, -4);
     this.haze.frustumCulled = false;
     this.haze.userData.gbuffer = false;
     this.haze.layers.set(LAYER.NO_REFLECT);
@@ -382,8 +494,11 @@ export class StageVolumetrics {
     }
 
     this.hazeMaterial.uniforms.uTime.value = time;
-    this.hazeMaterial.uniforms.uIntensity.value = 0.06 + breathe * 0.07;
-    if (envParams?.fog?.color) this.hazeMaterial.uniforms.uColor.value.copy(envParams.fog.color).multiplyScalar(4.2);
+    this.hazeMaterial.uniforms.uIntensity.value = 0.34 + breathe * 0.3;
+    // The mood's fog colour is the right hue but it is authored for FogExp2,
+    // where it is a destination colour rather than an emitted one; scattering
+    // toward the eye needs it several stops up to register at all.
+    if (envParams?.fog?.color) this.hazeMaterial.uniforms.uColor.value.copy(envParams.fog.color).multiplyScalar(9);
 
     this.motes.update(time, 0.55 + breathe * 0.7);
     this.steam.update(time);

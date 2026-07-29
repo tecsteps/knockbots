@@ -25,9 +25,12 @@
  *    whose action fits in ~16m, one 4096 map is ~4mm per texel — better than any
  *    three-cascade split would give at these distances, for a third of the cost.
  *
- * 3. **G-buffer**. One depth+view-normal prepass feeds GTAO, the wet-floor SSR,
- *    depth of field and the motion blur reprojection. Every one of those would
- *    otherwise render the scene again on its own.
+ * 3. **G-buffer**. There isn't one. GTAO, the wet-floor SSR, depth of field and
+ *    the motion blur reprojection all need scene depth and nothing else that
+ *    cannot be derived from it, so `ScenePass` renders the beauty pass into a
+ *    target that owns a real depth texture and everything downstream reads
+ *    that. The dedicated view-normal prepass this replaced was a second full
+ *    geometry pass — it cost as many draw calls as the scene itself.
  *
  * Externally this class only needs the charter API, but it also listens for a
  * `cameraFocus` bus event (emitted by `FightCamera`) carrying the focus point
@@ -303,7 +306,7 @@ function installPcssShadows() {
   if (pcssInstalled) return true;
   const original = THREE.ShaderChunk.shadowmap_pars_fragment;
   if (typeof original !== 'string' || !original.includes(SHADOW_CHUNK_SENTINEL)) return false;
-  THREE.ShaderChunk.shadowmap_pars_fragment = buildPcssChunk(16, 24);
+  THREE.ShaderChunk.shadowmap_pars_fragment = buildPcssChunk(12, 16);
   pcssInstalled = true;
   return true;
 }
@@ -318,7 +321,7 @@ function installPcssShadows() {
  * @property {number} minScale        floor for adaptive resolution
  * @property {number} shadowMapSize
  * @property {boolean} pcss
- * @property {boolean} gbuffer
+ * @property {boolean} depth          render scene depth for the geometry passes
  * @property {boolean} ao
  * @property {boolean} ssr
  * @property {boolean} bloom
@@ -329,29 +332,37 @@ function installPcssShadows() {
  * @property {number} particleBudget
  */
 
-/** @type {Record<string, QualityTier>} */
+/**
+ * `minScale` is deliberately tight on the top tiers. Adaptive resolution exists
+ * to protect the frame rate, not to hand back the picture: a 0.75 floor is a
+ * 25% linear drop, which reads as a blanket soften over the whole frame and is
+ * far more damaging on a still than a dropped frame is in motion. A tier that
+ * cannot hold its budget at 0.9 should be a tier down, not a blurrier ultra.
+ *
+ * @type {Record<string, QualityTier>}
+ */
 export const QUALITY_TIERS = {
   ultra: {
-    renderScale: 1.0, minScale: 0.75, shadowMapSize: 4096, pcss: true,
-    gbuffer: true, ao: true, aoSamples: 16, ssr: true, ssrSteps: 32,
-    bloom: true, dof: true, dofTaps: 28, motionBlur: true, mbTaps: 12,
+    renderScale: 1.0, minScale: 0.9, shadowMapSize: 4096, pcss: true,
+    depth: true, ao: true, aoSamples: 16, ssr: true, ssrSteps: 24,
+    bloom: true, dof: true, dofTaps: 20, motionBlur: true, mbTaps: 12,
     grade: true, smaa: true, particleBudget: 1.0,
   },
   high: {
-    renderScale: 0.95, minScale: 0.68, shadowMapSize: 2560, pcss: true,
-    gbuffer: true, ao: true, aoSamples: 11, ssr: true, ssrSteps: 20,
-    bloom: true, dof: true, dofTaps: 18, motionBlur: true, mbTaps: 8,
+    renderScale: 0.95, minScale: 0.78, shadowMapSize: 2560, pcss: true,
+    depth: true, ao: true, aoSamples: 11, ssr: true, ssrSteps: 18,
+    bloom: true, dof: true, dofTaps: 14, motionBlur: true, mbTaps: 8,
     grade: true, smaa: true, particleBudget: 0.8,
   },
   medium: {
-    renderScale: 0.85, minScale: 0.6, shadowMapSize: 1536, pcss: false,
-    gbuffer: false, ao: false, aoSamples: 8, ssr: false, ssrSteps: 12,
+    renderScale: 0.85, minScale: 0.65, shadowMapSize: 1536, pcss: false,
+    depth: false, ao: false, aoSamples: 8, ssr: false, ssrSteps: 12,
     bloom: true, dof: false, dofTaps: 12, motionBlur: false, mbTaps: 6,
     grade: true, smaa: true, particleBudget: 0.5,
   },
   low: {
     renderScale: 0.7, minScale: 0.6, shadowMapSize: 1024, pcss: false,
-    gbuffer: false, ao: false, aoSamples: 6, ssr: false, ssrSteps: 8,
+    depth: false, ao: false, aoSamples: 6, ssr: false, ssrSteps: 8,
     bloom: true, dof: false, dofTaps: 8, motionBlur: false, mbTaps: 4,
     grade: true, smaa: false, particleBudget: 0.3,
   },
@@ -393,24 +404,37 @@ vec2 vogel( int i, int n, float phi ) {
 }`;
 
 // ---------------------------------------------------------------------------
-// G-buffer prepass
+// Scene pass — beauty render plus the depth every geometry pass reads
 // ---------------------------------------------------------------------------
 
 /**
- * Renders the opaque scene once with `MeshNormalMaterial` to produce packed
- * view-space normals plus a real depth attachment. Everything downstream that
- * needs geometry (AO, SSR, DOF, motion blur) reads this instead of rendering
- * the scene again.
+ * Renders the scene into a half-float target that owns a real depth texture,
+ * then blits the colour into the composer chain.
+ *
+ * Hanging the depth texture off the composer's own ping-pong buffers instead
+ * would save the blit but cannot work: the chain writes back into the buffer it
+ * read two passes ago, and a pass that samples a depth texture attached to the
+ * framebuffer it is currently drawing into is a WebGL feedback loop, which the
+ * driver is entitled to drop. One fullscreen blit — a single draw call — buys a
+ * depth buffer every downstream pass can read safely, and it replaces the
+ * `MeshNormalMaterial` prepass this used to need, which redrew every mesh in
+ * the scene and therefore roughly doubled the frame's draw calls.
+ *
+ * View normals are gone with it. GTAO reconstructs them from depth (its own
+ * default path) and the wet-floor SSR does the same in two derivatives, which
+ * is exact on the flat surface it is masked to.
  */
-class DepthNormalPass extends Pass {
-  constructor(scene, camera) {
+class ScenePass extends Pass {
+  /**
+   * @param {THREE.Scene} scene
+   * @param {THREE.Camera} camera
+   * @param {{sceneDrawCalls:number, sceneTriangles:number}} stats counters to fill
+   */
+  constructor(scene, camera, stats) {
     super();
-    this.needsSwap = false;
     this.scene = scene;
     this.camera = camera;
-
-    this.normalMaterial = new THREE.MeshNormalMaterial();
-    this.normalMaterial.blending = THREE.NoBlending;
+    this.stats = stats;
 
     const depth = new THREE.DepthTexture(1, 1);
     depth.format = THREE.DepthFormat;
@@ -418,114 +442,74 @@ class DepthNormalPass extends Pass {
     depth.minFilter = THREE.NearestFilter;
     depth.magFilter = THREE.NearestFilter;
 
-    this.renderTarget = new THREE.WebGLRenderTarget(1, 1, {
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
-      type: THREE.UnsignedByteType,
+    this.target = new THREE.WebGLRenderTarget(1, 1, {
+      type: THREE.HalfFloatType,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
       depthBuffer: true,
       stencilBuffer: false,
+      samples: 0,
     });
-    this.renderTarget.texture.name = 'RenderPipeline.viewNormal';
-    this.renderTarget.depthTexture = depth;
+    this.target.texture.name = 'RenderPipeline.scene';
+    this.target.texture.colorSpace = THREE.NoColorSpace;
+    this.target.depthTexture = depth;
 
-    this._hidden = [];
-    this._clearColor = new THREE.Color();
+    this.material = new THREE.ShaderMaterial({
+      name: 'SceneBlit',
+      uniforms: { tDiffuse: { value: this.target.texture } },
+      vertexShader: FULLSCREEN_VERT,
+      fragmentShader: /* glsl */ `
+        varying vec2 vUv;
+        uniform sampler2D tDiffuse;
+        void main() { gl_FragColor = texture2D( tDiffuse, vUv ); }`,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this._fsQuad = new FullScreenQuad(this.material);
   }
 
-  get depthTexture() { return this.renderTarget.depthTexture; }
-  get normalTexture() { return this.renderTarget.texture; }
+  get depthTexture() { return this.target.depthTexture; }
+  get texture() { return this.target.texture; }
 
   setSize(width, height) {
-    this.renderTarget.setSize(Math.max(1, Math.floor(width)), Math.max(1, Math.floor(height)));
+    this.target.setSize(Math.max(1, Math.floor(width)), Math.max(1, Math.floor(height)));
   }
 
-  /**
-   * Transparent, additive and non-mesh objects (particles, trails, decal
-   * sprites) must not write geometry, or AO and SSR read a fog of fake
-   * surfaces sitting in mid-air.
-   */
-  #hideNonGeometry() {
-    this._hidden.length = 0;
-    this.scene.traverse((obj) => {
-      if (!obj.visible) return;
-      const isRenderable = obj.isMesh || obj.isSkinnedMesh || obj.isInstancedMesh;
-      const excluded =
-        obj.isPoints || obj.isLine || obj.isLineSegments || obj.isSprite ||
-        obj.userData.gbuffer === false ||
-        (isRenderable && obj.material && !Array.isArray(obj.material) &&
-          (obj.material.transparent === true || obj.material.depthWrite === false));
-      if (excluded) {
-        obj.visible = false;
-        this._hidden.push(obj);
-      }
-    });
-  }
-
-  #restore() {
-    for (const obj of this._hidden) obj.visible = true;
-    this._hidden.length = 0;
-  }
-
-  render(renderer) {
-    const prevTarget = renderer.getRenderTarget();
+  render(renderer, writeBuffer) {
+    // EffectComposer turns autoClear off for the whole chain; the beauty pass
+    // is the one draw in it that genuinely needs a cleared colour and depth.
     const prevAutoClear = renderer.autoClear;
-    const prevBackground = this.scene.background;
-    const prevOverride = this.scene.overrideMaterial;
-    const prevShadowAuto = renderer.shadowMap.autoUpdate;
-    const prevShadowNeeds = renderer.shadowMap.needsUpdate;
-    renderer.getClearColor(this._clearColor);
-    const prevAlpha = renderer.getClearAlpha();
-
-    this.#hideNonGeometry();
-    this.scene.background = null;
-    this.scene.overrideMaterial = this.normalMaterial;
-
-    // The main RenderPass already refreshed the shadow maps this frame. Skip
-    // them here without touching `shadowMap.enabled`, which would change the
-    // USE_SHADOWMAP define and recompile every material.
-    renderer.shadowMap.autoUpdate = false;
-    renderer.shadowMap.needsUpdate = false;
-
     renderer.autoClear = true;
-    // 0.5,0.5,1 unpacks to a flat +Z view normal, the safest default for sky.
-    renderer.setClearColor(0x8080ff, 1);
-    renderer.setRenderTarget(this.renderTarget);
+    renderer.setRenderTarget(this.target);
     renderer.render(this.scene, this.camera);
-
-    this.scene.overrideMaterial = prevOverride;
-    this.scene.background = prevBackground;
-    this.#restore();
-
-    renderer.shadowMap.autoUpdate = prevShadowAuto;
-    renderer.shadowMap.needsUpdate = prevShadowNeeds;
-    renderer.setClearColor(this._clearColor, prevAlpha);
     renderer.autoClear = prevAutoClear;
-    renderer.setRenderTarget(prevTarget);
+
+    // Snapshot here, before any post pass has run: these are the counters the
+    // charter's draw-call and triangle budgets are written against.
+    this.stats.sceneDrawCalls = renderer.info.render.calls;
+    this.stats.sceneTriangles = renderer.info.render.triangles;
+
+    renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+    this._fsQuad.render(renderer);
   }
 
   dispose() {
-    this.renderTarget.depthTexture?.dispose();
-    this.renderTarget.dispose();
-    this.normalMaterial.dispose();
+    this.target.depthTexture?.dispose();
+    this.target.dispose();
+    this.material.dispose();
+    this._fsQuad.dispose();
   }
 }
 
 /**
- * A no-op pass that snapshots the renderer counters immediately after the
- * scene has been drawn. Without it `renderer.info` reports the whole frame
- * including every post pass, which is not the number the triangle and
- * draw-call budgets are written against.
+ * GTAO at half resolution. Ambient occlusion is a low-frequency signal that
+ * this pass then runs a Poisson denoise over, so three quarters of the
+ * fragments buy nothing the blur does not put back — and they cost more than
+ * every other post pass combined at 1080p.
  */
-class StatsProbePass extends Pass {
-  constructor(out) {
-    super();
-    this.needsSwap = false;
-    this.enabled = true;
-    this.out = out;
-  }
-  render(renderer) {
-    this.out.sceneDrawCalls = renderer.info.render.calls;
-    this.out.sceneTriangles = renderer.info.render.triangles;
+class HalfResGtaoPass extends GTAOPass {
+  setSize(width, height) {
+    super.setSize(Math.max(1, width >> 1), Math.max(1, height >> 1));
   }
 }
 
@@ -549,7 +533,6 @@ class WetFloorSsrPass extends Pass {
     this.uniforms = {
       tDiffuse: { value: null },
       tDepth: { value: null },
-      tNormal: { value: null },
       uInvProjection: { value: new THREE.Matrix4() },
       uProjection: { value: new THREE.Matrix4() },
       uCameraWorld: { value: new THREE.Matrix4() },
@@ -573,7 +556,6 @@ class WetFloorSsrPass extends Pass {
         varying vec2 vUv;
         uniform sampler2D tDiffuse;
         uniform highp sampler2D tDepth;
-        uniform sampler2D tNormal;
         uniform mat4 uProjection;
         uniform mat4 uCameraWorld;
         uniform vec2 uResolution;
@@ -588,10 +570,17 @@ class WetFloorSsrPass extends Pass {
         void main() {
           vec3 base = texture2D( tDiffuse, vUv ).rgb;
           float depth = texture2D( tDepth, vUv ).x;
-          if ( depth >= 1.0 ) { gl_FragColor = vec4( base, 1.0 ); return; }
 
-          vec3 viewPos = viewPosFromDepth( vUv, depth );
-          vec3 viewNormal = normalize( texture2D( tNormal, vUv ).xyz * 2.0 - 1.0 );
+          // Geometric normal from the depth gradient. Both derivatives are
+          // taken before any branch, because a derivative in divergent control
+          // flow is undefined. Silhouettes come out wrong, but the mask below
+          // throws away everything that is not a near-horizontal surface close
+          // to the floor plane, and on that surface two derivatives are exact.
+          vec3 viewPos = viewPosFromDepth( vUv, min( depth, 0.999999 ) );
+          vec3 viewNormal = normalize( cross( dFdx( viewPos ), dFdy( viewPos ) ) );
+          if ( viewNormal.z < 0.0 ) viewNormal = -viewNormal;
+
+          if ( depth >= 1.0 ) { gl_FragColor = vec4( base, 1.0 ); return; }
 
           vec3 worldPos = ( uCameraWorld * vec4( viewPos, 1.0 ) ).xyz;
           vec3 worldNormal = normalize( ( uCameraWorld * vec4( viewNormal, 0.0 ) ).xyz );
@@ -708,11 +697,35 @@ class WetFloorSsrPass extends Pass {
  * Circle-of-confusion driven bokeh. Gathers on a golden-angle disc and weights
  * every tap by whether that tap's own blur circle actually reaches the centre
  * pixel, which is what stops sharp foreground silhouettes from smearing into
- * defocused background. Kept deliberately subtle: the fighters stay crisp and
- * only the stage separates.
+ * defocused background.
+ *
+ * The circle of confusion is the thin-lens one, measured in pixels, with the
+ * aperture chosen so the hyperfocal distance tracks the focus distance. That
+ * collapses to
+ *
+ *     c = K · (1 − S / z)          for z behind the focus plane S
+ *
+ * which is worth stating plainly, because the two obvious alternatives are both
+ * wrong here. `|z − S| / range` — what a depth-of-field pass usually ships with
+ * — is linear in metres, so a fighter, who is a metre deep, picks up blur the
+ * moment any part of him leaves the focus plane; that is the bug this replaced.
+ * A fixed physical aperture is correct but not framing-invariant: the same lens
+ * at a 4m portrait distance has a quarter the depth of field it has at 15m, so
+ * the background would dissolve on close framings and stay sharp on wide ones.
+ *
+ * Normalising by S makes the blur a function of how many times further away a
+ * surface is than the subject, which is the relationship a focus puller
+ * actually holds when they stop down for a wide shot. Anything at twice the
+ * subject distance sits at half the maximum blur, whatever the shot.
+ *
+ * On top of that: `uSharpPx` is the acceptable circle of confusion, subtracted
+ * so the subject is not merely nearly sharp but exactly untouched; and the near
+ * field does not blur at all inside `uNearRange`, the depth the camera reports
+ * as its subject volume, because a fighting game may never soften the fighter
+ * closest to the lens.
  */
 class BokehDofPass extends Pass {
-  constructor(camera, taps = 24) {
+  constructor(camera, taps = 20) {
     super();
     this.camera = camera;
     this.uniforms = {
@@ -724,8 +737,9 @@ class BokehDofPass extends Pass {
       uResolution: { value: new THREE.Vector2(1, 1) },
       uFocus: { value: 6.0 },
       uNearRange: { value: 2.6 },
-      uFarRange: { value: 18.0 },
-      uMaxRadius: { value: 7.0 },
+      uCocScale: { value: 9.3 },
+      uSharpPx: { value: 1.4 },
+      uMaxRadius: { value: 8.0 },
       uStrength: { value: 0.85 },
     };
     this.material = new THREE.ShaderMaterial({
@@ -740,24 +754,33 @@ class BokehDofPass extends Pass {
         uniform vec2 uResolution;
         uniform float uFocus;
         uniform float uNearRange;
-        uniform float uFarRange;
+        uniform float uCocScale;
+        uniform float uSharpPx;
         uniform float uMaxRadius;
         uniform float uStrength;
         ${DEPTH_HELPERS}
 
+        /** Signed circle of confusion, normalised to the bokeh disc radius. */
         float cocAt( vec2 uv ) {
           float d = texture2D( tDepth, uv ).x;
-          float z = ( d >= 1.0 ) ? uFar : linearDepth( d );
-          float delta = z - uFocus;
-          float range = delta < 0.0 ? uNearRange : uFarRange;
-          return clamp( delta / max( range, 0.001 ), -1.0, 1.0 );
+          float z = max( ( d >= 1.0 ) ? uFar : linearDepth( d ), 0.05 );
+
+          if ( z < uFocus ) {
+            float edge = max( uFocus - uNearRange, 0.1 );
+            if ( z >= edge ) return 0.0;
+            float c = uCocScale * ( edge / z - 1.0 ) - uSharpPx;
+            return -min( max( c, 0.0 ) / uMaxRadius, 1.0 );
+          }
+
+          float c = uCocScale * ( 1.0 - uFocus / z ) - uSharpPx;
+          return min( max( c, 0.0 ) / uMaxRadius, 1.0 );
         }
 
         void main() {
           vec3 centre = texture2D( tDiffuse, vUv ).rgb;
           float coc = cocAt( vUv );
-          float blend = smoothstep( 0.05, 0.35, abs( coc ) ) * uStrength;
-          if ( blend <= 0.003 ) { gl_FragColor = vec4( centre, 1.0 ); return; }
+          float blend = abs( coc ) * uStrength;
+          if ( blend <= 0.004 ) { gl_FragColor = vec4( centre, 1.0 ); return; }
 
           float radiusPx = uMaxRadius * abs( coc );
           vec2 texel = 1.0 / uResolution;
@@ -787,10 +810,18 @@ class BokehDofPass extends Pass {
     this._fsQuad = new FullScreenQuad(this.material);
   }
 
+  /**
+   * Every length in the CoC is a fraction of the frame height, so the lens
+   * behaves identically at any render scale. The acceptable circle of confusion
+   * sits at ~1.3 thousandths of frame height, which is about where a viewer
+   * stops calling an edge sharp; the asymptote is a touch above the disc radius
+   * so only genuine infinity ever reaches maximum blur.
+   */
   setSize(width, height) {
     this.uniforms.uResolution.value.set(width, height);
-    // Keep the bokeh disc a constant fraction of the frame, not of the pixels.
-    this.uniforms.uMaxRadius.value = Math.max(3, height * 0.0058);
+    this.uniforms.uCocScale.value = Math.max(5, height * 0.0086);
+    this.uniforms.uSharpPx.value = Math.max(1.0, height * 0.0013);
+    this.uniforms.uMaxRadius.value = Math.max(4, height * 0.0075);
   }
 
   render(renderer, writeBuffer, readBuffer) {
@@ -808,6 +839,74 @@ class BokehDofPass extends Pass {
     this.material.dispose();
     this._fsQuad.dispose();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Bloom
+// ---------------------------------------------------------------------------
+
+/**
+ * `UnrealBloomPass` with a rebuilt bright-pass.
+ *
+ * Two things are wrong with the stock extraction on a scene-referred buffer.
+ * It is a hard threshold, so a highlight drifting past it pops a ring into
+ * existence; and it is unbounded, so the halo a light throws is proportional to
+ * its radiance rather than to its area. An emissive panel at 40x white
+ * therefore does not glow — it detonates, and the mip pyramid smears the blob
+ * across a quarter of the frame.
+ *
+ * The fix is the standard pair: a quadratic soft knee under the threshold, and
+ * an energy limit on the extracted radiance. After the clamp a 40x emissive and
+ * a 4x one bloom to the same peak; what still separates them is how many pixels
+ * are lit, which is exactly the physical cue — a bigger light has a bigger
+ * halo, a brighter one does not.
+ */
+class HighlightBloomPass extends UnrealBloomPass {
+  /**
+   * @param {THREE.Vector2} resolution
+   * @param {number} strength
+   * @param {number} radius
+   * @param {number} threshold  scene-referred luminance where bloom begins
+   * @param {number} knee       soft-knee width as a fraction of the threshold
+   * @param {number} maxRadiance energy limit on the extracted highlight
+   */
+  constructor(resolution, strength, radius, threshold, knee = 0.55, maxRadiance = 4.0) {
+    super(resolution, strength, radius, threshold);
+
+    this.highPassUniforms.smoothWidth.value = knee;
+    this.highPassUniforms.maxRadiance = { value: maxRadiance };
+
+    this.materialHighPassFilter.fragmentShader = /* glsl */ `
+      uniform sampler2D tDiffuse;
+      uniform float luminosityThreshold;
+      uniform float smoothWidth;
+      uniform float maxRadiance;
+      varying vec2 vUv;
+
+      void main() {
+        vec4 texel = texture2D( tDiffuse, vUv );
+        vec3 col = max( texel.rgb, vec3( 0.0 ) );
+        float v = max( max( col.r, col.g ), col.b );
+
+        float knee = max( luminosityThreshold * smoothWidth, 1e-4 );
+        float soft = clamp( v - luminosityThreshold + knee, 0.0, 2.0 * knee );
+        soft = soft * soft / ( 4.0 * knee );
+        float contribution = max( soft, v - luminosityThreshold ) / max( v, 1e-5 );
+
+        vec3 bright = col * contribution;
+        float peak = max( max( bright.r, bright.g ), bright.b );
+        if ( peak > maxRadiance ) bright *= maxRadiance / peak;
+
+        gl_FragColor = vec4( bright, texel.a );
+      }`;
+    this.materialHighPassFilter.needsUpdate = true;
+  }
+
+  /**
+   * @param {number} value energy limit on the extracted highlight
+   */
+  set maxRadiance(value) { this.highPassUniforms.maxRadiance.value = value; }
+  get maxRadiance() { return this.highPassUniforms.maxRadiance.value; }
 }
 
 // ---------------------------------------------------------------------------
@@ -831,8 +930,8 @@ class MotionBlurPass extends Pass {
       tDepth: { value: null },
       uInvViewProjection: { value: new THREE.Matrix4() },
       uPrevViewProjection: { value: new THREE.Matrix4() },
-      uIntensity: { value: 0.55 },
-      uMaxRadius: { value: 0.018 },
+      uIntensity: { value: 0.45 },
+      uMaxRadius: { value: 0.011 },
       uResolution: { value: new THREE.Vector2(1, 1) },
     };
     this.material = new THREE.ShaderMaterial({
@@ -948,6 +1047,13 @@ const smoothstep01 = (e0, e1, x) => {
  * obvious-looking choice — puts a 30% blue floor under the whole frame,
  * because 0.09 linear is 0.33 display.
  *
+ * The numbers below are set against the reference stills this project is
+ * measured on, which have genuinely black blacks: the pivot sits under
+ * mid-grey and the lift is small enough that the bottom two percent of the
+ * range resolves to zero. A lifted, tinted floor is the single tell that reads
+ * as "browser demo" in a side-by-side, because it turns every unlit surface
+ * into the same milky grey.
+ *
  * @returns {THREE.DataTexture}
  */
 function buildGradeLut() {
@@ -955,11 +1061,11 @@ function buildGradeLut() {
   const width = n * n;
   const data = new Uint8Array(width * n * 4);
 
-  const shadowTint = [-0.006, 0.007, 0.027]; // cold teal, display-space delta
-  const highTint = [0.021, 0.005, -0.015];   // warm amber
-  const lift = 0.011;
-  const pivot = 0.45;
-  const contrast = 1.08;
+  const shadowTint = [-0.004, 0.004, 0.014]; // cold teal, display-space delta
+  const highTint = [0.019, 0.004, -0.014];   // warm amber
+  const lift = 0.004;
+  const pivot = 0.42;
+  const contrast = 1.13;
 
   for (let b = 0; b < n; b++) {
     for (let g = 0; g < n; g++) {
@@ -1026,6 +1132,12 @@ function buildGradeLut() {
  * transform with a punchy look, the procedural grade LUT, luminance-weighted
  * animated grain and a vignette. Emits linear display-referred colour so the
  * downstream SMAA and OutputPass behave the way three expects.
+ *
+ * Every lens term here is set below the level where it is nameable. The
+ * reference stills this project is measured against carry no visible grain, no
+ * fringing and barely a vignette; they read as clean because the render is
+ * clean, not because a filter was laid over it. A lens effect strong enough to
+ * spot is a lens effect strong enough to date the image.
  */
 class GradePass extends Pass {
   constructor(lut) {
@@ -1284,10 +1396,11 @@ export class RenderPipeline {
      * may push mood-specific values here through `setGrade` / `setBloom`.
      */
     this.look = {
-      exposure: 1.0, lutStrength: 1.0, saturation: 1.0,
-      chroma: 0.0016, distortion: 0.028, grain: 0.032, vignette: 0.42,
-      bloomStrength: 0.32, bloomRadius: 0.74, bloomThreshold: 0.92,
-      ssrIntensity: 0.62, aoIntensity: 0.92, dofStrength: 0.85, motionBlur: 0.55,
+      exposure: 0.92, lutStrength: 1.0, saturation: 1.0,
+      chroma: 0.0009, distortion: 0.018, grain: 0.02, vignette: 0.3,
+      bloomStrength: 0.24, bloomRadius: 0.62, bloomThreshold: 1.15,
+      bloomKnee: 0.55, bloomClamp: 4.0,
+      ssrIntensity: 0.62, aoIntensity: 0.92, dofStrength: 0.9, motionBlur: 0.45,
     };
 
     /**
@@ -1391,24 +1504,29 @@ export class RenderPipeline {
       : THREE.AgXToneMapping;
     const passes = {};
 
-    passes.render = new RenderPass(this.scene, this.camera);
-    composer.addPass(passes.render);
-
-    passes.probe = new StatsProbePass(this.stats);
-    composer.addPass(passes.probe);
-
-    const wantsGeometry = tier.gbuffer &&
+    const wantsDepth = tier.depth &&
       (this.effects.ao || this.effects.ssr || this.effects.dof || this.effects.motionBlur);
 
-    if (wantsGeometry) {
-      passes.gbuffer = new DepthNormalPass(this.scene, this.camera);
-      passes.gbuffer.setSize(w, h);
-      composer.addPass(passes.gbuffer);
+    // The scene pass carries the depth texture; on tiers that need no geometry
+    // passes there is nothing to carry, so a stock RenderPass is cheaper.
+    if (wantsDepth) {
+      passes.scene = new ScenePass(this.scene, this.camera, this.stats);
+      passes.scene.setSize(w, h);
+      // `_passes.gbuffer` is the name EffectsDirector reads its depth from.
+      passes.gbuffer = passes.scene;
+      composer.addPass(passes.scene);
+    } else {
+      passes.render = new RenderPass(this.scene, this.camera);
+      composer.addPass(passes.render);
     }
 
-    if (tier.ao && this.effects.ao && passes.gbuffer) {
-      const gtao = new GTAOPass(this.scene, this.camera, w, h);
-      gtao.setGBuffer(passes.gbuffer.depthTexture, passes.gbuffer.normalTexture);
+    const depthTexture = passes.scene?.depthTexture || null;
+
+    if (tier.ao && this.effects.ao && depthTexture) {
+      const gtao = new HalfResGtaoPass(this.scene, this.camera, w >> 1, h >> 1);
+      // No normal texture: GTAO reconstructs view normals from the depth
+      // gradient, which is what the second geometry pass used to buy.
+      gtao.setGBuffer(depthTexture, undefined);
       gtao.output = GTAOPass.OUTPUT.Default;
       gtao.blendIntensity = this.look.aoIntensity;
       gtao.updateGtaoMaterial({
@@ -1420,15 +1538,14 @@ export class RenderPipeline {
         distanceFallOff: 0.9,
         screenSpaceRadius: false,
       });
-      gtao.updatePdMaterial({ lumaPhi: 8, depthPhi: 2.2, normalPhi: 3.6, radius: 5, samples: 12, rings: 2 });
+      gtao.updatePdMaterial({ lumaPhi: 8, depthPhi: 2.2, normalPhi: 3.6, radius: 4, samples: 12, rings: 2 });
       passes.ao = gtao;
       composer.addPass(gtao);
     }
 
-    if (tier.ssr && this.effects.ssr && passes.gbuffer) {
+    if (tier.ssr && this.effects.ssr && depthTexture) {
       const ssr = new WetFloorSsrPass(this.camera, tier.ssrSteps);
-      ssr.uniforms.tDepth.value = passes.gbuffer.depthTexture;
-      ssr.uniforms.tNormal.value = passes.gbuffer.normalTexture;
+      ssr.uniforms.tDepth.value = depthTexture;
       ssr.uniforms.uIntensity.value = this.look.ssrIntensity;
       passes.ssr = ssr;
       composer.addPass(ssr);
@@ -1437,26 +1554,27 @@ export class RenderPipeline {
     if (tier.bloom && this.effects.bloom) {
       // Restrained: only genuine highlights bloom, and they bloom wide and
       // faint. A glow bath is the single fastest way to look cheap.
-      const bloom = new UnrealBloomPass(
+      const bloom = new HighlightBloomPass(
         new THREE.Vector2(w, h),
         this.look.bloomStrength, this.look.bloomRadius, this.look.bloomThreshold,
+        this.look.bloomKnee, this.look.bloomClamp,
       );
       passes.bloom = bloom;
       composer.addPass(bloom);
     }
 
-    if (tier.dof && this.effects.dof && passes.gbuffer) {
+    if (tier.dof && this.effects.dof && depthTexture) {
       const dof = new BokehDofPass(this.camera, tier.dofTaps);
-      dof.uniforms.tDepth.value = passes.gbuffer.depthTexture;
+      dof.uniforms.tDepth.value = depthTexture;
       dof.uniforms.uStrength.value = this.look.dofStrength;
       dof.setSize(w, h);
       passes.dof = dof;
       composer.addPass(dof);
     }
 
-    if (tier.motionBlur && this.effects.motionBlur && passes.gbuffer) {
+    if (tier.motionBlur && this.effects.motionBlur && depthTexture) {
       const mb = new MotionBlurPass(this.camera, tier.mbTaps);
-      mb.uniforms.tDepth.value = passes.gbuffer.depthTexture;
+      mb.uniforms.tDepth.value = depthTexture;
       mb.uniforms.uIntensity.value = this.look.motionBlur;
       passes.motionBlur = mb;
       composer.addPass(mb);
@@ -1589,17 +1707,29 @@ export class RenderPipeline {
 
   /**
    * Retunes bloom in place.
-   * @param {{strength?:number, radius?:number, threshold?:number}} values
+   *
+   * `threshold` and `clamp` are scene-referred luminances, not display values:
+   * 1.0 is diffuse white under the key light, so a threshold of 1.35 blooms
+   * only things that are genuinely emitting. `clamp` is the energy limit on the
+   * extracted highlight and is what keeps a hot emissive reading as a lit panel
+   * instead of a white blob.
+   *
+   * @param {{strength?:number, radius?:number, threshold?:number,
+   *          knee?:number, clamp?:number}} values
    */
-  setBloom({ strength, radius, threshold } = {}) {
+  setBloom({ strength, radius, threshold, knee, clamp } = {}) {
     if (typeof strength === 'number') this.look.bloomStrength = strength;
     if (typeof radius === 'number') this.look.bloomRadius = radius;
     if (typeof threshold === 'number') this.look.bloomThreshold = threshold;
+    if (typeof knee === 'number') this.look.bloomKnee = knee;
+    if (typeof clamp === 'number') this.look.bloomClamp = clamp;
     const b = this._passes.bloom;
     if (!b) return;
     b.strength = this.look.bloomStrength;
     b.radius = this.look.bloomRadius;
     b.threshold = this.look.bloomThreshold;
+    b.highPassUniforms.smoothWidth.value = this.look.bloomKnee;
+    b.maxRadiance = this.look.bloomClamp;
   }
 
   /**
@@ -1687,6 +1817,12 @@ export class RenderPipeline {
     this.stats.drawCalls = info.calls;
     this.stats.triangles = info.triangles;
     this.stats.renderScale = this.renderScale;
+    // Without a ScenePass nothing snapshots the scene alone, and on those tiers
+    // the post chain is short enough that the whole frame is a fair stand-in.
+    if (!this._passes.scene) {
+      this.stats.sceneDrawCalls = info.calls;
+      this.stats.sceneTriangles = info.triangles;
+    }
 
     if (this.effects.adaptiveResolution) this.#adaptResolution();
   }
@@ -1705,12 +1841,10 @@ export class RenderPipeline {
     }
 
     if (this.composer) {
+      // `setSize` fans out to every pass at the effective device resolution,
+      // which is where each of them derives its own working size from.
       this.composer.setPixelRatio(pr);
       this.composer.setSize(this._cssWidth, this._cssHeight);
-      const w = Math.floor(this._cssWidth * pr);
-      const h = Math.floor(this._cssHeight * pr);
-      this._passes.gbuffer?.setSize(w, h);
-      this._passes.ao?.setSize(w, h);
     }
   }
 
@@ -1743,14 +1877,16 @@ export class RenderPipeline {
   #syncPasses(scene, camera) {
     const p = this._passes;
     if (p.render) { p.render.scene = scene; p.render.camera = camera; }
-    if (p.gbuffer) { p.gbuffer.scene = scene; p.gbuffer.camera = camera; }
+    if (p.scene) { p.scene.scene = scene; p.scene.camera = camera; }
     if (p.ao) { p.ao.scene = scene; p.ao.camera = camera; }
     if (p.ssr) p.ssr.camera = camera;
     if (p.dof) {
       p.dof.camera = camera;
       p.dof.uniforms.uFocus.value = this.dofFocus.distance;
+      // The camera reports the depth its subject occupies. Honour it as a hard
+      // no-blur band on the lens side; the far side is left to the thin-lens
+      // curve, which is what gives the stage its separation.
       p.dof.uniforms.uNearRange.value = this.dofFocus.nearRange;
-      p.dof.uniforms.uFarRange.value = this.dofFocus.farRange;
     }
     if (p.motionBlur) {
       p.motionBlur.camera = camera;
@@ -1773,6 +1909,12 @@ export class RenderPipeline {
   /**
    * Holds 60fps by trading resolution. Uses a long window and a cooldown so a
    * single hitching frame (a shader compile, a GC) never drops the picture.
+   *
+   * The band is wide and the steps are small on purpose. Resolution is the most
+   * expensive thing this class can spend, and also the most visible: a drop is
+   * a blanket soften across the whole frame, so it has to be the last resort
+   * and it has to climb back the moment there is headroom. Anything under about
+   * 21ms sustained is left alone.
    */
   #adaptResolution() {
     if (this._adaptCooldown > 0) { this._adaptCooldown--; return; }
@@ -1783,8 +1925,8 @@ export class RenderPipeline {
     const max = this.tier.renderScale;
     let next = this._targetScale;
 
-    if (avg > 19.0) next = Math.max(min, this._targetScale - 0.06);
-    else if (avg < 13.6) next = Math.min(max, this._targetScale + 0.04);
+    if (avg > 21.0) next = Math.max(min, this._targetScale - 0.04);
+    else if (avg < 15.4) next = Math.min(max, this._targetScale + 0.04);
 
     if (Math.abs(next - this._targetScale) > 0.001) {
       this._targetScale = next;

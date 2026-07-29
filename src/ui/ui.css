@@ -121,25 +121,86 @@
 .hud-top {
   position: absolute;
   top: 0.9em;
-  left: 0.9em;
-  right: 0.9em;
+  left: 1.1em;
+  right: 1.1em;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: start;
-  gap: 0.6em;
+  gap: 0.7em;
 }
 
-.hp-block { display: flex; flex-direction: column; gap: 0.32em; min-width: 0; }
-.hp-block--p2 { align-items: flex-end; }
+/*
+ * `width: min(29em, 100%)` is the load-bearing rule here, not a cosmetic
+ * cap: it stops a long name (`nameplate`, an unconstrained-width flex row)
+ * from growing the block past the bar's own footprint and off the edge of
+ * the screen. It must be a real `width`, not `max-width` + `margin-left:
+ * auto` — that combination collapses in a grid item once a `width: 100%`
+ * descendant (`.hp-frame`) is in the mix: an auto margin forces the item's
+ * own size to resolve via shrink-to-fit first, and a percentage-width
+ * child contributes nothing to that intrinsic calculation, so the whole
+ * block (bar included) silently shrinks to the width of the *nameplate*
+ * text alone. `justify-self: end` positions the now-definite-width p2
+ * block flush right without that trap.
+ */
+.hp-block {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.32em;
+  min-width: 0;
+  width: min(29em, 100%);
+}
+.hp-block--p2 { align-items: flex-end; justify-self: end; }
+
+/* Small angled flags at the outer tip of each bar in the player's identity
+ * colour — an anchor for the eye where a portrait icon would sit, filling
+ * what would otherwise be dead space at the screen edge. */
+.hp-block::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 0.32em;
+  height: 1.7em;
+  opacity: 0.95;
+  pointer-events: none;
+}
+.hp-block--p1::after {
+  left: -0.52em;
+  background: linear-gradient(100deg, transparent 35%, var(--kb-p1) 100%);
+  clip-path: polygon(100% 8%, 100% 92%, 0 100%, 0 0);
+  box-shadow: 0 0 0.8em rgba(79, 210, 255, 0.55);
+}
+.hp-block--p2::after {
+  right: -0.52em;
+  background: linear-gradient(260deg, transparent 35%, var(--kb-p2) 100%);
+  clip-path: polygon(0 8%, 0 92%, 100% 100%, 100% 0);
+  box-shadow: 0 0 0.8em rgba(255, 95, 109, 0.55);
+}
+
+/* A thin fading trace running from the bar's inner edge toward the timer —
+ * ties the three top-bar pieces (bar / timer / bar) into one composition
+ * instead of three widgets floating in empty space. */
+.hp-block--p1::before,
+.hp-block--p2::before {
+  content: '';
+  position: absolute;
+  top: 0.84em;
+  width: 2.4em;
+  height: 2px;
+}
+.hp-block--p1::before { left: 100%; background: linear-gradient(90deg, var(--kb-line-strong), transparent); }
+.hp-block--p2::before { right: 100%; background: linear-gradient(270deg, var(--kb-line-strong), transparent); }
 
 .hp-frame {
   position: relative;
-  height: 1.55em;
+  height: 1.7em;
   width: 100%;
-  max-width: 34em;
-  background: linear-gradient(180deg, #060810 0%, #0c1018 100%);
+  max-width: 29em;
+  background:
+    repeating-linear-gradient(100deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, #05060a 0%, #0d1119 55%, #070911 100%);
   clip-path: polygon(var(--kb-cut) 0, 100% 0, calc(100% - var(--kb-cut)) 100%, 0 100%);
-  box-shadow: var(--kb-shadow-panel);
+  box-shadow: var(--kb-shadow-panel), inset 0 1px 0 rgba(255, 255, 255, 0.07);
   overflow: hidden;
 }
 .hp-block--p2 .hp-frame {
@@ -154,13 +215,58 @@
 }
 .hp-block--p2 .hp-layer { transform-origin: right center; }
 
-.hp-ghost { background: linear-gradient(180deg, #6b7386, #444c5c); opacity: 0.85; }
-.hp-drain {
-  background: linear-gradient(180deg, #ff6b53 0%, #c81f2e 100%);
+/* Recoverable ceiling — matte, cool, hazard-hatched so it reads as inert
+ * "potential" rather than live health; never glossy like the two layers
+ * that sit on top of it. */
+.hp-ghost {
+  background-image:
+    repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.06) 0 0.1em, transparent 0.1em 0.55em),
+    linear-gradient(180deg, #7c8698 0%, #565f6f 48%, #383e4a 100%);
+  box-shadow: inset 0 0.05em 0 rgba(255, 255, 255, 0.1), inset 0 -0.22em 0.32em rgba(0, 0, 0, 0.5);
+  opacity: 0.92;
 }
+/* Delayed-drain chip — a hotter, glossier red so the eye reads it as
+ * "still bleeding" against the flat grey ghost layer above. The extra
+ * horizontal gradient is the leading edge: because it's a `background`
+ * (not a child), it scales together with the layer's own `scaleX()` and so
+ * always sits exactly at the layer's current trailing end. */
+.hp-drain {
+  background-image: linear-gradient(180deg, #ff9d86 0%, #e5433f 45%, #8f141d 100%);
+  box-shadow: inset 0 0.06em 0 rgba(255, 255, 255, 0.3), inset 0 -0.2em 0.34em rgba(0, 0, 0, 0.45);
+}
+.hp-block--p1 .hp-drain {
+  background-image:
+    linear-gradient(90deg, transparent 0%, transparent 88%, rgba(255, 210, 190, 0.9) 96%, #fff 100%),
+    linear-gradient(180deg, #ff9d86 0%, #e5433f 45%, #8f141d 100%);
+}
+.hp-block--p2 .hp-drain {
+  background-image:
+    linear-gradient(270deg, transparent 0%, transparent 88%, rgba(255, 210, 190, 0.9) 96%, #fff 100%),
+    linear-gradient(180deg, #ff9d86 0%, #e5433f 45%, #8f141d 100%);
+}
+/* True health — the brightest, most metallic layer: a six-stop gradient
+ * (bright rolled-edge highlight, saturated amber body, dark base) plus a
+ * bevel of four stacked inset shadows for a pressed-metal cross-section,
+ * and the same self-scaling hot leading edge as the drain layer above. */
 .hp-fill {
-  background: linear-gradient(180deg, #fff6e6 0%, #ffd27a 38%, #ff9a2e 100%);
-  box-shadow: inset 0 0.08em 0 rgba(255, 255, 255, 0.65), inset 0 -0.15em 0.3em rgba(0, 0, 0, 0.35);
+  background-image:
+    linear-gradient(180deg,
+      #fffef2 0%, #ffe9a8 14%, #ffc85c 34%, #ff9a2e 58%, #dd6a12 82%, #a84e0a 100%);
+  box-shadow:
+    inset 0 0.09em 0 rgba(255, 255, 255, 0.85),
+    inset 0 0.18em 0 rgba(255, 255, 255, 0.18),
+    inset 0 -0.2em 0.34em rgba(0, 0, 0, 0.5),
+    inset 0 -0.02em 0 rgba(0, 0, 0, 0.6);
+}
+.hp-block--p1 .hp-fill {
+  background-image:
+    linear-gradient(90deg, transparent 0%, transparent 91%, rgba(255, 255, 255, 0.6) 97%, #fff 100%),
+    linear-gradient(180deg, #fffef2 0%, #ffe9a8 14%, #ffc85c 34%, #ff9a2e 58%, #dd6a12 82%, #a84e0a 100%);
+}
+.hp-block--p2 .hp-fill {
+  background-image:
+    linear-gradient(270deg, transparent 0%, transparent 91%, rgba(255, 255, 255, 0.6) 97%, #fff 100%),
+    linear-gradient(180deg, #fffef2 0%, #ffe9a8 14%, #ffc85c 34%, #ff9a2e 58%, #dd6a12 82%, #a84e0a 100%);
 }
 .hp-block--p2 .hp-fill,
 .hp-block--p2 .hp-drain,
@@ -168,7 +274,8 @@
 
 .hp-sheen {
   position: absolute; inset: 0;
-  background: linear-gradient(115deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0) 24%);
+  background: linear-gradient(115deg, rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0.06) 14%, rgba(255, 255, 255, 0) 26%);
+  mix-blend-mode: screen;
   pointer-events: none;
 }
 .hp-flash {
@@ -193,10 +300,17 @@
   display: flex;
   align-items: baseline;
   gap: 0.55em;
+  max-width: 100%;
+  min-width: 0;
 }
 .hp-block--p2 .nameplate { flex-direction: row-reverse; }
 
 .nameplate-name {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 900;
   font-size: 1.05em;
   letter-spacing: 0.06em;
@@ -207,7 +321,7 @@
 .hp-block--p1 .nameplate-name { border-left: 0.18em solid var(--kb-p1); padding-left: 0.4em; }
 .hp-block--p2 .nameplate-name { border-right: 0.18em solid var(--kb-p2); padding-right: 0.4em; }
 
-.pips { display: flex; gap: 0.28em; }
+.pips { display: flex; gap: 0.28em; flex-shrink: 0; }
 .hp-block--p2 .pips { flex-direction: row-reverse; }
 .pip {
   width: 0.62em; height: 0.62em;
@@ -264,20 +378,24 @@
 
 .meter-wrap {
   position: absolute;
-  top: 3.05em;
-  left: 0.9em;
-  right: 0.9em;
+  top: 3.2em;
+  left: 1.1em;
+  right: 1.1em;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.6em;
+  gap: 0.7em;
 }
-.meter-block { display: flex; flex-direction: column; align-items: flex-start; gap: 0.2em; max-width: 22em; }
-.meter-block--p2 { align-items: flex-end; margin-left: auto; }
+/* `width`, not `max-width` + `margin-left: auto` — see `.hp-block` above for
+ * why that combination silently collapses a `width: 100%` child (here,
+ * `.meter-frame`) down to the label text's width instead of the bar's. */
+.meter-block { display: flex; flex-direction: column; align-items: flex-start; gap: 0.2em; width: min(27em, 100%); }
+.meter-block--p2 { align-items: flex-end; justify-self: end; }
 
 .meter-frame {
   position: relative;
   height: 0.62em;
   width: 100%;
+  max-width: 27em;
   background: #090c13;
   clip-path: polygon(var(--kb-cut-sm) 0, 100% 0, calc(100% - var(--kb-cut-sm)) 100%, 0 100%);
   box-shadow: var(--kb-shadow-panel);
@@ -339,40 +457,69 @@
 .combo--p0 { left: 5%; align-items: flex-start; }
 .combo--p1 { right: 5%; align-items: flex-end; }
 .combo.combo--show { opacity: 1; transform: scale(1); }
-.combo.combo--punch { animation: comboPunch 0.32s cubic-bezier(0.2, 1.8, 0.4, 1); }
+.combo.combo--punch { animation: comboPunch 0.36s cubic-bezier(0.2, 1.8, 0.4, 1); }
 @keyframes comboPunch {
-  0% { transform: scale(1.55); }
-  60% { transform: scale(0.92); }
-  100% { transform: scale(1); }
+  0% { transform: scale(1.75) rotate(-2deg); }
+  55% { transform: scale(0.92) rotate(1deg); }
+  100% { transform: scale(1) rotate(0deg); }
 }
 .combo-hits {
+  position: relative;
   font-family: var(--kb-font-mono);
   font-weight: 800;
-  font-size: 2.6em;
+  font-size: 3.4em;
   line-height: 1;
   letter-spacing: -0.01em;
   color: var(--kb-text);
-  text-shadow: 0 0.06em 0 rgba(0, 0, 0, 0.6), 0 0 0.5em rgba(255, 138, 42, 0.35);
+  text-shadow: 0 0.07em 0 rgba(0, 0, 0, 0.7), 0 0 0.6em rgba(255, 138, 42, 0.4);
+  transition: color 0.15s ease, text-shadow 0.15s ease;
 }
-.combo-hits::after { content: ' HITS'; font-size: 0.36em; font-weight: 700; letter-spacing: 0.16em; color: var(--kb-text-dim); }
+/* A soft glow plate behind the number gives it a floor to land on instead
+ * of sitting bare on the 3D scene — reads as weight, not a debug overlay. */
+.combo-hits::before {
+  content: '';
+  position: absolute;
+  inset: -0.28em -0.5em;
+  z-index: -1;
+  background: radial-gradient(60% 65% at 50% 55%, rgba(255, 138, 42, 0.28), transparent 72%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.combo.combo--show .combo-hits::before { opacity: 1; }
+.combo-hits::after { content: ' HITS'; font-size: 0.32em; font-weight: 700; letter-spacing: 0.16em; color: var(--kb-text-dim); }
+/* Colour climbs with the tally: tier 2 runs hotter, tier 3 goes white-hot
+ * with a bigger glow and a slight overall punch-up in scale. */
+.combo[data-tier='2'] .combo-hits {
+  color: var(--kb-accent-soft);
+  text-shadow: 0 0.07em 0 rgba(0, 0, 0, 0.7), 0 0 1em rgba(255, 138, 42, 0.75);
+}
+.combo[data-tier='2'] .combo-hits::before { background: radial-gradient(60% 65% at 50% 55%, rgba(255, 138, 42, 0.4), transparent 72%); }
+.combo[data-tier='3'] .combo-hits {
+  color: #fff4dd;
+  text-shadow: 0 0.07em 0 rgba(0, 0, 0, 0.75), 0 0 1.6em rgba(255, 89, 42, 0.95), 0 0 0.4em rgba(255, 255, 255, 0.6);
+}
+.combo[data-tier='3'] .combo-hits::before { background: radial-gradient(60% 65% at 50% 55%, rgba(255, 89, 42, 0.55), transparent 72%); }
+.combo.combo--show[data-tier='3'] { transform: scale(1.08); }
 .combo-tag {
-  font-size: 0.85em;
+  font-size: 0.9em;
   font-weight: 900;
   letter-spacing: 0.24em;
   text-transform: uppercase;
-  padding: 0.05em 0.5em;
+  padding: 0.08em 0.55em;
   clip-path: polygon(0.5em 0, 100% 0, calc(100% - 0.5em) 100%, 0 100%);
   background: var(--kb-accent);
   color: #150800;
+  box-shadow: inset 0 0.06em 0 rgba(255, 255, 255, 0.5), inset 0 -0.1em 0.15em rgba(0, 0, 0, 0.35);
 }
 .combo-tag[data-tag='JUGGLE'] { background: var(--kb-cyan); color: #001217; }
 .combo-tag[data-tag='COUNTER'] { background: var(--kb-danger); color: #1b0002; }
 .combo-dmg {
-  margin-top: 0.15em;
-  font-size: 0.8em;
+  margin-top: 0.2em;
+  font-size: 0.88em;
   font-weight: 700;
   color: var(--kb-danger-soft);
   letter-spacing: 0.05em;
+  text-shadow: 0 0.08em 0.2em rgba(0, 0, 0, 0.7);
 }
 
 /* -- floating callouts (damage numbers, counter-hit tags) -------------- */
@@ -429,6 +576,7 @@
   letter-spacing: 0.12em;
   opacity: 0;
   white-space: nowrap;
+  --flare: var(--kb-accent);
 }
 .announce-banner.announce--run { animation-name: announceCycle; animation-duration: 1.5s; animation-timing-function: linear; animation-fill-mode: forwards; }
 @keyframes announceCycle {
@@ -439,26 +587,65 @@
   78%  { opacity: 1; transform: scale(1); }
   100% { opacity: 0; transform: scale(1.5) translateY(-6%); filter: blur(4px); }
 }
-.announce-banner[data-kind='round'] { font-size: clamp(28px, 6vw, 96px); color: var(--kb-text); text-shadow: 0 0 1.4em rgba(255, 138, 42, 0.55), 0 0.1em 0 rgba(0,0,0,0.7); }
+/* A blurred horizontal streak in the announcement's own colour, behind the
+ * text, so it reads as a crisp lit object over whatever the 3D scene is
+ * doing rather than blending into it — the "hold" beat gets a floor. */
+.announce-banner::before {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 160%; height: 0.34em;
+  transform: translate(-50%, -50%) scaleX(0);
+  background: linear-gradient(90deg, transparent, var(--flare) 35%, var(--flare) 65%, transparent);
+  filter: blur(0.2em);
+  opacity: 0;
+  z-index: -1;
+}
+.announce-banner.announce--run::before { animation: announceFlare 1.5s linear forwards; }
+@keyframes announceFlare {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scaleX(0); }
+  10%  { opacity: 0.95; transform: translate(-50%, -50%) scaleX(1); }
+  26%  { opacity: 0.5; }
+  78%  { opacity: 0.45; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scaleX(1.4); }
+}
+.announce-banner[data-kind='round'] {
+  font-size: clamp(28px, 6vw, 96px); color: var(--kb-text); --flare: var(--kb-accent);
+  -webkit-text-stroke: 0.012em rgba(5, 3, 0, 0.5);
+  text-shadow: 0 0.12em 0.28em rgba(0, 0, 0, 0.85), 0 0 1.4em rgba(255, 138, 42, 0.55);
+}
 .announce-banner[data-kind='fight'] {
-  font-size: clamp(46px, 10vw, 160px);
+  font-size: clamp(46px, 10vw, 160px); --flare: var(--kb-accent);
   background: linear-gradient(180deg, #fff6e0, var(--kb-accent-soft) 45%, var(--kb-accent) 100%);
   -webkit-background-clip: text; background-clip: text; color: transparent;
-  text-shadow: 0 0 2em rgba(255, 138, 42, 0.6);
+  -webkit-text-stroke: 0.016em rgba(10, 4, 0, 0.55);
+  filter:
+    drop-shadow(0 0.14em 0.3em rgba(0, 0, 0, 0.9))
+    drop-shadow(0 0 1.6em rgba(255, 138, 42, 0.8));
 }
 .announce-banner[data-kind='ko'] {
   font-size: clamp(50px, 11vw, 176px);
-  color: var(--kb-danger);
-  -webkit-text-stroke: 0.02em rgba(0,0,0,0.6);
-  text-shadow: 0 0 2.2em rgba(255, 59, 78, 0.7), 0 0.12em 0 rgba(0,0,0,0.8);
+  color: var(--kb-danger); --flare: var(--kb-danger);
+  -webkit-text-stroke: 0.024em rgba(0,0,0,0.75);
+  text-shadow: 0 0 2.2em rgba(255, 59, 78, 0.8), 0 0.14em 0 rgba(0,0,0,0.9);
 }
 .announce-banner[data-kind='perfect'] {
   font-size: clamp(24px, 5vw, 74px);
-  color: var(--kb-gold);
-  text-shadow: 0 0 1.6em rgba(255, 207, 74, 0.7);
+  color: var(--kb-gold); --flare: var(--kb-gold);
+  -webkit-text-stroke: 0.014em rgba(10, 6, 0, 0.5);
+  text-shadow: 0 0.1em 0.24em rgba(0,0,0,0.85), 0 0 1.6em rgba(255, 207, 74, 0.75);
 }
-.announce-banner[data-kind='timeup'] { font-size: clamp(26px, 5.4vw, 82px); color: var(--kb-grey); text-shadow: 0 0 1.2em rgba(139, 150, 170, 0.5); }
-.announce-banner[data-kind='great'] { font-size: clamp(30px, 6.4vw, 100px); color: var(--kb-good); text-shadow: 0 0 1.6em rgba(51, 255, 180, 0.6); }
+.announce-banner[data-kind='timeup'] {
+  font-size: clamp(26px, 5.4vw, 82px);
+  color: var(--kb-grey); --flare: var(--kb-grey);
+  text-shadow: 0 0.1em 0.24em rgba(0,0,0,0.85), 0 0 1.2em rgba(139, 150, 170, 0.55);
+}
+.announce-banner[data-kind='great'] {
+  font-size: clamp(30px, 6.4vw, 100px);
+  color: var(--kb-good); --flare: var(--kb-good);
+  -webkit-text-stroke: 0.014em rgba(0, 10, 6, 0.5);
+  text-shadow: 0 0.1em 0.24em rgba(0,0,0,0.85), 0 0 1.6em rgba(51, 255, 180, 0.7);
+}
 
 /* ========================================================================
  * MenuSystem

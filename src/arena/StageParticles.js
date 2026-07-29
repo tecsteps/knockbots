@@ -22,7 +22,7 @@
  */
 
 import * as THREE from 'three';
-import { LAYER } from '../core/Constants.js';
+import { GROUND_Y, LAYER } from '../core/Constants.js';
 
 const COMMON_FRAG_ROTATE = /* glsl */ `
   vec2 rotatePointCoord( vec2 c, float a ) {
@@ -31,6 +31,65 @@ const COMMON_FRAG_ROTATE = /* glsl */ `
     return vec2( p.x * k - p.y * s, p.x * s + p.y * k ) + 0.5;
   }
 `;
+
+/**
+ * Three guards every sprite system here shares, because a point sprite has no
+ * volume and no depth:
+ *
+ *   - **Lens fade.** `gl_PointSize` is inverse in view distance, so a four
+ *     centimetre mote a metre from the eye covers a quarter of the screen. An
+ *     additive system with a few hundred of those *is* a white veil. Sprites
+ *     fade out over the last couple of metres and their pixel size is capped.
+ *   - **Deck fade.** A sprite that straddles the floor cuts it in a hard line.
+ *     The deck is the only surface these systems ever intersect, and it is a
+ *     known plane, so the fade is analytic rather than a depth fetch — the
+ *     stage particles are drawn in the forward pass, before the frame's
+ *     depth-normal buffer exists.
+ *   - **Fight-plane carve.** Nothing ambient is allowed to accumulate in the
+ *     box the fighters occupy. That box is where all the contrast lives.
+ */
+const SPRITE_GUARDS = /* glsl */ `
+  uniform vec2 uNearFade;
+  uniform float uMaxPixels;
+  uniform float uFloorY;
+  uniform vec3 uClearCenter;
+  uniform vec3 uClearHalf;
+
+  float lensFade( float viewDist ) {
+    return smoothstep( uNearFade.x, uNearFade.y, viewDist );
+  }
+
+  float deckFade( float worldY, float over ) {
+    return smoothstep( 0.0, over, worldY - uFloorY );
+  }
+
+  /** 0 inside the protected box, 1 once well clear of it. */
+  float fightPlaneCarve( vec3 world ) {
+    vec3 q = abs( world - uClearCenter ) / max( uClearHalf, vec3( 1e-3 ) );
+    return smoothstep( 1.0, 1.85, max( q.x, max( q.y, q.z ) ) );
+  }
+`;
+
+/**
+ * Uniform block matching {@link SPRITE_GUARDS}. A zero `clear.half` disables
+ * the carve, which is what impact FX want — they belong in the fight plane.
+ * @param {object} [opts]
+ * @param {number[]} [opts.nearFade] view distances at which the fade starts and ends
+ * @param {number} [opts.maxPixels] hard cap on `gl_PointSize`
+ * @param {number} [opts.floorY]
+ * @param {{center:number[], half:number[]}} [opts.clear]
+ */
+function guardUniforms(opts = {}) {
+  const near = opts.nearFade ?? [0.7, 2.4];
+  const clear = opts.clear ?? { center: [0, 0, 0], half: [0, 0, 0] };
+  return {
+    uNearFade: { value: new THREE.Vector2(near[0], near[1]) },
+    uMaxPixels: { value: opts.maxPixels ?? 30 },
+    uFloorY: { value: opts.floorY ?? GROUND_Y },
+    uClearCenter: { value: new THREE.Vector3(clear.center[0], clear.center[1], clear.center[2]) },
+    uClearHalf: { value: new THREE.Vector3(clear.half[0], clear.half[1], clear.half[2]) },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Pooled physical burst — dust, debris, sparks
@@ -52,6 +111,8 @@ export class PointBurst {
    * @param {boolean} [opts.additive=false]
    * @param {number} [opts.floorY] bounce plane; omit for no bounce
    * @param {number} [opts.stretch=0] elongation along velocity, in sprite widths
+   * @param {number[]} [opts.nearFade] lens fade window, in metres of view distance
+   * @param {number} [opts.maxPixels] cap on `gl_PointSize`
    */
   constructor(texture, opts = {}) {
     const count = opts.count ?? 256;
@@ -84,18 +145,24 @@ export class PointBurst {
         map: { value: texture },
         uColor: { value: new THREE.Color(opts.color ?? 0xffffff) },
         uPixelScale: { value: 600 },
+        // Impact FX belong in the fight plane, so they take no carve — only
+        // the lens guard, and a generous one, since a puff of dust thrown at
+        // the camera on a wall splat is the effect working.
+        ...guardUniforms({ nearFade: opts.nearFade ?? [0.2, 0.9], maxPixels: opts.maxPixels ?? 260, floorY: opts.floorY }),
       },
       vertexShader: /* glsl */ `
         attribute vec3 aData;
         varying float vAlpha;
         varying float vSpin;
         uniform float uPixelScale;
+        ${SPRITE_GUARDS}
         void main() {
-          vAlpha = aData.y;
           vSpin = aData.z;
           vec4 mv = modelViewMatrix * vec4( position, 1.0 );
+          float dist = max( 0.001, -mv.z );
           gl_Position = projectionMatrix * mv;
-          gl_PointSize = aData.x * uPixelScale / max( 0.001, -mv.z );
+          gl_PointSize = min( uMaxPixels, aData.x * uPixelScale / dist );
+          vAlpha = aData.y * lensFade( dist );
         }
       `,
       fragmentShader: /* glsl */ `
@@ -238,21 +305,38 @@ export class PointBurst {
  * drift, so the whole system is a single uniform write per frame. Motes are
  * additive and brighten sharply when they pass through a light shaft, which is
  * what sells the shaft as a volume rather than a decal.
+ *
+ * Anchors are rejection-sampled out of the fight plane rather than merely faded
+ * there: a mote spent inside the protected box is a mote not hanging in a
+ * shaft, and the whole point of the system is to make the shafts read.
  */
 export class DustMotes {
   /**
    * @param {THREE.Texture} texture
    * @param {object} box { x, y, z, cx, cy, cz } extents and centre, metres
    * @param {object} [opts]
+   * @param {{center:number[], half:number[]}} [opts.clear] fight-plane box to keep empty
    */
   constructor(texture, box, opts = {}) {
     const count = opts.count ?? 900;
     const pos = new Float32Array(count * 3);
     const seed = new Float32Array(count * 3);
+    const clear = opts.clear;
     for (let i = 0; i < count; i++) {
-      pos[i * 3] = box.cx + (Math.random() - 0.5) * box.x;
-      pos[i * 3 + 1] = box.cy + Math.pow(Math.random(), 1.4) * box.y;
-      pos[i * 3 + 2] = box.cz + (Math.random() - 0.5) * box.z;
+      let x = 0, y = 0, z = 0;
+      for (let tries = 0; tries < 12; tries++) {
+        x = box.cx + (Math.random() - 0.5) * box.x;
+        y = box.cy + Math.pow(Math.random(), 1.4) * box.y;
+        z = box.cz + (Math.random() - 0.5) * box.z;
+        if (!clear) break;
+        const qx = Math.abs(x - clear.center[0]) / clear.half[0];
+        const qy = Math.abs(y - clear.center[1]) / clear.half[1];
+        const qz = Math.abs(z - clear.center[2]) / clear.half[2];
+        if (Math.max(qx, qy, qz) > 1.85) break;
+      }
+      pos[i * 3] = x;
+      pos[i * 3 + 1] = y;
+      pos[i * 3 + 2] = z;
       seed[i * 3] = Math.random() * 100;
       seed[i * 3 + 1] = 0.4 + Math.random() * 1.6;         // size scale
       seed[i * 3 + 2] = 0.25 + Math.random() * 0.85;        // brightness
@@ -272,6 +356,12 @@ export class DustMotes {
         uSize: { value: opts.size ?? 0.028 },
         uPixelScale: { value: 600 },
         uDrift: { value: opts.drift ?? 0.16 },
+        ...guardUniforms({
+          nearFade: opts.nearFade ?? [1.1, 3.4],
+          maxPixels: opts.maxPixels ?? 9,
+          floorY: opts.floorY,
+          clear: opts.clear,
+        }),
       },
       vertexShader: /* glsl */ `
         attribute vec3 aSeed;
@@ -280,6 +370,7 @@ export class DustMotes {
         uniform float uPixelScale;
         uniform float uDrift;
         varying float vBright;
+        ${SPRITE_GUARDS}
         void main() {
           float ph = aSeed.x;
           vec3 p = position;
@@ -288,11 +379,14 @@ export class DustMotes {
           p.x += sin( uTime * 0.21 + ph ) * uDrift + sin( uTime * 0.07 + ph * 2.3 ) * uDrift * 1.7;
           p.y += sin( uTime * 0.13 + ph * 1.7 ) * uDrift * 0.7 + cos( uTime * 0.041 + ph ) * uDrift * 1.2;
           p.z += cos( uTime * 0.17 + ph * 0.9 ) * uDrift * 1.3 + sin( uTime * 0.055 + ph * 3.1 ) * uDrift;
+          vec3 w = ( modelMatrix * vec4( p, 1.0 ) ).xyz;
           vec4 mv = modelViewMatrix * vec4( p, 1.0 );
+          float dist = max( 0.001, -mv.z );
           gl_Position = projectionMatrix * mv;
-          gl_PointSize = uSize * aSeed.y * uPixelScale / max( 0.001, -mv.z );
+          gl_PointSize = min( uMaxPixels, uSize * aSeed.y * uPixelScale / dist );
           // Twinkle: motes catch the light as they tumble.
-          vBright = aSeed.z * ( 0.45 + 0.55 * pow( abs( sin( uTime * 0.9 + ph * 4.1 ) ), 2.0 ) );
+          float twinkle = 0.45 + 0.55 * pow( abs( sin( uTime * 0.9 + ph * 4.1 ) ), 2.0 );
+          vBright = aSeed.z * twinkle * lensFade( dist ) * deckFade( w.y, 0.7 ) * fightPlaneCarve( w );
         }
       `,
       fragmentShader: /* glsl */ `
@@ -301,6 +395,7 @@ export class DustMotes {
         uniform float uIntensity;
         varying float vBright;
         void main() {
+          if ( vBright <= 0.004 ) discard;
           float a = texture2D( map, gl_PointCoord ).a;
           gl_FragColor = vec4( uColor * vBright * uIntensity, a );
         }
@@ -309,6 +404,7 @@ export class DustMotes {
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
+    this._baseIntensity = opts.intensity ?? 0.5;
 
     this.points = new THREE.Points(geo, this.material);
     this.points.name = 'arena.motes';
@@ -319,7 +415,7 @@ export class DustMotes {
 
   update(time, intensity = 1) {
     this.material.uniforms.uTime.value = time;
-    this.material.uniforms.uIntensity.value = 0.5 * intensity;
+    this.material.uniforms.uIntensity.value = this._baseIntensity * intensity;
   }
 
   dispose() {
@@ -379,6 +475,12 @@ export class SteamJets {
         uColor: { value: new THREE.Color(opts.color ?? 0x9fb3c8) },
         uOpacity: { value: opts.opacity ?? 0.19 },
         uPixelScale: { value: 600 },
+        ...guardUniforms({
+          nearFade: opts.nearFade ?? [2.5, 7.0],
+          maxPixels: opts.maxPixels ?? 130,
+          floorY: opts.floorY,
+          clear: opts.clear,
+        }),
       },
       vertexShader: /* glsl */ `
         attribute vec3 aDir;
@@ -387,6 +489,7 @@ export class SteamJets {
         uniform float uPixelScale;
         varying float vAlpha;
         varying float vSpin;
+        ${SPRITE_GUARDS}
         void main() {
           float life = aSeed.y;
           float t = fract( uTime / life + aSeed.x );
@@ -396,10 +499,13 @@ export class SteamJets {
           p.y += age * age * 0.42;
           p.x += sin( aSeed.x * 31.0 + age * 1.3 ) * age * 0.22;
           p.z += cos( aSeed.x * 17.0 + age * 1.1 ) * age * 0.22;
+          vec3 w = ( modelMatrix * vec4( p, 1.0 ) ).xyz;
           vec4 mv = modelViewMatrix * vec4( p, 1.0 );
+          float dist = max( 0.001, -mv.z );
           gl_Position = projectionMatrix * mv;
-          gl_PointSize = aSeed.w * ( 0.35 + t * 2.6 ) * uPixelScale / max( 0.001, -mv.z );
-          vAlpha = smoothstep( 0.0, 0.14, t ) * ( 1.0 - smoothstep( 0.35, 1.0, t ) );
+          gl_PointSize = min( uMaxPixels, aSeed.w * ( 0.35 + t * 2.6 ) * uPixelScale / dist );
+          float fade = smoothstep( 0.0, 0.14, t ) * ( 1.0 - smoothstep( 0.35, 1.0, t ) );
+          vAlpha = fade * lensFade( dist ) * deckFade( w.y, 1.1 ) * fightPlaneCarve( w );
           vSpin = aSeed.x * 39.0 + t * 1.4;
         }
       `,
@@ -411,6 +517,7 @@ export class SteamJets {
         varying float vSpin;
         ${COMMON_FRAG_ROTATE}
         void main() {
+          if ( vAlpha <= 0.003 ) discard;
           float a = texture2D( map, rotatePointCoord( gl_PointCoord, vSpin ) ).a;
           gl_FragColor = vec4( uColor, a * vAlpha * uOpacity );
         }

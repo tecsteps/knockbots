@@ -204,13 +204,22 @@ export class HUD {
     this.calloutLayer = layer;
   }
 
+  /**
+   * The announcement layer is deliberately appended to `uiRoot` — a sibling
+   * of `this.root`, not a child of it — so it never inherits `.hud`'s
+   * visibility fade. "FIGHT"/"K.O."/etc. fire in lockstep with the HUD
+   * becoming visible (see `#onPhase`), and if the banner shared that 0.4s
+   * opacity transition its own fly-in would render at partial opacity,
+   * reading as washed-out instead of a crisp foreground overlay. Appending
+   * it after `this.root` keeps it painting on top with no z-index needed.
+   */
   #buildAnnouncements() {
     const layer = document.createElement('div');
     layer.className = 'announce-layer';
     const banner = document.createElement('div');
     banner.className = 'announce-banner';
     layer.appendChild(banner);
-    this.root.appendChild(layer);
+    this.uiRoot.appendChild(layer);
     this.announceBanner = banner;
     banner.addEventListener('animationend', () => this.#advanceAnnounceQueue());
   }
@@ -414,6 +423,10 @@ export class HUD {
           ? c.shownHits + Math.ceil((c.hits - c.shownHits) * 0.4)
           : c.hits;
         els.hits.textContent = String(c.shownHits);
+        // Tier climbs with the count so a long combo visibly escalates —
+        // bigger and hotter in colour, not just a bigger number.
+        const tier = c.shownHits >= 8 ? '3' : c.shownHits >= 5 ? '2' : '1';
+        if (els.el.dataset.tier !== tier) els.el.dataset.tier = tier;
       }
       if (els.tag.dataset.tag !== c.tag) {
         els.tag.dataset.tag = c.tag;

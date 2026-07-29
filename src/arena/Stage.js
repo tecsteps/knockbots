@@ -283,8 +283,11 @@ export class Stage {
 
   /**
    * @param {number} dt seconds since the last rendered frame
+   * @param {number} tick current simulation tick, per the charter. The stage is
+   *   presentation only and animates off wall-clock time, so it is accepted and
+   *   ignored; nothing here may influence the deterministic sim.
    */
-  update(dt) {
+  update(dt, tick) { // eslint-disable-line no-unused-vars
     if (!this.ready) return;
     this._time += dt;
     const t = this._time;

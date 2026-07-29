@@ -182,7 +182,7 @@ function bakeFloorMaps(size) {
       // threshold hold standing water, and water pools where the slab dips.
       const puddleCell = smoothstep(0.42, 0.58, pid);
       const pool = puddleCell * (1 - smoothstep(0.28, 0.62, pud)) * (1 - smoothstep(0.06, 0.34, h + 0.35));
-      const damp = clamp01(0.34 + stn * 0.5 - Math.abs(wz - 1) * 0.012);
+      const damp = clamp01(0.26 + stn * 0.44 - Math.abs(wz - 1) * 0.012);
       const puddle = clamp01(pool * 1.6 + joint * 0.35 * puddleCell);
       wet[k] = clamp01(damp * 0.55 + puddle);
 
@@ -225,7 +225,7 @@ function bakeFloorMaps(size) {
       // Dry concrete 0.74 -> damp 0.26 -> standing water 0.06. The damp value
       // is the important one: it is most of the floor, and it is what decides
       // whether a fighter has a reflection to stand on.
-      let rough = lerp(0.74, 0.26, clamp01(w * 1.7));
+      let rough = lerp(0.78, 0.33, clamp01(w * 1.7));
       rough = lerp(rough, 0.06, clamp01((w - 0.55) * 2.6));
       rough = clamp01(rough + fine * 0.05 - mark[k] * 0.06);
       const o = k * 4;
@@ -412,7 +412,7 @@ export class StageFloor {
       ior: 1.42,
       specularIntensity: 1,
       normalScale: new THREE.Vector2(1.0, 1.0),
-      envMapIntensity: 0.55,
+      envMapIntensity: 0.42,
       dithering: true,
     });
     graftFloorShader(this.material, this.uniforms);

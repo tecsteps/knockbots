@@ -41,61 +41,61 @@ const SHOTS = [
   {
     name: '01-hero-idle',
     note: 'Default fight framing, both fighters idle. The baseline look.',
-    setup: `KB.debug.freecam=false; KB.setPhase('fight');`,
+    setup: `window.KB.debug.freecam=false; window.KB.setPhase('fight');`,
     settle: 1600,
   },
   {
     name: '02-closeup-face',
     note: 'Head/chest closeup — material, panel, and emissive detail.',
-    setup: `KB.fightCamera.cinematic('closeup', { target: KB.fighters[0], bone: 'head', dist: 1.15 });`,
+    setup: `window.KB.fightCamera.cinematic('closeup', { target: window.KB.fighters[0], bone: 'head', dist: 1.15 });`,
     settle: 1200,
   },
   {
     name: '03-full-body',
     note: 'Full-body three-quarter — silhouette and proportion read.',
-    setup: `KB.fightCamera.cinematic('portrait', { target: KB.fighters[0], dist: 4.2, yaw: 0.6 });`,
+    setup: `window.KB.fightCamera.cinematic('portrait', { target: window.KB.fighters[0], dist: 4.2, yaw: 0.6 });`,
     settle: 1200,
   },
   {
     name: '04-impact',
     note: 'Mid-combo impact frame — FX, hitstop, camera punch.',
-    setup: `KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });`,
+    setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });`,
     settle: 700,
   },
   {
     name: '05-juggle',
     note: 'Airborne juggle — pose readability off the ground.',
-    setup: `KB.testHarness.forceJuggle({ attacker: 0, hits: 3 });`,
+    setup: `window.KB.testHarness.forceJuggle({ attacker: 0, hits: 3 });`,
     settle: 1400,
   },
   {
     name: '06-stage-wide',
     note: 'Wide arena — environment, lighting, and depth cues.',
-    setup: `KB.fightCamera.cinematic('wide', { dist: 14, height: 4.5 });`,
+    setup: `window.KB.fightCamera.cinematic('wide', { dist: 14, height: 4.5 });`,
     settle: 1200,
   },
   {
     name: '07-super',
     note: 'Overdrive/super cinematic — the money shot.',
-    setup: `KB.testHarness.forceSuper({ attacker: 0 });`,
+    setup: `window.KB.testHarness.forceSuper({ attacker: 0 });`,
     settle: 1500,
   },
   {
     name: '08-hud',
     note: 'Full frame with HUD — the actual play-view composition.',
-    setup: `KB.setPhase('fight'); KB.fighters[1].health = 62; KB.fighters[0].meter = 84;`,
+    setup: `window.KB.setPhase('fight'); window.KB.fighters[1].health = 62; window.KB.fighters[0].meter = 84;`,
     settle: 900,
   },
   {
     name: '09-roster',
     note: 'All characters lined up — silhouette variety across the cast.',
-    setup: `KB.testHarness.rosterLineup();`,
+    setup: `window.KB.testHarness.rosterLineup();`,
     settle: 1600,
   },
   {
     name: '10-ko',
     note: 'KO slow-motion moment — the dramatic beat.',
-    setup: `KB.testHarness.forceKO({ loser: 1 });`,
+    setup: `window.KB.testHarness.forceKO({ loser: 1 });`,
     settle: 1800,
   },
 ];
@@ -106,7 +106,7 @@ async function main() {
 
   const server = await createServer({
     root: ROOT,
-    server: { port: PORT, host: '127.0.0.1' },
+    server: { port: PORT, host: '127.0.0.1', hmr: false, watch: { ignored: ['**/*'] } },
     logLevel: 'error',
   });
   await server.listen();
@@ -160,9 +160,9 @@ async function main() {
   // Every shot is taken from inside a live round with the menus dismissed.
   // Without this the camera framings composite over the title screen.
   const ENTER_MATCH = `
-    KB.menus.show(null);
-    KB.paused = false;
-    if (KB.phase !== 'fight') { KB.startMatch(0, 1); KB.setPhase('fight'); }
+    window.KB.menus.show(null);
+    window.KB.paused = false;
+    if (window.KB.phase !== 'fight') { window.KB.startMatch(0, 1); window.KB.setPhase('fight'); }
   `;
 
   for (const shot of list) {

@@ -12,14 +12,21 @@
  *    independent, and — crucially — has a *velocity* that impacts can kick.
  *    A lerp cannot recoil; a spring can.
  *
- * 2. **Distance drives dolly and lens together.** As the fighters close, the
- *    camera dollies in and the lens tightens slightly. Both moving at once is
- *    what makes close range feel claustrophobic instead of merely nearer.
+ * 2. **Composition first, distance second.** Nothing here picks a dolly
+ *    distance by hand. Each framing declares the world-space box it wants on
+ *    screen — the fighters' silhouettes plus explicit headroom, floor and side
+ *    margins — and the distance falls out of that box and the frustum angles.
+ *    Because the box is asymmetric (more air above the heads than below the
+ *    feet) the pair naturally sits a little below frame centre, which is where
+ *    Tekken puts it. Separation then only chooses the *lens*: tight and
+ *    compressed up close, wide and airy at range. Subject size stays constant
+ *    because distance and lens move together.
  *
- * 3. **Framing is guaranteed, not hoped for.** After the artistic distance is
- *    chosen, the camera solves for the distance that actually contains both
- *    fighters' bounding spheres inside the smaller of the two frustum angles
- *    and takes whichever is larger. Juggles pull the camera back on their own.
+ * 3. **The guarantee survives everything.** Punch-in on impact eats the
+ *    margins rather than shortening the solved distance, and the shake
+ *    amplitude is reserved as extra margin before the solve. Both are therefore
+ *    incapable of pushing a fighter out of frame, which is the one thing a
+ *    fighting-game camera may never do.
  *
  * 4. **Trauma, not shake.** Impacts add trauma; shake is trauma squared driven
  *    by smooth value noise on three positional and two rotational axes. Trauma
@@ -125,6 +132,31 @@ function snoise(x, seed) {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Peak shake displacement at full trauma. The framing solver reserves exactly
+ * these amounts as extra margin, so `render()` can never knock a fighter past
+ * the frame edge no matter how many impacts overlap.
+ */
+const SHAKE = { lateral: 0.22, vertical: 0.16, dolly: 0.10, swing: 0.052, roll: 0.07 };
+
+/**
+ * Composition margins in metres, measured off a fighter's *standing* height.
+ * A fighting stance sits a good fifteen centimetres under that, so the visible
+ * headroom lands above the floor margin and the pair's midpoint falls just
+ * below frame centre — which is where Tekken keeps it.
+ */
+const FRAME_MARGIN = { top: 0.32, bottom: 0.30, side: 0.36 };
+
+/** Half-width of a robot's silhouette including shoulder plates and arms. */
+const BODY_HALF_WIDTH = 0.55;
+
+/** Radius a closeup should fill the frame height with, by target bone. */
+const CLOSEUP_RADIUS = {
+  headTop: 0.30, head: 0.32, neck: 0.36, chest: 0.48, spine02: 0.52,
+  spine01: 0.52, hips: 0.48, hand_L: 0.24, hand_R: 0.24,
+  foot_L: 0.26, foot_R: 0.26, shoulder_L: 0.38, shoulder_R: 0.38,
+};
+
 /** Fallback bone heights, in metres above the fighter's feet. */
 const BONE_HEIGHT = {
   headTop: 1.82, head: 1.62, neck: 1.5, chest: 1.36, spine02: 1.2,
@@ -143,6 +175,8 @@ const IMPACT_TRAUMA = {
 const _focus = new THREE.Vector3();
 const _desiredPos = new THREE.Vector3();
 const _desiredLook = new THREE.Vector3();
+const _endPos = new THREE.Vector3();
+const _endLook = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _upAxis = new THREE.Vector3(0, 1, 0);
@@ -202,6 +236,14 @@ export class FightCamera {
     this._orbit = 0;
     this._tick = 0;
 
+    // Trauma envelope leads the decaying trauma, so the margin the solver
+    // reserves shrinks more slowly than the shake it is covering for.
+    this._traumaEnvelope = 0;
+    // Last solved framing, used to size the shake reserve without recursion.
+    this._fitDistance = 6;
+    this._fitHalfHeight = 1.45;
+    this._pair = { x: 0, z: 0, sep: 2.4, top: 2, bottom: 0 };
+
     // Prime on the current pair so the very first frame is already framed.
     this.#desiredForMode(_desiredPos, _desiredLook);
     this.posSpring.snap(_desiredPos);
@@ -238,6 +280,7 @@ export class FightCamera {
   shake(amount, ticks = 14) {
     if (!(amount > 0)) return;
     this.trauma = Math.min(1, this.trauma + amount);
+    this._traumaEnvelope = Math.max(this._traumaEnvelope, this.trauma);
     this.traumaDecay = THREE.MathUtils.clamp(60 / Math.max(ticks, 4), 0.7, 6.5);
   }
 
@@ -247,8 +290,19 @@ export class FightCamera {
    * `ko`, `super` and `replay`. Passing `'fight'` or nothing returns to normal
    * pair tracking.
    *
+   * Every framing honours the same option vocabulary where it is meaningful:
+   * - `target` fighter the shot is about (defaults to player one, or to the
+   *   losing fighter for `ko`)
+   * - `bone` bone name a `closeup` frames
+   * - `dist` dolly distance in metres; the lens is then solved so the subject
+   *   still fits, so asking for a closer camera really does get you one
+   * - `yaw` azimuth in radians, measured from the audience axis (+Z)
+   * - `height` camera height above the stage floor
+   * - `fov` pins the lens and lets the distance do the fitting instead
+   * - `ticks` how long the framing lasts before falling back to `fight`
+   *
    * @param {string} name
-   * @param {object} [opts] `{ target, bone, dist, height, yaw, fov, ticks }`
+   * @param {object} [opts]
    */
   cinematic(name = 'fight', opts = {}) {
     const mode = name || 'fight';
@@ -264,11 +318,14 @@ export class FightCamera {
     const durations = { intro: 150, super: 220, fight: Infinity };
     this.modeDuration = opts?.ticks ?? durations[mode] ?? Infinity;
 
-    // Cinematic framings want a tighter, faster rig than combat tracking.
+    // Combat tracking is loose enough to breathe; moving cinematics are tighter;
+    // held portraits are rigid, because a subject that drifts a hand's width in
+    // a shot this close leaves the frame entirely.
+    const rigid = mode === 'closeup' || mode === 'portrait';
     const fast = mode !== 'fight';
-    this.posSpring.frequency = fast ? 3.6 : 2.9;
-    this.lookSpring.frequency = fast ? 5.0 : 4.2;
-    this.fovSpring.frequency = fast ? 3.4 : 2.6;
+    this.posSpring.frequency = rigid ? 9 : (fast ? 3.6 : 2.9);
+    this.lookSpring.frequency = rigid ? 11 : (fast ? 5.0 : 4.2);
+    this.fovSpring.frequency = rigid ? 7 : (fast ? 3.4 : 2.6);
   }
 
   /**
@@ -290,6 +347,10 @@ export class FightCamera {
     if (this.modeTicks > this.modeDuration) this.cinematic('fight');
 
     this.trauma = Math.max(0, this.trauma - this.traumaDecay * TICK_DT);
+    this._traumaEnvelope = Math.max(
+      this.trauma,
+      this._traumaEnvelope - this.traumaDecay * 0.55 * TICK_DT,
+    );
     this.punch = Math.max(0, this.punch - 3.4 * TICK_DT * (0.4 + this.punch));
 
     const fov = this.#desiredForMode(_desiredPos, _desiredLook);
@@ -342,19 +403,17 @@ export class FightCamera {
       _right.crossVectors(_fwd, _upAxis).normalize();
       _v.crossVectors(_right, _fwd).normalize(); // orthonormal up
 
-      const ax = snoise(t, 0.0) * 0.24 * k;
-      const ay = snoise(t, 37.1) * 0.17 * k;
-      const az = snoise(t * 0.82, 71.9) * 0.11 * k;
-      _posOut.addScaledVector(_right, ax);
-      _posOut.addScaledVector(_v, ay);
-      _posOut.addScaledVector(_fwd, az);
+      // Amplitudes are exactly the ones the solver reserved margin for.
+      _posOut.addScaledVector(_right, snoise(t, 0.0) * SHAKE.lateral * k);
+      _posOut.addScaledVector(_v, snoise(t, 37.1) * SHAKE.vertical * k);
+      _posOut.addScaledVector(_fwd, snoise(t * 0.82, 71.9) * SHAKE.dolly * k);
 
       // Rotational shake is applied to the look target so it stays a rotation
       // about the camera rather than a second translation.
-      const swing = dist * 0.055 * k;
+      const swing = dist * SHAKE.swing * k;
       _lookOut.addScaledVector(_right, snoise(t * 1.13, 113.4) * swing);
       _lookOut.addScaledVector(_v, snoise(t * 1.07, 151.2) * swing);
-      roll += snoise(t * 0.91, 197.6) * 0.075 * k;
+      roll += snoise(t * 0.91, 197.6) * SHAKE.roll * k;
     }
 
     cam.position.copy(_posOut);
@@ -400,76 +459,49 @@ export class FightCamera {
     return this.stage?.bounds ?? { halfWidth: ARENA_HALF_WIDTH, halfDepth: ARENA_HALF_DEPTH };
   }
 
-  /** Midpoint of the pair, raised to chest height and led by their motion. */
-  #computeFocus(out) {
-    const [a, b] = this.fighters;
-    const floor = this.floorY;
-    if (!a?.position || !b?.position) {
-      out.set(0, floor + 1.05, 0);
-      this.focusRadius = 3.0;
-      return 2.6;
-    }
-
-    out.copy(a.position).add(b.position).multiplyScalar(0.5);
-    // Feet-relative midpoint raised to chest height; airborne fighters lift it
-    // on their own, which is what keeps a juggle in frame.
-    out.y = (a.position.y + b.position.y) * 0.5 + 1.14;
-
-    // Lead the camera along the pair's shared motion so it is never behind the
-    // action, but only a little — a camera that anticipates too hard swims.
-    if (a.velocity && b.velocity) {
-      _v.copy(a.velocity).add(b.velocity).multiplyScalar(0.5 * 0.13);
-      _v.y = 0;
-      if (_v.lengthSq() > 4) _v.setLength(2);
-      out.add(_v);
-    }
-
-    _v.copy(a.position).sub(b.position);
-    _v.y = 0;
-    const sep = Math.min(_v.length(), MAX_PAIR_DISTANCE);
-
-    // Bounding sphere of both bodies about the focus point, used for framing.
-    let r = 0;
-    for (const f of this.fighters) {
-      if (!f?.position) continue;
-      _v2.copy(f.position);
-      _v2.y += FIGHTER_HEIGHT * 0.52;
-      r = Math.max(r, _v2.distanceTo(out));
-    }
-    this.focusRadius = r + 1.24;
-    return sep;
-  }
-
-  /** Normal combat tracking. */
+  /**
+   * Normal combat tracking — the framing the game is actually played in.
+   *
+   * Separation picks the lens and nothing else. The distance comes from the
+   * composition box, so a robot occupies the same slice of the frame whether
+   * the pair is nose to nose or at poking range; only the compression changes.
+   */
   #framingFight(outPos, outLook) {
-    const sep = this.#computeFocus(_focus);
+    const m = this.#pairMetrics();
     const floor = this.floorY;
 
-    const t = THREE.MathUtils.clamp((sep - 1.1) / 5.4, 0, 1);
-    const eased = Math.pow(t, 0.85);
+    const t = THREE.MathUtils.clamp((m.sep - 0.9) / (MAX_PAIR_DISTANCE - 0.9), 0, 1);
+    // Impacts widen the lens a touch while the margins tighten, so the punch-in
+    // is a genuine dolly rather than a zoom.
+    const fov = THREE.MathUtils.lerp(31, 43, Math.pow(t, 0.7)) + 1.5 * this.punch;
 
-    let dist = THREE.MathUtils.lerp(3.55, 7.9, eased);
-    let fov = THREE.MathUtils.lerp(31.5, 40.5, t);
-    const pitch = THREE.MathUtils.lerp(6.5, 12.5, t) * DEG;
+    // Punch-in eats margin instead of distance: the frame gets tighter but the
+    // solve still contains both bodies, so nobody can be cropped by an impact.
+    const bite = 1 - 0.6 * this.punch;
+    const shake = this.#shakeMargin();
 
-    // Punch-in on impact: dolly and lens tighten together.
-    dist *= 1 - 0.15 * this.punch;
-    fov -= 3.4 * this.punch;
+    const top = m.top + FRAME_MARGIN.top * bite + shake.vert;
+    const bottom = m.bottom - FRAME_MARGIN.bottom * bite - shake.vert;
+    _focus.set(m.x, (top + bottom) * 0.5, m.z);
 
-    // Slight yaw so the pair is not dead-on when they are pinned to a wall.
-    const yaw = THREE.MathUtils.clamp(-_focus.x * 0.021, -0.15, 0.15);
+    const halfH = (top - bottom) * 0.5;
+    const side = FRAME_MARGIN.side * bite + shake.side;
 
-    // Honour the artistic distance unless it would cut somebody off.
-    const need = this.#distanceToFrame(fov);
-    dist = THREE.MathUtils.clamp(Math.max(dist, need), 3.1, 14.5);
+    // A few degrees of yaw keeps the pair off dead-on when they are pinned to a
+    // wall; the solver is told about it so the fit stays exact.
+    const yaw = THREE.MathUtils.clamp(-m.x * 0.02, -0.14, 0.14);
+    const dist = THREE.MathUtils.clamp(this.#fitDistance(fov, halfH, side, yaw), 3.4, 16);
+    this._fitDistance = dist;
+    this._fitHalfHeight = halfH;
+    this.focusRadius = Math.max(halfH, m.sep * 0.5 + BODY_HALF_WIDTH) + 0.6;
 
+    const pitch = THREE.MathUtils.lerp(5, 9, t) * DEG;
     const horiz = Math.cos(pitch) * dist;
     outPos.set(
       _focus.x + Math.sin(yaw) * horiz,
-      _focus.y + Math.sin(pitch) * dist + 0.28,
+      Math.max(_focus.y + Math.sin(pitch) * dist, floor + 1.0),
       _focus.z + Math.cos(yaw) * horiz,
     );
-    outPos.y = Math.max(outPos.y, floor + 0.95);
     outLook.copy(_focus);
     return fov;
   }
@@ -479,22 +511,33 @@ export class FightCamera {
     const opts = this.modeOpts;
     const target = opts.target ?? this.fighters[0];
     const bone = opts.bone ?? 'head';
-    const dist = opts.dist ?? 1.15;
-    const fov = opts.fov ?? 26;
+    const radius = CLOSEUP_RADIUS[bone] ?? 0.42;
 
     this.#bonePosition(target, bone, _focus);
-    this.focus.copy(_focus);
-    this.focusRadius = 1.4;
+    this.focusRadius = radius + 0.35;
+
+    // `dist` is the caller's to choose; the lens is then solved so the bone
+    // still fills the frame. That is what makes the option mean something.
+    const dist = THREE.MathUtils.clamp(opts.dist ?? radius / Math.tan(15 * DEG), 0.55, 6);
+    const fov = opts.fov ?? THREE.MathUtils.clamp(2 * Math.atan(radius / dist) / DEG, 20, 46);
 
     const facing = target?.facing ?? 1;
-    const yaw = opts.yaw ?? 0.95;
-    // Three-quarter front view: swing off the fighter's forward axis toward
-    // the camera side of the stage.
-    _v.set(facing * Math.cos(yaw), 0, Math.sin(yaw)).normalize();
+    const yaw = opts.yaw ?? 0.85;
+    // Three-quarter front: swing off the audience axis toward the fighter's
+    // forward direction, never behind it and never past the stage edge.
+    _v.set(facing * Math.sin(yaw), 0, Math.cos(yaw));
     outPos.copy(_focus).addScaledVector(_v, dist);
-    outPos.y = _focus.y + dist * 0.13;
-    outPos.y = Math.max(outPos.y, this.floorY + 0.35);
+    // A hair under the bone, looking fractionally up. Above it and a robot's
+    // shoulder pack eats the frame while the head reads as an afterthought.
+    outPos.y = Math.max(_focus.y + (opts.height ?? -dist * 0.05), this.floorY + 0.3);
+
+    // Sit the bone above centre and give it room to look into: dead-centre
+    // reads as a debug view, not as a portrait.
     outLook.copy(_focus);
+    outLook.y -= radius * 0.28;
+    _fwd.copy(_focus).sub(outPos).normalize();
+    _right.crossVectors(_fwd, _upAxis).normalize();
+    outLook.addScaledVector(_right, (Math.sign(facing * _right.x) || 1) * radius * 0.5);
     return fov;
   }
 
@@ -502,71 +545,82 @@ export class FightCamera {
   #framingPortrait(outPos, outLook) {
     const opts = this.modeOpts;
     const target = opts.target ?? this.fighters[0];
-    const dist = opts.dist ?? 4.2;
-    const fov = opts.fov ?? 30;
     const floor = this.floorY;
+    const p = target?.position;
 
-    const base = target?.position ?? _focus.set(0, floor, 0);
-    _focus.set(base.x, floor + FIGHTER_HEIGHT * 0.54, base.z);
-    this.focus.copy(_focus);
-    this.focusRadius = FIGHTER_HEIGHT * 0.62;
+    const top = this.#subjectTop(target) + 0.34;
+    const bottom = (p ? p.y : floor) - 0.24;
+    _focus.set(p ? p.x : 0, (top + bottom) * 0.5, p ? p.z : 0);
+
+    const halfH = (top - bottom) * 0.5;
+    this.focusRadius = halfH + 0.5;
+
+    const dist = THREE.MathUtils.clamp(opts.dist ?? halfH / Math.tan(15 * DEG), 2.2, 14);
+    const fov = opts.fov ?? THREE.MathUtils.clamp(2 * Math.atan(halfH / dist) / DEG, 22, 46);
 
     const facing = target?.facing ?? 1;
-    const yaw = opts.yaw ?? 0.6;
-    _v.set(facing * Math.cos(yaw), 0, Math.sin(yaw)).normalize();
+    const yaw = opts.yaw ?? 0.62;
+    // Yaw runs from the audience axis toward the subject's front. Measuring it
+    // off the fighter's own forward axis instead would walk the camera onto the
+    // pair axis, where the opponent stands squarely between lens and subject.
+    _v.set(facing * Math.sin(yaw), 0, Math.cos(yaw));
     outPos.copy(_focus).addScaledVector(_v, dist);
-    // A hair below eyeline: heroic without becoming a low-angle gimmick.
-    outPos.y = floor + (opts.height ?? FIGHTER_HEIGHT * 0.62);
+    outPos.y = floor + (opts.height ?? _focus.y - floor + 0.06);
     outLook.copy(_focus);
+
+    this.#panOffSubject(outPos, outLook, target, fov);
     return fov;
   }
 
   /** Wide arena establishing shot. */
   #framingWide(outPos, outLook) {
     const opts = this.modeOpts;
-    const dist = opts.dist ?? 13;
-    const height = opts.height ?? 4.5;
-    const fov = opts.fov ?? 34;
+    const m = this.#pairMetrics();
     const floor = this.floorY;
+    const fov = opts.fov ?? 34;
 
-    this.#computeFocus(_focus);
-    _focus.y = floor + 1.35;
-    this.focus.copy(_focus);
-    this.focusRadius = Math.max(this.focusRadius, 6.5);
+    // A generous box: the shot is about the room the fight happens in, so the
+    // pair should sit small and low with architecture above them.
+    const top = m.top + 1.35;
+    const bottom = m.bottom - 0.9;
+    _focus.set(m.x * 0.6, (top + bottom) * 0.5, m.z * 0.5);
+
+    const halfH = (top - bottom) * 0.5;
+    this.focusRadius = Math.max(halfH, m.sep * 0.5) + 1.6;
 
     const yaw = opts.yaw ?? 0.16;
+    const dist = Math.max(opts.dist ?? 13, this.#fitDistance(fov, halfH, 1.2, yaw));
     outPos.set(
-      _focus.x * 0.35 + Math.sin(yaw) * dist,
-      floor + height,
-      _focus.z * 0.3 + Math.cos(yaw) * dist,
+      _focus.x + Math.sin(yaw) * dist,
+      floor + (opts.height ?? 4.5),
+      _focus.z + Math.cos(yaw) * dist,
     );
     outLook.copy(_focus);
     return fov;
   }
 
-  /** Opening crane: high, wide and slow, settling into the fight framing. */
+  /**
+   * Opening crane: high, wide and slow, landing exactly on the framing the
+   * round will be played in so the cut to `fight` is invisible.
+   */
   #framingIntro(outPos, outLook) {
-    const total = Math.max(1, this.modeDuration);
-    const t = THREE.MathUtils.clamp(this.modeTicks / total, 0, 1);
+    const opts = this.modeOpts;
+    const t = THREE.MathUtils.clamp(this.modeTicks / Math.max(1, this.modeDuration), 0, 1);
     const e = t * t * t * (t * (t * 6 - 15) + 10); // smootherstep
-    const floor = this.floorY;
 
-    this.#computeFocus(_focus);
-    _focus.y = floor + THREE.MathUtils.lerp(1.55, 1.15, e);
-    this.focus.copy(_focus);
+    const endFov = this.#framingFight(_endPos, _endLook);
+    const dx = _endPos.x - _endLook.x;
+    const dz = _endPos.z - _endLook.z;
+    const endYaw = Math.atan2(dx, dz);
+    const endDist = Math.hypot(dx, dz);
 
-    const yaw = THREE.MathUtils.lerp(-0.95, -0.06, e);
-    const dist = THREE.MathUtils.lerp(9.6, 6.0, e);
-    const height = THREE.MathUtils.lerp(5.4, 1.95, e);
-    const fov = THREE.MathUtils.lerp(44, 38, e);
+    const yaw = THREE.MathUtils.lerp(endYaw + (opts.yaw ?? -0.9), endYaw, e);
+    const dist = THREE.MathUtils.lerp(endDist + (opts.dist ?? 4.2), endDist, e);
+    const height = THREE.MathUtils.lerp(this.floorY + (opts.height ?? 5.6), _endPos.y, e);
 
-    outPos.set(
-      _focus.x + Math.sin(yaw) * dist,
-      floor + height,
-      _focus.z + Math.cos(yaw) * dist,
-    );
-    outLook.copy(_focus);
-    return fov;
+    outLook.copy(_endLook);
+    outPos.set(_endLook.x + Math.sin(yaw) * dist, height, _endLook.z + Math.cos(yaw) * dist);
+    return THREE.MathUtils.lerp(endFov + 6, endFov, e);
   }
 
   /** KO: drop to a low hero angle on the loser and orbit slowly. */
@@ -574,24 +628,28 @@ export class FightCamera {
     const opts = this.modeOpts;
     const floor = this.floorY;
     const loser = opts.target ?? this.#lowestHealthFighter();
-    const base = loser?.position ?? _focus.set(0, floor, 0);
+    const p = loser?.position;
 
-    _focus.set(base.x, floor + 0.82, base.z);
-    this.focus.copy(_focus);
-    this.focusRadius = 2.6;
+    const top = this.#subjectTop(loser) + 0.30;
+    const bottom = (p ? p.y : floor) - 0.25;
+    _focus.set(p ? p.x : 0, (top + bottom) * 0.5, p ? p.z : 0);
 
-    const facing = loser?.facing ?? 1;
-    const yaw = (opts.yaw ?? 0.55) * facing + this._orbit * 0.17;
-    const dist = opts.dist ?? 3.5;
+    const halfH = (top - bottom) * 0.5;
+    this.focusRadius = halfH + 0.6;
 
+    const dist = THREE.MathUtils.clamp(opts.dist ?? halfH / Math.tan(16 * DEG), 2, 12);
+    const fov = opts.fov ?? THREE.MathUtils.clamp(2 * Math.atan(halfH / dist) / DEG, 22, 46);
+
+    // Orbit from the audience side, biased around the fallen fighter's front.
+    const yaw = (opts.yaw ?? 0.55) * (loser?.facing ?? 1) + this._orbit * 0.17;
     outPos.set(
       _focus.x + Math.sin(yaw) * dist,
-      floor + (opts.height ?? 0.62),
+      floor + (opts.height ?? 0.75),
       _focus.z + Math.cos(yaw) * dist,
     );
     outLook.copy(_focus);
-    outLook.y = floor + 1.0;
-    return opts.fov ?? 33;
+    this.#panOffSubject(outPos, outLook, loser, fov);
+    return fov;
   }
 
   /** Super: a fast whip-pan onto the attacker, then a hard push-in. */
@@ -599,11 +657,14 @@ export class FightCamera {
     const opts = this.modeOpts;
     const attacker = opts.target ?? this.fighters[0];
     const floor = this.floorY;
-    const base = attacker?.position ?? _focus.set(0, floor, 0);
+    const p = attacker?.position;
 
-    _focus.set(base.x, floor + 1.22, base.z);
-    this.focus.copy(_focus);
-    this.focusRadius = 2.4;
+    const top = this.#subjectTop(attacker) + 0.28;
+    const bottom = (p ? p.y : floor) - 0.22;
+    _focus.set(p ? p.x : 0, (top + bottom) * 0.5, p ? p.z : 0);
+
+    const halfH = (top - bottom) * 0.5;
+    this.focusRadius = halfH + 0.5;
 
     // Whip in the first 20 ticks, push in over the next 60, then hold.
     const whip = THREE.MathUtils.clamp(this.modeTicks / 20, 0, 1);
@@ -611,79 +672,207 @@ export class FightCamera {
     const push = THREE.MathUtils.clamp((this.modeTicks - 14) / 62, 0, 1);
     const pushEase = push * push * (3 - 2 * push);
 
+    // The lens is pinned to its end state while the distance animates, so the
+    // attacker genuinely grows in frame instead of holding a constant size.
+    const endDist = THREE.MathUtils.clamp(opts.dist ?? halfH / Math.tan(17 * DEG), 1.8, 12);
+    const endFov = opts.fov ?? THREE.MathUtils.clamp(2 * Math.atan(halfH / endDist) / DEG, 24, 44);
+    const dist = THREE.MathUtils.lerp(endDist * 2.6, endDist, pushEase);
+
     const facing = attacker?.facing ?? 1;
-    const yaw = THREE.MathUtils.lerp(-1.45 * facing, 0.34 * facing, whipEase);
-    const dist = THREE.MathUtils.lerp(7.4, 2.85, pushEase);
-    const fov = THREE.MathUtils.lerp(48, 29, pushEase);
-    const height = THREE.MathUtils.lerp(2.6, 1.42, pushEase);
+    const endYaw = (opts.yaw ?? 0.34) * facing;
+    const yaw = THREE.MathUtils.lerp(endYaw - 1.6 * facing, endYaw, whipEase);
+    const endHeight = floor + (opts.height ?? _focus.y - floor + 0.15);
 
     outPos.set(
       _focus.x + Math.sin(yaw) * dist,
-      floor + height,
+      THREE.MathUtils.lerp(endHeight + 1.3, endHeight, pushEase),
+      _focus.z + Math.cos(yaw) * dist,
+    );
+    outLook.copy(_focus);
+    return THREE.MathUtils.lerp(endFov + 12, endFov, pushEase);
+  }
+
+  /** Replay: a patient orbit around the pair. */
+  #framingReplay(outPos, outLook) {
+    const opts = this.modeOpts;
+    const m = this.#pairMetrics();
+    const floor = this.floorY;
+
+    const top = m.top + 0.45;
+    const bottom = m.bottom - 0.32;
+    _focus.set(m.x, (top + bottom) * 0.5, m.z);
+
+    const halfH = (top - bottom) * 0.5;
+    this.focusRadius = Math.max(halfH, m.sep * 0.5) + 0.8;
+
+    const fov = opts.fov ?? 34;
+    const yaw = (opts.yaw ?? -0.5) + this._orbit * 0.22;
+    const dist = Math.max(opts.dist ?? 6.4, this.#fitDistance(fov, halfH, 0.5, yaw));
+    outPos.set(
+      _focus.x + Math.sin(yaw) * dist,
+      floor + (opts.height ?? _focus.y - floor + 0.9),
       _focus.z + Math.cos(yaw) * dist,
     );
     outLook.copy(_focus);
     return fov;
   }
 
-  /** Replay: a patient orbit around the pair. */
-  #framingReplay(outPos, outLook) {
-    const opts = this.modeOpts;
-    const floor = this.floorY;
-    this.#computeFocus(_focus);
-    _focus.y = floor + 1.2;
-    this.focus.copy(_focus);
-
-    const yaw = (opts.yaw ?? -0.5) + this._orbit * 0.22;
-    const dist = opts.dist ?? 6.4;
-    outPos.set(
-      _focus.x + Math.sin(yaw) * dist,
-      floor + (opts.height ?? 2.15),
-      _focus.z + Math.cos(yaw) * dist,
-    );
-    outLook.copy(_focus);
-    return opts.fov ?? 34;
-  }
-
-  // -- helpers --------------------------------------------------------------
+  // -- framing solver -------------------------------------------------------
 
   /**
-   * Smallest distance that still contains both fighters, with headroom.
+   * Midpoint, separation and vertical silhouette extent of the pair, led very
+   * slightly along their shared motion so the camera is never behind the
+   * action. Written into a reused record; valid until the next call.
+   */
+  #pairMetrics() {
+    const [a, b] = this.fighters;
+    const floor = this.floorY;
+    const m = this._pair;
+
+    if (!a?.position || !b?.position) {
+      m.x = 0; m.z = 0; m.sep = 2.4;
+      m.top = floor + FIGHTER_HEIGHT; m.bottom = floor;
+      return m;
+    }
+
+    m.x = (a.position.x + b.position.x) * 0.5;
+    m.z = (a.position.z + b.position.z) * 0.5;
+    if (a.velocity && b.velocity) {
+      m.x += THREE.MathUtils.clamp((a.velocity.x + b.velocity.x) * 0.065, -1.2, 1.2);
+      m.z += THREE.MathUtils.clamp((a.velocity.z + b.velocity.z) * 0.065, -1.2, 1.2);
+    }
+
+    m.sep = Math.min(
+      Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z),
+      MAX_PAIR_DISTANCE,
+    );
+    m.top = Math.max(this.#silhouetteTop(a), this.#silhouetteTop(b));
+    m.bottom = Math.min(a.position.y, b.position.y, floor);
+    return m;
+  }
+
+  /**
+   * World Y of the top of a fighter's silhouette. Robots are built from the
+   * shared skeleton scaled by their `proportions.height`, so a fixed constant
+   * crops the tall chassis by a good fifteen centimetres — which is exactly the
+   * kind of error that reads as "the camera cut his head off".
    *
-   * Solved per axis against the real frustum rather than against a bounding
-   * sphere: the pair is almost always spread along X and barely at all along
-   * Y, and a sphere fit would let the narrow vertical angle dictate a distance
-   * two thirds too far. Assumes the camera looks roughly down -Z, which the
-   * yaw clamp in `#framingFight` guarantees. `_focus` must already hold the
-   * current focus point.
+   * @param {object} fighter
+   * @returns {number}
+   */
+  #silhouetteTop(fighter) {
+    const scale = fighter?.def?.proportions?.height ?? 1;
+    const base = fighter?.position ? fighter.position.y : this.floorY;
+    return base + FIGHTER_HEIGHT * scale + 0.08;
+  }
+
+  /**
+   * Top of a fighter's silhouette *in its current pose*, from the crown bone.
+   *
+   * The pair framing deliberately uses the standing height instead — a camera
+   * that breathes with the idle animation is a camera you notice. A single
+   * subject is different: a crouched or floored fighter framed against its
+   * standing height ends up as a small shape in the bottom of an empty frame.
+   *
+   * @param {object} fighter
+   * @returns {number}
+   */
+  #subjectTop(fighter) {
+    const scale = fighter?.def?.proportions?.height ?? 1;
+    const base = fighter?.position ? fighter.position.y : this.floorY;
+    this.#bonePosition(fighter, 'headTop', _v2);
+    return Math.max(_v2.y + 0.16, base + FIGHTER_HEIGHT * scale * 0.55);
+  }
+
+  /**
+   * Smallest distance from the focus point that keeps every fighter inside the
+   * frustum, solved per fighter against both frustum angles.
+   *
+   * Solving per axis rather than against one bounding sphere matters: the pair
+   * is spread along X and barely at all along Y, and a sphere fit would let the
+   * narrow vertical angle dictate a distance a third too far. Fighters nearer
+   * the camera than the focus plane are given their depth back, so a sidestep
+   * toward the lens cannot clip anybody either. `_focus` must already hold the
+   * composition point.
    *
    * @param {number} fovDeg vertical field of view being considered
+   * @param {number} halfHeight half the composition box height, about `_focus`
+   * @param {number} sideMargin clear air demanded outboard of each silhouette
+   * @param {number} yaw azimuth the camera will sit at, radians from +Z
    * @returns {number} required distance in metres
    */
-  #distanceToFrame(fovDeg) {
-    const vFov = fovDeg * DEG;
-    const aspect = this.camera?.aspect || 16 / 9;
-    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+  #fitDistance(fovDeg, halfHeight, sideMargin, yaw = 0) {
+    const vTan = Math.tan(fovDeg * DEG * 0.5);
+    const hTan = vTan * (this.camera?.aspect || 16 / 9);
+    const sy = Math.sin(yaw);
+    const cy = Math.cos(yaw);
 
-    let halfW = 0;
-    let above = 0;
-    let below = 0;
-    let towardCamera = 0;
+    let need = halfHeight / vTan;
     for (const f of this.fighters) {
       const p = f?.position;
       if (!p) continue;
-      halfW = Math.max(halfW, Math.abs(p.x - _focus.x));
-      above = Math.max(above, p.y + FIGHTER_HEIGHT - _focus.y);
-      below = Math.max(below, _focus.y - p.y);
-      towardCamera = Math.max(towardCamera, p.z - _focus.z);
+      const dx = p.x - _focus.x;
+      const dz = p.z - _focus.z;
+      const lateral = Math.abs(dx * cy - dz * sy) + BODY_HALF_WIDTH + sideMargin;
+      const depth = Math.max(0, dx * sy + dz * cy);
+      need = Math.max(need, lateral / hTan + depth, halfHeight / vTan + depth);
     }
-    halfW += 1.0;                                   // body radius plus side margin
-    const halfH = Math.max(above + 0.34, below + 0.22);
-
-    const needH = halfW / Math.tan(hFov / 2);
-    const needV = halfH / Math.tan(vFov / 2);
-    return Math.max(needH, needV) + Math.max(0, towardCamera);
+    return need;
   }
+
+  /**
+   * Extra margin, in metres, that the current trauma envelope could displace a
+   * silhouette by once `render()` applies shake. Reserving it up front is what
+   * makes "shake never pushes a fighter out of frame" a property of the solve
+   * rather than a hope.
+   */
+  #shakeMargin() {
+    const k = this._traumaEnvelope * this._traumaEnvelope;
+    if (k < 1e-4) return { side: 0, vert: 0 };
+    const swing = this._fitDistance * SHAKE.swing * k;
+    const tilt = SHAKE.roll * k * this._fitHalfHeight;
+    return {
+      side: SHAKE.lateral * k + swing + tilt,
+      vert: SHAKE.vertical * k + swing + tilt,
+    };
+  }
+
+  /**
+   * Rotates a single-subject framing away from any other fighter that would
+   * otherwise crowd the frame. Both robots stand on the same axis the subject
+   * faces, so a three-quarter portrait always has the opponent somewhere near
+   * the edge; nudging the look target off-centre pushes it out and leaves the
+   * subject composed off-axis, which is the better picture anyway. The nudge is
+   * capped well short of the frame edge so the subject can never be unseated.
+   */
+  #panOffSubject(pos, look, subject, fovDeg) {
+    _fwd.copy(look).sub(pos);
+    const d = _fwd.length();
+    if (d < 1e-4) return;
+    _fwd.divideScalar(d);
+    _right.crossVectors(_fwd, _upAxis);
+    if (_right.lengthSq() < 1e-6) return;
+    _right.normalize();
+
+    const hTan = Math.tan(fovDeg * DEG * 0.5) * (this.camera?.aspect || 16 / 9);
+    let shift = 0;
+    for (const f of this.fighters) {
+      if (!f || f === subject || !f.position) continue;
+      _v2.set(f.position.x, f.position.y + 0.9, f.position.z).sub(pos);
+      const along = _v2.dot(_fwd);
+      if (along <= 0.25) continue;
+      const lateral = _v2.dot(_right);
+      const inner = (Math.abs(lateral) - BODY_HALF_WIDTH) / along;
+      if (inner >= hTan) continue;
+      const push = (hTan - inner) * d * (Math.sign(lateral) || 1);
+      if (Math.abs(push) > Math.abs(shift)) shift = push;
+    }
+    if (shift === 0) return;
+    const limit = hTan * d * 0.20;
+    look.addScaledVector(_right, -THREE.MathUtils.clamp(shift, -limit, limit));
+  }
+
+  // -- helpers --------------------------------------------------------------
 
   /**
    * Keeps the camera out of the floor, off the fighters, and inside a sane box
@@ -694,20 +883,23 @@ export class FightCamera {
   #clampCamera(pos, look) {
     const floor = this.floorY;
     const b = this.bounds;
-    pos.y = Math.max(pos.y, floor + 0.5);
+    pos.y = Math.max(pos.y, floor + 0.45);
     pos.x = THREE.MathUtils.clamp(pos.x, -(b.halfWidth + 3.5), b.halfWidth + 3.5);
-    pos.z = THREE.MathUtils.clamp(pos.z, -(b.halfDepth + 4.5), b.halfDepth + 12);
+    pos.z = THREE.MathUtils.clamp(pos.z, -(b.halfDepth + 4.5), b.halfDepth + 14);
 
-    // Never let the lens pass through a body.
+    // Never let the lens pass through a body. Fighters are capsules, so the
+    // test is radial about their vertical axis over the height they occupy.
     for (const f of this.fighters) {
-      if (!f?.position) continue;
-      _v.set(f.position.x, f.position.y + 0.95, f.position.z);
+      const p = f?.position;
+      if (!p) continue;
+      const axisY = THREE.MathUtils.clamp(pos.y, p.y + 0.25, this.#silhouetteTop(f) - 0.2);
+      _v.set(p.x, axisY, p.z);
       const d = pos.distanceTo(_v);
-      const minD = 0.62;
+      const minD = BODY_HALF_WIDTH + 0.12;
       if (d < minD && d > 1e-4) {
         _v2.copy(pos).sub(_v).divideScalar(d);
         pos.copy(_v).addScaledVector(_v2, minD);
-        pos.y = Math.max(pos.y, floor + 0.5);
+        pos.y = Math.max(pos.y, floor + 0.45);
       }
     }
     look.y = Math.max(look.y, floor + 0.1);
@@ -755,6 +947,7 @@ export class FightCamera {
     const bone =
       fighter.byName?.[name] ??
       fighter.bonesByName?.[name] ??
+      fighter.skeletonBundle?.byName?.[name] ??
       fighter.bones?.byName?.[name] ??
       fighter.skeleton?.byName?.[name] ??
       fighter.rig?.byName?.[name] ??
@@ -769,7 +962,8 @@ export class FightCamera {
     }
 
     const p = fighter.position;
-    const h = BONE_HEIGHT[name] ?? 1.4;
+    const scale = fighter.def?.proportions?.height ?? 1;
+    const h = (BONE_HEIGHT[name] ?? 1.4) * scale;
     if (p) out.set(p.x, p.y + h, p.z);
     else out.set(0, floor + h, 0);
     return out;

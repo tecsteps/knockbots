@@ -23,8 +23,11 @@ async function main() {
   }
   game.start();
 
-  // Expose for the automated visual-QA harness and for debugging.
+  // Expose for the automated visual-QA harness and for debugging. The move
+  // table rides along so tools/animstrip.mjs can drive real moves through the
+  // fighter state machine rather than poking the animator behind its back.
   window.KB = game;
+  window.KB.MOVES = (await import('./combat/Moves.js')).MOVES;
   window.dispatchEvent(new CustomEvent('knockbots:ready'));
 
   setTimeout(() => boot?.classList.add('hidden'), 250);
