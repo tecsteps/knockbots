@@ -22,7 +22,6 @@
  */
 
 import * as THREE from 'three';
-import { ARENA_HALF_WIDTH } from '../core/Constants.js';
 import { Rng } from '../core/Rng.js';
 import {
   bevelBox, place, mergeAll, worldUv, truss, railing, pipeRun, tube,
@@ -49,10 +48,10 @@ export class StageStructure {
   /**
    * @param {object} deps
    * @param {Record<string, THREE.Material>} deps.materials
-   * @param {Record<string, THREE.Texture>} deps.textures
+   * @param {object} deps.bins shared geometry bins, merged by the Stage
    * @param {'ultra'|'high'|'medium'|'low'} [deps.quality]
    */
-  constructor({ materials, textures, bins, quality = 'high' }) {
+  constructor({ materials, bins, quality = 'high' }) {
     this.group = new THREE.Group();
     this.group.name = 'arena.structure';
     this.materials = materials;
@@ -673,11 +672,10 @@ export class StageStructure {
   // -------------------------------------------------------------------------
 
   /**
-   * @param {number} dt
-   * @param {number} time
+   * @param {number} time seconds since the stage was built
    * @param {object} envParams live Environment mood parameters
    */
-  update(dt, time, envParams) {
+  update(time, envParams) {
     this.timeUniform.value = time;
     this.fan.rotation.z = time * 0.62;
 
@@ -709,7 +707,6 @@ export class StageStructure {
         mat.uniforms.uWindow.value.copy(envParams.rimB?.color ?? mat.uniforms.uWindow.value).lerp(new THREE.Color(0xffc98a), 0.6);
       }
     }
-    void dt;
   }
 
   dispose() {

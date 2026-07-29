@@ -351,12 +351,11 @@ export class StageVolumetrics {
   }
 
   /**
-   * @param {number} dt
-   * @param {number} time
+   * @param {number} time seconds since the stage was built
    * @param {number} shaftIntensity the Environment's breathing multiplier
-   * @param {object} envParams
+   * @param {object} envParams live Environment mood parameters
    */
-  update(dt, time, shaftIntensity, envParams) {
+  update(time, shaftIntensity, envParams) {
     const breathe = Math.max(0, shaftIntensity);
     const tint = envParams?.shaft?.color;
 
@@ -388,7 +387,6 @@ export class StageVolumetrics {
 
     this.motes.update(time, 0.55 + breathe * 0.7);
     this.steam.update(time);
-    void dt;
   }
 
   dispose() {

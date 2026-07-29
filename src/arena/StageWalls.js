@@ -267,7 +267,8 @@ export class StageWalls {
 
     const i = this._dentNext;
     this._dentNext = (i + 1) % this.dents.count;
-    const size = 0.55 + Math.min(1.6, force) * 0.85;
+    // A dent, not a crater: a metre across at the very heaviest.
+    const size = 0.34 + Math.min(1.6, force) * 0.36;
     const m = new THREE.Matrix4();
     m.compose(
       new THREE.Vector3(side * (ARENA_HALF_WIDTH - 0.012 - i * 0.0007), y, z),

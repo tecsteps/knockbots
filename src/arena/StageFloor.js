@@ -134,9 +134,9 @@ function bakeFloorMaps(size) {
   const wet = new Float32Array(n);
   const albedoData = new Uint8Array(n * 4);
 
-  const conc = hexToLinear(0x3b3c3f);
-  const concPale = hexToLinear(0x55565a);
-  const concDark = hexToLinear(0x1d1e21);
+  const conc = hexToLinear(0x2f3033);
+  const concPale = hexToLinear(0x44454a);
+  const concDark = hexToLinear(0x171719);
   const paintWhite = hexToLinear(0xa9a49a);
   const paintYellow = hexToLinear(0xbf9218);
   const paintBlack = hexToLinear(0x141416);
@@ -202,7 +202,7 @@ function bakeFloorMaps(size) {
         v = lerp(v, paint[ch] * (0.72 + fine * 0.55), cov);
         // Wet concrete is darker concrete. This is the single most convincing
         // cue that a floor is wet, ahead of the reflection itself.
-        v *= lerp(1, 0.38, clamp01(wet[k] * 1.25));
+        v *= lerp(1, 0.32, clamp01(wet[k] * 1.35));
         const o = k * 4 + ch;
         albedoData[o] = encodeSrgb(v);
       }
@@ -222,9 +222,11 @@ function bakeFloorMaps(size) {
       const ao = sampleWrap(aoSmall, FIELD, i * s2f, fy);
       const w = wet[k];
       const fine = sampleWrap(fines, FIELD, i * s2f, fy);
-      // Dry concrete 0.82 -> damp 0.4 -> standing water 0.045.
-      let rough = lerp(0.84, 0.4, clamp01(w * 1.7));
-      rough = lerp(rough, 0.045, clamp01((w - 0.55) * 2.6));
+      // Dry concrete 0.74 -> damp 0.26 -> standing water 0.06. The damp value
+      // is the important one: it is most of the floor, and it is what decides
+      // whether a fighter has a reflection to stand on.
+      let rough = lerp(0.74, 0.26, clamp01(w * 1.7));
+      rough = lerp(rough, 0.06, clamp01((w - 0.55) * 2.6));
       rough = clamp01(rough + fine * 0.05 - mark[k] * 0.06);
       const o = k * 4;
       ormData[o] = Math.round(clamp01(ao) * 255);
@@ -301,15 +303,15 @@ const FRAG_REFLECT_HOOK = /* glsl */ `
       coord.xy += wn.xz * uReflDistort * coord.w;
 
       // Roughness-proportional gather: a puddle mirrors, damp concrete smears.
-      float blurR = clamp( material.roughness * uReflBlur, 0.0, 0.045 ) * coord.w;
+      float blurR = clamp( material.roughness * uReflBlur, 0.0, 0.018 ) * coord.w;
       vec3 refl = texture2DProj( uReflection, coord ).rgb * 0.36;
       refl += texture2DProj( uReflection, coord + vec4(  blurR, 0.0, 0.0, 0.0 ) ).rgb * 0.16;
       refl += texture2DProj( uReflection, coord + vec4( -blurR, 0.0, 0.0, 0.0 ) ).rgb * 0.16;
       refl += texture2DProj( uReflection, coord + vec4( 0.0,  blurR * 0.6, 0.0, 0.0 ) ).rgb * 0.16;
       refl += texture2DProj( uReflection, coord + vec4( 0.0, -blurR * 0.6, 0.0, 0.0 ) ).rgb * 0.16;
 
-      float k = uReflStrength * fres * smoothstep( 0.06, 0.55, wet )
-              * ( 1.0 - smoothstep( 0.12, 0.62, material.roughness ) );
+      float k = uReflStrength * fres * smoothstep( 0.02, 0.34, wet )
+              * ( 1.0 - smoothstep( 0.16, 0.78, material.roughness ) );
       // Energy-conserving: the reflection replaces diffuse rather than adding
       // to it, which is what keeps a wet floor from turning milky.
       gl_FragColor.rgb = mix( gl_FragColor.rgb, gl_FragColor.rgb * ( 1.0 - k * 0.55 ) + refl, saturate( k ) );
@@ -385,7 +387,7 @@ export class StageFloor {
       uWetMap: { value: maps.normal },
       uReflStrength: { value: 0.62 },
       uReflDistort: { value: 0.028 },
-      uReflBlur: { value: 0.32 },
+      uReflBlur: { value: 0.055 },
       uDetailScale: { value: 2.4 },
       uDetailAmp: { value: 0.55 },
       uRippleScale: { value: 0.35 },

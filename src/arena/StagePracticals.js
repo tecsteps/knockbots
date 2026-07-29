@@ -448,7 +448,7 @@ export class StagePracticals {
       if (!p) continue;
       // Radiance, scaled well below the light's own power: the fitting should
       // bloom, not clip to a white rectangle.
-      const power = (light?.intensity ?? p.power) * 0.055;
+      const power = (light?.intensity ?? p.power) * 0.12;
       cols[i].copy(light?.color ?? p.color).multiplyScalar(power);
       const pub = this.practicalPositions[i];
       if (pub) {
@@ -461,9 +461,9 @@ export class StagePracticals {
   }
 
   /**
-   * @param {number} dt
-   * @param {number} time
-   * @param {object} envParams
+   * @param {number} dt seconds since the last rendered frame
+   * @param {number} time seconds since the stage was built
+   * @param {object} envParams live Environment mood parameters
    */
   update(dt, time, envParams) {
     this.syncToEnvironment();

@@ -292,7 +292,7 @@ function concreteSet(size, seed) {
 
   const rough = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) {
-    rough[k] = clamp01(0.82 + fines[k] * 0.12 - streaks[k] * 0.14);
+    rough[k] = clamp01(0.88 + fines[k] * 0.1 - streaks[k] * 0.1);
   }
   return { albedo, normal: makeTexture(normal, size), orm: packOrm(ao, rough, null, size) };
 }
@@ -332,10 +332,10 @@ function hazardSet(size, seed) {
   const ao = heightToAo(height, size, 4, 0.9);
   const normal = heightToNormal(height, size, 1.8, { wrap: true });
 
-  const yellow = hexToLinear(0xc99a17);
-  const yellowDim = hexToLinear(0x7d6115);
-  const black = hexToLinear(0x141416);
-  const substrate = hexToLinear(0x3c3d40);
+  const yellow = hexToLinear(0x9c7614);
+  const yellowDim = hexToLinear(0x5d4711);
+  const black = hexToLinear(0x0b0b0c);
+  const substrate = hexToLinear(0x2b2c2f);
   const grime = hexToLinear(0x17161a);
 
   const albedo = bakeAlbedo(size, (i, j, k, out) => {
@@ -351,7 +351,7 @@ function hazardSet(size, seed) {
 
   const rough = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) {
-    rough[k] = clamp01(lerp(0.42, 0.86, worn[k]) + streaks[k] * 0.14 + grain[k] * 0.05);
+    rough[k] = clamp01(lerp(0.58, 0.9, worn[k]) + streaks[k] * 0.14 + grain[k] * 0.05);
   }
   return { albedo, normal: makeTexture(normal, size), orm: packOrm(ao, rough, null, size) };
 }
@@ -452,9 +452,10 @@ function dentDecal(size, seed) {
   for (let k = 0; k < size * size; k++) height[k] += grain[k] * 0.09 * alpha[k];
 
   const data = new Uint8Array(size * size * 4);
-  const bare = hexToLinear(0x8b8c88);
-  const shadow = hexToLinear(0x0c0d0f);
-  const scorch = hexToLinear(0x1a1512);
+  // Spalled concrete, not bare steel: these land on the barriers.
+  const bare = hexToLinear(0x5c5b57);
+  const shadow = hexToLinear(0x0a0b0c);
+  const scorch = hexToLinear(0x171310);
   const lin = [0, 0, 0];
   for (let j = 0; j < size; j++) {
     for (let i = 0; i < size; i++) {
@@ -516,12 +517,16 @@ function warningPlate(size, seed, lines) {
   const grain = fbm(size, 120, { octaves: 3, seed });
   const wear = fbm(size, 8, { octaves: 4, seed: seed + 3 });
   const text = new Float32Array(size * size);
-  const cell = Math.max(2, Math.round(size / 46));
-  let y = Math.round(size * 0.2);
-  for (const line of lines) {
+  // Longest line decides the type size, and the rows are stamped bottom-up so
+  // the plate reads top-down once v=0 lands at the bottom of the quad.
+  const longest = lines.reduce((m, l) => Math.max(m, l.length), 1);
+  const cell = Math.max(2, Math.floor((size * 0.88) / (longest * 6)));
+  let y = Math.round(size * 0.14);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
     const w = line.length * 6 * cell - cell;
     stampText(text, size, line, Math.round((size - w) / 2), y, cell, cell * 0.5);
-    y += cell * 11;
+    y += cell * 10;
   }
   const soft = blur(text, size, 1, 1);
 
@@ -597,8 +602,8 @@ export function makeArenaMaterials(opts = {}) {
     steel: std(steelSet, { name: 'arena.steel', normalScale: new THREE.Vector2(1, 1), envMapIntensity: 0.7 }),
     darkMetal: std(darkSet, { name: 'arena.darkMetal', normalScale: new THREE.Vector2(0.9, 0.9), envMapIntensity: 0.85 }),
     container: std(boxSet, { name: 'arena.container', normalScale: new THREE.Vector2(1.1, 1.1), envMapIntensity: 0.55 }),
-    concrete: std(concSet, { name: 'arena.concrete', metalness: 0, normalScale: new THREE.Vector2(1.05, 1.05), envMapIntensity: 0.45 }),
-    hazard: std(hazSet, { name: 'arena.hazard', metalness: 0, normalScale: new THREE.Vector2(0.85, 0.85), envMapIntensity: 0.5 }),
+    concrete: std(concSet, { name: 'arena.concrete', metalness: 0, normalScale: new THREE.Vector2(1.15, 1.15), envMapIntensity: 0.3 }),
+    hazard: std(hazSet, { name: 'arena.hazard', metalness: 0, normalScale: new THREE.Vector2(0.85, 0.85), envMapIntensity: 0.32 }),
 
     grating: new THREE.MeshStandardMaterial({
       name: 'arena.grating',

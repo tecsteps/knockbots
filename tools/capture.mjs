@@ -30,6 +30,7 @@ const WIDTH = Number(arg('width', 1920));
 const HEIGHT = Number(arg('height', 1080));
 const ONLY = arg('shots', '').split(',').filter(Boolean);
 const KEEP = argv.includes('--keep');
+const PORT = Number(arg('port', 5199));
 
 /**
  * A shot is a named camera/pose setup evaluated in the page. Each `setup` runs
@@ -105,11 +106,11 @@ async function main() {
 
   const server = await createServer({
     root: ROOT,
-    server: { port: 5199, host: '127.0.0.1' },
+    server: { port: PORT, host: '127.0.0.1' },
     logLevel: 'error',
   });
   await server.listen();
-  const url = 'http://127.0.0.1:5199/';
+  const url = `http://127.0.0.1:${PORT}/`;
 
   const browser = await chromium.launch({
     args: [
@@ -145,11 +146,29 @@ async function main() {
   // Let shader compilation and the first frames settle.
   await page.waitForTimeout(2500);
 
+  // `--eval "<js>"` runs once before the shot list, for A/B diagnosis of a
+  // single effect without editing the shot table.
+  const pre = arg('eval', '');
+  if (pre) {
+    await page.evaluate(`(() => { try { ${pre} } catch (e) { console.error('eval', e); } })()`);
+    await page.waitForTimeout(600);
+  }
+
   const list = ONLY.length ? SHOTS.filter((s) => ONLY.some((o) => s.name.includes(o))) : SHOTS;
   const manifest = [];
 
+  // Every shot is taken from inside a live round with the menus dismissed.
+  // Without this the camera framings composite over the title screen.
+  const ENTER_MATCH = `
+    KB.menus.show(null);
+    KB.paused = false;
+    if (KB.phase !== 'fight') { KB.startMatch(0, 1); KB.setPhase('fight'); }
+  `;
+
   for (const shot of list) {
     try {
+      await page.evaluate(`(() => { try { ${ENTER_MATCH} } catch (e) { console.error('enter', e); } })()`);
+      await page.waitForTimeout(500);
       await page.evaluate(`(() => { try { ${shot.setup} } catch (e) { console.error('shot setup', e); } })()`);
     } catch (e) {
       console.warn(`[capture] setup failed for ${shot.name}: ${e.message}`);

@@ -178,7 +178,7 @@ export class Stage {
    */
   #commitBins(bins) {
     const spec = [
-      ['concrete', this.materials.concrete, 2.6, true],
+      ['concrete', this.materials.concrete, 3.4, true],
       ['hazard', this.materials.hazard, 1.6, true],
       ['steel', this.materials.steel, 1.5, true],
       ['dark', this.materials.darkMetal, 1.9, true],
@@ -283,9 +283,8 @@ export class Stage {
 
   /**
    * @param {number} dt seconds since the last rendered frame
-   * @param {number} tick current simulation tick
    */
-  update(dt, tick) {
+  update(dt) {
     if (!this.ready) return;
     this._time += dt;
     const t = this._time;
@@ -298,8 +297,8 @@ export class Stage {
 
     this.floor.update(dt, t, params);
     this.walls.update(dt, t);
-    this.structure.update(dt, t, params);
-    this.volumetrics.update(dt, t, env?.shaftIntensity ?? 0.5, params);
+    this.structure.update(t, params);
+    this.volumetrics.update(t, env?.shaftIntensity ?? 0.5, params);
     this.practicals.update(dt, t, params);
     this.dust.update(dt);
     this.grit.update(dt);
@@ -309,8 +308,6 @@ export class Stage {
       const f = this.walls.flickerAt(i);
       this.wallLights[i].intensity = f > 0 ? f * f * 26 * (0.55 + Math.random() * 0.45) : 0;
     }
-
-    void tick;
   }
 
   /**
