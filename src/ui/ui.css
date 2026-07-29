@@ -310,6 +310,11 @@
   0%, 100% { filter: brightness(1); }
   50% { filter: brightness(1.6); }
 }
+.meter-frame.meter--burst { animation: meterBurst 0.5s ease-out; }
+@keyframes meterBurst {
+  0% { box-shadow: var(--kb-shadow-panel), 0 0 2.4em rgba(63, 224, 255, 0.95); filter: brightness(2.2); }
+  100% { box-shadow: var(--kb-shadow-panel), var(--kb-glow-cyan); filter: brightness(1); }
+}
 .meter-label {
   font-size: 0.55em;
   letter-spacing: 0.24em;

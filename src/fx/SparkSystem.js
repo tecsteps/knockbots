@@ -132,7 +132,7 @@ export class SparkSystem {
         uDrag: { value: 1.35 },
         uSizeScale: { value: 1 },
         uStreak: { value: 0.055 },
-        uHeat: { value: 5.5 },
+        uHeat: { value: 1.0 },
         uOpacity: { value: 1 },
       },
       transparent: true,
@@ -159,6 +159,7 @@ export class SparkSystem {
    * @param {number} [opts.spread]  0 = pencil beam, 1 = full hemisphere
    * @param {number} [opts.life]    seconds
    * @param {number} [opts.size]    metres
+   * @param {number} [opts.heat]   peak radiance at ignition
    * @param {THREE.Color|{r:number,g:number,b:number}} [opts.tint]
    * @param {THREE.Vector3} [opts.inherit] velocity added to every spark
    */
@@ -183,9 +184,12 @@ export class SparkSystem {
     const first = this.pool.allocRun(count);
     const time = this.material.uniforms.uTime.value;
 
-    const tr = tint ? tint.r : 1;
-    const tg = tint ? tint.g : 1;
-    const tb = tint ? tint.b : 1;
+    // Per-burst radiance rides in the tint: one extra attribute would buy
+    // nothing that a scaled colour does not already carry.
+    const heat = opts.heat ?? 3.0;
+    const tr = (tint ? tint.r : 1) * heat;
+    const tg = (tint ? tint.g : 1) * heat;
+    const tb = (tint ? tint.b : 1) * heat;
 
     for (let k = 0; k < count; k++) {
       const i = (first + k) % cap;

@@ -107,7 +107,7 @@ export class TrailSystem {
       vertexShader: VERT,
       fragmentShader: FRAG,
       uniforms: {
-        uIntensity: { value: 2.6 },
+        uIntensity: { value: 1.6 },
         uOpacity: { value: 1 },
       },
       transparent: true,

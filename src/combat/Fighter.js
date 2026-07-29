@@ -924,6 +924,7 @@ export class Fighter {
     if (v && !d.broken && d.ticks < d.duration * 0.62) {
       v.position.x = this.position.x + this.facing * (this.radius + v.radius) * 0.86;
       v.position.z = this.position.z;
+      v.clampToArena();
       v.prevPosition.copy(v.position);
       v.velocity.set(0, 0, 0);
     }
@@ -1002,6 +1003,7 @@ export class Fighter {
         -Math.sign(a.position.x) || -a.facing;
       this.position.x = a.position.x + dir * sep;
       this.position.z = a.position.z;
+      this.#clampPosition();
       this.prevPosition.copy(this.position);
     }
     // 'throwBreak' is the precise event; 'parry' fires too so the FX and audio
@@ -1364,6 +1366,17 @@ export class Fighter {
     }
     if (this.position.z > limZ) { this.position.z = limZ; this.velocity.z = Math.min(this.velocity.z, 0); }
     else if (this.position.z < -limZ) { this.position.z = -limZ; this.velocity.z = Math.max(this.velocity.z, 0); }
+  }
+
+  /** Keep a directly-assigned position (throw drag, throw break) inside the arena. */
+  clampToArena() { this.#clampPosition(); }
+
+  #clampPosition() {
+    const limX = this.bounds.halfWidth - this.radius;
+    const limZ = this.bounds.halfDepth - this.radius;
+    this.position.x = THREE.MathUtils.clamp(this.position.x, -limX, limX);
+    this.position.z = THREE.MathUtils.clamp(this.position.z, -limZ, limZ);
+    this.position.y = Math.max(this.position.y, this.floorY);
   }
 
   #updateFlags() {

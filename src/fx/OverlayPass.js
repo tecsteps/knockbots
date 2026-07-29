@@ -74,17 +74,24 @@ void main() {
     vec2 da = vec2( d.x * uAspect, d.y );
     float dist = length( da );
     float R = max( ring.z * 0.5 * uAspect, 1e-4 );
-    // Gaussian band riding the shock front; the wake is wider than the front.
-    float w = R * 0.22 + 0.006;
+    // Narrow gaussian band riding the shock front, with a weaker counter-lobe
+    // just inside it. Wide bands warp recognisable geometry and read as a bug.
+    float w = R * 0.10 + 0.004;
     float band = exp( -pow( ( dist - R ) / w, 2.0 ) );
-    float inner = exp( -pow( ( dist - R * 0.78 ) / ( w * 2.1 ), 2.0 ) ) * 0.4;
+    float inner = exp( -pow( ( dist - R * 0.86 ) / ( w * 1.9 ), 2.0 ) ) * 0.35;
     vec2 dir = dist > 1e-5 ? da / dist : vec2( 0.0 );
     dir.x /= uAspect;
-    float amt = ( band - inner ) * ring.w * 0.05;
-    uvR += dir * amt * 1.14;
+    float amt = ( band - inner ) * ring.w * 0.022;
+    uvR += dir * amt * 1.07;
     uvG += dir * amt;
-    uvB += dir * amt * 0.86;
+    uvB += dir * amt * 0.93;
   }
+
+  // Never sample off-screen: clamped edge taps smear a stripe of the border
+  // colour across the frame, which is far more visible than the refraction.
+  uvR = clamp( uvR, vec2( 0.0015 ), vec2( 0.9985 ) );
+  uvG = clamp( uvG, vec2( 0.0015 ), vec2( 0.9985 ) );
+  uvB = clamp( uvB, vec2( 0.0015 ), vec2( 0.9985 ) );
 
   // --- impact frame: radial smear toward the contact point ------------------
   vec3 col;
@@ -124,18 +131,19 @@ void main() {
     vec2 rel = p - ic;
     float rad = length( rel );
     float ang = atan( rel.y, rel.x );
-    float spokes = 58.0;
+    float spokes = 64.0;
     float idx = floor( ang / 6.2831853 * spokes + 0.5 );
     float n = hash11( idx * 0.017 + uSpeedSeed );
     // Only about a third of the spokes exist, and they start at random radii.
-    float exists = step( 0.62, n );
-    float start = 0.16 + hash11( idx * 0.031 + uSpeedSeed + 3.7 ) * 0.24;
+    float exists = step( 0.66, n );
+    float start = 0.28 + hash11( idx * 0.031 + uSpeedSeed + 3.7 ) * 0.22;
     float thin = abs( fract( ang / 6.2831853 * spokes + 0.5 ) - 0.5 ) * 2.0;
-    float line = pow( clamp( 1.0 - thin, 0.0, 1.0 ), 22.0 - n * 12.0 );
-    float reach = smoothstep( start, start + 0.42, rad );
+    float line = pow( clamp( 1.0 - thin, 0.0, 1.0 ), 30.0 - n * 12.0 );
+    // Tapered at both ends: a streak, not a spoke of a wheel.
+    float reach = smoothstep( start, start + 0.16, rad ) * ( 1.0 - smoothstep( 0.58, 1.1, rad ) );
     float mask = exists * line * reach * uSpeedLines;
-    col += vec3( 1.0 ) * mask * 0.9;
-    col *= 1.0 - mask * 0.25;
+    col += vec3( 1.0 ) * mask * 0.55;
+    col *= 1.0 - mask * 0.18;
   }
 
   // --- overdrive takeover ---------------------------------------------------

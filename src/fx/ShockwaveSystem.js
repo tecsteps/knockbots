@@ -42,6 +42,7 @@ varying vec3 vTint;
 varying float vT;
 varying float vHeat;
 varying float vThickness;
+varying float vSeed;
 
 ${GLSL_EASE}
 ${GLSL_BILLBOARD}
@@ -52,7 +53,8 @@ void main() {
   float t = age / max( life, 1e-4 );
   if ( life <= 0.0 || t < 0.0 || t >= 1.0 ) {
     gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
-    vUv = vec2( 0.0 ); vTint = vec3( 0.0 ); vT = 1.0; vHeat = 0.0; vThickness = 1.0;
+    vUv = vec2( 0.0 ); vTint = vec3( 0.0 ); vT = 1.0; vHeat = 0.0;
+    vThickness = 1.0; vSeed = 0.0;
     return;
   }
 
@@ -74,6 +76,7 @@ void main() {
   vT = t;
   vHeat = aStyle.y;
   vThickness = aParams.w;
+  vSeed = aStyle.z;
 }`;
 
 const FRAG = /* glsl */ `
@@ -85,22 +88,35 @@ varying vec3 vTint;
 varying float vT;
 varying float vHeat;
 varying float vThickness;
+varying float vSeed;
 
 void main() {
   vec2 d = vUv * 2.0 - 1.0;
   float r = length( d );
   if ( r > 1.0 ) discard;
 
+  // A perfect circle is the tell that a shockwave was drawn rather than caused.
+  // Three angular harmonics deform the front, and the deformation grows as the
+  // wave expands and loses coherence.
+  float ang = atan( d.y, d.x );
+  float wob = sin( ang * 7.0 + vSeed )
+            + sin( ang * 13.0 - vSeed * 1.7 ) * 0.55
+            + sin( ang * 23.0 + vSeed * 0.6 ) * 0.27;
+  float rr = clamp( r * ( 1.0 + wob * 0.028 * ( 0.5 + vT ) ), 0.0, 1.0 );
+
   // Thicker shocks read further down the profile, so a heavy hit has a fat wake
   // and a light one is a hairline.
-  float u = clamp( 1.0 - ( 1.0 - r ) / max( vThickness, 0.02 ), 0.0, 1.0 );
+  float u = clamp( 1.0 - ( 1.0 - rr ) / max( vThickness, 0.02 ), 0.0, 1.0 );
   vec4 prof = texture2D( uRing, vec2( u, 0.5 ) );
 
-  float fade = pow( 1.0 - vT, 1.7 );
-  vec3 col = vTint * prof.r * vHeat * fade;
-  col += vec3( 1.0, 0.96, 0.92 ) * prof.g * vHeat * 2.1 * fade;
+  // Energy is not distributed evenly around the front either.
+  float amp = 0.62 + 0.38 * ( sin( ang * 5.0 - vSeed * 2.3 ) * 0.5 + 0.5 );
 
-  float a = prof.a * fade * uOpacity;
+  float fade = pow( 1.0 - vT, 2.2 );
+  vec3 col = vTint * prof.r * vHeat * fade * amp;
+  col += vec3( 1.0, 0.96, 0.92 ) * prof.g * vHeat * 0.5 * fade * amp;
+
+  float a = prof.a * fade * uOpacity * ( 0.55 + amp * 0.5 );
   if ( a < 0.004 ) discard;
   gl_FragColor = vec4( col, a );
 }`;

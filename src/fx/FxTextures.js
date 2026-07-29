@@ -190,17 +190,24 @@ export function bakeRingProfile(w = 512) {
   const data = new Uint8Array(w * h * 4);
   for (let x = 0; x < w; x++) {
     const t = (x + 0.5) / w;
-    const edge = Math.exp(-Math.pow((t - 0.86) * 15.5, 2));      // leading shock
-    const shoulder = Math.exp(-Math.pow((t - 0.7) * 6.2, 2)) * 0.55;
-    const wake = Math.pow(clamp01((t - 0.12) / 0.6), 2.4) * 0.3 * (1 - smoothstep(0.72, 0.95, t));
+    const edge = Math.exp(-Math.pow((t - 0.79) * 6.2, 2));       // leading shock
+    const shoulder = Math.exp(-Math.pow((t - 0.55) * 3.0, 2)) * 0.62;
+    const wake = Math.pow(clamp01((t - 0.02) / 0.66), 1.6) * 0.5 * (1 - smoothstep(0.72, 0.96, t));
     const intensity = clamp01(edge + shoulder + wake);
-    const refract = (Math.exp(-Math.pow((t - 0.82) * 9.0, 2)) - Math.exp(-Math.pow((t - 0.62) * 7.0, 2)) * 0.75);
+    // Alpha is a *wide* envelope, not a copy of the intensity. Additive
+    // blending multiplies colour by alpha, so reusing the sharp profile for
+    // both squares it and the ring collapses into a wireframe hoop.
+    // The outer boundary tapers over the last fifth of the profile; a hard cut
+    // there is what turns an expanding shell back into a drawn circle.
+    const envelope = clamp01(Math.exp(-Math.pow((t - 0.76) * 2.7, 2)) * 0.92 + wake * 0.7)
+      * (1 - smoothstep(0.86, 1.0, t));
+    const refract = Math.exp(-Math.pow((t - 0.79) * 8.0, 2)) - Math.exp(-Math.pow((t - 0.55) * 6.0, 2)) * 0.7;
     for (let y = 0; y < h; y++) {
       const i = (y * w + x) * 4;
       data[i] = b(intensity);
-      data[i + 1] = b(clamp01(edge));                 // hot core mask
+      data[i + 1] = b(clamp01(edge * edge * 0.8));    // hot core mask
       data[i + 2] = b(refract * 0.5 + 0.5);           // signed distortion, biased
-      data[i + 3] = b(intensity);
+      data[i + 3] = b(envelope);
     }
   }
   return finish(data, w, h, { mips: false });

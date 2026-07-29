@@ -39,6 +39,7 @@ import { bus } from '../core/Bus.js';
 import { WEIGHT, GROUND_Y, ARENA_HALF_WIDTH, ARENA_HALF_DEPTH } from '../core/Constants.js';
 import { bakeFxTextures } from './FxTextures.js';
 import { SparkSystem } from './SparkSystem.js';
+import { FlashSystem } from './FlashSystem.js';
 import { DebrisSystem } from './DebrisSystem.js';
 import { SmokeSystem } from './SmokeSystem.js';
 import { FluidSystem } from './FluidSystem.js';
@@ -61,28 +62,33 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
 /** Per-weight impact recipe. Every number here is a readability decision. */
 const HIT_FX = {
   [WEIGHT.LIGHT]: {
-    sparks: 26, speed: 6.2, size: 0.028, heat: 4.6,
-    ring: 0.5, ringLife: 0.24, thick: 0.2, ringHeat: 1.4,
+    sparks: 26, speed: 6.2, size: 0.028, heat: 2.3,
+    ring: 0.48, ringLife: 0.17, thick: 0.5, ringHeat: 0.8,
+    flash: 0.34, flashHeat: 1.3, flashLife: 0.1,
     debris: 0, fluid: 0, light: 26, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
-    sparks: 50, speed: 7.6, size: 0.033, heat: 5.2,
-    ring: 0.86, ringLife: 0.3, thick: 0.24, ringHeat: 1.9,
+    sparks: 50, speed: 7.6, size: 0.033, heat: 2.7,
+    ring: 0.82, ringLife: 0.22, thick: 0.55, ringHeat: 1.1,
+    flash: 0.5, flashHeat: 1.7, flashLife: 0.13,
     debris: 0, fluid: 5, light: 44, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
-    sparks: 104, speed: 9.6, size: 0.04, heat: 6.2,
-    ring: 1.55, ringLife: 0.46, thick: 0.32, ringHeat: 2.6,
+    sparks: 104, speed: 9.6, size: 0.04, heat: 3.2,
+    ring: 1.5, ringLife: 0.32, thick: 0.6, ringHeat: 1.5,
+    flash: 0.82, flashHeat: 2.3, flashLife: 0.17,
     debris: 5, fluid: 12, light: 88, impact: 0.55, dust: 6,
   },
   [WEIGHT.LAUNCHER]: {
-    sparks: 118, speed: 10.6, size: 0.042, heat: 6.4,
-    ring: 1.85, ringLife: 0.54, thick: 0.34, ringHeat: 2.8,
+    sparks: 118, speed: 10.6, size: 0.042, heat: 3.3,
+    ring: 1.8, ringLife: 0.38, thick: 0.62, ringHeat: 1.6,
+    flash: 0.95, flashHeat: 2.5, flashLife: 0.19,
     debris: 6, fluid: 14, light: 96, impact: 0.62, dust: 8,
   },
   [WEIGHT.ULTRA]: {
-    sparks: 200, speed: 13.5, size: 0.052, heat: 7.4,
-    ring: 2.9, ringLife: 0.72, thick: 0.42, ringHeat: 3.4,
+    sparks: 200, speed: 13.5, size: 0.052, heat: 3.9,
+    ring: 2.85, ringLife: 0.5, thick: 0.68, ringHeat: 2.0,
+    flash: 1.5, flashHeat: 3.2, flashLife: 0.26,
     debris: 14, fluid: 26, light: 150, impact: 1.0, dust: 14,
   },
 };
@@ -127,7 +133,7 @@ export class EffectsDirector {
     this.group.matrixAutoUpdate = false;
 
     /** Screen-space punctuation state, decayed every frame. */
-    this.impact = { level: 0, decay: 6, lines: 0, linesDecay: 5, invert: 0, invertDecay: 22 };
+    this.impact = { level: 0, decay: 9, lines: 0, linesDecay: 11, invert: 0, invertDecay: 22 };
     this.flash = { amount: 0, decay: 8 };
     this.overdrive = {
       on: false, t: 0, hold: 0, level: 0, desat: 0, flash: 0,
@@ -167,12 +173,14 @@ export class EffectsDirector {
     this.smoke = new SmokeSystem(this.textures.smoke, this.textures.curl, n(720));
     this.debris = new DebrisSystem(n(176), this.textures.shard, this.floorY);
     this.shock = new ShockwaveSystem(this.textures.ring, 48);
+    this.flashes = new FlashSystem(64);
     this.decals = new DecalSystem(this.textures.decals, 160, this.floorY);
     this.trails = new TrailSystem(10, 30);
 
     this.group.add(
       this.decals.mesh, this.smoke.mesh, this.fluid.mesh,
       this.debris.mesh, this.sparks.mesh, this.shock.mesh, this.trails.mesh,
+      this.flashes.mesh,
     );
 
     // Impact lights. Allocated once and never added or removed, because a
@@ -286,8 +294,17 @@ export class EffectsDirector {
       tint: counter ? _c.setRGB(1.0, 0.86, 0.72) : null,
     });
 
-    // Contact ring, oriented to face the camera at the contact point.
+    // The flare at the contact point: the brightest element and the one the
+    // bloom pass actually feeds on.
     this.#palette(e.attacker, 'emissive', _c2);
+    this.flashes.pop(e.point, {
+      size: recipe.flash * scale,
+      life: recipe.flashLife,
+      heat: recipe.flashHeat * scale,
+      tint: _c3.copy(_c2).lerp(_c.setRGB(1, 0.95, 0.88), 0.55),
+    });
+
+    // Contact ring, oriented to face the camera at the contact point.
     this.shock.spawn(e.point, {
       mode: 'facing',
       radius: recipe.ring * scale,
@@ -335,12 +352,13 @@ export class EffectsDirector {
 
     this.sparks.burst(e.point, _n, {
       count: 30, speed: 6.4, spread: 0.42, life: 0.4, size: 0.026,
-      heat: 4.0, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.6),
+      heat: 2.4, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.6),
     });
     this.shock.spawn(e.point, {
       mode: 'facing', radius: 0.7, life: 0.24, thickness: 0.18,
       heat: 1.6, tint: _c, distort: 0.4,
     });
+    this.flashes.pop(e.point, { size: 0.42, life: 0.1, heat: 1.5, tint: _c });
     this.#flashLight(e.point, 30, 0xbfe4ff);
   }
 
@@ -352,8 +370,9 @@ export class EffectsDirector {
       heat: 3.4, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.5), distort: 1.2,
     });
     this.sparks.burst(e.point, _v.set(0, 1, 0), {
-      count: 56, speed: 8.5, spread: 1.0, life: 0.5, size: 0.03, heat: 5.6, tint: _c,
+      count: 56, speed: 8.5, spread: 1.0, life: 0.5, size: 0.03, heat: 3.0, tint: _c,
     });
+    this.flashes.pop(e.point, { size: 1.05, life: 0.2, heat: 2.6, tint: _c });
     this.#flashLight(e.point, 70, 0xd8f0ff);
     this.#punch(e.point, 0.3, false);
   }
@@ -361,12 +380,13 @@ export class EffectsDirector {
   #onArmor(e) {
     if (!this.enabled || !e?.point) return;
     this.sparks.burst(e.point, _v.set(0, 0.6, 0).normalize(), {
-      count: 44, speed: 5.4, spread: 1.0, life: 0.45, size: 0.03, heat: 4.4,
+      count: 44, speed: 5.4, spread: 1.0, life: 0.45, size: 0.03, heat: 2.5,
     });
     this.shock.spawn(e.point, {
       mode: 'facing', radius: 0.9, life: 0.3, thickness: 0.4,
       heat: 1.4, tint: _c.setRGB(1, 0.62, 0.24), distort: 0.5,
     });
+    this.flashes.pop(e.point, { size: 0.6, life: 0.14, heat: 1.6, tint: _c.setRGB(1, 0.62, 0.24) });
     this.#flashLight(e.point, 46, 0xffb066);
   }
 
@@ -379,7 +399,7 @@ export class EffectsDirector {
       count: 18, speed: 6.4, spread: 1.3, size: 0.085, life: 6.5, color: _c,
     });
     this.sparks.burst(e.point, _n, {
-      count: 120, speed: 9.0, spread: 1.0, life: 0.7, size: 0.038, heat: 6.0,
+      count: 120, speed: 9.0, spread: 1.0, life: 0.7, size: 0.038, heat: 3.2,
     });
     this.#palette(e.fighter, 'emissive', _c2);
     this.fluid.spray(e.point, _n, {
@@ -394,6 +414,7 @@ export class EffectsDirector {
       mode: 'facing', radius: 1.6, life: 0.44, thickness: 0.34,
       heat: 2.4, tint: _c2, distort: 1.0,
     });
+    this.flashes.pop(e.point, { size: 1.1, life: 0.2, heat: 2.5 });
     this.#flashLight(e.point, 110, 0xffc48a);
     this.#punch(e.point, 0.5, false);
   }
@@ -431,7 +452,7 @@ export class EffectsDirector {
     if (!this.enabled || !e?.point) return;
     _n.copy(e.normal && e.normal.lengthSq() > 1e-6 ? e.normal : _v.set(0, 1, 0)).normalize();
     this.sparks.burst(e.point, _n, {
-      count: 140, speed: 11.0, spread: 0.85, life: 0.75, size: 0.045, heat: 6.6,
+      count: 140, speed: 11.0, spread: 0.85, life: 0.75, size: 0.045, heat: 3.4,
     });
     this.#palette(e.fighter, 'trim', _c);
     this.debris.burst(e.point, _n, {
@@ -450,6 +471,7 @@ export class EffectsDirector {
     const fx = THREE.MathUtils.clamp(e.point.x, -ARENA_HALF_WIDTH + 0.3, ARENA_HALF_WIDTH - 0.3);
     const fz = THREE.MathUtils.clamp(e.point.z, -ARENA_HALF_DEPTH + 0.3, ARENA_HALF_DEPTH - 0.3);
     this.decals.add(DECAL.SCORCH, fx, fz, 1.1, { life: 24, strength: 0.55 });
+    this.flashes.pop(e.point, { size: 1.25, life: 0.22, heat: 2.7 });
     this.#flashLight(e.point, 120, 0xffd0a0);
     this.#punch(e.point, 0.7, false);
   }
@@ -470,7 +492,7 @@ export class EffectsDirector {
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.7 + 0.8 * k, { life: 16, strength: 0.4 + 0.3 * k });
     if (k > 0.9) {
       this.sparks.burst(_v, _v2.set(0, 1, 0), {
-        count: 40, speed: 5.0, spread: 1.0, life: 0.45, size: 0.028, heat: 4.0,
+        count: 40, speed: 5.0, spread: 1.0, life: 0.45, size: 0.028, heat: 2.3,
       });
       this.decals.add(DECAL.FRACTURE, _v.x, _v.z, 0.9, { life: 20, strength: 0.4 });
     }
@@ -515,11 +537,11 @@ export class EffectsDirector {
     this.smoke.puff(_v, {
       count: 9, dir: _v2, speed: 4.2, spread: 0.7, radius: 0.1,
       size: 0.16, growth: 3.4, life: 0.42, buoyancy: 0.1, curl: 0.5,
-      tint: _c2, emissive: 1.6,
+      tint: _c2, emissive: 0.8,
     });
     this.sparks.burst(_v, _v2, {
       count: 18, speed: 6.5, spread: 0.35, life: 0.3, size: 0.02,
-      heat: 3.4, tint: _c2,
+      heat: 2.2, tint: _c2,
     });
     this.#flashLight(_v, 22, _c2.getHex());
   }
@@ -545,10 +567,10 @@ export class EffectsDirector {
     this.smoke.puff(_v3, {
       count: 16, dir: _v2.set(0, 1, 0), speed: 2.6, spread: 0.9, radius: 0.42,
       size: 0.3, growth: 2.2, life: 1.1, buoyancy: 0.9, curl: 0.8,
-      tint: _c, emissive: 1.1,
+      tint: _c, emissive: 0.55,
     });
     this.sparks.burst(_v.setY(this.floorY + 0.2), _v2.set(0, 1, 0), {
-      count: 60, speed: 7.0, spread: 0.55, life: 0.8, size: 0.026, heat: 4.6, tint: _c,
+      count: 60, speed: 7.0, spread: 0.55, life: 0.8, size: 0.026, heat: 2.8, tint: _c,
     });
   }
 
@@ -574,13 +596,13 @@ export class EffectsDirector {
     _v3.copy(_v).setY(this.floorY + 0.1);
     this.sparks.burst(_v3, _v2.set(0, 1, 0), {
       count: 190, speed: 9.5, spread: 0.5, life: 1.3, size: 0.032,
-      heat: 5.6, tint: _c,
+      heat: 3.0, tint: _c,
     });
     _v3.setY(this.floorY + 0.7);
     this.smoke.puff(_v3, {
       count: 26, dir: _v2.set(0, 1, 0), speed: 3.4, spread: 1.0, radius: 0.5,
       size: 0.42, growth: 2.4, life: 1.6, buoyancy: 1.2, curl: 1.2,
-      tint: _c, emissive: 1.4,
+      tint: _c, emissive: 0.7,
     });
     this.decals.add(DECAL.SCORCH, _v.x, _v.z, 1.9, {
       life: 26, strength: 0.7, tint: _c2.copy(_c).lerp(_c3.setRGB(0.2, 0.2, 0.2), 0.55),
@@ -598,7 +620,7 @@ export class EffectsDirector {
 
     this.overdrive.flash = 1;
     this.sparks.burst(_v, _v2.set(0, 1, 0), {
-      count: 260, speed: 14.0, spread: 1.0, life: 1.0, size: 0.05, heat: 7.6,
+      count: 260, speed: 14.0, spread: 1.0, life: 1.0, size: 0.05, heat: 3.8,
     });
     this.shock.spawn(_v, {
       mode: 'facing', radius: 4.2, life: 0.85, thickness: 0.4,
@@ -612,6 +634,7 @@ export class EffectsDirector {
     this.debris.burst(_v, _v2.set(0, 0.6, 0).normalize(), {
       count: 26, speed: 8.0, spread: 1.4, size: 0.09, life: 6, color: _c2,
     });
+    this.flashes.pop(_v, { size: 3.2, life: 0.34, heat: 4.0, tint: _c });
     this.#punch(_v, 1.0, true);
     this.#flashLight(_v, 260, 0xffffff);
   }
@@ -703,6 +726,7 @@ export class EffectsDirector {
     this.fluid.update(this.time);
     this.smoke.update(this.time);
     this.shock.update(this.time);
+    this.flashes.update(this.time);
     this.decals.update(this.time);
 
     // Coolant that has finished falling leaves a splat where it landed.
@@ -922,8 +946,9 @@ export class EffectsDirector {
       for (const l of this.impactLights) { l.visible = false; l.intensity = 0; }
     }
     this.debris.setShadows(ultra);
-    this.trails.setIntensity(high ? 2.7 : 2.2);
+    this.trails.setIntensity(high ? 1.6 : 1.3);
     this.sparks.setScale(high ? 1 : 1.15);
+    this.flashes.setScale(high ? 1 : 0.9);
     this.smoke.setScale(high ? 1 : 1.2);
     this.smoke.material.uniforms.uOpacity.value = q === 'low' ? 0.72 : 1;
     this.fluid.setScale(1);
@@ -938,6 +963,7 @@ export class EffectsDirector {
     this.smoke.reset();
     this.debris.reset();
     this.shock.reset();
+    this.flashes.reset();
     this.decals.reset();
     this.trails.reset();
 
@@ -977,6 +1003,7 @@ export class EffectsDirector {
     this.smoke?.dispose();
     this.debris?.dispose();
     this.shock?.dispose();
+    this.flashes?.dispose();
     this.decals?.dispose();
     this.trails?.dispose();
     if (this.textures) for (const t of Object.values(this.textures)) t.dispose();

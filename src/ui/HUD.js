@@ -68,7 +68,6 @@ export class HUD {
     }));
     this.lastName = [null, null];
     this.lastWins = [-1, -1];
-    this.meterFull = [false, false];
 
     this.combo = fighters.map(() => ({
       visible: false, hits: 0, shownHits: 0, damage: 0, tag: 'COMBO', holdTimer: 0,
@@ -227,7 +226,15 @@ export class HUD {
     bus.on('roundStart', (e) => this.#queueAnnounce('round', `ROUND ${e.round}`));
     bus.on('roundEnd', (e) => this.#onRoundEnd(e));
     bus.on('phase', (e) => this.#onPhase(e));
-    bus.on('meterFull', (e) => { this.meterFull[e.fighter.index] = true; });
+    bus.on('meterFull', (e) => this.#onMeterFull(e.fighter.index));
+  }
+
+  #onMeterFull(i) {
+    const el = this.meters[i]?.frame;
+    if (!el) return;
+    el.classList.remove('meter--burst');
+    void el.offsetWidth; // restart the CSS animation
+    el.classList.add('meter--burst');
   }
 
   #onPhase({ phase }) {
