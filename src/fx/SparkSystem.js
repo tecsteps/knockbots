@@ -17,10 +17,11 @@
  *  - **Three size tiers per burst.** A burst whose particles are all one size
  *    reads as a puff however many of them there are, because nothing in it
  *    establishes scale. See `TIERS`.
- *  - **A real cooling curve.** `sparkEmission` walks a blackbody hue path and
- *    drops luminance with a steep power law, so the burst reads as white-hot
- *    metal for two frames and cherry-red embers for the rest of its life — which
- *    is what makes a hit feel like it happened to metal.
+ *  - **A real cooling curve.** `sparkEmission` walks a blackbody hue path from
+ *    white through pale yellow and orange to a cherry red that is well under the
+ *    display range, and drops luminance far faster than it drops hue. That is
+ *    what makes a hit feel like it happened to metal, and it is why bursts are
+ *    tuned in tenths of a second: the curve is over long before the buffer is.
  *
  * Sparks are additive, never write depth, and test against it, so they occlude
  * correctly behind the fighters without needing to be sorted.
@@ -102,6 +103,7 @@ void main() {
   float streakK = aStyle.x;
 
   vec4 mv;
+  float along = 1.0;
   if ( streakK < 0.02 ) {
     // A fragment is a chip of plate, not a filament: it tumbles about its own
     // axis at a rate set by how much of the blow it took.
@@ -111,7 +113,6 @@ void main() {
     // Head of the streak sits on the particle; the body trails behind it.
     float len = sz * ( 1.0 + clamp( speed * uStreak * streakK, 0.0, 11.0 ) );
     vec2 corner = vec2( position.x, position.y - 0.5 );
-    float along;
     mv = streakBillboard( p, vel, corner, sz, len, along );
   }
   gl_Position = projectionMatrix * mv;
@@ -126,7 +127,28 @@ void main() {
   float sputter = 0.3 * clamp( streakK, 0.25, 1.5 );
   float flicker = 1.0 - sputter + sputter * sin( seed * 61.7 + uTime * 78.0 + hash11( seed ) * 6.28 );
   float heat = uHeat * flicker * exp( -bounces * 0.18 );
-  vColor = sparkEmission( t, heat ) * aTint;
+
+  // Two offsets onto the cooling ramp, and they are the whole reason a burst
+  // reads as temperature rather than as one colour of confetti. A population
+  // that all shares a birth time also shares a position on the ramp, so however
+  // good the ramp is the frame only ever shows one point of it.
+  //
+  //  - Thermal mass. A filament of oxide is cherry-red within two frames; a chip
+  //    of plate holds white heat for the length of its arc. aStyle.x already
+  //    sorts the tiers by exactly the property that decides this — how fine the
+  //    particle is — so the fines run their ramp half again as fast as the
+  //    fragments do, and every frame of the burst contains both ends of it.
+  //  - Along the streak. The head of a smear is the particle now; the tail is
+  //    where it was two frames ago and has had two frames to cool. Shading the
+  //    quad from head to tail is free — streakBillboard already returns the
+  //    coordinate — and it is what a photograph of a spark actually looks like.
+  //
+  // Both are clamped at the mid tier. Letting the fines run away puts most of
+  // the burst's particles at the dim end of the ramp on the contact frame, and
+  // the hit loses the punch that the count was bought for.
+  float fine = clamp( streakK, 0.0, 1.0 );
+  float tt = t * ( 1.0 + 0.30 * fine ) + ( 1.0 - along ) * 0.28 * fine;
+  vColor = sparkEmission( clamp( tt, 0.0, 1.0 ), heat ) * aTint;
 }`;
 
 const FRAG = /* glsl */ `
@@ -169,7 +191,7 @@ export class SparkSystem {
         uTangentFriction: { value: 0.66 },
         uDrag: { value: 0.82 },
         uSizeScale: { value: 1 },
-        uStreak: { value: 0.17 },
+        uStreak: { value: 0.30 },
         uHeat: { value: 1.0 },
         uOpacity: { value: 1 },
       },

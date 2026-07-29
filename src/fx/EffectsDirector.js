@@ -63,54 +63,61 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
 /**
  * Per-weight impact recipe. Every number here is a readability decision.
  *
- * The persistence hierarchy is deliberate and it is the opposite of the obvious
- * one: `flashLife` is two to four frames, `coreLife` is under a second, and the
- * sparks burn for two. The flare is the event; the cooling metal is the moment
- * after it; the embers falling out of the air are the evidence it left. Getting
- * that the wrong way round leaves a reaction animation playing out over a
- * contact point that is still a bright ball half a second later, which is the
- * single loudest way an impact announces itself as geometry — and leaves the
- * rest of the reaction with nothing in it at all.
+ * The persistence hierarchy is deliberate: `flashLife` is two to four frames,
+ * `sparkLife` is ten to eighteen, and `coreLife` is the only element still
+ * visible half a second later. A hit is an instantaneous event and the sparks
+ * are the loudest part of it, so they have to be gone before the eye has
+ * finished reading the reaction pose.
  *
- * The spark counts are large on purpose. `SparkSystem` splits every burst into
- * three size tiers, and a tier that only gets a dozen particles does not read as
- * a population — it reads as a handful of stray dots. A launcher throwing a
- * thousand sparks is one buffer upload and one draw call.
+ * The sparks used to burn for one to two seconds. Over that long the ballistic
+ * integrator does exactly what it should — drag bleeds the horizontal speed off,
+ * gravity brings everything down, and the whole population settles into a
+ * glowing carpet on the floor between the fighters' feet. That carpet is not an
+ * impact; it is a campfire, and it sits there under a reaction animation that
+ * has moved on. Short lives put the mass back on the strike line where the blow
+ * happened, which is the only place it means anything.
+ *
+ * The spark counts stay large. `SparkSystem` splits every burst into three size
+ * tiers, and a tier that only gets a dozen particles does not read as a
+ * population — it reads as a handful of stray dots. A launcher throwing eight
+ * hundred sparks is one buffer upload and one draw call. `ember` is the
+ * exception: it is a small garnish of slower motes at the contact, not a second
+ * burst, so it is counted in tens.
  */
 const HIT_FX = {
   [WEIGHT.LIGHT]: {
-    sparks: 190, jet: 64, speed: 7.4, size: 0.028, heat: 2.6, sparkLife: 1.1,
+    sparks: 190, jet: 64, speed: 7.4, size: 0.028, heat: 2.6, sparkLife: 0.16,
     ring: 0.48, ringLife: 0.17, thick: 0.2, ringHeat: 1.5,
     flash: 0.26, flashHeat: 3.2, flashLife: 0.075,
-    core: 0.10, coreHeat: 2.6, coreLife: 0.42, ember: 40,
+    core: 0.10, coreHeat: 2.6, coreLife: 0.42, ember: 10,
     debris: 0, fluid: 0, light: 3.0, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
-    sparks: 340, jet: 105, speed: 8.6, size: 0.032, heat: 3.0, sparkLife: 1.35,
+    sparks: 340, jet: 105, speed: 8.6, size: 0.032, heat: 3.0, sparkLife: 0.19,
     ring: 0.82, ringLife: 0.22, thick: 0.2, ringHeat: 1.9,
     flash: 0.36, flashHeat: 3.8, flashLife: 0.09,
-    core: 0.13, coreHeat: 3.4, coreLife: 0.55, ember: 90,
+    core: 0.13, coreHeat: 3.4, coreLife: 0.55, ember: 16,
     debris: 0, fluid: 5, light: 5.0, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
-    sparks: 680, jet: 200, speed: 10.4, size: 0.038, heat: 3.4, sparkLife: 1.65,
+    sparks: 680, jet: 200, speed: 10.4, size: 0.038, heat: 3.4, sparkLife: 0.24,
     ring: 1.5, ringLife: 0.3, thick: 0.24, ringHeat: 2.4,
     flash: 0.56, flashHeat: 4.6, flashLife: 0.11,
-    core: 0.19, coreHeat: 4.4, coreLife: 0.72, ember: 220,
+    core: 0.19, coreHeat: 4.4, coreLife: 0.72, ember: 26,
     debris: 8, fluid: 12, light: 12.0, impact: 0.55, dust: 6,
   },
   [WEIGHT.LAUNCHER]: {
-    sparks: 780, jet: 225, speed: 11.4, size: 0.04, heat: 3.5, sparkLife: 1.8,
+    sparks: 780, jet: 225, speed: 11.4, size: 0.04, heat: 3.5, sparkLife: 0.26,
     ring: 1.8, ringLife: 0.34, thick: 0.25, ringHeat: 2.6,
     flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
-    core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 260,
+    core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 30,
     debris: 10, fluid: 14, light: 14.0, impact: 0.62, dust: 8,
   },
   [WEIGHT.ULTRA]: {
-    sparks: 1150, jet: 330, speed: 14.5, size: 0.048, heat: 4.0, sparkLife: 2.0,
+    sparks: 1150, jet: 330, speed: 14.5, size: 0.048, heat: 4.0, sparkLife: 0.30,
     ring: 2.85, ringLife: 0.44, thick: 0.28, ringHeat: 3.0,
     flash: 0.7, flashHeat: 6.0, flashLife: 0.16,
-    core: 0.28, coreHeat: 5.6, coreLife: 0.9, ember: 380,
+    core: 0.28, coreHeat: 5.6, coreLife: 0.9, ember: 42,
     debris: 18, fluid: 26, light: 26.0, impact: 1.0, dust: 14,
   },
 };
@@ -373,19 +380,19 @@ export class EffectsDirector {
       heat: recipe.heat * 1.15,
     });
 
-    // Slow embers, thrown almost straight up out of the contact. Deliberately
-    // slow: the fast sparks are nine metres away and out of frame within a
-    // second, and a reaction animation that runs for two needs something left at
-    // the place the blow landed. These arc up, fall back through the contact,
-    // bounce, and are cherry-red by the time they settle.
+    // A few slow embers lofted out of the contact, to give the burst a near
+    // field that is not travelling at ten metres a second. They are the tail of
+    // the same event, not a second one: barely faster than the fighters, no
+    // inherited velocity to carry them downrange, and dead a handful of frames
+    // after the fast sparks are. Given a longer life they simply fall out of the
+    // strike line and pile up on the floor.
     if (recipe.ember) {
       _v2.copy(_n).setY(_n.y * 0.35 + 1.1).normalize();
       this.sparks.burst(e.point, _v2, {
         count: recipe.ember * scale,
-        speed: recipe.speed * 0.26,
+        speed: recipe.speed * 0.22,
         spread: 0.85,
-        life: recipe.sparkLife * 1.5,
-        inherit: _v3.copy(_n).multiplyScalar(recipe.speed * 0.12),
+        life: recipe.sparkLife * 1.25,
         size: recipe.size * 0.8,
         heat: recipe.heat * 0.85,
       });
@@ -463,7 +470,7 @@ export class EffectsDirector {
     const roll = this.#screenRoll(_n);
 
     this.sparks.burst(e.point, _n, {
-      count: 210, speed: 7.2, spread: 0.34, life: 0.65, size: 0.028,
+      count: 210, speed: 7.2, spread: 0.34, life: 0.2, size: 0.028,
       heat: 2.6, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.6),
     });
     this.shock.spawn(e.point, {
@@ -483,7 +490,7 @@ export class EffectsDirector {
       heat: 3.4, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.5), distort: 1.2,
     });
     this.sparks.burst(e.point, _v.set(0, 1, 0), {
-      count: 320, speed: 8.5, spread: 1.0, life: 0.85, size: 0.032, heat: 3.2, tint: _c,
+      count: 320, speed: 8.5, spread: 1.0, life: 0.26, size: 0.032, heat: 3.2, tint: _c,
     });
     this.flashes.pop(e.point, { size: 0.6, life: 0.11, heat: 4.4, tint: _c });
     this.flashes.pop(e.point, { size: 0.24, life: 0.55, heat: 3.2, cool: true });
@@ -494,7 +501,7 @@ export class EffectsDirector {
   #onArmor(e) {
     if (!this.enabled || !e?.point) return;
     this.sparks.burst(e.point, _v.set(0, 0.6, 0).normalize(), {
-      count: 260, speed: 5.4, spread: 1.0, life: 0.75, size: 0.032, heat: 2.7,
+      count: 260, speed: 5.4, spread: 1.0, life: 0.22, size: 0.032, heat: 2.7,
     });
     this.shock.spawn(e.point, {
       mode: 'facing', radius: 0.9, life: 0.3, thickness: 0.24,
@@ -515,7 +522,7 @@ export class EffectsDirector {
       count: 18, speed: 6.4, spread: 1.3, size: 0.085, life: 6.5, color: _c,
     });
     this.sparks.burst(e.point, _n, {
-      count: 700, speed: 9.6, spread: 0.72, life: 1.05, size: 0.04, heat: 3.4,
+      count: 700, speed: 9.6, spread: 0.72, life: 0.28, size: 0.04, heat: 3.4,
     });
     this.#palette(e.fighter, 'emissive', _c2);
     this.fluid.spray(e.point, _n, {
@@ -545,13 +552,14 @@ export class EffectsDirector {
       heat: 1.6, tint: _c.setRGB(0.9, 0.86, 0.78), distort: 0.7,
     });
     this.#groundDust(_v, 7, 2.6, 0.26);
-    // Boots tearing off the floor throw a low ember shower that is still
-    // glowing when the launched fighter reaches the top of the arc — the one
-    // piece of the hit that survives long enough to punctuate the whole
-    // reaction rather than just its first four frames.
+    // Boots tearing off the floor scrape a short ember shower out of the
+    // concrete. It has to die with the launch itself: this burst is spawned at
+    // floor level, so anything that outlives its own upward arc lands straight
+    // back down and becomes a glowing pool at the fighters' feet — exactly where
+    // there is no longer anything happening.
     _v3.copy(_v).setY(this.floorY + 0.12);
     this.sparks.burst(_v3, _v2.set(0, 1, 0), {
-      count: 200, speed: 5.4, spread: 0.9, life: 1.5, size: 0.032, heat: 2.6,
+      count: 90, speed: 5.4, spread: 0.9, life: 0.26, size: 0.032, heat: 2.6,
     });
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.9, { life: 14, strength: 0.34 });
   }
@@ -578,7 +586,7 @@ export class EffectsDirector {
     _n.copy(e.normal && e.normal.lengthSq() > 1e-6 ? e.normal : _v.set(0, 1, 0)).normalize();
     const roll = this.#screenRoll(_n);
     this.sparks.burst(e.point, _n, {
-      count: 820, speed: 11.6, spread: 0.62, life: 1.1, size: 0.046, heat: 3.6,
+      count: 820, speed: 11.6, spread: 0.62, life: 0.3, size: 0.046, heat: 3.6,
     });
     this.#palette(e.fighter, 'trim', _c);
     this.debris.burst(e.point, _n, {
@@ -619,7 +627,7 @@ export class EffectsDirector {
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.7 + 0.8 * k, { life: 16, strength: 0.3 + 0.22 * k });
     if (k > 0.9) {
       this.sparks.burst(_v, _v2.set(0, 1, 0), {
-        count: 240, speed: 5.0, spread: 1.0, life: 0.8, size: 0.03, heat: 2.5,
+        count: 240, speed: 5.0, spread: 1.0, life: 0.24, size: 0.03, heat: 2.5,
       });
       this.decals.add(DECAL.FRACTURE, _v.x, _v.z, 0.9, { life: 20, strength: 0.4 });
     }
@@ -697,7 +705,7 @@ export class EffectsDirector {
       tint: _c, emissive: 0.55,
     });
     this.sparks.burst(_v.setY(this.floorY + 0.2), _v2.set(0, 1, 0), {
-      count: 340, speed: 7.0, spread: 0.55, life: 0.8, size: 0.028, heat: 2.8, tint: _c,
+      count: 340, speed: 7.0, spread: 0.55, life: 0.45, size: 0.028, heat: 2.8, tint: _c,
     });
   }
 
@@ -722,7 +730,7 @@ export class EffectsDirector {
     });
     _v3.copy(_v).setY(this.floorY + 0.1);
     this.sparks.burst(_v3, _v2.set(0, 1, 0), {
-      count: 560, speed: 9.0, spread: 0.5, life: 1.2, size: 0.028,
+      count: 560, speed: 9.0, spread: 0.5, life: 0.5, size: 0.028,
       heat: 2.8, tint: _c,
     });
     // The plume is charged, not incandescent. Pushing its self-illumination up
@@ -752,7 +760,7 @@ export class EffectsDirector {
     _n.set(e?.attacker?.facing || 1, 0.2, 0).normalize();
     const roll = this.#screenRoll(_n);
     this.sparks.burst(_v, _v2.copy(_n).setY(0.55).normalize(), {
-      count: 900, speed: 14.0, spread: 0.7, life: 1.2, size: 0.038, heat: 3.6,
+      count: 900, speed: 14.0, spread: 0.7, life: 0.34, size: 0.038, heat: 3.6,
     });
     this.shock.spawn(_v, {
       mode: 'facing', tilt: roll, radius: 2.8, life: 0.55, thickness: 0.28,
@@ -791,6 +799,11 @@ export class EffectsDirector {
    * A ring of dust kicked outward along the floor. Spawned a little above the
    * floor plane: a billboard whose centre sits on the ground cuts a hard line
    * across it on tiers that have no depth prepass to fade against.
+   *
+   * The life is short for the same reason the sparks' is. A puff that grows for
+   * a second is at its largest and its most opaque at the end, so it is still a
+   * solid tan mass sitting on the fighter's boots long after the blow that threw
+   * it — which is the one place in the frame nothing should be drawing the eye.
    */
   #groundDust(at, count, speed, size) {
     const c = Math.max(1, Math.round(count * this.budget));
@@ -800,7 +813,7 @@ export class EffectsDirector {
       _v2.set(Math.cos(a), 0.42, Math.sin(a)).normalize();
       this.smoke.puff(_v3, {
         count: Math.min(4, c - i), dir: _v2, speed, spread: 0.7, radius: 0.24,
-        size, growth: 1.2, life: 0.95, buoyancy: 0.18, curl: 1.1, tint: DUST,
+        size, growth: 1.2, life: 0.62, buoyancy: 0.18, curl: 1.1, tint: DUST,
       });
     }
   }

@@ -47,7 +47,9 @@ const b = (v) => Math.max(0, Math.min(255, Math.round(v * 255)));
 /**
  * A single spark: a soft-ended capsule that the vertex shader stretches along
  * the velocity vector. Radially the profile is a tight gaussian so the streak
- * still has a hot filament core after being stretched twenty times its width.
+ * still has a hot filament core after being stretched twenty times its width,
+ * and it is greyscale — the colour of a spark is entirely the cooling ramp's
+ * business.
  * @param {number} [size]
  */
 export function bakeSparkTexture(size = 64) {
@@ -61,14 +63,20 @@ export function bakeSparkTexture(size = 64) {
     for (let x = 0; x < size; x++) {
       const u = (x + 0.5) / size;
       const r = Math.abs(u - 0.5) * 2;
-      const across = Math.exp(-r * r * 7.5);
+      const across = Math.exp(-r * r * 11);
       const core = Math.exp(-r * r * 42) * along;
       const a = clamp01(across * along);
       const i = (y * size + x) * 4;
-      // RGB is a temperature weight: the filament core stays white far longer.
-      data[i] = b(clamp01(a + core * 1.6));
-      data[i + 1] = b(clamp01(a * 0.85 + core * 1.2));
-      data[i + 2] = b(clamp01(a * 0.5 + core));
+      // RGB is a luminance weight and nothing else: the filament core carries
+      // extra radiance so a stretched streak keeps a hot centre line. Any hue
+      // baked in here multiplies the cooling ramp, so a warm map turns every
+      // spark — however far down the ramp it has cooled — back into the same
+      // yellow. That is the whole mechanism behind a burst reading as gold
+      // confetti, and no amount of work on the ramp itself survives it.
+      const w = b(clamp01(a + core * 1.6));
+      data[i] = w;
+      data[i + 1] = w;
+      data[i + 2] = w;
       data[i + 3] = b(a);
     }
   }

@@ -57,6 +57,12 @@
   /* Type */
   --kb-font-display: 'Eurostile Extended', 'Bank Gothic', 'Segoe UI Semibold',
     'Arial Narrow', 'Helvetica Neue', Impact, sans-serif;
+  /* Small HUD labels ("ROUND 1", "OVERDRIVE") route through this, not the
+   * procedural stencil face in Typeface.js — that face is cut for a 100px+
+   * cap height and its counters close up below ~16px. A clean condensed
+   * system sans, letterspaced, is what actually stays legible at label size. */
+  --kb-font-label: 'Bank Gothic', 'Eurostile Extended', 'Segoe UI Semibold',
+    'Arial Narrow', 'Helvetica Neue', Impact, sans-serif;
   --kb-font-mono: 'Chivo Mono', 'JetBrains Mono', 'SF Mono', 'Consolas',
     'Roboto Mono', monospace;
 
@@ -492,8 +498,20 @@
   align-items: center;
   padding-top: 0.1em;
 }
+/*
+ * The timer is the one focal readout every fighting-game HUD builds the top
+ * bar around; it was rendering as a tiny 1.2em numeral lost between the two
+ * health bars. `.timer-value`'s font-size is relative to `.hud`'s own
+ * clamped root size (inherited straight down through `.hud-top` /
+ * `.timer-wrap` / `.timer-frame`, none of which set their own font-size), so
+ * 5.4em is what actually lands the numeral at ~100-120px cap height at
+ * 1920x1080 — not the roughly 3x jump the number alone suggests. The frame
+ * is fixed at a width wide enough for the widest two-digit reading
+ * ("88"-class advance) so it never resizes as the count ticks down through
+ * narrower digits like "1".
+ */
 .timer-frame {
-  width: 2.6em; height: 1.65em;
+  width: 9em; height: 6.5em;
   display: grid; place-items: center;
   background: linear-gradient(180deg, #0d1119, #070a10);
   clip-path: polygon(14% 0, 86% 0, 100% 30%, 100% 70%, 86% 100%, 14% 100%, 0 70%, 0 30%);
@@ -501,7 +519,7 @@
   filter: drop-shadow(0 0.3em 0.6em rgba(0, 0, 0, 0.5));
 }
 .timer-value {
-  font-size: 1.2em;
+  font-size: 5.4em;
   height: 1em;
 }
 .timer-frame.timer--tense {
@@ -517,11 +535,15 @@
   50% { transform: scale(1.14); }
 }
 .round-label {
-  margin-top: 0.35em;
-  font-size: 0.6em;
-  height: 1em;
-  --kb-ink-a: #aab4c6;
-  --kb-ink-b: #4b5567;
+  margin-top: 0.4em;
+  font-family: var(--kb-font-label);
+  font-size: 0.62em;
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--kb-text-dim);
+  text-shadow: 0 0.1em 0.15em rgba(0, 0, 0, 0.8);
 }
 
 /* -- overdrive meter ------------------------------------------------- */
@@ -604,14 +626,17 @@
   100% { box-shadow: var(--kb-shadow-panel), var(--kb-glow-cyan); filter: brightness(1); }
 }
 .meter-label {
-  font-size: 0.55em;
-  height: 1em;
-  --kb-ink-a: #aab4c6;
-  --kb-ink-b: #4b5567;
+  font-family: var(--kb-font-label);
+  font-size: 0.58em;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--kb-text-dim);
+  text-shadow: 0 0.1em 0.15em rgba(0, 0, 0, 0.8);
+  transition: color 0.2s ease;
 }
 .meter-label.meter-label--full {
-  --kb-ink-a: #d8fbff;
-  --kb-ink-b: #1a94ac;
+  color: var(--kb-cyan);
   filter: drop-shadow(0 0 0.5em rgba(63, 224, 255, 0.65));
 }
 

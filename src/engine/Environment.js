@@ -31,13 +31,19 @@
  * same amount is what makes hard-surface armour read as one grey shape.
  *
  * Depth is carried by real aerial perspective rather than by darkness. The mood
- * fog colours are lifted, desaturated and pulled toward the surround, so a
- * barrier twenty metres out loses contrast and drifts toward the sky instead of
- * sinking toward black. Distance that reads as "gets darker" is the inverse of
- * what the eye expects and it flattens a stage into a backdrop. `FogExp2` is
- * quadratic in depth, which puts effectively none of that on the fighters at
- * five to eight metres and all of it on the set behind them — the localised
- * behaviour the rig is built around, not the global veil it replaced.
+ * fog colours are desaturated and pulled toward the surround, so a barrier
+ * twenty metres out loses contrast and drifts toward the sky instead of sinking
+ * toward black. Distance that reads as "gets darker" is the inverse of what the
+ * eye expects and it flattens a stage into a backdrop. `FogExp2` is quadratic in
+ * depth, which puts effectively none of that on the fighters at five to eight
+ * metres and all of it on the set behind them — the localised behaviour the rig
+ * is built around, not the global veil it replaced.
+ *
+ * The haze is held to roughly a third of the mood's own mid-ground luminance,
+ * which is the part that had to be walked back. Aerial perspective that reaches
+ * the value of the thing it is veiling stops being depth and becomes milk: the
+ * barrier, the crowd and the far skyline all arrive at the same light grey and
+ * the mid-ground loses the contrast it was supposed to be trading away.
  *
  * Two cubes are baked from the same scene at chest height (0, 1.4, 0), so the
  * parallax of the practical quads is correct for a standing robot:
@@ -95,30 +101,37 @@ const FIGHTER_RIG_COUNT = 2;
  * The cone is the part that had to be measured: three's penumbra is the
  * fraction of the cone spent ramping, so the plateau is `angle * (1 - penumbra)`.
  * At 0.85 that plateau is five degrees — a spotlight nominally lighting a whole
- * fighter that actually delivers full strength to a hand-sized patch. 0.36 puts
- * a metre and a half of plateau on the fighter at 3.2 metres with another metre
- * of skirt around it, so an outstretched arm is still inside the light.
+ * fighter that actually delivers full strength to a hand-sized patch. 0.42 puts
+ * a 1.2-metre plateau radius on the fighter at 3.2 metres with another metre of
+ * skirt around it, so an outstretched arm is still inside the light while the
+ * ramp does the work of keeping the far half of the body out of it.
  */
 const RIM = {
   radius: 3.2,
   elevationDeg: 20,
   /** Aim height above the fighter's root — a standing robot's chest. */
   aimHeight: 1.2,
-  angle: 0.66,
-  penumbra: 0.36,
+  angle: 0.62,
+  penumbra: 0.42,
   decay: 2,
   range: 7.5,
   /**
    * Candela per unit of the mood's authored rim irradiance. `radius²` is folded
-   * in at use. Well above one because a rim is meant to overdrive: on brushed
-   * metal the edge is carried by a specular lobe seen at a grazing angle, so the
-   * cosine term is already throwing most of it away. A rim budgeted to match the
-   * key measures the same on a light meter and disappears on screen — at
-   * gameplay framing, where the fighter is two hundred pixels tall and the edge
-   * it has to draw is three of them wide, it has to be several stops hotter than
-   * the key before it separates rather than merely brightening the back plane.
+   * in at use. Above one because a rim is meant to overdrive: on brushed metal
+   * the edge is carried by a specular lobe seen at a grazing angle, so the
+   * cosine term is already throwing most of it away, and a rim budgeted to match
+   * the key measures the same on a light meter and disappears on screen.
+   *
+   * There is a ceiling on that argument and it was found the expensive way. At
+   * 2.6 the cool spot delivered four times the key's irradiance at the subject
+   * and the warm kicker delivered two and a half; both sit three-quarters behind
+   * but a point source at 3.2 metres wraps, so between them they lit the flanks
+   * and most of the front harder than the key did. The silhouette edge was
+   * excellent and the body inside it was one flat value, which is the trade the
+   * critic called out. 1.7 keeps the rim pass at roughly twice the key — hot
+   * enough to draw the edge, not hot enough to become the key.
    */
-  gain: 2.6,
+  gain: 1.7,
 };
 
 /**
@@ -131,10 +144,12 @@ const DIRECTIONAL_RIM_SHARE = 0.34;
 
 /**
  * Radiance of an env-scene practical quad per unit of RectAreaLight power.
- * Tuned so four practicals contribute roughly 0.3–0.5 of ambient irradiance —
- * enough to be seen as shaped highlights, not enough to flatten the rig.
+ * Tuned so four practicals contribute roughly 0.2–0.35 of ambient irradiance —
+ * enough to be seen as shaped highlights, not enough to flatten the rig. The
+ * quads only exist inside the environment cube, so this number is an ambient
+ * term in everything but name and every unit of it is spent against the key.
  */
-const QUAD_GAIN = 0.16;
+const QUAD_GAIN = 0.11;
 
 /**
  * Minimum hue separation, in turns, a mood must keep between its key and its
@@ -194,24 +209,36 @@ function practical(pos, target, w, h, color, power, flickerAmp, flickerHz, seed)
 // read, while the sun sits at 1e1–1e3 and the practicals at 4–36 to give bloom
 // and the specular lobes something genuinely HDR to bite on.
 //
-// Three rules were paid for in rendered frames rather than guessed at:
-//   - the key sits 40–50° off the camera axis at 40–48° elevation. Higher and
-//     flatter both kill the lit-side/shadow-side read on hard-surface armour.
+// Four rules were paid for in rendered frames rather than guessed at:
+//   - there is exactly one key and it has to win. It sits 30–40° off the camera
+//     axis at 37–40° elevation, warm against a cool ambient, and it is the
+//     brightest thing landing on a front plane. Raked at that elevation the
+//     terminator runs vertically across a chest plate instead of sliding down
+//     it, so the value gradient the eye uses to place the source survives being
+//     two hundred pixels tall.
 //   - the rims are nearly horizontal (11–17°) and well behind. A rim above the
 //     subject washes a side plane; a rim beside it draws the silhouette edge,
 //     which is the entire point. `rim.intensity` is the budget for the whole
-//     rim pass and it runs at 1.3–2.2× the key; the per-fighter spots take the
-//     majority of it and multiply again by {@link RIM}.gain.
+//     rim pass; the per-fighter spots take the majority of it and multiply
+//     again by {@link RIM}.gain, which lands the cool rim near 2× the key and
+//     the warm kicker (`rimB`) below it. Those two ratios are the whole rig.
+//     Push the rim past the key and the fighter loses its lit side; drop it
+//     under the key and the fighter merges into the set.
 //   - `fill` and `bounce` stay under a fifth of the key. They keep the shadow
 //     side off paper black and do nothing else. Whatever they add, they add
 //     equally to the lit plane, the side plane and the wall four metres behind,
 //     so they buy readability at the direct cost of form.
+//   - `bgSky` keeps the visible surround well under the light falling on the
+//     fighters. It is not a look control; it is the figure/ground separation
+//     every fighting game leans on, and it is cheap to spend and expensive to
+//     get back.
 //
-// `fog.color` is aerial perspective, so it is authored as a lifted, desaturated
-// relative of the mood's own haze — the colour a kilometre of lit air would be,
-// not a darker version of the set. `StageStructure` reads it too and drives the
-// parallaxed skyline off it at 2.4×, which is why the far city warms or cools
-// with the mood without a second table.
+// `fog.color` is aerial perspective, so it is authored as a desaturated relative
+// of the mood's own haze — the colour a few hundred metres of lit air would be,
+// not a darker version of the set. It is deliberately kept below the mid-ground
+// it veils; `StageStructure` reads it too and drives the parallaxed skyline off
+// it at 2.4×, so a fog colour raised until it looks right on its own arrives on
+// the far city at more than twice that and takes the whole backdrop with it.
 // ---------------------------------------------------------------------------
 
 /** @type {Record<string, object>} */
@@ -251,17 +278,20 @@ const MOODS = {
     screens: { color: C(0x7fd4ff), intensity: 1.7, count: 9, y: 0.2, height: 0.05 },
     structure: { count: 11, width: 0.15, dark: 0.16 },
     floorRefl: 0.32,
-    key: { color: C(0xffe6c6), intensity: 6.6, dir: dir(38, 44) },
-    rim: { color: C(0x38ccff), intensity: 10.6, dir: dir(214, 16), hueDrift: 0.018 },
+    // Tungsten work light against the shop's cold fluorescent ambient. The
+    // warm/cool split is between this and `fill`/`sky`, not between this and
+    // the rim — the rim only has to clear it in hue, and it already does.
+    key: { color: C(0xffdcae), intensity: 8.6, dir: dir(32, 38) },
+    rim: { color: C(0x38ccff), intensity: 9.4, dir: dir(214, 16), hueDrift: 0.018 },
     // Rose rather than sodium. The kicker draws the flank the cool rim cannot
     // reach, and on an orange robot an orange kicker draws nothing at all.
-    rimB: { color: C(0xff5a6a), intensity: 6.4, dir: dir(326, 13) },
+    rimB: { color: C(0xff5a6a), intensity: 3.6, dir: dir(326, 13) },
     bounce: { color: C(0x6b7c94), intensity: 0.2, dir: dir(280, -22) },
     fill: { sky: C(0x36506b), ground: C(0x181310), intensity: 0.15 },
-    fog: { color: C(0x46596f), density: 0.030 },
+    fog: { color: C(0x2c3a4c), density: 0.028 },
     shaft: { color: C(0xbfd8ff), intensity: 0.85 },
-    envIntensity: 0.56,
-    bgSky: 0.4,
+    envIntensity: 0.52,
+    bgSky: 0.26,
     bgLights: 0.6,
     bgKnee: 0.5,
     exposure: 1.0,
@@ -309,16 +339,18 @@ const MOODS = {
     structure: { count: 9, width: 0.13, dark: 0.1 },
     floorRefl: 0.55,
     // The key is sodium street light, not moonlight. A cool key under cyan neon
-    // leaves the rim a near-neighbour and the whole frame one temperature.
-    key: { color: C(0xffc98e), intensity: 5.6, dir: dir(46, 44) },
-    rim: { color: C(0x18dcff), intensity: 12.0, dir: dir(212, 14), hueDrift: 0.035 },
-    rimB: { color: C(0xff2fb0), intensity: 6.6, dir: dir(328, 12) },
+    // leaves the rim a near-neighbour and the whole frame one temperature. It
+    // also has to be the loudest thing in a mood built entirely out of coloured
+    // sources, or the fighters read as another sign.
+    key: { color: C(0xffc98e), intensity: 7.6, dir: dir(40, 38) },
+    rim: { color: C(0x18dcff), intensity: 10.4, dir: dir(212, 14), hueDrift: 0.035 },
+    rimB: { color: C(0xff2fb0), intensity: 4.0, dir: dir(328, 12) },
     bounce: { color: C(0x8a4fd0), intensity: 0.26, dir: dir(290, -20) },
     fill: { sky: C(0x3d1a60), ground: C(0x0a0810), intensity: 0.13 },
-    fog: { color: C(0x4a2a68), density: 0.036 },
+    fog: { color: C(0x2e1a42), density: 0.032 },
     shaft: { color: C(0xff6fd0), intensity: 0.85 },
-    envIntensity: 0.6,
-    bgSky: 0.42,
+    envIntensity: 0.56,
+    bgSky: 0.28,
     bgLights: 0.66,
     bgKnee: 0.46,
     exposure: 1.05,
@@ -365,15 +397,15 @@ const MOODS = {
     screens: { color: C(0xffb04a), intensity: 2.4, count: 7, y: 0.14, height: 0.05 },
     structure: { count: 13, width: 0.12, dark: 0.09 },
     floorRefl: 0.5,
-    key: { color: C(0xff9c52), intensity: 6.0, dir: dir(36, 42) },
-    rim: { color: C(0x3f9dff), intensity: 9.6, dir: dir(216, 15), hueDrift: 0.02 },
-    rimB: { color: C(0xffd08a), intensity: 5.2, dir: dir(324, 11) },
+    key: { color: C(0xff9c52), intensity: 7.8, dir: dir(32, 37) },
+    rim: { color: C(0x3f9dff), intensity: 8.8, dir: dir(216, 15), hueDrift: 0.02 },
+    rimB: { color: C(0xffd08a), intensity: 3.4, dir: dir(324, 11) },
     bounce: { color: C(0xff5a20), intensity: 0.5, dir: dir(275, -30) },
     fill: { sky: C(0x4d1408), ground: C(0x2a0a03), intensity: 0.2 },
-    fog: { color: C(0x6a2c16), density: 0.040 },
+    fog: { color: C(0x431c0e), density: 0.036 },
     shaft: { color: C(0xff8a3a), intensity: 1.0 },
-    envIntensity: 0.58,
-    bgSky: 0.4,
+    envIntensity: 0.54,
+    bgSky: 0.26,
     bgLights: 0.66,
     bgKnee: 0.46,
     exposure: 0.95,
@@ -421,16 +453,16 @@ const MOODS = {
     structure: { count: 15, width: 0.11, dark: 0.12 },
     floorRefl: 0.4,
     // Warmer than a broadcast key really is. A neutral key is only neutral next
-    // to something, and next to a cyan rim it just reads as the same light.
-    key: { color: C(0xffe6c2), intensity: 7.2, dir: dir(44, 46) },
-    rim: { color: C(0x1fb0ff), intensity: 10.8, dir: dir(215, 17), hueDrift: 0.012 },
-    rimB: { color: C(0xff4a5e), intensity: 6.0, dir: dir(325, 14) },
+    // to something, and next to a blue ambient it just reads as the same light.
+    key: { color: C(0xffe4bc), intensity: 9.2, dir: dir(38, 40) },
+    rim: { color: C(0x1fb0ff), intensity: 9.6, dir: dir(215, 17), hueDrift: 0.012 },
+    rimB: { color: C(0xff4a5e), intensity: 3.8, dir: dir(325, 14) },
     bounce: { color: C(0x8fa3ba), intensity: 0.22, dir: dir(284, -24) },
     fill: { sky: C(0x2d3b4d), ground: C(0x121417), intensity: 0.16 },
-    fog: { color: C(0x3a4a5e), density: 0.026 },
+    fog: { color: C(0x243040), density: 0.024 },
     shaft: { color: C(0xdce9ff), intensity: 0.95 },
-    envIntensity: 0.56,
-    bgSky: 0.36,
+    envIntensity: 0.52,
+    bgSky: 0.24,
     bgLights: 0.58,
     bgKnee: 0.55,
     exposure: 1.0,
@@ -477,15 +509,15 @@ const MOODS = {
     screens: { color: C(0xffe0b0), intensity: 1.2, count: 8, y: 0.11, height: 0.04 },
     structure: { count: 10, width: 0.17, dark: 0.06 },
     floorRefl: 0.28,
-    key: { color: C(0xffb478), intensity: 7.4, dir: dir(206, 21) },
-    rim: { color: C(0x6aa8ff), intensity: 9.4, dir: dir(332, 14), hueDrift: 0.014 },
-    rimB: { color: C(0xffd8a0), intensity: 5.0, dir: dir(258, 9) },
+    key: { color: C(0xffb478), intensity: 9.4, dir: dir(206, 19) },
+    rim: { color: C(0x6aa8ff), intensity: 8.6, dir: dir(332, 14), hueDrift: 0.014 },
+    rimB: { color: C(0xffd8a0), intensity: 3.2, dir: dir(258, 9) },
     bounce: { color: C(0xc89060), intensity: 0.3, dir: dir(80, -26) },
     fill: { sky: C(0x6a90d0), ground: C(0x3a2620), intensity: 0.22 },
-    fog: { color: C(0x8a7060), density: 0.030 },
+    fog: { color: C(0x5c4a3e), density: 0.028 },
     shaft: { color: C(0xffc890), intensity: 1.0 },
-    envIntensity: 0.64,
-    bgSky: 0.2,
+    envIntensity: 0.6,
+    bgSky: 0.13,
     bgLights: 0.42,
     bgKnee: 0.6,
     exposure: 1.05,

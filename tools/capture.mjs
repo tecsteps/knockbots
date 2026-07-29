@@ -58,9 +58,24 @@ const SHOTS = [
   },
   {
     name: '04-impact',
-    note: 'Mid-combo impact frame — FX, hitstop, camera punch.',
+    note: 'The contact frame itself — sparks, flash, hitstop, camera punch.',
+    // Impact FX live 160-300ms. A fixed settle delay photographs the aftermath,
+    // not the impact, so this shot arms a bus listener and freezes the frame the
+    // hit actually lands. `impactOffset` then steps a precise number of ticks
+    // past contact. See docs/CRITIC.md — earlier impact scores were measured on
+    // frames taken after every spark had already died.
     setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });`,
-    settle: 700,
+    freezeOnHit: true,
+    impactOffset: 1,
+    settle: 0,
+  },
+  {
+    name: '04b-impact-decay',
+    note: 'Eight ticks past contact — spark travel, ember fall, debris arc.',
+    setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });`,
+    freezeOnHit: true,
+    impactOffset: 8,
+    settle: 0,
   },
   {
     name: '05-juggle',
@@ -165,19 +180,45 @@ async function main() {
     if (window.KB.phase !== 'fight') { window.KB.startMatch(0, 1); window.KB.setPhase('fight'); }
   `;
 
+  // Arms a one-shot bus listener that records the tick a hit lands on and
+  // freezes the simulation `offset` ticks later. This is the only way to
+  // photograph an impact whose effects live a fifth of a second.
+  const ARM_HIT_FREEZE = (offset) => `(() => {
+    window.__kbHit = null;
+    window.KB.timeScale = 0.05;
+    const off = ${offset};
+    const stop = window.KB.bus.on('hit', (e) => {
+      window.__kbHit = { tick: window.KB.tick };
+      stop();
+      const wait = () => {
+        if (window.KB.tick - window.__kbHit.tick >= off) { window.KB.paused = true; window.__kbHit.frozen = true; }
+        else requestAnimationFrame(wait);
+      };
+      wait();
+    });
+  })()`;
+
   for (const shot of list) {
     try {
       await page.evaluate(`(() => { try { ${ENTER_MATCH} } catch (e) { console.error('enter', e); } })()`);
       await page.waitForTimeout(500);
+      if (shot.freezeOnHit) await page.evaluate(ARM_HIT_FREEZE(shot.impactOffset ?? 0));
       await page.evaluate(`(() => { try { ${shot.setup} } catch (e) { console.error('shot setup', e); } })()`);
+      if (shot.freezeOnHit) {
+        await page.waitForFunction('window.__kbHit && window.__kbHit.frozen', null, { timeout: 15000 })
+          .catch(() => console.warn(`[capture] ${shot.name}: no hit landed, frame is not a contact frame`));
+      }
     } catch (e) {
       console.warn(`[capture] setup failed for ${shot.name}: ${e.message}`);
     }
-    await page.waitForTimeout(shot.settle);
+    if (shot.settle) await page.waitForTimeout(shot.settle);
     const file = resolve(OUT, `${shot.name}.png`);
     await page.screenshot({ path: file });
+    if (shot.freezeOnHit) {
+      await page.evaluate('window.KB.paused = false; window.KB.timeScale = 1;');
+    }
     manifest.push({ name: shot.name, note: shot.note, file });
-    console.log(`[capture] ${shot.name}`);
+    console.log(`[capture] ${shot.name}${shot.freezeOnHit ? ' (frozen at contact)' : ''}`);
   }
 
   const fps = await page.evaluate(`window.KB?.renderer?.stats?.fps ?? null`);

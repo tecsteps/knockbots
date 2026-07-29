@@ -28,6 +28,12 @@
  *
  * A fighter auto-turns when crossed up, but never in the middle of an attack —
  * that is what makes crossovers and back throws readable.
+ *
+ * Clips may also carry their own yaw in the root track: a spin kick turns the
+ * whole chassis through 360 degrees. That is applied as `animYaw`, an offset ON
+ * TOP of the facing yaw, never as a change to `facing` itself — so a spin swings
+ * the body and its hitboxes without ever deciding which way the fighter ends up
+ * pointing, and auto-turn keeps working underneath it.
  */
 
 import * as THREE from 'three';
@@ -80,11 +86,19 @@ const LAUNCH_SCALE = 0.85;
 const FOOT_CLEAR = 0.055;       // ankle height above the floor when planted
 // How much of the animation's authored root translation the body actually takes.
 const ROOT_MOTION_SCALE = 1.0;
+// Per-tick share of the leftover animation yaw that unwinds once no clip is
+// driving it. A move may spin the chassis; it may not decide where it ends up.
+const ANIM_YAW_RELEASE = 0.22;
 
 /** +1 when the rig's local +Z is its front. See the file header. */
 export const FORWARD_SIGN = 1;
 /** Root yaw that points the rig's front along the fighter's facing. */
 export const yawForFacing = (facing) => facing * FORWARD_SIGN * Math.PI / 2;
+/** Wrap an angle into (-PI, PI]. A full turn is not a turn. */
+const wrapPi = (a) => {
+  const x = (a + Math.PI) % (Math.PI * 2);
+  return (x < 0 ? x + Math.PI * 2 : x) - Math.PI;
+};
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -120,6 +134,12 @@ let _probeRig = null;
 
 /**
  * Tick at which `clipId` reaches its furthest forward extension.
+ *
+ * Measured on the unspun rig, deliberately. A spinning clip's root yaw is a
+ * presentation offset — the body turns, the fighter's facing does not — and
+ * folding it in here would re-warp six clips' playback speed off a peak that
+ * sweeps past the camera rather than toward the opponent. The frame data is law;
+ * this only says which tick of the art to line up with it.
  * @param {string} clipId
  * @returns {number} 0 when the clip has no meaningful strike
  */
@@ -194,6 +214,10 @@ export class Fighter {
 
     this.facing = index === 0 ? 1 : -1;
     this.visualYaw = yawForFacing(this.facing);
+    // Yaw the animation is currently adding on top of `facing`, and its value
+    // on the previous tick so render() can interpolate across a spin.
+    this.animYaw = 0;
+    this.prevAnimYaw = 0;
     this.position = new THREE.Vector3((index === 0 ? -1.9 : 1.9), 0, 0);
     this.prevPosition = this.position.clone();
     this.velocity = new THREE.Vector3();
@@ -420,6 +444,8 @@ export class Fighter {
     this.velocity.set(0, 0, 0);
     this.facing = facing;
     this.visualYaw = yawForFacing(facing);
+    this.animYaw = 0;
+    this.prevAnimYaw = 0;
     this.health = MAX_HEALTH;
     this.recoverable = 0;
     this.meter = Math.min(this.meter, METER_MAX * 0.25);
@@ -468,6 +494,7 @@ export class Fighter {
     this.simTick++;
     this.stateTicks++;
     this.prevPosition.copy(this.position);
+    this.prevAnimYaw = this.animYaw;
     this.cmd = cmd;
     this.wallImpact = null;
 
@@ -786,6 +813,7 @@ export class Fighter {
         // fighter ends up where the animation actually put it.
         if (this.animator.consumeRootMotion) {
           const rm = this.animator.consumeRootMotion();
+          this.#advanceRootYaw(rm.yaw, this.animator.rootYawDrive ?? 0);
           _v.set(rm.x * ROOT_MOTION_SCALE, 0, rm.z * ROOT_MOTION_SCALE).applyAxisAngle(UP, yawForFacing(this.facing));
           this.position.x += _v.x;
           this.position.z += _v.z;
@@ -794,6 +822,7 @@ export class Fighter {
       this.animator.applyTo(this.bones, 1);
     }
     this.prevPosition.copy(this.position);
+    this.prevAnimYaw = this.animYaw;
     this.#writePose();
     this.#buildHurtboxes();
     this.#buildHitboxes();
@@ -1402,18 +1431,41 @@ export class Fighter {
     this.animator.simulate(this.simTick);
     if (!this.animator.consumeRootMotion) return;
     const rm = this.animator.consumeRootMotion();
-    if (this.state === STATE.THROW || this.state === STATE.THROWN || this.state === STATE.KO) return;
-    if (!rm.x && !rm.z) return;
+    // Paired and dead states place the body by hand; the clip does not get a
+    // vote, so its root motion is dropped and any leftover spin unwinds.
+    const paired = this.state === STATE.THROW || this.state === STATE.THROWN || this.state === STATE.KO;
+    this.#advanceRootYaw(paired ? 0 : rm.yaw, paired ? 0 : this.animator.rootYawDrive ?? 0);
+    if (paired || (!rm.x && !rm.z)) return;
+    // Authored translation is in the clip's own frame, which the spin does not
+    // rotate — the yaw turns the body about its axis, not its line of travel.
     _v.set(rm.x * ROOT_MOTION_SCALE, 0, rm.z * ROOT_MOTION_SCALE)
       .applyAxisAngle(UP, yawForFacing(this.facing));
     this.position.x += _v.x;
     this.position.z += _v.z;
   }
 
+  /**
+   * Fold this tick's authored root yaw into the offset the body is rendered and
+   * struck with.
+   *
+   * The offset follows the clip exactly while the clip is driving it, wraps at a
+   * full turn so a 360 spin costs nothing, and bleeds back to neutral as the
+   * drive fades — so a move that ends 180 degrees round pivots back to face the
+   * opponent over its recovery instead of leaving the fighter back-turned.
+   * @param {number} dYaw  radians of authored yaw this tick
+   * @param {number} drive 0..1 share of the animation still authoring yaw
+   */
+  #advanceRootYaw(dYaw, drive) {
+    let yaw = this.animYaw + dYaw;
+    if (drive < 1) yaw -= yaw * ANIM_YAW_RELEASE * (1 - drive);
+    if (yaw > Math.PI || yaw <= -Math.PI) yaw = wrapPi(yaw);
+    this.animYaw = Math.abs(yaw) < 1e-4 ? 0 : yaw;
+  }
+
   /** Write the simulated transform and the canonical pose onto the scene graph. */
   #writePose() {
     this.group.position.copy(this.position);
-    this.group.rotation.y = yawForFacing(this.facing);
+    this.group.rotation.y = yawForFacing(this.facing) + this.animYaw;
     if (this.animator) this.animator.applyTo(this.bones, 1);
     this.group.updateMatrixWorld(true);
   }
@@ -1575,7 +1627,9 @@ export class Fighter {
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
     this.visualYaw += delta * Math.min(1, dt * 14);
-    this.group.rotation.y = this.visualYaw;
+    // The animation's own yaw rides on top, interpolated the short way round so
+    // the frame a spin wraps at is not rendered as a full turn backwards.
+    this.group.rotation.y = this.visualYaw + this.prevAnimYaw + wrapPi(this.animYaw - this.prevAnimYaw) * alpha;
 
     if (this.animator) this.animator.applyTo(this.bones, alpha);
     this.group.updateMatrixWorld(true);

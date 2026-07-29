@@ -28,6 +28,9 @@ async function main() {
   // fighter state machine rather than poking the animator behind its back.
   window.KB = game;
   window.KB.MOVES = (await import('./combat/Moves.js')).MOVES;
+  // The capture harness has to freeze on the exact contact frame: impact sparks
+  // live 160-300ms, so a fixed settle delay photographs an empty floor.
+  window.KB.bus = (await import('./core/Bus.js')).bus;
   window.dispatchEvent(new CustomEvent('knockbots:ready'));
 
   setTimeout(() => boot?.classList.add('hidden'), 250);

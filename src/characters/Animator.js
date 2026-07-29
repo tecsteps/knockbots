@@ -33,7 +33,10 @@
  * Root motion is extracted, not applied: horizontal translation and yaw are
  * accumulated into a delta that Fighter drains with consumeRootMotion() and
  * feeds to the physical body. Vertical root motion stays visual by default,
- * because height is owned by the physics integrator.
+ * because height is owned by the physics integrator. Alongside the delta the
+ * animator publishes `rootYawDrive`, the share of the base layer that is
+ * actually authoring yaw this tick, so the consumer can tell "the clip is
+ * mid-spin" from "the clip has let go and the residual should unwind".
  */
 
 import * as THREE from 'three';
@@ -297,6 +300,9 @@ export class Animator {
     this.rootMotionAxes = { x: true, y: false, z: true, yaw: true };
     this._rootAccum = new THREE.Vector3();
     this._rootYawAccum = 0;
+    /** 0..1 share of the base layer authoring root yaw this tick. */
+    this.rootYawDrive = 0;
+    this._yawClips = new WeakMap();
 
     // --- IK -----------------------------------------------------------------
     /** @type {Record<string, {target:THREE.Vector3|null, weight:number, current:number, preserveEnd:boolean, space:string}>} */
@@ -743,6 +749,19 @@ export class Animator {
   }
 
   /**
+   * Does this clip's root track author any yaw at all? A property of the data,
+   * so it is answered once and cached; it is asked for every entry every tick.
+   */
+  #authorsYaw(clip) {
+    let v = this._yawClips.get(clip);
+    if (v === undefined) {
+      v = !!(clip.root && clip.root.some((k) => k.ry));
+      this._yawClips.set(clip, v);
+    }
+    return v;
+  }
+
+  /**
    * Drain the root-motion delta accumulated since the last call.
    * The vector is in the fighter's LOCAL space using the clip convention from
    * AnimationFormat: -Z is forward, +X is the fighter's left, +Y is up. Fighter
@@ -760,6 +779,7 @@ export class Animator {
   clearRootMotion() {
     this._rootAccum.set(0, 0, 0);
     this._rootYawAccum = 0;
+    this.rootYawDrive = 0;
   }
 
   // =========================================================================
@@ -1017,6 +1037,7 @@ export class Animator {
       }
       // Root motion is extracted from the base layer only, weight-normalised so
       // a crossfade blends the two clips' motion instead of summing it.
+      let yawDrive = 0;
       for (const e of base.entries) {
         if (e.weight <= 1e-6) continue;
         const w = e.weight / total;
@@ -1024,7 +1045,11 @@ export class Animator {
         if (this.rootMotionAxes.y) this._rootAccum.y += e.dPos.y * w;
         if (this.rootMotionAxes.z) this._rootAccum.z += e.dPos.z * w;
         if (this.rootMotionAxes.yaw) this._rootYawAccum += e.dYaw * w;
+        if (this.#authorsYaw(e.clip)) yawDrive += w;
       }
+      this.rootYawDrive = yawDrive;
+    } else {
+      this.rootYawDrive = 0;
     }
     // Zero the axes we extracted so the visual root never double-applies them.
     if (this.rootMotionAxes.x) out.rootPos.x = 0;

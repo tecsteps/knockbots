@@ -182,7 +182,7 @@ export class HUD {
     timerFrame.appendChild(timerValue);
     const roundLabel = document.createElement('div');
     roundLabel.className = 'round-label';
-    applyKbText(roundLabel, 'ROUND 1');
+    roundLabel.textContent = 'ROUND 1';
     timerWrap.append(timerFrame, roundLabel);
 
     top.append(this.sides[0].block, timerWrap, this.sides[1].block);
@@ -214,7 +214,7 @@ export class HUD {
       block.className = `meter-block meter-block--${p}`;
       const label = document.createElement('div');
       label.className = 'meter-label';
-      applyKbText(label, 'OVERDRIVE');
+      label.textContent = 'OVERDRIVE';
       const frame = document.createElement('div');
       frame.className = 'meter-frame';
       const fill = document.createElement('div');
@@ -513,7 +513,7 @@ export class HUD {
     }
     const rt = `ROUND ${game.round ?? 1}`;
     if (rt !== this.lastRoundText) {
-      applyKbText(this.roundLabel, rt);
+      this.roundLabel.textContent = rt;
       this.lastRoundText = rt;
     }
   }
@@ -528,7 +528,7 @@ export class HUD {
       if (full !== m._full) {
         m.frame.classList.toggle('meter--full', full);
         m.label.classList.toggle('meter-label--full', full);
-        applyKbText(m.label, full ? 'OVERDRIVE READY' : 'OVERDRIVE');
+        m.label.textContent = full ? 'OVERDRIVE READY' : 'OVERDRIVE';
         m._full = full;
       }
     }

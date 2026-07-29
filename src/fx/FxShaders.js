@@ -111,35 +111,42 @@ vec3 ballistic( vec3 p0, vec3 v0, float t, float floorY, out vec3 outVel, out fl
  * Returns *radiance*, deliberately far above 1.0 at the head so the bloom pass
  * has something real to work with.
  *
- * The luminance curve is two terms, not one. The first is the Stefan-Boltzmann
- * collapse that takes a spark from white-hot to invisible in a handful of
- * frames; the second is a slow ember floor that keeps a dim cherry-red glow
- * alive for the rest of the particle's life, which is the phase where a spark
- * has already fallen, bounced and is rolling on the floor. A single steep power
- * law kills that phase entirely and leaves a hit with nothing behind it once the
- * first two frames are over.
+ * The hue path has five stops, not three. White-hot, pale yellow, saturated
+ * yellow, orange and finally a dark cherry that is well under the display range.
+ * Three stops leaves the middle of the curve sitting on yellow for most of the
+ * particle's life, and yellow at a radiance the tonemapper clips is gold — which
+ * is how a burst ends up reading as confetti rather than as cooling metal.
+ *
+ * The luminance curve is three terms. A very steep ignition spike that is white
+ * for about two frames and is what the bloom pass feeds on; the Stefan-Boltzmann
+ * collapse under it; and a thin ember term that reaches *zero* at burn-out. The
+ * ember term used to have a shallow exponent and a floor four times this high,
+ * which kept every spark a visible object for its whole life — so the useful
+ * lifetime of a burst was set by the buffer rather than by the curve.
  */
 export const GLSL_TEMPERATURE = /* glsl */ `
-/** 6500K white -> 3200K yellow -> 2000K orange -> 1100K cherry. */
+/** 6500K white -> 4200K pale -> 3000K yellow -> 1900K orange -> 1100K cherry. */
 vec3 blackbodyHue( float u ) {
-  vec3 white  = vec3( 1.00, 0.97, 0.94 );
-  vec3 yellow = vec3( 1.00, 0.78, 0.36 );
-  vec3 orange = vec3( 1.00, 0.42, 0.10 );
-  vec3 cherry = vec3( 0.72, 0.07, 0.02 );
-  vec3 c = mix( white, yellow, smoothstep( 0.0, 0.22, u ) );
-  c = mix( c, orange, smoothstep( 0.18, 0.55, u ) );
-  return mix( c, cherry, smoothstep( 0.5, 1.0, u ) );
+  vec3 white  = vec3( 1.00, 0.99, 0.97 );
+  vec3 pale   = vec3( 1.00, 0.92, 0.66 );
+  vec3 yellow = vec3( 1.00, 0.74, 0.26 );
+  vec3 orange = vec3( 1.00, 0.36, 0.05 );
+  vec3 cherry = vec3( 0.58, 0.05, 0.01 );
+  vec3 c = mix( white, pale, smoothstep( 0.00, 0.09, u ) );
+  c = mix( c, yellow, smoothstep( 0.07, 0.30, u ) );
+  c = mix( c, orange, smoothstep( 0.28, 0.60, u ) );
+  return mix( c, cherry, smoothstep( 0.56, 0.94, u ) );
 }
 
 vec3 sparkEmission( float t, float heat ) {
   float u = clamp( t, 0.0, 1.0 );
-  // Hue runs ahead of the clock. A spark that is white for the first third of
-  // its life is a burst of white confetti; the real thing is white for a couple
-  // of frames, yellow for a tenth of a second, and cherry-red for the rest.
-  float hue = pow( u, 0.72 );
-  float flash = pow( 1.0 - u, 4.5 ) * 0.95;
-  float ember = pow( 1.0 - u, 0.55 ) * 0.42;
-  return blackbodyHue( hue ) * heat * ( flash + ember );
+  // Hue runs slightly ahead of the clock so the white phase stays short even on
+  // the longest-lived tier.
+  float hue = pow( u, 0.85 );
+  float core  = pow( 1.0 - u, 10.0 ) * 2.6;
+  float flash = pow( 1.0 - u, 3.2 ) * 0.62;
+  float ember = ( 1.0 - u ) * ( 1.0 - u ) * 0.12;
+  return blackbodyHue( hue ) * heat * ( core + flash + ember );
 }`;
 
 /**

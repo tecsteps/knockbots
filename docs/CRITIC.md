@@ -67,3 +67,23 @@ Score each 0–100. **80 is the ship bar.** Below 80 means iterate, not ship.
   passes: boolean           // score >= 80
 }
 ```
+
+## Correction: impact scores before round 5 are invalid
+
+An independent review by a second model (Codex GPT-5.6 Sol, read-only over the repo)
+found that `tools/capture.mjs` photographed the `04-impact` shot **700ms after
+`forceHit()`**, while impact sparks in `src/fx/EffectsDirector.js` live **160–300ms**.
+`TestHarness.forceHit()` never paused on contact either, despite the shot's own note
+claiming it captured hitstop.
+
+Every impact score up to and including round 4 — 42, 41, 52 — was therefore measured on a
+frame taken 400–540ms after the last spark had already died. Those numbers say nothing
+about the effects and should not be compared against later ones.
+
+The harness now arms a `hit` bus listener, slows the simulation, and freezes the frame a
+precise number of ticks past contact: `04-impact` at +1 tick and `04b-impact-decay` at +8.
+Impact is re-baselined from round 5 onward.
+
+The general lesson applies beyond this axis: **a visual score is only as trustworthy as the
+capture that produced it.** Before believing a bad score, confirm the shot actually shows
+the thing being judged.
