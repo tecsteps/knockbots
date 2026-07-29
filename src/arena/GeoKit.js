@@ -315,6 +315,78 @@ export function truss(length, depth, opts = {}) {
 }
 
 /**
+ * Portal crane: two braced legs, a box girder, a cantilevered boom and the
+ * machinery house between them.
+ *
+ * Distance in a stage is read from *known* objects, not from small ones. A
+ * crane has a size everybody already has a number for, so a crane a third the
+ * height of the last one is unarguably three times as far away — which is why
+ * this shape is worth having as a primitive rather than as a box.
+ *
+ * @param {number} span leg centre to leg centre
+ * @param {number} height rail to girder top
+ * @param {object} [opts]
+ * @param {number} [opts.boom=0] cantilever beyond the +X leg; 0 for none
+ * @param {number} [opts.member] member width; defaults to a fraction of height
+ * @returns {THREE.BufferGeometry} origin at rail level, centred on the span
+ */
+export function portalCrane(span, height, opts = {}) {
+  const m = opts.member ?? Math.max(0.28, height * 0.035);
+  const boom = opts.boom ?? 0;
+  const parts = [];
+
+  for (const s of [-1, 1]) {
+    const x = s * span / 2;
+    // Legs splay outward at the base: a vertical post reads as a pole, a
+    // splayed A-frame reads as something built to carry a load.
+    for (const d of [-1, 1]) {
+      const foot = [x + s * d * 0, 0, d * span * 0.06];
+      const top = [x, height - m, d * span * 0.02];
+      parts.push(segment(foot, top, m * 0.62, m * 0.5, 4));
+    }
+    for (let i = 1; i < 4; i++) {
+      const y = (i / 4) * height;
+      parts.push(place(bevelBox(m * 0.7, m * 0.5, span * 0.13, m * 0.1), { pos: [x, y, 0] }));
+    }
+    // End truck straddling the rail.
+    parts.push(place(bevelBox(m * 2.2, m * 0.9, span * 0.2, m * 0.15), { pos: [x, m * 0.45, 0] }));
+  }
+
+  const girder = span + boom;
+  const gx = boom / 2;
+  parts.push(place(bevelBox(girder, m * 1.5, m * 1.2, m * 0.2), { pos: [gx, height - m * 0.75, 0] }));
+  parts.push(place(bevelBox(girder, m * 0.4, m * 2.4, m * 0.12), { pos: [gx, height + 0.05, 0] }));
+  if (boom > 0) {
+    // Tie back to the far leg head, the detail that says cantilever.
+    const tie = spanX([span / 2 + boom - m, height + m * 1.4, 0], [-span / 2 + m, height + m * 3.2, 0]);
+    parts.push(place(bevelBox(tie.length, m * 0.4, m * 0.4, m * 0.1), { pos: tie.pos, rot: tie.rot }));
+    parts.push(place(bevelBox(m * 0.6, m * 3.4, m * 0.6, m * 0.12), { pos: [-span / 2 + m, height + m * 1.7, 0] }));
+  }
+  // Trolley and machinery house.
+  parts.push(place(bevelBox(m * 3.4, m * 2.0, m * 2.6, m * 0.2), { pos: [-span * 0.18, height - m * 2.5, 0] }));
+  parts.push(place(bevelBox(m * 2.2, m * 1.2, m * 2.0, m * 0.2), { pos: [span * 0.24, height - m * 2.0, 0] }));
+  return mergeAll(parts);
+}
+
+/**
+ * Tapered industrial stack with reinforcing bands and a flared cap. Extends
+ * along +Y from the origin.
+ * @param {number} height
+ * @param {number} radius at the base; the top is 60% of it
+ * @param {number} [bands=4]
+ */
+export function chimney(height, radius, bands = 4) {
+  const parts = [place(new THREE.CylinderGeometry(radius * 0.6, radius, height, 14, 1), { pos: [0, height / 2, 0] })];
+  for (let i = 1; i <= bands; i++) {
+    const t = i / (bands + 1);
+    const r = radius * (1 - 0.4 * t) * 1.08;
+    parts.push(place(new THREE.CylinderGeometry(r, r, height * 0.012 + 0.06, 14, 1), { pos: [0, t * height, 0] }));
+  }
+  parts.push(place(new THREE.CylinderGeometry(radius * 0.72, radius * 0.58, height * 0.03 + 0.2, 14, 1), { pos: [0, height, 0] }));
+  return mergeAll(parts);
+}
+
+/**
  * A pipe run with flanges at each joint. The flanges are what stop a tube from
  * reading as a bent cylinder.
  */
@@ -402,10 +474,16 @@ export const CROWD_ARCHETYPES = 6;
  * holds — and the arms are always built, because the gap between an arm and the
  * ribcage is the one hole that tells the eye it is looking at a person.
  *
+ * Skin and clothing are separated into an `aSkin` vertex mask rather than left
+ * to one flat tint. A crowd where the heads share the value of the coats is a
+ * row of bollards; the light band of a face above a dark collar is the thing
+ * that makes forty silhouettes resolve into forty people.
+ *
  * @param {number} [seed] varies proportion, stance and headwear within an archetype
  * @param {number} [archetype] 0 stand, 1 cheer, 2 lean on rail, 3 arms folded,
  *   4 filming, 5 hunched with hands pocketed
- * @returns {THREE.BufferGeometry} origin at the feet, facing -Z
+ * @returns {THREE.BufferGeometry} origin at the feet, facing -Z, carrying a
+ *   float `aSkin` attribute that is 1 on bare skin and 0 on clothing
  */
 export function crowdFigure(seed = 0, archetype = 0) {
   const r = (n) => {
@@ -427,6 +505,7 @@ export function crowdFigure(seed = 0, archetype = 0) {
   // metres — close that gap and it collapses straight back into a capsule.
   const shoulderX = 0.26 * bulk;
   const parts = [];
+  const skin = [];
 
   // Everything above the waist is rotated about the hip pivot, so a lean moves
   // the shoulders, the head and both hands together instead of shearing them.
@@ -459,8 +538,8 @@ export function crowdFigure(seed = 0, archetype = 0) {
   // Head, neck and one of four hat silhouettes.
   const neck = at(0, shoulderY + 0.02);
   const head = at(0, shoulderY + 0.19 * tall, 0.02);
-  parts.push(segment(neck, head, 0.052, 0.056));
-  parts.push(place(new THREE.SphereGeometry(0.102 * tall, 9, 7), { pos: head, scale: [0.95, 1.1, 1] }));
+  skin.push(segment(neck, head, 0.052, 0.056));
+  skin.push(place(new THREE.SphereGeometry(0.102 * tall, 9, 7), { pos: head, scale: [0.95, 1.1, 1] }));
   const hat = (r(5) * 4) | 0;
   if (hat === 0) {
     parts.push(place(new THREE.CylinderGeometry(0.108 * tall, 0.104 * tall, 0.08, 9), { pos: [head[0], head[1] + 0.07, head[2]] }));
@@ -504,9 +583,18 @@ export function crowdFigure(seed = 0, archetype = 0) {
     }
     parts.push(segment(sh, elbow, armR * 1.15, armR));
     parts.push(segment(elbow, hand, armR, armR * 0.82));
-    parts.push(place(new THREE.SphereGeometry(armR * 1.25, 6, 5), { pos: hand }));
+    skin.push(place(new THREE.SphereGeometry(armR * 1.25, 6, 5), { pos: hand }));
   }
-  return mergeAll(parts);
+
+  // Clothing first, skin second, so the mask is one contiguous run and can be
+  // filled from a single vertex offset instead of tagged part by part.
+  const clothed = mergeAll(parts);
+  const bare = mergeAll(skin);
+  const geo = mergeAll([clothed, bare]);
+  const mask = new Float32Array(geo.attributes.position.count);
+  mask.fill(1, clothed.attributes.position.count);
+  geo.setAttribute('aSkin', new THREE.Float32BufferAttribute(mask, 1));
+  return geo;
 }
 
 /**

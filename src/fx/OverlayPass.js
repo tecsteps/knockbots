@@ -76,13 +76,15 @@ void main() {
     float dist = length( da );
     float R = max( ring.z * 0.5 * uAspect, 1e-4 );
     // Narrow gaussian band riding the shock front, with a weaker counter-lobe
-    // just inside it. Wide bands warp recognisable geometry and read as a bug.
-    float w = R * 0.10 + 0.004;
+    // just inside it. This is deliberately hairline: a wide band displaces
+    // recognisable geometry over a large area, and a metre-wide smear of warped
+    // crowd and fence reads as dirt on the lens rather than as a pressure front.
+    float w = R * 0.045 + 0.003;
     float band = exp( -pow( ( dist - R ) / w, 2.0 ) );
-    float inner = exp( -pow( ( dist - R * 0.86 ) / ( w * 1.9 ), 2.0 ) ) * 0.35;
+    float inner = exp( -pow( ( dist - R * 0.93 ) / ( w * 1.9 ), 2.0 ) ) * 0.35;
     vec2 dir = dist > 1e-5 ? da / dist : vec2( 0.0 );
     dir.x /= uAspect;
-    float amt = ( band - inner ) * ring.w * 0.022;
+    float amt = ( band - inner ) * ring.w * 0.014;
     uvR += dir * amt * 1.07;
     uvG += dir * amt;
     uvB += dir * amt * 0.93;
@@ -177,23 +179,34 @@ void main() {
       // A hot core and a tight bloom halo centred on the fighter.
       float core = exp( -rad * rad * 60.0 ) * uSuper;
       float halo = exp( -rad * 4.2 ) * 0.14 * uSuper;
-      col += uSuperColor * ( beams * 0.5 + halo ) + vec3( 1.0 ) * core * 0.35;
+      // Nothing the takeover adds survives past a third of the frame. Every
+      // element here already has its own falloff, but they stack, and the sum of
+      // several gentle falloffs is a frame-wide lift — which is exactly what a
+      // blown-out super looks like from the outside.
+      float reach = exp( -rad * rad * 6.5 );
+      col += ( uSuperColor * ( beams * 0.5 + halo ) + vec3( 1.0 ) * core * 0.35 ) * reach;
       // Charge ripple travelling outward through the drained world.
       float ripple = sin( rad * 26.0 - uTime * 7.0 ) * 0.5 + 0.5;
-      col += uSuperColor * pow( ripple, 8.0 ) * falloff * uSuper * 0.14;
+      col += uSuperColor * pow( ripple, 8.0 ) * falloff * uSuper * 0.14 * reach;
       col *= 1.0 - smoothstep( 0.3, 0.95, rad ) * uSuper * 0.34;
     }
 
     // The connect flash is a blow-out at the contact, not a gel over the frame.
     // Washing all 1920x1080 pixels with the character colour reads as a bug in
     // the tone mapper; masked to a couple of hundred pixels around the impact it
-    // reads as the camera being overwhelmed by it.
-    float wash = uSuperFlash * ( 0.10 + 0.62 * exp( -rad * rad * 5.0 ) );
+    // reads as the camera being overwhelmed by it. There is deliberately no
+    // frame-wide floor term: a constant ten percent lift across two million
+    // pixels is not subtle, it is fog.
+    float wash = uSuperFlash * 0.78 * exp( -rad * rad * 9.0 );
     col = mix( col, uSuperColor * 0.35 + vec3( 0.8 ), clamp( wash, 0.0, 1.0 ) );
   }
 
   // --- punctuation ----------------------------------------------------------
-  col += uImpactTint * uImpact * 0.28;
+  // The impact tint is heat spilling off the contact, so it falls off from the
+  // contact. Added flat it is a coloured gel over the whole frame, and on an
+  // ULTRA that is a third of the display range on every pixel at once.
+  float ir = length( p - aspected( uImpactCenter * 0.5 + 0.5 ) );
+  col += uImpactTint * uImpact * 0.34 * exp( -ir * ir * 4.0 );
   col = mix( col, vec3( 1.0 ) - col, uInvert );
   col = mix( col, uFlashColor, uFlashAmount );
 

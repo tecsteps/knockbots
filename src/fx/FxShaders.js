@@ -21,6 +21,11 @@
  *    perpendicular, giving a divergence-free flow. Divergence-free is the whole
  *    point: smoke that is advected by plain noise visibly compresses and
  *    expands, which the eye reads as "wrong" without being able to say why.
+ *
+ *  - `GLSL_DEPTH_FADE` is what stops a billboard from drawing its own outline.
+ *    Every sprite that crosses opaque geometry cuts a hard circular arc across
+ *    it, and that arc is the clearest possible statement that the effect is a
+ *    quad rather than light in the air.
  */
 
 /** Integer hash; the sine-fract kind bands badly on Apple GPUs. */
@@ -128,9 +133,38 @@ vec3 blackbodyHue( float u ) {
 
 vec3 sparkEmission( float t, float heat ) {
   float u = clamp( t, 0.0, 1.0 );
-  float flash = pow( 1.0 - u, 3.2 ) * 0.78;
-  float ember = pow( 1.0 - u, 0.6 ) * 0.42;
-  return blackbodyHue( u ) * heat * ( flash + ember );
+  // Hue runs ahead of the clock. A spark that is white for the first third of
+  // its life is a burst of white confetti; the real thing is white for a couple
+  // of frames, yellow for a tenth of a second, and cherry-red for the rest.
+  float hue = pow( u, 0.72 );
+  float flash = pow( 1.0 - u, 4.5 ) * 0.95;
+  float ember = pow( 1.0 - u, 0.55 ) * 0.42;
+  return blackbodyHue( hue ) * heat * ( flash + ember );
+}`;
+
+/**
+ * Soft-particle depth fade against the pipeline's depth prepass.
+ *
+ * `uSoft` gates the sampler entirely, because the lower quality tiers have no
+ * prepass to read and an unbound sampler is undefined behaviour, not zero.
+ */
+export const GLSL_DEPTH_FADE = /* glsl */ `
+uniform sampler2D uDepth;
+uniform vec2 uResolution;
+uniform float uNear;
+uniform float uFar;
+uniform float uSoft;
+
+float viewZFromDepth( float d ) {
+  return ( uNear * uFar ) / ( ( uFar - uNear ) * d - uFar );
+}
+
+/** 0 where the sprite meets the depth buffer, 1 at range metres in front of it. */
+float depthFade( float viewZ, float range ) {
+  if ( uSoft < 0.5 ) return 1.0;
+  float d = texture2D( uDepth, gl_FragCoord.xy / uResolution ).x;
+  float sceneZ = -viewZFromDepth( d );
+  return clamp( ( sceneZ - viewZ ) / max( range, 0.02 ), 0.0, 1.0 );
 }`;
 
 /** Divergence-free 2D advection from the baked potential-gradient field. */

@@ -19,6 +19,12 @@
  * Every slot lives in one shared geometry with a fixed vertex range, so the
  * whole trail layer is a single additive draw call and no buffer is ever
  * reallocated. Retired slots collapse to a degenerate point.
+ *
+ * The one thing a swept ribbon must defend against is a discontinuity in the
+ * thing it is sweeping. A fighter that is respawned, wall-bounced or repositioned
+ * moves several metres between two frames, and a ribbon interpolated through
+ * that gap is a band of light laid across the entire arena — by far the loudest
+ * artefact this system can produce. `MAX_LIMB_SPEED` is the guard.
  */
 
 import * as THREE from 'three';
@@ -26,6 +32,12 @@ import * as THREE from 'three';
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 const _axis = new THREE.Vector3();
+
+/**
+ * Metres per second past which a sample is treated as a teleport rather than
+ * motion. Well above any real limb: a heavy's fist tops out near twenty.
+ */
+const MAX_LIMB_SPEED = 45;
 
 const VERT = /* glsl */ `
 attribute vec3 aInfo;   // alongT (0 = newest), across (-1..1), fade
@@ -55,18 +67,21 @@ varying vec3 vTint;
 
 void main() {
   // Soft analytic cross-section: bright filament in the middle of the ribbon,
-  // falling to nothing at the edges without a texture fetch.
+  // falling to nothing at the edges without a texture fetch. The exponents are
+  // deliberately steep — a ribbon with a broad plateau across it is a translucent
+  // sheet dragged through the frame, and at this width it reads as smeared glass
+  // rather than as the arc a limb travelled.
   float across = 1.0 - abs( vAcross );
-  float body = pow( clamp( across, 0.0, 1.0 ), 0.65 );
-  float core = pow( clamp( across, 0.0, 1.0 ), 6.0 );
+  float body = pow( clamp( across, 0.0, 1.0 ), 1.9 );
+  float core = pow( clamp( across, 0.0, 1.0 ), 9.0 );
 
-  float tail = pow( clamp( 1.0 - vAlong, 0.0, 1.0 ), 1.35 );
+  float tail = pow( clamp( 1.0 - vAlong, 0.0, 1.0 ), 2.1 );
   vec3 hot = vec3( 1.0, 0.98, 0.95 );
   vec3 col = mix( hot, vTint, smoothstep( 0.0, 0.42, vAlong ) );
 
   float a = body * tail * vFade * uOpacity;
   if ( a < 0.004 ) discard;
-  vec3 emit = col * ( uIntensity * ( 0.55 + core * 2.4 ) );
+  vec3 emit = col * ( uIntensity * ( 0.35 + core * 3.4 ) );
   gl_FragColor = vec4( emit, a );
 }`;
 
@@ -200,7 +215,7 @@ export class TrailSystem {
       const t = this.trails[i];
 
       if (t.active && t.bone) {
-        this.#sample(t);
+        this.#sample(t, dt);
       } else if (t.releasing >= 0) {
         t.fade -= dt * t.fadeRate;
         if (t.fade <= 0) {
@@ -226,8 +241,12 @@ export class TrailSystem {
     }
   }
 
-  /** Pushes one pair of world-space ribbon edge points into the history. */
-  #sample(t) {
+  /**
+   * Pushes one pair of world-space ribbon edge points into the history.
+   * @param {any} t slot
+   * @param {number} dt seconds since the previous sample
+   */
+  #sample(t, dt) {
     t.bone.updateWorldMatrix(true, false);
     _a.setFromMatrixPosition(t.bone.matrixWorld);
 
@@ -248,8 +267,18 @@ export class TrailSystem {
 
     const h = t.history;
     const n = this.segments;
-    // Shift the ring by writing newest into slot 0 and rotating, which for 30
-    // samples is cheaper than the modular indexing it replaces at read time.
+
+    // Discard the history when the limb has plainly been moved rather than
+    // animated, so the ribbon restarts at the new position instead of being
+    // stretched across the gap.
+    if (t.count > 0) {
+      const dx = _b.x - h[0], dy = _b.y - h[1], dz = _b.z - h[2];
+      const step = MAX_LIMB_SPEED * Math.max(dt, 1 / 240);
+      if (dx * dx + dy * dy + dz * dz > step * step) t.count = 0;
+    }
+
+    // Shift the ring by writing newest into slot 0 and rotating, which for a
+    // couple of dozen samples is cheaper than modular indexing at read time.
     h.copyWithin(6, 0, (n - 1) * 6);
     h[0] = _b.x; h[1] = _b.y; h[2] = _b.z;
     h[3] = outerX; h[4] = outerY; h[5] = outerZ;

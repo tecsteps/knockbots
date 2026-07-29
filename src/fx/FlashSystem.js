@@ -6,6 +6,24 @@
  * system draws it: an additive billboard whose shape is computed analytically
  * rather than sampled, so it stays razor sharp at any size and costs nothing.
  *
+ * Nothing here responds to light and nothing here is solid. A flash is light,
+ * so the whole system is one unlit additive shell, and three properties are what
+ * keep it reading as light rather than as a ball of geometry someone left in the
+ * air:
+ *
+ *  - **Radiance, not paint.** The core opens an order of magnitude above the
+ *    display range and collapses within a couple of frames. An effect that peaks
+ *    near 1.0 has nothing for the bloom pass to spread, so it resolves as a flat
+ *    coloured disc — which is exactly what an opaque sphere looks like.
+ *  - **A shell, not a ball.** The billboard stands in for a sphere, so the
+ *    fragment shader recovers that sphere's normal and takes the grazing term.
+ *    The line of sight crosses most material at the silhouette and almost none
+ *    through the middle, so the interior stays open and the limb carries the
+ *    colour. A filled radial gradient reads as a solid object every time.
+ *  - **No silhouette of its own.** The shape reaches zero before the quad edge,
+ *    and the halo is faded against the depth prepass, so the sprite never draws
+ *    the hard circular arc where it crosses the fighter or the floor.
+ *
  * Two modes share that billboard, because a hit needs both halves of the
  * timeline and they behave nothing alike:
  *
@@ -21,10 +39,10 @@
  *  - **Heat core** (`cool = 1`). The flare is over long before the hit reaction
  *    is, and an impact whose only bright element lasts four frames leaves the
  *    rest of the reaction with nothing at its centre. So the contact patch keeps
- *    glowing: a small blackbody blob that starts white-hot, expands once, and
- *    cools down the same yellow → orange → cherry path the sparks take, over
- *    most of a second. It is the same physics as the sparks and it is what a
- *    struck plate actually does, so it costs no credibility to hold it.
+ *    glowing: a white-hot pinpoint inside a thin shell of ionised air, which
+ *    collapses as it cools down the same yellow → orange → cherry path the
+ *    sparks take. It shrinks the whole way, because a patch that holds its size
+ *    for most of a second is an object rather than cooling metal.
  *
  * The `roll` attribute is load-bearing rather than decorative: the caller sets
  * it from the screen-space direction of the blow, so the anamorphic streak lies
@@ -33,7 +51,7 @@
 
 import * as THREE from 'three';
 import { InstancedPool } from './InstancedPool.js';
-import { GLSL_EASE, GLSL_BILLBOARD, GLSL_TEMPERATURE } from './FxShaders.js';
+import { GLSL_EASE, GLSL_BILLBOARD, GLSL_TEMPERATURE, GLSL_DEPTH_FADE } from './FxShaders.js';
 
 const VERT = /* glsl */ `
 attribute vec3 aOrigin;
@@ -43,11 +61,14 @@ attribute float aCool;    // 0 = lens flare, 1 = cooling heat core
 
 uniform float uTime;
 uniform float uSizeScale;
+uniform float uMaxRadius;
 
 varying vec2 vUv;
 varying vec3 vTint;
 varying float vEnergy;
 varying float vCool;
+varying float vViewZ;
+varying float vSize;
 
 ${GLSL_EASE}
 ${GLSL_BILLBOARD}
@@ -60,27 +81,41 @@ void main() {
   if ( life <= 0.0 || t < 0.0 || t >= 1.0 ) {
     gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
     vUv = vec2( 0.0 ); vTint = vec3( 0.0 ); vEnergy = 0.0; vCool = 0.0;
+    vViewZ = 1.0; vSize = 0.0;
     return;
   }
 
   // The flare blooms outward as it clips, the way an overexposed highlight
-  // does; the heat core punches out once and then shrinks back as it cools.
+  // does; the heat core punches out on the contact frame and then collapses.
   float grow = mix(
     0.82 + easeOutExpo( t ) * 0.5,
-    ( 0.55 + easeOutExpo( t * 6.0 ) * 0.6 ) * ( 1.0 - 0.55 * t ),
+    ( 0.46 + easeOutExpo( t * 9.0 ) * 0.74 ) * ( 1.0 - 0.68 * t ),
     aCool
   );
   float sz = size * uSizeScale * grow;
+
+  // Screen-radius ceiling. A metre-wide flare on a cinematic that pushes the
+  // camera in to a metre and a half covers the whole frame and takes the fight
+  // with it. Capping the world size by its projected radius holds the outer
+  // frame readable wherever the camera ends up, and costs one divide.
+  float viewZ = -( viewMatrix * vec4( aOrigin, 1.0 ) ).z;
+  float ndcPerMetre = projectionMatrix[ 1 ][ 1 ] / max( viewZ, 1e-3 );
+  sz = min( sz, uMaxRadius / max( ndcPerMetre, 1e-4 ) );
+
   vec4 mv = billboard( aOrigin, position.xy, sz, roll );
   gl_Position = projectionMatrix * mv;
 
   vUv = uv;
   vCool = aCool;
+  vViewZ = viewZ;
+  vSize = sz;
 
   // Instant on, exponential settle. Peak energy is on the contact frame.
   float flare = impulse( 7.0, t + 0.14 ) * ( 1.0 - t );
-  // Two-term cooling: the radiant collapse, then a long ember floor.
-  float glow = pow( 1.0 - t, 1.7 ) * 0.8 + pow( 1.0 - t, 0.45 ) * 0.2;
+  // Two-term cooling: a radiant collapse that opens well above the display
+  // range, then a long dim ember floor that keeps the contact point alive under
+  // the reaction animation without ever becoming a bright object again.
+  float glow = pow( 1.0 - t, 2.6 ) * 3.4 + pow( 1.0 - t, 0.5 ) * 0.13;
   vEnergy = aTint.w * mix( flare, glow, aCool );
   vTint = mix( aTint.rgb, blackbodyHue( t ), aCool );
 }`;
@@ -92,6 +127,10 @@ varying vec2 vUv;
 varying vec3 vTint;
 varying float vEnergy;
 varying float vCool;
+varying float vViewZ;
+varying float vSize;
+
+${GLSL_DEPTH_FADE}
 
 void main() {
   if ( vEnergy < 0.002 ) discard;
@@ -99,22 +138,42 @@ void main() {
   float r = length( d );
   if ( r > 1.0 ) discard;
 
-  float vignette = 1.0 - smoothstep( 0.72, 1.0, r );
-  float core   = exp( -r * r * 17.0 );
-  float bloom  = exp( -r * 3.1 ) * 0.34;
+  // Reaches zero well before the quad edge. Any alpha still alive at r = 1 draws
+  // the sprite's own outline, and the flash becomes a visible disc.
+  float window = 1.0 - smoothstep( 0.72, 0.98, r );
+
+  float core   = exp( -r * r * 34.0 );
+  float bloom  = exp( -r * 4.4 ) * 0.16;
   float horiz  = exp( -abs( d.y ) * 44.0 ) * exp( -abs( d.x ) * 1.9 );
   float vert   = exp( -abs( d.x ) * 52.0 ) * exp( -abs( d.y ) * 2.6 ) * 0.55;
   float diagA  = exp( -abs( d.x - d.y ) * 62.0 ) * exp( -r * 3.4 );
   float diagB  = exp( -abs( d.x + d.y ) * 62.0 ) * exp( -r * 3.4 );
 
-  // The core has no lens response at all: it is hot metal seen directly, so it
-  // is a tight blob with a soft scatter halo and nothing else.
-  float flare = ( core * 1.7 + bloom + horiz * 0.95 + vert + ( diagA + diagB ) * 0.3 ) * vignette;
-  float blob  = ( exp( -r * r * 8.0 ) * 1.9 + exp( -r * 2.4 ) * 0.5 ) * vignette;
-  float shape = mix( flare, blob, vCool );
+  // Sphere normal the billboard stands in for, and the grazing term off it. A
+  // shell is brightest at its limb because that is where the line of sight
+  // crosses the most of it; through the middle there is almost nothing.
+  float nz    = sqrt( max( 0.0, 1.0 - r * r ) );
+  float limb  = pow( 1.0 - nz, 2.4 );
+  float shell = limb * exp( -pow( ( r - 0.64 ) * 4.8, 2.0 ) );
+  float pin   = exp( -r * r * 56.0 );
+
+  // Hot is the emitter itself; air is what it lights up around it. The fill
+  // between the pinpoint and the shell is kept almost to nothing on purpose: at
+  // the radiance a super runs at, even a tenth of a unit spread across a
+  // quarter of the frame is a solid white disc once the bloom pass has it.
+  float hot = mix( core * 1.7 + horiz * 0.95 + vert + ( diagA + diagB ) * 0.3, pin * 2.6, vCool );
+  float air = mix( bloom, shell * 1.2 + exp( -r * r * 11.0 ) * 0.05, vCool );
+
+  // The two halves want different depth behaviour. The pinpoint *is* the
+  // contact and sits on the surface it struck, so it keeps most of its energy
+  // hard against the geometry; the halo is scatter in the air in front of it and
+  // fades out completely, which is what removes the circular arc the quad would
+  // otherwise cut across the fighter.
+  float dfade = depthFade( vViewZ, max( vSize * 1.6, 0.12 ) );
+  float shape = ( hot * mix( 0.62, 1.0, dfade ) + air * dfade ) * window;
 
   // The centre saturates to white; the falloff keeps the hue.
-  vec3 col = mix( vTint, vec3( 1.0 ), clamp( core * 1.25, 0.0, 1.0 ) );
+  vec3 col = mix( vTint, vec3( 1.0 ), clamp( ( core + pin ) * 1.35, 0.0, 1.0 ) );
 
   // Additive blending already multiplies by alpha. Folding the shape into both
   // the colour and the alpha squares it, and a flash that peaks at fifty units
@@ -141,6 +200,13 @@ export class FlashSystem {
         uTime: { value: 0 },
         uSizeScale: { value: 1 },
         uOpacity: { value: 1 },
+        // NDC half-height, so 0.6 is a radius of roughly 30% of the frame.
+        uMaxRadius: { value: 0.6 },
+        uDepth: { value: null },
+        uResolution: { value: new THREE.Vector2(1920, 1080) },
+        uNear: { value: 0.15 },
+        uFar: { value: 260 },
+        uSoft: { value: 0 },
       },
       transparent: true,
       depthWrite: false,
@@ -197,6 +263,32 @@ export class FlashSystem {
   }
 
   setScale(s) { this.material.uniforms.uSizeScale.value = s; }
+
+  /**
+   * Hands over the pipeline's depth prepass so the halo can fade against scene
+   * geometry. Passing a null texture turns the fade off rather than sampling an
+   * unbound sampler.
+   * @param {THREE.Texture|null} depthTexture
+   * @param {number} width drawing buffer width
+   * @param {number} height drawing buffer height
+   * @param {number} near camera near plane
+   * @param {number} far camera far plane
+   */
+  setDepth(depthTexture, width, height, near, far) {
+    const u = this.material.uniforms;
+    u.uDepth.value = depthTexture || null;
+    u.uSoft.value = depthTexture ? 1 : 0;
+    u.uResolution.value.set(width, height);
+    u.uNear.value = near;
+    u.uFar.value = far;
+  }
+
+  /**
+   * Ceiling on the flash's projected radius, in NDC half-heights. This is the
+   * clamp that stops a super's contact flare from whiting out the frame.
+   * @param {number} ndcRadius
+   */
+  setMaxRadius(ndcRadius) { this.material.uniforms.uMaxRadius.value = ndcRadius; }
 
   reset() { this.pool.killAll(); }
 

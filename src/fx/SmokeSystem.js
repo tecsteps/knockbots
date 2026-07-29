@@ -21,7 +21,7 @@
 
 import * as THREE from 'three';
 import { InstancedPool } from './InstancedPool.js';
-import { GLSL_CURL, GLSL_HASH, GLSL_EASE, GLSL_BILLBOARD } from './FxShaders.js';
+import { GLSL_CURL, GLSL_HASH, GLSL_EASE, GLSL_BILLBOARD, GLSL_DEPTH_FADE } from './FxShaders.js';
 
 const _v = new THREE.Vector3();
 
@@ -84,15 +84,10 @@ void main() {
 
 const FRAG = /* glsl */ `
 uniform sampler2D uMap;
-uniform sampler2D uDepth;
 uniform vec3 uLightDir;      // view space, pointing from surface toward light
 uniform vec3 uLightColor;
 uniform vec3 uAmbient;
 uniform float uOpacity;
-uniform float uSoft;
-uniform vec2 uResolution;
-uniform float uNear;
-uniform float uFar;
 
 varying vec2 vUv;
 varying vec3 vTint;
@@ -101,9 +96,7 @@ varying float vEmissive;
 varying float vViewZ;
 varying float vSize;
 
-float viewZFromDepth( float d ) {
-  return ( uNear * uFar ) / ( ( uFar - uNear ) * d - uFar );
-}
+${GLSL_DEPTH_FADE}
 
 void main() {
   vec4 tex = texture2D( uMap, vUv );
@@ -135,12 +128,7 @@ void main() {
   vec3 col = vTint * lit + glow * vEmissive * ( 0.35 + thickness * 1.1 );
 
   // Soft particles: fade where the puff intersects opaque geometry.
-  float soft = 1.0;
-  if ( uSoft > 0.5 ) {
-    float d = texture2D( uDepth, gl_FragCoord.xy / uResolution ).x;
-    float sceneZ = -viewZFromDepth( d );
-    soft = clamp( ( sceneZ - vViewZ ) / max( vSize * 0.9, 0.05 ), 0.0, 1.0 );
-  }
+  float soft = depthFade( vViewZ, vSize * 0.9 );
 
   gl_FragColor = vec4( col, cover * soft );
 }`;

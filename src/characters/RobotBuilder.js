@@ -35,13 +35,32 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BONES } from './Skeleton.js';
 import { LAYER } from '../core/Constants.js';
 import { Rng } from '../core/Rng.js';
-import { makeMaterialLibrary } from './Materials.js';
+import { makeMaterialLibrary, makeMarkingAtlas, MARKINGS } from './Materials.js';
 
 const DEG = Math.PI / 180;
 const FRONT = -1; // multiply a "forward" offset by this to get world Z
 
 const MIRROR_X = new THREE.Matrix4().makeScale(-1, 1, 1);
 const UP = new THREE.Vector3(0, 1, 0);
+
+/**
+ * Texture density in tiles per metre, shared by every primitive here.
+ *
+ * Materials.js lays its armour panels out inside the unit tile, so this number
+ * is really "how big is a panel". Too high and a fighter at full-body framing
+ * wears brickwork — a uniform grid of small rectangles that reads as a texture
+ * rather than as designed plating. One tile per metre puts the smallest panel
+ * around 6cm and the structural ones around 20cm, which is the proportion the
+ * reference uses.
+ */
+const UV_DENSITY = 1.0;
+
+/**
+ * Chamfer width below which a rolled edge cannot resolve, in metres. A 4mm
+ * chamfer is under two pixels at full-body framing; subdividing it buys nothing
+ * and costs triangles on exactly the greebles there are hundreds of.
+ */
+const ROLL_MIN = 0.005;
 
 /** Detail tiers. 0 = primary silhouette forms, 1 = panelling, 2 = greebles. */
 const TIER = { PRIMARY: 0, SECONDARY: 1, GREEBLE: 2 };
@@ -70,6 +89,13 @@ class Surf {
     this.p.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
     this.n.push(na[0], na[1], na[2], nb[0], nb[1], nb[2], nc[0], nc[1], nc[2]);
     this.t.push(ua[0], ua[1], ub[0], ub[1], uc[0], uc[1]);
+  }
+
+  /** Triangle with per-vertex normals, auto-oriented so its winding agrees. */
+  triN(a, b, c, na, nb, nc, ua, ub, uc) {
+    const ref = [na[0] + nb[0] + nc[0], na[1] + nb[1] + nc[1], na[2] + nb[2] + nc[2]];
+    if (dot(faceNormal(a, b, c), ref) < 0) this.tri(a, c, b, na, nc, nb, ua, uc, ub);
+    else this.tri(a, b, c, na, nb, nc, ua, ub, uc);
   }
 
   /**
@@ -156,6 +182,16 @@ function newell(pts) {
   return [nx / l, ny / l, nz / l];
 }
 
+/** Great-circle interpolation between two unit directions. */
+function slerpDir(a, c, t) {
+  const om = Math.acos(Math.min(1, Math.max(-1, dot(a, c))));
+  const si = Math.sin(om);
+  if (si < 1e-6) return [a[0], a[1], a[2]];
+  const s0 = Math.sin((1 - t) * om) / si;
+  const s1 = Math.sin(t * om) / si;
+  return [a[0] * s0 + c[0] * s1, a[1] * s0 + c[1] * s1, a[2] * s0 + c[2] * s1];
+}
+
 /** Planar box projection onto the dominant axis of the face normal. */
 function boxUv(p, n, s, off) {
   const ax = Math.abs(n[0]), ay = Math.abs(n[1]), az = Math.abs(n[2]);
@@ -171,10 +207,24 @@ function boxUv(p, n, s, off) {
 // ---------------------------------------------------------------------------
 
 /**
- * Chamfered box: six inset faces, twelve edge bevels, eight corner triangles.
- * 44 triangles, and the only primitive in this file allowed to define a
- * character's primary mass. `taper` values scale the top/bottom cross-section so
- * one call produces trapezoidal pauldrons and tapering limb armour.
+ * Rolled-chamfer box: six flat faces joined by arced, smooth-shaded edge bands
+ * and matching spherical corner patches. `taper` values scale the top/bottom
+ * cross-section so one call produces trapezoidal pauldrons and tapering limb
+ * armour, and it is the only primitive here allowed to define a primary mass.
+ *
+ * Why an arc and not one flat facet. A single chamfer quad catches the key light
+ * as one hard specular line that snaps on and off as the part turns — the exact
+ * tell of a procedural model. A rolled edge carries a highlight that *travels*
+ * along the arc as the surface rotates, and that travelling highlight is what
+ * the eye reads as machined metal. The band is shaded smoothly across its rings,
+ * so even a single-facet roll is a graded ramp between the two face normals
+ * rather than a flat quad, and below `ROLL_MIN` the arc is too narrow to resolve
+ * at fighting-game distance and stays at one facet for free.
+ *
+ * Construction is a sphere-swept box: the solid is inset by the chamfer on all
+ * three axes, and every surface point is a corner of that core pushed out by the
+ * chamfer along a unit direction. Faces, bands and corners therefore share exact
+ * vertices and the shell is watertight at any roll count.
  *
  * @param {number} w width (X)
  * @param {number} h height (Y)
@@ -187,49 +237,93 @@ function boxUv(p, n, s, off) {
  * @param {number} [opts.botZ] Z scale of the -Y cross-section (defaults to botX)
  * @param {number} [opts.shearX=0] X displacement applied at +Y, linear in Y
  * @param {number} [opts.shearZ=0] Z displacement applied at +Y, linear in Y
- * @param {number} [opts.uv=1.4] UV density in tiles per metre
+ * @param {number} [opts.roll] chamfer facets; defaults to 2 above `ROLL_MIN`, else 1
+ * @param {number} [opts.uv] UV density in tiles per metre
  * @returns {THREE.BufferGeometry}
  */
 export function bevelBox(w, h, d, bevel = 0.012, opts = {}) {
-  const { topX = 1, topZ = null, botX = 1, botZ = null, shearX = 0, shearZ = 0, uv = 1.4 } = opts;
+  const { topX = 1, topZ = null, botX = 1, botZ = null, shearX = 0, shearZ = 0, uv = UV_DENSITY } = opts;
   const hx = w * 0.5, hy = h * 0.5, hz = d * 0.5;
   const tX = topX, tZ = topZ ?? topX, bX = botX, bZ = botZ ?? botX;
   const minHalf = Math.min(hx * Math.min(tX, bX), hy, hz * Math.min(tZ, bZ));
   const b = Math.max(1e-4, Math.min(bevel, minHalf * 0.42));
+  const R = Math.max(1, Math.round(opts.roll ?? (b >= ROLL_MIN ? 2 : 1)));
 
-  const V = (sx, sy, sz, axis) => {
-    const kx = hx * (sy > 0 ? tX : bX);
-    const kz = hz * (sy > 0 ? tZ : bZ);
-    let x = sx * kx, y = sy * hy, z = sz * kz;
-    if (axis === 'x') { y -= sy * b; z -= sz * b; }
-    else if (axis === 'y') { x -= sx * b; z -= sz * b; }
-    else { x -= sx * b; y -= sy * b; }
+  /** A corner of the core box: the solid inset by the chamfer on every axis. */
+  const core = (sx, sy, sz) => {
+    const kx = hx * (sy > 0 ? tX : bX) - b;
+    const kz = hz * (sy > 0 ? tZ : bZ) - b;
+    const y = sy * (hy - b);
     const f = y / (hy || 1);
-    return [x + shearX * f, y, z + shearZ * f];
+    return [sx * kx + shearX * f, y, sz * kz + shearZ * f];
+  };
+  /** Surface point: a core corner pushed out along a unit direction. */
+  const at = (sx, sy, sz, n) => {
+    const c = core(sx, sy, sz);
+    return [c[0] + n[0] * b, c[1] + n[1] * b, c[2] + n[2] * b];
   };
 
   const s = new Surf();
   const S = [-1, 1];
+  const AX = (v) => [v, 0, 0];
+  const AY = (v) => [0, v, 0];
+  const AZ = (v) => [0, 0, v];
 
-  // six inset faces
-  for (const sx of S) s.flatPoly([V(sx, 1, 1, 'x'), V(sx, 1, -1, 'x'), V(sx, -1, -1, 'x'), V(sx, -1, 1, 'x')], [sx, 0, 0], uv);
-  for (const sy of S) s.flatPoly([V(1, sy, 1, 'y'), V(1, sy, -1, 'y'), V(-1, sy, -1, 'y'), V(-1, sy, 1, 'y')], [0, sy, 0], uv);
-  for (const sz of S) s.flatPoly([V(1, 1, sz, 'z'), V(1, -1, sz, 'z'), V(-1, -1, sz, 'z'), V(-1, 1, sz, 'z')], [0, 0, sz], uv);
-
-  // twelve edge chamfers
-  for (const sx of S) for (const sy of S) {
-    s.flatPoly([V(sx, sy, -1, 'x'), V(sx, sy, -1, 'y'), V(sx, sy, 1, 'y'), V(sx, sy, 1, 'x')], [sx, sy, 0], uv);
+  // six flat faces
+  for (const sx of S) {
+    const n = AX(sx);
+    s.flatPoly([at(sx, 1, 1, n), at(sx, 1, -1, n), at(sx, -1, -1, n), at(sx, -1, 1, n)], n, uv);
   }
-  for (const sy of S) for (const sz of S) {
-    s.flatPoly([V(-1, sy, sz, 'y'), V(-1, sy, sz, 'z'), V(1, sy, sz, 'z'), V(1, sy, sz, 'y')], [0, sy, sz], uv);
+  for (const sy of S) {
+    const n = AY(sy);
+    s.flatPoly([at(1, sy, 1, n), at(1, sy, -1, n), at(-1, sy, -1, n), at(-1, sy, 1, n)], n, uv);
   }
-  for (const sx of S) for (const sz of S) {
-    s.flatPoly([V(sx, -1, sz, 'x'), V(sx, -1, sz, 'z'), V(sx, 1, sz, 'z'), V(sx, 1, sz, 'x')], [sx, 0, sz], uv);
+  for (const sz of S) {
+    const n = AZ(sz);
+    s.flatPoly([at(1, 1, sz, n), at(1, -1, sz, n), at(-1, -1, sz, n), at(-1, 1, sz, n)], n, uv);
   }
 
-  // eight corner triangles
+  // twelve rolled edge bands, swept between the two face normals they join
+  const band = (n0, n1, endA, endB) => {
+    const ref = [n0[0] + n1[0], n0[1] + n1[1], n0[2] + n1[2]];
+    for (let i = 0; i < R; i++) {
+      const a = slerpDir(n0, n1, i / R);
+      const c = slerpDir(n0, n1, (i + 1) / R);
+      const A = at(endA[0], endA[1], endA[2], a);
+      const B = at(endB[0], endB[1], endB[2], a);
+      const C = at(endB[0], endB[1], endB[2], c);
+      const D = at(endA[0], endA[1], endA[2], c);
+      s.quad(A, B, C, D, a, a, c, c,
+        boxUv(A, ref, uv), boxUv(B, ref, uv), boxUv(C, ref, uv), boxUv(D, ref, uv));
+    }
+  };
+  for (const sx of S) for (const sy of S) band(AX(sx), AY(sy), [sx, sy, -1], [sx, sy, 1]);
+  for (const sy of S) for (const sz of S) band(AY(sy), AZ(sz), [-1, sy, sz], [1, sy, sz]);
+  for (const sz of S) for (const sx of S) band(AZ(sz), AX(sx), [sx, -1, sz], [sx, 1, sz]);
+
+  // eight corner patches. Each boundary arc is the same equal-angle subdivision
+  // the adjoining band uses, so no crack can open between them.
   for (const sx of S) for (const sy of S) for (const sz of S) {
-    s.flatPoly([V(sx, sy, sz, 'x'), V(sx, sy, sz, 'y'), V(sx, sy, sz, 'z')], [sx, sy, sz], uv);
+    const ref = [sx, sy, sz];
+    const rows = [];
+    for (let i = 0; i <= R; i++) {
+      const p0 = slerpDir(AX(sx), AY(sy), i / R);
+      const p1 = slerpDir(AX(sx), AZ(sz), i / R);
+      const row = [];
+      for (let k = 0; k <= i; k++) row.push(i === 0 ? p0 : slerpDir(p0, p1, k / i));
+      rows.push(row);
+    }
+    const P = (n) => at(sx, sy, sz, n);
+    const U = (n) => boxUv(P(n), ref, uv);
+    for (let i = 1; i <= R; i++) {
+      const lo = rows[i - 1], hi = rows[i];
+      for (let k = 0; k < i; k++) {
+        s.triN(P(lo[k]), P(hi[k]), P(hi[k + 1]), lo[k], hi[k], hi[k + 1], U(lo[k]), U(hi[k]), U(hi[k + 1]));
+        if (k < i - 1) {
+          s.triN(P(lo[k]), P(hi[k + 1]), P(lo[k + 1]), lo[k], hi[k + 1], lo[k + 1], U(lo[k]), U(hi[k + 1]), U(lo[k + 1]));
+        }
+      }
+    }
   }
 
   return s.geometry();
@@ -252,11 +346,11 @@ export function bevelBox(w, h, d, bevel = 0.012, opts = {}) {
  * @param {number} [opts.arc=Math.PI*2] sweep angle
  * @param {number} [opts.phase=0] starting angle
  * @param {number} [opts.uvU=1] U tiling across the sweep
- * @param {number} [opts.uvV=1.4] V tiling per metre of profile arc length
+ * @param {number} [opts.uvV] V tiling per metre of profile arc length
  * @returns {THREE.BufferGeometry}
  */
 export function latheProfile(profile, segments = 22, opts = {}) {
-  const { faceted = false, arc = Math.PI * 2, phase = 0, uvU = 1, uvV = 1.4 } = opts;
+  const { faceted = false, arc = Math.PI * 2, phase = 0, uvU = 1, uvV = UV_DENSITY } = opts;
   const s = new Surf();
   const nSeg = profile.length - 1;
   if (nSeg < 1) return s.geometry();
@@ -382,7 +476,7 @@ function roundedRectRing(hw, hd, radius, perQuad) {
  * @returns {THREE.BufferGeometry}
  */
 export function loftHull(stations, opts = {}) {
-  const { perQuad = 3, capBottom = true, capTop = true, uv = 1.4 } = opts;
+  const { perQuad = 3, capBottom = true, capTop = true, uv = UV_DENSITY } = opts;
   const s = new Surf();
   const n = stations.length;
   if (n < 2) return s.geometry();
@@ -619,184 +713,13 @@ function braidStrand(base, phase, offset, twists, radius, tubular, radial) {
 }
 
 // ---------------------------------------------------------------------------
-// Decal atlas
+// Markings
 //
 // Warning stripes, stencil codes and roundels belong in a texture, not in
-// geometry. This draws a 4x4 atlas on an offscreen canvas at build time; the
-// builder then places paper-thin quads UV'd into one cell each. Guarded so the
-// headless import check (which has no canvas) degrades to "no decals".
+// geometry. Materials.js rasterises the 4x4 stencil atlas — sprayed edges, grit
+// breaking up the coverage, ink tinted from the character palette — and the
+// builder places paper-thin quads UV'd into one cell each.
 // ---------------------------------------------------------------------------
-
-const DECAL = {
-  HAZARD: 0, SERIAL: 1, TRIANGLE: 2, ARROW: 3,
-  BARCODE: 4, ROUNDEL: 5, CHEVRON: 6, GAUGE: 7,
-  GRID: 8, NAMEPLATE: 9, RIVETS: 10, CAUTION: 11,
-};
-
-const decalCache = new Map();
-
-function makeDecalAtlas(key, palette) {
-  if (decalCache.has(key)) return decalCache.get(key);
-  let tex = null;
-  try {
-    const cv = document.createElement('canvas');
-    cv.width = 1024; cv.height = 1024;
-    const g = cv.getContext('2d');
-    if (g) {
-      const C = 256;
-      g.clearRect(0, 0, 1024, 1024);
-      const cell = (i) => ({ x: (i % 4) * C, y: Math.floor(i / 4) * C });
-      const accent = new THREE.Color(palette.accent || '#ff9d2e').getStyle();
-      const trim = new THREE.Color(palette.trim || '#dfe4ea').getStyle();
-
-      // 0 — diagonal hazard stripes with a worn top edge
-      let c = cell(DECAL.HAZARD);
-      g.save(); g.beginPath(); g.rect(c.x, c.y, C, C); g.clip();
-      g.fillStyle = accent; g.fillRect(c.x, c.y, C, C);
-      g.fillStyle = '#101315';
-      for (let i = -C; i < C * 2; i += 44) {
-        g.beginPath();
-        g.moveTo(c.x + i, c.y); g.lineTo(c.x + i + 22, c.y);
-        g.lineTo(c.x + i + 22 - C, c.y + C); g.lineTo(c.x + i - C, c.y + C);
-        g.closePath(); g.fill();
-      }
-      g.restore();
-
-      // 1 — stencil serial code
-      c = cell(DECAL.SERIAL);
-      g.fillStyle = trim;
-      g.font = 'bold 74px "Arial Narrow", Arial, sans-serif';
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText(key.serial, c.x + C / 2, c.y + C * 0.36);
-      g.font = 'bold 44px "Arial Narrow", Arial, sans-serif';
-      g.fillText(key.sub, c.x + C / 2, c.y + C * 0.66);
-      g.fillRect(c.x + 30, c.y + C * 0.82, C - 60, 5);
-
-      // 2 — caution triangle
-      c = cell(DECAL.TRIANGLE);
-      g.fillStyle = accent;
-      g.beginPath();
-      g.moveTo(c.x + C / 2, c.y + 26); g.lineTo(c.x + C - 26, c.y + C - 34); g.lineTo(c.x + 26, c.y + C - 34);
-      g.closePath(); g.fill();
-      g.fillStyle = '#0d0f11';
-      g.beginPath();
-      g.moveTo(c.x + C / 2, c.y + 60); g.lineTo(c.x + C - 58, c.y + C - 58); g.lineTo(c.x + 58, c.y + C - 58);
-      g.closePath(); g.fill();
-      g.fillStyle = accent;
-      g.fillRect(c.x + C / 2 - 9, c.y + 100, 18, 62);
-      g.fillRect(c.x + C / 2 - 9, c.y + 172, 18, 18);
-
-      // 3 — directional arrow
-      c = cell(DECAL.ARROW);
-      g.fillStyle = trim;
-      g.beginPath();
-      g.moveTo(c.x + C - 30, c.y + C / 2);
-      g.lineTo(c.x + C * 0.55, c.y + 44); g.lineTo(c.x + C * 0.55, c.y + C * 0.38);
-      g.lineTo(c.x + 32, c.y + C * 0.38); g.lineTo(c.x + 32, c.y + C * 0.62);
-      g.lineTo(c.x + C * 0.55, c.y + C * 0.62); g.lineTo(c.x + C * 0.55, c.y + C - 44);
-      g.closePath(); g.fill();
-
-      // 4 — barcode / data strip
-      c = cell(DECAL.BARCODE);
-      g.fillStyle = '#0d0f11'; g.fillRect(c.x + 12, c.y + 60, C - 24, C - 120);
-      g.fillStyle = trim;
-      let x = c.x + 26;
-      let seed = 0x2f6d;
-      while (x < c.x + C - 26) {
-        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-        const w = 3 + (seed >> 16) % 9;
-        g.fillRect(x, c.y + 74, w, C - 148);
-        x += w + 4 + ((seed >> 8) % 6);
-      }
-
-      // 5 — unit roundel
-      c = cell(DECAL.ROUNDEL);
-      g.strokeStyle = trim; g.lineWidth = 11;
-      g.beginPath(); g.arc(c.x + C / 2, c.y + C / 2, C * 0.36, 0, Math.PI * 2); g.stroke();
-      g.fillStyle = accent;
-      g.beginPath(); g.arc(c.x + C / 2, c.y + C / 2, C * 0.2, 0, Math.PI * 2); g.fill();
-      g.fillStyle = '#0d0f11';
-      g.font = 'bold 96px Arial, sans-serif';
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText(key.num, c.x + C / 2, c.y + C / 2 + 4);
-
-      // 6 — chevrons
-      c = cell(DECAL.CHEVRON);
-      g.fillStyle = accent;
-      for (let i = 0; i < 3; i++) {
-        const y = c.y + 40 + i * 70;
-        g.beginPath();
-        g.moveTo(c.x + 30, y); g.lineTo(c.x + C / 2, y + 42); g.lineTo(c.x + C - 30, y);
-        g.lineTo(c.x + C - 30, y + 24); g.lineTo(c.x + C / 2, y + 66); g.lineTo(c.x + 30, y + 24);
-        g.closePath(); g.fill();
-      }
-
-      // 7 — gauge ticks
-      c = cell(DECAL.GAUGE);
-      g.strokeStyle = trim;
-      for (let i = 0; i < 32; i++) {
-        const a = (i / 32) * Math.PI * 2;
-        const long = i % 4 === 0;
-        g.lineWidth = long ? 8 : 4;
-        const r0 = C * (long ? 0.28 : 0.33), r1 = C * 0.42;
-        g.beginPath();
-        g.moveTo(c.x + C / 2 + Math.cos(a) * r0, c.y + C / 2 + Math.sin(a) * r0);
-        g.lineTo(c.x + C / 2 + Math.cos(a) * r1, c.y + C / 2 + Math.sin(a) * r1);
-        g.stroke();
-      }
-
-      // 8 — fine panel grid
-      c = cell(DECAL.GRID);
-      g.strokeStyle = 'rgba(220,228,236,0.55)'; g.lineWidth = 3;
-      for (let i = 1; i < 8; i++) {
-        g.beginPath(); g.moveTo(c.x + i * 32, c.y + 16); g.lineTo(c.x + i * 32, c.y + C - 16); g.stroke();
-      }
-      g.strokeStyle = 'rgba(220,228,236,0.28)';
-      for (let i = 1; i < 4; i++) {
-        g.beginPath(); g.moveTo(c.x + 16, c.y + i * 64); g.lineTo(c.x + C - 16, c.y + i * 64); g.stroke();
-      }
-
-      // 9 — nameplate
-      c = cell(DECAL.NAMEPLATE);
-      g.fillStyle = 'rgba(12,15,17,0.92)'; g.fillRect(c.x + 8, c.y + 76, C - 16, C - 152);
-      g.strokeStyle = accent; g.lineWidth = 5;
-      g.strokeRect(c.x + 8, c.y + 76, C - 16, C - 152);
-      g.fillStyle = trim;
-      g.font = 'bold 58px "Arial Narrow", Arial, sans-serif';
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText(key.label, c.x + C / 2, c.y + C / 2);
-
-      // 10 — rivet line
-      c = cell(DECAL.RIVETS);
-      for (let i = 0; i < 7; i++) {
-        const cx = c.x + 30 + i * 33, cy = c.y + C / 2;
-        const grd = g.createRadialGradient(cx - 4, cy - 4, 1, cx, cy, 13);
-        grd.addColorStop(0, 'rgba(255,255,255,0.9)');
-        grd.addColorStop(0.6, 'rgba(150,158,166,0.75)');
-        grd.addColorStop(1, 'rgba(20,24,28,0.0)');
-        g.fillStyle = grd;
-        g.beginPath(); g.arc(cx, cy, 13, 0, Math.PI * 2); g.fill();
-      }
-
-      // 11 — caution text bar
-      c = cell(DECAL.CAUTION);
-      g.fillStyle = accent; g.fillRect(c.x + 6, c.y + 88, C - 12, C - 176);
-      g.fillStyle = '#0d0f11';
-      g.font = 'bold 52px "Arial Narrow", Arial, sans-serif';
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText('HIGH VOLT', c.x + C / 2, c.y + C / 2);
-
-      tex = new THREE.CanvasTexture(cv);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = 8;
-      tex.needsUpdate = true;
-    }
-  } catch {
-    tex = null;
-  }
-  decalCache.set(key, tex);
-  return tex;
-}
 
 /** Flat quad UV-mapped into one atlas cell, facing +Z, centred on the origin. */
 function decalQuad(cellIndex, w, h, flipU = false) {
@@ -842,7 +765,7 @@ function fallbackMaterial(name, palette) {
  * texture generation; this only tints clones so one texture set serves the
  * primary / secondary / accent plates without extra VRAM.
  */
-function resolveMaterials(environment, palette, def) {
+function resolveMaterials(environment, palette) {
   const key = paletteKey(palette);
   let lib = libraryCache.get(key);
   if (!lib) {
@@ -901,14 +824,17 @@ function resolveMaterials(environment, palette, def) {
     mats[`glow_${name}`] = m;
   }
 
-  const atlas = makeDecalAtlas(decalKeyFor(def), palette);
+  // Markings are sprayed paint sitting on top of a plate, not a second plate:
+  // alphaTest is low because the atlas deliberately thins its own coverage with
+  // grit, and clipping that away is what turns a stencil back into a sticker.
+  const atlas = markingAtlas(environment, palette);
   if (atlas) {
     mats.decal = new THREE.MeshStandardMaterial({
       map: atlas,
       transparent: true,
-      alphaTest: 0.42,
-      roughness: 0.55,
-      metalness: 0.15,
+      alphaTest: 0.34,
+      roughness: 0.62,
+      metalness: 0.1,
       polygonOffset: true,
       polygonOffsetFactor: -3,
       polygonOffsetUnits: -3,
@@ -926,21 +852,24 @@ function resolveMaterials(environment, palette, def) {
   return { mats, emissiveConfig: GLOWS };
 }
 
-function decalKeyFor(def) {
-  const id = String(def?.id ?? def?.name ?? 'KB').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4) || 'KB';
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) & 0xffff;
-  const k = {
-    serial: `${id}-${String(100 + (h % 800))}`,
-    sub: `MK ${1 + (h % 7)}  REV.${String.fromCharCode(65 + (h % 6))}`,
-    num: String(1 + (h % 9)),
-    label: String(def?.name ?? 'KNOCKBOT').toUpperCase().slice(0, 11),
-  };
-  // cached by value, not identity: two Fighters on the same character share one atlas
-  for (const existing of decalCache.keys()) {
-    if (existing.serial === k.serial && existing.label === k.label) return existing;
+/**
+ * The stencil marking atlas for this palette, or null if it cannot be built.
+ *
+ * Materials.js keys its cache on numeric colours, so the palette's hex strings
+ * are converted before they are handed over — passing the strings straight
+ * through collapses every character onto one cache entry and every robot ends up
+ * wearing the first one's ink.
+ */
+function markingAtlas(environment, palette) {
+  const renderer = environment?.renderer ?? environment?.pmremRenderer ?? null;
+  try {
+    return makeMarkingAtlas(renderer, {
+      accent: new THREE.Color(palette.accent).getHex(),
+      trim: new THREE.Color(palette.trim).getHex(),
+    });
+  } catch {
+    return null;
   }
-  return k;
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,8 +1090,9 @@ class Rig {
    * @param {Record<string, THREE.Matrix4>} restWorld
    * @param {Object} mats
    * @param {number} maxTier
+   * @param {number} [greeble=1] fraction of tertiary detail to keep, 0..1
    */
-  constructor(bones, restWorld, mats, maxTier) {
+  constructor(bones, restWorld, mats, maxTier, greeble = 1) {
     this.bones = bones;
     this.byName = Object.create(null);
     this.index = Object.create(null);
@@ -1172,6 +1102,12 @@ class Rig {
     for (const [n, m] of Object.entries(restWorld)) this.restPos[n] = new THREE.Vector3().setFromMatrixPosition(m);
     this.mats = mats;
     this.maxTier = maxTier;
+    /**
+     * Tertiary-detail budget, 0..1. A courier chassis and a foundry chassis do
+     * not carry the same amount of bolted-on hardware, and thinning the greeble
+     * layer is what separates "sleek" from "crusty" at silhouette distance.
+     */
+    this.greeble = clamp(greeble, 0, 1);
     /** Uniform author-space scale applied by `scaled()`. */
     this.autoScale = 1;
     /** Unscaled bone-local Y shift applied by `lifted()`. */
@@ -1245,6 +1181,17 @@ class Rig {
   }
 
   /**
+   * Whether a tertiary part should be dropped for this character's greeble
+   * budget. The decision is a hash of the plate counter rather than a die roll,
+   * so a chassis thins out in the same places every build and both players'
+   * copies of a fighter are identical down to the bolt.
+   */
+  overGreebleBudget(tier) {
+    if (tier < TIER.GREEBLE || this.greeble >= 1) return false;
+    return plateHash(this.plateCount * 7 + 3)[0] > 0.35 + 0.65 * this.greeble;
+  }
+
+  /**
    * Rigid plate: geometry authored in `bone`'s local rest frame (or, with
    * `world: true`, a world-axis-aligned frame anchored at that bone) bound
    * 100% to that bone.
@@ -1252,7 +1199,10 @@ class Rig {
   add(bone, geo, mat, o = {}) {
     if (!geo) return this;
     const tier = o.tier ?? TIER.SECONDARY;
-    if (tier > this.maxTier || !this.byName[bone]) { geo.dispose?.(); return this; }
+    if (tier > this.maxTier || !this.byName[bone] || this.overGreebleBudget(tier)) {
+      geo.dispose?.();
+      return this;
+    }
     const m = this.frame(bone, o);
     if (!m) { geo.dispose?.(); return this; }
     const g = geo.index ? geo.toNonIndexed() : geo;
@@ -1285,7 +1235,7 @@ class Rig {
     // Stations are authored about the section's own centre so that `r` still
     // rolls the section in place, exactly as the box version did.
     const cy = (o.y0 + o.y1) * 0.5;
-    const geo = loftHull(this.stations(o, cy), { perQuad: o.perQuad ?? 3, uv: 1.4 });
+    const geo = loftHull(this.stations(o, cy), { perQuad: o.perQuad ?? 3 });
     return this.add(bone, geo, o.mat, {
       p: [o.x ?? 0, cy, o.z ?? 0],
       r: o.r, mirror: o.mirror, tier: o.tier ?? TIER.PRIMARY, wear: o.wear,
@@ -1327,15 +1277,23 @@ class Rig {
    * ends. Panel gaps that hold shadow are what the reference has and a
    * continuous painted column does not.
    *
+   * With `bands: 2` the painted run is split again part-way along, so the limb
+   * wears two overlapping lames with a shadowed channel of frame between them
+   * instead of one continuous painted tube. That channel is the negative space
+   * the reference gets from layered plate, and each band's end cap is a real
+   * plate edge the rim light can catch.
+   *
    * @param {string} bone
    * @param {Object} o same shape as `section`, plus:
-   *   `gap` metres of frame left exposed at each end, `inset` frame
-   *   cross-section as a fraction of the armour's.
+   *   `gap` metres of frame left exposed at each end and between bands, `inset`
+   *   frame cross-section as a fraction of the armour's, `bands` painted
+   *   sections along the run.
    */
   plated(bone, o) {
     const gap = o.gap ?? 0.016;
     const inset = o.inset ?? 0.86;
-    const dir = Math.sign(o.y1 - o.y0) || 1;
+    const span = o.y1 - o.y0;
+    const dir = Math.sign(span) || 1;
     const over = gap * 0.7 * dir;
     this.section(bone, {
       ...o,
@@ -1345,14 +1303,28 @@ class Rig {
       mat: 'darkMetal', round: 0.5, perQuad: 2, swell: 0,
       tier: TIER.PRIMARY,
     });
-    const t0 = gap * dir / (o.y1 - o.y0);
+
+    const cut = Math.abs(gap / span);
+    // A band shorter than the gap that made it is a rib, not a plate: fall back
+    // to one continuous run rather than shredding a short bone into slivers.
+    let bands = Math.max(1, Math.round(o.bands ?? 1));
+    while (bands > 1 && (1 - cut * (bands + 1)) / bands < cut * 1.6) bands--;
+    const step = (1 - cut * (bands + 1)) / bands;
+    const swell = (o.swell ?? 0) / bands;
+
     const lerp = (a, b, t) => a + (b - a) * t;
-    return this.section(bone, {
-      ...o,
-      y0: lerp(o.y0, o.y1, t0), y1: lerp(o.y1, o.y0, t0),
-      w0: lerp(o.w0, o.w1, t0), w1: lerp(o.w1, o.w0, t0),
-      d0: lerp(o.d0 ?? o.w0, o.d1 ?? o.w1, t0), d1: lerp(o.d1 ?? o.w1, o.d0 ?? o.w0, t0),
-    });
+    const d0 = o.d0 ?? o.w0, d1 = o.d1 ?? o.w1;
+    for (let i = 0; i < bands; i++) {
+      const a = cut + i * (step + cut);
+      const b = a + step;
+      this.section(bone, {
+        ...o, swell,
+        y0: lerp(o.y0, o.y1, a), y1: lerp(o.y0, o.y1, b),
+        w0: lerp(o.w0, o.w1, a), w1: lerp(o.w0, o.w1, b),
+        d0: lerp(d0, d1, a), d1: lerp(d0, d1, b),
+      });
+    }
+    return this;
   }
 
   /** Emissive plate. `group` selects which emissive material/mesh it lands in. */
@@ -1636,6 +1608,63 @@ const SIDES = [
   { s: 'R', sign: -1, mirror: true },
 ];
 
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const LEG_PLANS = ['plantigrade', 'digitigrade', 'splayed'];
+
+/**
+ * The chassis plan, adjusted by the roster's per-character `silhouette` block.
+ *
+ * Five chassis serve ten fighters, so two characters always share a body plan
+ * and paint alone will not tell them apart at 100 pixels tall. roster.js already
+ * writes down what makes them different — broader shoulders, a deeper chest, a
+ * tighter waist, how much hardware is bolted to the outside — and this is where
+ * that description stops being documentation and becomes geometry.
+ *
+ * Shoulder and chest multipliers are applied at reduced strength: the roster
+ * numbers are *impressions* (`shoulders: 1.42` means "reads broad", not "is 42%
+ * wider"), and taking them literally puts a heavy's pauldrons through its own
+ * head. The counts — cables, spikes, vents — are taken at face value, because
+ * counting hardware is exactly what they are for.
+ *
+ * @param {Object} def CharacterDef
+ * @returns {Object} a CHASSIS entry plus `greeble`, `cables`, `spikes`, `vents`
+ */
+function chassisFor(def) {
+  const base = CHASSIS[def?.chassis] || CHASSIS.heavy;
+  const sil = def?.silhouette || {};
+  const num = (v, dflt, lo, hi) => clamp(Number.isFinite(v) ? v : dflt, lo, hi);
+  const sh = num(sil.shoulders, 1, 0.7, 1.5);
+  const cd = num(sil.chestDepth, 1, 0.7, 1.4);
+  const wa = num(sil.waist, 1, 0.6, 1.3);
+  const shK = 0.55 + 0.45 * sh;
+
+  return {
+    ...base,
+    torso: {
+      ...base.torso,
+      chestW: base.torso.chestW * (0.72 + 0.28 * sh),
+      chestD: base.torso.chestD * (0.5 + 0.5 * cd),
+      waistW: base.torso.waistW * (0.35 + 0.65 * wa),
+      waistD: base.torso.waistD * (0.45 + 0.55 * wa),
+    },
+    pauldron: {
+      ...base.pauldron,
+      w: base.pauldron.w * shK,
+      h: base.pauldron.h * (0.7 + 0.3 * sh),
+      d: base.pauldron.d * shK,
+      out: base.pauldron.out * shK,
+    },
+    legs: {
+      ...base.legs,
+      plan: LEG_PLANS.includes(sil.legs) ? sil.legs : base.legs.plan,
+    },
+    greeble: num(sil.greeble, 0.7, 0, 1),
+    cables: Math.round(num(sil.cables, 4, 0, 8)),
+    spikes: Math.round(num(sil.spikes, 2, 0, 6)),
+    vents: Math.round(num(sil.vents, 5, 2, 10)),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Body construction
 // ---------------------------------------------------------------------------
@@ -1753,7 +1782,7 @@ function buildPelvis(rig, spec) {
     ], { radius: 0.010, mirror });
   }
 
-  rig.decal('hips', DECAL.HAZARD, w * 0.42, 0.05, {
+  rig.decal('hips', MARKINGS.HAZARD, w * 0.42, 0.05, {
     p: [0, floor + 0.05, FRONT * (d * 0.5 + 0.052)], r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
   });
 }
@@ -1811,7 +1840,7 @@ function buildTorso(rig, spec, def) {
       { p: [0, -m.mid * 0.22 + i * m.thorax * 0.30, -FRONT * (P.waistHi.d * 0.54 + 0.004)] });
   }
 
-  rig.decal('spine02', DECAL.SERIAL, 0.11, 0.11, {
+  rig.decal('spine02', MARKINGS.SERIAL, 0.11, 0.11, {
     p: [P.waistHi.w * 0.34, m.thorax * 0.24, -FRONT * (P.waistHi.d * 0.56)], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE,
   });
 
@@ -1884,7 +1913,7 @@ function buildTorso(rig, spec, def) {
     addLouvres(rig, 'chest', {
       p: [sign * cw * 0.40, m.collar * 0.42, FRONT * cd * 0.22],
       r: [0, sign * 118 * DEG, 0],
-      w: cd * 0.30, h: 0.062, n: 4, depth: 0.020, mirror, glow: 'vents',
+      w: cd * 0.30, h: 0.062, n: ventFins(spec, 0.55), depth: 0.020, mirror, glow: 'vents',
     });
   }
 
@@ -1934,14 +1963,14 @@ function buildTorso(rig, spec, def) {
   buildChestCore(rig, spec, cw, cd, ch, cy);
   buildBackHardware(rig, spec, cy);
 
-  rig.decal('chest', DECAL.ROUNDEL, 0.10, 0.10, {
+  rig.decal('chest', MARKINGS.ROUNDEL, 0.10, 0.10, {
     p: [-cw * 0.30, m.collar * 0.34, FRONT * (cd * 0.5 + 0.03)], r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
   });
-  rig.decal('chest', DECAL.NAMEPLATE, 0.15, 0.062, {
+  rig.decal('chest', MARKINGS.NAMEPLATE, 0.15, 0.062, {
     p: [0, -m.thorax * 0.32, FRONT * (cd * 0.5 + 0.01)], r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
   });
   if (def?.archetype) {
-    rig.decal('chest', DECAL.CHEVRON, 0.07, 0.07, {
+    rig.decal('chest', MARKINGS.CHEVRON, 0.07, 0.07, {
       p: [cw * 0.32, -m.thorax * 0.10, FRONT * (cd * 0.5 + 0.02)], r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
     });
   }
@@ -2026,7 +2055,7 @@ function buildChestCore(rig, spec, cw, cd, ch, cy) {
       ], 6, { faceted: true, phase: Math.PI / 6 }), 'trim',
       { p: [0, cy, zf], r: [90 * DEG, 0, 0], tier: TIER.PRIMARY });
       for (let i = 0; i < 3; i++) {
-        rig.decal('chest', DECAL.GAUGE, 0.05, 0.05, {
+        rig.decal('chest', MARKINGS.GAUGE, 0.05, 0.05, {
           p: [Math.cos(i * 2.1) * 0.11, cy + Math.sin(i * 2.1) * 0.09, zf + FRONT * 0.006],
           r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
         });
@@ -2106,7 +2135,7 @@ function buildBackHardware(rig, spec, cyIn) {
       }
       rig.add('chest', bevelBox(t.chestW * 0.62, 0.22, 0.10, 0.014, { topX: 0.86 }), 'armorSecondary',
         { p: [0, cy - 0.01, zb], tier: TIER.PRIMARY });
-      addLouvres(rig, 'chest', { p: [0, cy - 0.01, zb + 0.055 * -FRONT], r: [0, YAW_BACK, 0], w: t.chestW * 0.44, h: 0.16, n: 5, depth: 0.02, glow: 'vents' });
+      addLouvres(rig, 'chest', { p: [0, cy - 0.01, zb + 0.055 * -FRONT], r: [0, YAW_BACK, 0], w: t.chestW * 0.44, h: 0.16, n: ventFins(spec, 0.7), depth: 0.02, glow: 'vents' });
       break;
     }
     case 'sensorWings': {
@@ -2163,12 +2192,21 @@ function buildBackHardware(rig, spec, cyIn) {
       }
       rig.add('chest', bevelBox(t.chestW * 0.34, 0.24, 0.10, 0.012, { topX: 0.6 }), 'armorPrimary',
         { p: [0, cy + 0.02, zb], r: [8 * DEG, 0, 0], tier: TIER.PRIMARY });
-      rig.decal('chest', DECAL.GAUGE, 0.16, 0.16, {
+      rig.decal('chest', MARKINGS.GAUGE, 0.16, 0.16, {
         p: [0, cy + 0.07, zb + 0.05 * -FRONT], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE,
       });
       break;
     }
   }
+}
+
+/**
+ * Fin count for one louvre stack, from the roster's `vents` budget. `share` is
+ * how much of that budget this particular stack is entitled to — a chest intake
+ * is the character's headline vent, a shin outlet is not.
+ */
+function ventFins(spec, share) {
+  return Math.round(clamp(spec.vents * share, 3, 7));
 }
 
 /**
@@ -2703,7 +2741,7 @@ function headTower(rig, spec, def) {
     { r: 0, y: 0 }, { r: 0.036, y: 0 }, { r: 0.040, y: 0.011, smooth: true }, { r: 0.040, y: 0.038 },
     { r: 0.030, y: 0.046 }, { r: 0, y: 0.046 },
   ], 20), 'darkMetal', { p: [-0.070, 0.066, 0], r: [0, 0, 90 * DEG], tier: TIER.SECONDARY });
-  rig.decal('head', DECAL.GAUGE, 0.058, 0.058, { p: [-0.118, 0.066, 0], r: [0, -90 * DEG, 0], tier: TIER.GREEBLE });
+  rig.decal('head', MARKINGS.GAUGE, 0.058, 0.058, { p: [-0.118, 0.066, 0], r: [0, -90 * DEG, 0], tier: TIER.GREEBLE });
 
   // mast: a tapered tower, not a stick
   rig.add('head', loftHull([
@@ -2718,7 +2756,7 @@ function headTower(rig, spec, def) {
   }
   rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.011, y: 0 }, { r: 0, y: 0.014 }], 12), 'joints',
     { p: [0, 0.276, -FRONT * 0.046] });
-  if (def) rig.decal('head', DECAL.BARCODE, 0.062, 0.030, { p: [0, 0.016, -FRONT * 0.098], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE });
+  if (def) rig.decal('head', MARKINGS.BARCODE, 0.062, 0.030, { p: [0, 0.016, -FRONT * 0.098], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE });
 }
 
 function headCrown(rig) {
@@ -2884,7 +2922,7 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     y0: -uLen * 0.90, y1: upper * 0.40,
     w0: elbowW * 0.94, w1: upper * 1.52,
     d0: elbowW * 0.96, d1: upper * 1.56,
-    mat: 'armorPrimary', gap: 0.013, inset: 0.88, round: 0.36, swell: 0.05, mirror,
+    mat: 'armorPrimary', gap: 0.015, inset: 0.86, round: 0.36, swell: 0.05, bands: 2, mirror,
   });
   rig.add(`shoulder_${S}`, bevelBox(upper * 1.1, uLen * 0.40, upper * 0.5, 0.008, { topX: 0.9, botX: 0.7 }), 'armorSecondary',
     { p: [0, -uLen * 0.52, FRONT * upper * 0.82], r: [0, 0, 0], mirror, tier: TIER.SECONDARY });
@@ -2912,7 +2950,7 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     y0: -fLen * 0.90, y1: fore * 0.34,
     w0: cuffW, w1: fore * 1.55,
     d0: cuffW * 0.98, d1: fore * 1.55,
-    mat: 'armorPrimary', gap: 0.012, inset: 0.88, round: 0.34, swell: 0.04, mirror,
+    mat: 'armorPrimary', gap: 0.014, inset: 0.86, round: 0.34, swell: 0.04, bands: 2, mirror,
   });
   // forearm panel with fasteners
   rig.add(`elbow_${S}`, bevelBox(fore * 1.0, fLen * 0.44, 0.012, 0.005), 'carbon',
@@ -2928,7 +2966,7 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     [sign * fore * 0.86, -0.13, -FRONT * fore * 0.40],
     [sign * fore * 0.76, -0.23, -FRONT * fore * 0.20],
   ], { radius: 0.008, mirror });
-  rig.decal(`elbow_${S}`, DECAL.SERIAL, fore * 1.1, fore * 1.1, {
+  rig.decal(`elbow_${S}`, MARKINGS.SERIAL, fore * 1.1, fore * 1.1, {
     p: [sign * fore * 0.86, -fLen * 0.45, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
   });
 
@@ -3025,7 +3063,7 @@ function addShoulderCannon(rig, spec, side, sign, mirror) {
     { p: [bx, pd.up + pd.h * 0.62, FRONT * 0.46], r: [(90 * DEG) * FRONT, 0, 0], mirror });
   rig.add(`clavicle_${S}`, boltRing(6, 0.040, 0.007, 0.009), 'trim',
     { p: [bx, pd.up + pd.h * 0.62, -FRONT * 0.02], r: [(-90 * DEG) * FRONT, 0, 0], mirror, tier: TIER.GREEBLE });
-  rig.decal(`clavicle_${S}`, DECAL.CAUTION, 0.10, 0.05, {
+  rig.decal(`clavicle_${S}`, MARKINGS.CAUTION, 0.10, 0.05, {
     p: [bx + sign * 0.048, pd.up + pd.h * 0.62, FRONT * 0.05], r: [0, sign * 90 * DEG, 90 * DEG], mirror, tier: TIER.GREEBLE,
   });
   rig.emitter('muzzle', `clavicle_${S}`, [bx, pd.up + pd.h * 0.62, FRONT * 0.47], [0, 0, FRONT], 0.035);
@@ -3088,16 +3126,23 @@ function buildLeg(rig, spec, side, sign, mirror) {
   // Thighs may just touch at the top — that is what a heavy is supposed to look
   // like — but the knee has to come back inside the hip spacing or the two lower
   // legs fuse into one column and the stance stops reading.
-  const thighW = Math.min(L.thigh * 1.40, m.hipSep * 1.12);
-  const kneeW = Math.min(L.shin * 1.30, m.hipSep * 0.82);
+  //
+  // Depth is not capped, and that is deliberate. A leg is limited sideways by
+  // the width of the pelvis and by nothing at all fore-and-aft, so a real one is
+  // markedly deeper than it is wide. Building it square is what leaves a fighter
+  // with a huge torso standing on two sticks in every profile view, and the
+  // fight camera spends most of a round somewhere near profile.
+  const thighW = Math.min(L.thigh * 1.40, m.hipSep * 1.16);
+  const kneeW = Math.min(L.shin * 1.30, m.hipSep * 0.90);
   const ankleW = kneeW * 0.78;
+  const DEEP = 1.30;
 
   // --- thigh: one section from inside the hip ball down to the knee barrel
   rig.plated(`hip_${S}`, {
     y0: -tLen * 0.90, y1: L.thigh * 0.42,
     w0: kneeW * 0.96, w1: thighW,
-    d0: kneeW * 1.00, d1: thighW * 1.03,
-    mat: 'armorPrimary', gap: 0.017, inset: 0.86, round: 0.36, swell: 0.07, swellAt: 0.62,
+    d0: kneeW * 1.10, d1: thighW * DEEP,
+    mat: 'armorPrimary', gap: 0.019, inset: 0.84, round: 0.36, swell: 0.07, swellAt: 0.62, bands: 2,
     r: [0, 0, sign * (splay ? 4 : 2) * DEG], mirror,
   });
   // outer thigh panel + channel
@@ -3109,7 +3154,7 @@ function buildLeg(rig, spec, side, sign, mirror) {
     p: [sign * (L.thigh * 0.76), -tLen * 0.40, 0], r: [0, sign * 90 * DEG, 0],
     w: L.thigh * 1.05, h: tLen * 0.58, bolts: 4, mirror,
   });
-  rig.decal(`hip_${S}`, DECAL.ARROW, L.thigh * 0.7, L.thigh * 0.7, {
+  rig.decal(`hip_${S}`, MARKINGS.ARROW, L.thigh * 0.7, L.thigh * 0.7, {
     p: [sign * L.thigh * 0.80, -tLen * 0.6, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
   });
   // hip collar
@@ -3162,13 +3207,13 @@ function buildLeg(rig, spec, side, sign, mirror) {
     rig.plated(`knee_${S}`, {
       y0: -sLen * 0.92, y1: L.shin * 0.44,
       w0: ankleW, w1: kneeW,
-      d0: ankleW * 1.04, d1: kneeW * 1.06,
-      mat: 'armorPrimary', gap: 0.016, inset: 0.86, round: 0.34, swell: 0.08, swellAt: 0.66, mirror,
+      d0: ankleW * 1.20, d1: kneeW * DEEP,
+      mat: 'armorPrimary', gap: 0.018, inset: 0.84, round: 0.34, swell: 0.08, swellAt: 0.66, bands: 2, mirror,
     });
     // calf vent stack
     addLouvres(rig, `knee_${S}`, {
       p: [0, -sLen * 0.42, -FRONT * (L.shin * 0.78)], r: [0, YAW_BACK, 0],
-      w: L.shin * 0.9, h: sLen * 0.36, n: 4, depth: 0.016, mirror, glow: 'vents',
+      w: L.shin * 0.9, h: sLen * 0.36, n: ventFins(spec, 0.6), depth: 0.016, mirror, glow: 'vents',
     });
     rig.add(`knee_${S}`, bevelBox(0.024, sLen * 0.5, L.shin * 0.9, 0.006, { topX: 0.8 }), 'carbon',
       { p: [sign * L.shin * 0.76, -sLen * 0.42, 0], mirror, tier: TIER.SECONDARY });
@@ -3177,7 +3222,7 @@ function buildLeg(rig, spec, side, sign, mirror) {
     p: [0, -sLen * 0.46, FRONT * (L.shin * 0.76 + 0.004)], r: [0, YAW_FRONT, 0],
     w: L.shin * 1.08, h: sLen * 0.46, bolts: 4, splitsY: [0.24], splitsX: [], mirror,
   });
-  rig.decal(`knee_${S}`, DECAL.RIVETS, L.shin * 1.1, L.shin * 0.28, {
+  rig.decal(`knee_${S}`, MARKINGS.RIVETS, L.shin * 1.1, L.shin * 0.28, {
     p: [0, -sLen * 0.16, FRONT * (L.shin * 0.80)], r: [0, YAW_FRONT, 0], mirror, tier: TIER.GREEBLE,
   });
 
@@ -3192,16 +3237,30 @@ function buildLeg(rig, spec, side, sign, mirror) {
 
   // --- foot
   const fw = L.footW, fl = L.foot;
+  // A boot assembled from a sole box, a toe box and a heel box reads as three
+  // boxes, and it reads that way from every angle the fight camera uses because
+  // the feet are the one part of a fighter never occluded by anything. So each
+  // mass below is a lofted volume that swells at the instep and sweeps back into
+  // the ankle, and the only boxes left are the sole pads and the cleats.
   if (digi) {
-    // slim pad + long toe + rearward heel spur
-    rig.add(`foot_${S}`, bevelBox(fw * 1.05, 0.075, fl * 0.62, 0.010,
-      { topX: 1.05, botX: 0.86, botZ: 0.9 }), 'armorPrimary',
-    { p: [0, 0.020, FRONT * fl * 0.04], mirror, tier: TIER.PRIMARY });
-    rig.add(`foot_${S}`, bevelBox(fw * 0.55, 0.05, fl * 0.42, 0.008, { topX: 0.9, botZ: 0.6, shearZ: -FRONT * 0.05 }), 'armorSecondary',
-      { p: [0, 0.055, -FRONT * fl * 0.34], r: [-30 * DEG, 0, 0], mirror, tier: TIER.PRIMARY });
-    rig.add(`toe_${S}`, bevelBox(fw * 0.95, 0.055, fl * 0.55, 0.008,
-      { topX: 0.85, botX: 0.62, botZ: 0.55, shearZ: FRONT * 0.03 }), 'armorPrimary',
-    { p: [0, 0.047, FRONT * fl * 0.10], mirror, tier: TIER.PRIMARY });
+    // raptor foot: a slim pad thrown forward onto a long toe, heel spur behind
+    rig.add(`foot_${S}`, loftHull([
+      { y: -0.018, w: fw * 0.96, d: fl * 0.58, round: 0.40 },
+      { y: 0.022, w: fw * 1.08, d: fl * 0.64, round: 0.30, smooth: true },
+      { y: 0.056, w: fw * 0.94, d: fl * 0.54, z: -FRONT * fl * 0.04, round: 0.34 },
+    ]), 'armorPrimary', { p: [0, 0, FRONT * fl * 0.04], mirror, tier: TIER.PRIMARY });
+    rig.add(`foot_${S}`, loftHull([
+      { y: -0.024, w: fw * 0.54, d: fl * 0.40, round: 0.38 },
+      { y: 0.018, w: fw * 0.48, d: fl * 0.34, z: -FRONT * fl * 0.05, round: 0.34, smooth: true },
+      { y: 0.052, w: fw * 0.30, d: fl * 0.20, z: -FRONT * fl * 0.11, round: 0.44 },
+    ]), 'armorSecondary', {
+      p: [0, 0.055, -FRONT * fl * 0.34], r: [-30 * DEG, 0, 0], mirror, tier: TIER.PRIMARY,
+    });
+    rig.add(`toe_${S}`, loftHull([
+      { y: 0.020, w: fw * 0.86, d: fl * 0.52, round: 0.38 },
+      { y: 0.050, w: fw * 0.92, d: fl * 0.50, z: FRONT * fl * 0.03, round: 0.30, smooth: true },
+      { y: 0.076, w: fw * 0.66, d: fl * 0.34, z: FRONT * fl * 0.06, round: 0.42 },
+    ]), 'armorPrimary', { p: [0, 0, FRONT * fl * 0.10], mirror, tier: TIER.PRIMARY });
     for (let i = -1; i <= 1; i++) {
       rig.add(`toe_${S}`, bevelBox(fw * 0.20, 0.030, fl * 0.24, 0.005, { topX: 0.4, topZ: 0.3, shearZ: FRONT * 0.02 }), 'trim',
         { p: [i * fw * 0.30, 0.029, FRONT * fl * 0.34], r: [8 * DEG, 0, 0], mirror, tier: TIER.SECONDARY });
@@ -3209,20 +3268,30 @@ function buildLeg(rig, spec, side, sign, mirror) {
     rig.add(`foot_${S}`, bevelBox(fw * 0.95, 0.020, fl * 0.55, 0.005), 'rubber',
       { p: [0, -0.020, FRONT * fl * 0.04], mirror, tier: TIER.SECONDARY });
   } else {
-    // heavy boot: sole, toe cap, ankle collar, cleats
-    rig.add(`foot_${S}`, bevelBox(fw * 1.25, 0.11, fl * 0.86, 0.012,
-      { topX: 0.90, topZ: 0.86, botX: 1.0, botZ: 1.0, shearZ: FRONT * 0.012 }), 'armorPrimary',
-    { p: [0, 0.036, 0], mirror, tier: TIER.PRIMARY });
+    // heavy boot: one swept shell from the sole up into the ankle collar
+    rig.add(`foot_${S}`, loftHull([
+      { y: -0.019, w: fw * 1.25, d: fl * 0.86, round: 0.30 },
+      { y: 0.028, w: fw * 1.30, d: fl * 0.90, round: 0.24, smooth: true },
+      { y: 0.066, w: fw * 1.14, d: fl * 0.78, z: -FRONT * fl * 0.03, round: 0.28, smooth: true },
+      { y: 0.091, w: fw * 0.98, d: fl * 0.58, z: -FRONT * fl * 0.06, round: 0.38 },
+    ]), 'armorPrimary', { mirror, tier: TIER.PRIMARY });
     rig.add(`foot_${S}`, bevelBox(fw * 1.28, 0.030, fl * 0.90, 0.006), 'rubber',
       { p: [0, -0.015, 0], mirror, tier: TIER.PRIMARY });
-    rig.add(`toe_${S}`, bevelBox(fw * 1.1, 0.085, fl * 0.42, 0.010,
-      { topX: 0.82, topZ: 0.7, botZ: 0.9, shearZ: FRONT * 0.02 }), 'armorAccent',
-    { p: [0, 0.060, FRONT * fl * 0.06], r: [-6 * DEG, 0, 0], mirror, tier: TIER.PRIMARY });
+    rig.add(`toe_${S}`, loftHull([
+      { y: 0.018, w: fw * 1.10, d: fl * 0.42, round: 0.32 },
+      { y: 0.058, w: fw * 1.04, d: fl * 0.40, z: FRONT * fl * 0.02, round: 0.26, smooth: true },
+      { y: 0.100, w: fw * 0.78, d: fl * 0.26, z: FRONT * fl * 0.05, round: 0.42 },
+    ]), 'armorAccent', {
+      p: [0, 0, FRONT * fl * 0.06], r: [-6 * DEG, 0, 0], mirror, tier: TIER.PRIMARY,
+    });
     rig.add(`toe_${S}`, bevelBox(fw * 1.12, 0.022, fl * 0.44, 0.005), 'rubber',
       { p: [0, 0.026, FRONT * fl * 0.06], mirror, tier: TIER.SECONDARY });
-    // heel block
-    rig.add(`foot_${S}`, bevelBox(fw * 0.9, 0.09, fl * 0.26, 0.008, { topX: 0.85, shearZ: -FRONT * 0.02 }), 'armorSecondary',
-      { p: [0, 0.048, -FRONT * fl * 0.40], mirror, tier: TIER.PRIMARY });
+    // heel counter, tapering up and back into the ankle joint
+    rig.add(`foot_${S}`, loftHull([
+      { y: 0.004, w: fw * 0.94, d: fl * 0.30, round: 0.34 },
+      { y: 0.056, w: fw * 0.84, d: fl * 0.25, z: -FRONT * fl * 0.02, round: 0.30, smooth: true },
+      { y: 0.096, w: fw * 0.58, d: fl * 0.16, z: -FRONT * fl * 0.04, round: 0.44 },
+    ]), 'armorSecondary', { p: [0, 0, -FRONT * fl * 0.40], mirror, tier: TIER.PRIMARY });
     // cleats
     for (let i = 0; i < 3; i++) {
       rig.add(`foot_${S}`, bevelBox(fw * 1.1, 0.012, 0.022, 0.004), 'darkMetal',
@@ -3230,8 +3299,13 @@ function buildLeg(rig, spec, side, sign, mirror) {
     }
     if (splay) {
       for (const o of [-1, 1]) {
-        rig.add(`foot_${S}`, bevelBox(fw * 0.34, 0.06, fl * 0.5, 0.007, { topX: 0.6, botZ: 0.9 }), 'armorSecondary',
-          { p: [o * fw * 0.72, 0.040, -FRONT * fl * 0.05], r: [0, 0, o * 14 * DEG], mirror, tier: TIER.SECONDARY });
+        rig.add(`foot_${S}`, loftHull([
+          { y: -0.014, w: fw * 0.34, d: fl * 0.50, round: 0.36 },
+          { y: 0.020, w: fw * 0.30, d: fl * 0.44, round: 0.32, smooth: true },
+          { y: 0.046, w: fw * 0.18, d: fl * 0.28, round: 0.44 },
+        ]), 'armorSecondary', {
+          p: [o * fw * 0.72, 0.040, -FRONT * fl * 0.05], r: [0, 0, o * 14 * DEG], mirror, tier: TIER.SECONDARY,
+        });
       }
     }
   }
@@ -3239,7 +3313,7 @@ function buildLeg(rig, spec, side, sign, mirror) {
     { r: ankleW * 0.44, y: 0.02 }, { r: ankleW * 0.50, y: 0.0, smooth: true }, { r: ankleW * 0.50, y: -0.028 },
     { r: ankleW * 0.41, y: -0.044 },
   ], 20), 'trim', { p: [0, -0.01, 0], mirror, tier: TIER.SECONDARY });
-  rig.decal(`foot_${S}`, DECAL.HAZARD, fw * 0.9, 0.028, {
+  rig.decal(`foot_${S}`, MARKINGS.HAZARD, fw * 0.9, 0.028, {
     p: [0, 0.045, FRONT * (fl * 0.44)], r: [0, YAW_FRONT, 0], mirror, tier: TIER.GREEBLE,
   });
 }
@@ -3293,7 +3367,7 @@ function buildVariation(rig, spec, def) {
   const lame = pauldronLames(scaled)[0];
 
   // 1. shoulder crest blades — 0, 1 or 2 per side, swept back over the pauldron
-  const blades = rng.int(3);
+  const blades = Math.min(3, Math.round(spec.spikes * 0.5));
   for (let i = 0; i < blades; i++) {
     const len = 0.16 + rng.range(0, 0.12);
     for (const { s, sign, mirror } of SIDES) {
@@ -3312,30 +3386,40 @@ function buildVariation(rig, spec, def) {
     }
   }
 
-  // 1b. asymmetric shoulder markings.
+  // 1b. asymmetric markings.
   //
-  // Real hardware is not stencilled symmetrically: the unit roundel goes on one
-  // side, the tally chevrons on the other, and that single asymmetry is worth
-  // more to the read than another twenty greebles. Materials.js exports no
-  // marking atlas as of this writing — if it ever does, swap `DECAL` for it and
-  // keep these placements. Until then the flat quad reserves the UV space: each
-  // sits on its own atlas cell with a 0.002 edge trim, and the surface under it
-  // is left clear of panel strips so a larger marking can grow into it.
+  // Real hardware is not stencilled symmetrically: the unit number goes on one
+  // shoulder, tally chevrons on the other, servicing instructions wherever the
+  // technician stands. That single asymmetry is worth more to the read than
+  // another twenty greebles, and it is the cue that says a person maintained
+  // this machine rather than that a generator extruded it.
   const numberSide = rng.sign();
+  const unitCell = rng.pick([MARKINGS.UNIT, MARKINGS.ROUNDEL, MARKINGS.SERIAL]);
   for (const { s, sign, mirror } of SIDES) {
     const ballX = Math.abs((rig.restPos[`shoulder_${s}`]?.x ?? 0.155)
       - (rig.restPos[`clavicle_${s}`]?.x ?? 0)) * 0.58;
     const marked = sign === numberSide;
-    rig.decal(`clavicle_${s}`, marked ? DECAL.ROUNDEL : DECAL.CHEVRON,
-      lame.R * 0.62, lame.R * 0.62, {
+    rig.decal(`clavicle_${s}`, marked ? unitCell : MARKINGS.CHEVRON,
+      lame.R * (marked ? 0.66 : 0.44), lame.R * (marked ? 0.66 : 0.44), {
         p: [sign * (ballX + lame.dx + lame.R * 0.34), lame.dy + lame.R * 0.30,
           FRONT * (lame.half + 0.008)],
         r: [0, YAW_FRONT, sign * (marked ? -14 : 8) * DEG], mirror, tier: TIER.GREEBLE,
       });
   }
-  rig.decal(`clavicle_${numberSide > 0 ? 'R' : 'L'}`, DECAL.HAZARD, scaled.d * 0.44, 0.034, {
+  rig.decal(`clavicle_${numberSide > 0 ? 'R' : 'L'}`, MARKINGS.HAZARD, scaled.d * 0.44, 0.034, {
     p: [-numberSide * (scaled.out + scaled.w * 0.30), lame.dy + lame.R * 0.70, 0],
     r: [-72 * DEG, 0, numberSide * 18 * DEG], mirror: numberSide > 0, tier: TIER.GREEBLE,
+  });
+  // service stencils: a lifting point over one hip, a no-step warning on the
+  // opposite shin, both on the side a crew chief would actually walk up to
+  const lift = rng.sign();
+  rig.decal('hips', MARKINGS.LIFT, 0.075, 0.038, {
+    p: [lift * t.pelvisW * 0.40, 0.028, back * (t.waistD * 0.5 + 0.014)],
+    r: [0, YAW_BACK, lift * 4 * DEG], tier: TIER.GREEBLE,
+  });
+  rig.decal(`knee_${lift > 0 ? 'R' : 'L'}`, MARKINGS.NOSTEP, spec.legs.shin * 1.5, spec.legs.shin * 0.62, {
+    p: [0, -rig.dim.shin * 0.66, FRONT * (spec.legs.shin * rig.dim.legK * 0.72 + 0.006)],
+    r: [0, YAW_FRONT, 0], mirror: lift < 0, tier: TIER.GREEBLE,
   });
 
   // 2. hip stowage: an ammo drum or a utility block on one side
@@ -3360,7 +3444,7 @@ function buildVariation(rig, spec, def) {
         p: [sign * t.pelvisW * 0.58, -0.05, back * t.waistD * 0.22],
         r: [0, 0, sign * -8 * DEG], mirror, tier: TIER.PRIMARY,
       });
-      rig.decal('hips', DECAL.BARCODE, 0.06, 0.03, {
+      rig.decal('hips', MARKINGS.BARCODE, 0.06, 0.03, {
         p: [sign * (t.pelvisW * 0.58 + 0.040), -0.05, back * t.waistD * 0.22],
         r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
       });
@@ -3385,7 +3469,7 @@ function buildVariation(rig, spec, def) {
   }
 
   // 4. torso insignia plate, placed off-centre and rotated per character
-  const cell = rng.pick([DECAL.ROUNDEL, DECAL.TRIANGLE, DECAL.CHEVRON, DECAL.GAUGE, DECAL.CAUTION]);
+  const cell = rng.pick([MARKINGS.ROUNDEL, MARKINGS.TRIANGLE, MARKINGS.CHEVRON, MARKINGS.GAUGE, MARKINGS.CAUTION]);
   rig.decal('spine02', cell, 0.075, 0.075, {
     p: [rng.sign() * t.waistW * 0.44, 0.02, back * (t.waistD * 0.60)],
     r: [0, YAW_BACK, rng.range(-0.2, 0.2)], tier: TIER.GREEBLE,
@@ -3468,20 +3552,32 @@ function buildMechanism(rig, spec) {
   }
 
   // --- cable looms -------------------------------------------------------
+  // The roster's `cables` count is a loom budget, not decoration: a courier
+  // chassis runs two thin bundles and a foundry chassis runs six fat ones, and
+  // spending that budget on the spine and the big joints first is what keeps a
+  // sleek fighter from ending up wrapped in the same spaghetti as a heavy.
+  const loom = spec.cables;
+  const braid = clamp(Math.round(loom * 0.5), 1, 3);
+  const fat = 0.75 + loom * 0.06;
+
   rig.cable('hips', [0, m.lumbar * 0.70, back * t.waistD * 0.62], 'chest', [0, -m.thorax * 0.24, back * t.chestD * 0.52],
-    { sag: 0.031, radius: 0.0079 * k, strands: 3, twists: 2.0 });
+    { sag: 0.031, radius: 0.0079 * k * fat, strands: braid, twists: 2.0 });
 
   for (const { s, sign } of SIDES) {
     rig.cable('chest', [sign * t.chestW * 0.26, m.collar * 0.10, back * t.chestD * 0.44],
-      `shoulder_${s}`, [0, -m.upper * 0.48, back * a.upper * 0.55], { sag: 0.020, radius: 0.0072 * k });
+      `shoulder_${s}`, [0, -m.upper * 0.48, back * a.upper * 0.55], { sag: 0.020, radius: 0.0072 * k * fat, strands: braid });
     rig.cable(`shoulder_${s}`, [sign * a.upper * 0.5, -m.upper * 0.76, back * a.upper * 0.7],
-      `elbow_${s}`, [sign * a.fore * 0.5, -m.fore * 0.22, back * a.fore * 0.7], { sag: 0.022, radius: 0.0065 * k });
+      `elbow_${s}`, [sign * a.fore * 0.5, -m.fore * 0.22, back * a.fore * 0.7], { sag: 0.022, radius: 0.0065 * k * fat, strands: braid });
     rig.cable('hips', [sign * t.pelvisW * 0.34, -0.02, back * t.waistD * 0.55],
-      `hip_${s}`, [sign * L.thigh * 0.5, -m.thigh * 0.41, back * L.thigh * 0.85], { sag: 0.025, radius: 0.0072 * k });
-    rig.cable(`hip_${s}`, [sign * L.thigh * 0.55, -m.thigh * 0.68, back * L.thigh * 0.9],
-      `knee_${s}`, [sign * L.shin * 0.55, -m.shin * 0.24, back * L.shin * 0.9], { sag: 0.022, radius: 0.0065 * k });
-    rig.cable(`knee_${s}`, [sign * L.shin * 0.45, -m.shin * 0.79, back * L.shin * 0.75],
-      `foot_${s}`, [sign * L.footW * 0.40, 0.03, back * L.foot * 0.25], { sag: 0.015, radius: 0.0058 * k, strands: 2 });
+      `hip_${s}`, [sign * L.thigh * 0.5, -m.thigh * 0.41, back * L.thigh * 0.85], { sag: 0.025, radius: 0.0072 * k * fat, strands: braid });
+    if (loom >= 3) {
+      rig.cable(`hip_${s}`, [sign * L.thigh * 0.55, -m.thigh * 0.68, back * L.thigh * 0.9],
+        `knee_${s}`, [sign * L.shin * 0.55, -m.shin * 0.24, back * L.shin * 0.9], { sag: 0.022, radius: 0.0065 * k * fat, strands: braid });
+    }
+    if (loom >= 5) {
+      rig.cable(`knee_${s}`, [sign * L.shin * 0.45, -m.shin * 0.79, back * L.shin * 0.75],
+        `foot_${s}`, [sign * L.footW * 0.40, 0.03, back * L.foot * 0.25], { sag: 0.015, radius: 0.0058 * k, strands: 2 });
+    }
     // neck loom
     rig.cable('chest', [sign * 0.045, m.collar * 0.84, back * 0.06], 'head', [sign * 0.04, m.skull * 0.05, back * 0.07],
       { sag: 0.011, radius: 0.0050 * k, strands: 2, twists: 1.2 });
@@ -3547,7 +3643,7 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
   }
 
   const palette = { ...DEFAULT_PALETTE, ...(def?.palette || {}) };
-  const spec = CHASSIS[def?.chassis] || CHASSIS.heavy;
+  const spec = chassisFor(def);
   const quality = opts.detail ?? environment?.quality ?? 'high';
   const maxTier = DETAIL_TIER[quality] ?? TIER.GREEBLE;
   const wantLod = opts.lod !== false && maxTier > TIER.PRIMARY;
@@ -3561,10 +3657,10 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
   }
 
   // ---- materials --------------------------------------------------------
-  const { mats, emissiveConfig } = resolveMaterials(environment, palette, def);
+  const { mats, emissiveConfig } = resolveMaterials(environment, palette);
 
   // ---- assemble ---------------------------------------------------------
-  const rig = new Rig(bones, restWorld, mats, maxTier);
+  const rig = new Rig(bones, restWorld, mats, maxTier, spec.greeble);
 
   buildPelvis(rig, spec);
   buildTorso(rig, spec, def);
@@ -3610,29 +3706,34 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
   const makeLevel = (tierCap, suffix) => {
     const container = new THREE.Group();
     container.name = `robot:${suffix}`;
-    const byMat = new Map();
+    // Batched by material AND by whether the part is allowed into the depth
+    // pass. Shadow work is paid once per cascade, so a bolt head or a rivet row
+    // that merges into the same buffer as a chest plate drags the whole plate's
+    // worth of geometry through every cascade to cast a shadow measured in
+    // fractions of a pixel. Splitting them costs one draw call in the colour
+    // pass and saves that same draw call several times over in the depth passes.
+    const batches = new Map();
     for (const part of rig.parts) {
       if (part.tier > tierCap) continue;
-      let list = byMat.get(part.mat);
-      if (!list) byMat.set(part.mat, (list = []));
-      list.push(part.geo);
+      const shadowed = part.tier < TIER.GREEBLE && part.mat !== 'decal' && !part.mat.startsWith('glow_');
+      const key = shadowed ? part.mat : `${part.mat} flat`;
+      let entry = batches.get(key);
+      if (!entry) batches.set(key, (entry = { mat: part.mat, shadowed, list: [] }));
+      entry.list.push(part.geo);
     }
     let tris = 0;
-    for (const [matName, list] of byMat) {
+    for (const [key, batch] of batches) {
+      const matName = batch.mat;
       const mat = mats[matName];
       if (!mat) continue;
-      const merged = mergeGeometries(list, false);
+      const merged = mergeGeometries(batch.list, false);
       if (!merged) continue;
       merged.computeBoundingSphere();
       if (merged.boundingSphere) merged.boundingSphere.radius *= 1.9;
       merged.computeBoundingBox();
       const mesh = new THREE.SkinnedMesh(merged, mat);
-      mesh.name = `${suffix}:${matName}`;
-      // Shadow-caster budget. Every mesh here is one more draw call per cascade,
-      // and the emissive strips and decal quads are recessed millimetres-thin
-      // surfaces that cannot throw a shadow anyone will ever see — so they stay
-      // out of the depth pass entirely. That is ten draw calls per fighter.
-      mesh.castShadow = matName !== 'decal' && !matName.startsWith('glow_');
+      mesh.name = `${suffix}:${key.replace(' ', ':')}`;
+      mesh.castShadow = batch.shadowed;
       mesh.receiveShadow = !matName.startsWith('glow_') && matName !== 'decal';
       mesh.bind(skeleton, new THREE.Matrix4());
       if (matName.startsWith('glow_')) {

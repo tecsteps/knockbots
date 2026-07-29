@@ -246,26 +246,36 @@
 .hp-block--p2::before { right: 100%; background: linear-gradient(270deg, var(--kb-line-strong), transparent); }
 
 /*
- * The bar is two nested boxes, not one. `.hp-frame` is the outer bezel —
- * brushed metal, padded, with the bevel and the *cast* shadow (`filter:
- * drop-shadow`, not `box-shadow`: a clip-path'd element clips its own
- * box-shadow along with its content, which is why the previous single-box
- * bar had no shadow separating it from the scene at all). `.hp-inner` is
- * the clipped window the health layers actually live and scale inside —
- * the padding between the two is what reads as a keyline/frame at a glance.
+ * The bar is a constructed assembly of three physically distinct planes,
+ * not a filled rectangle:
+ *   1. `.hp-frame`  the outer chamfered bezel — a lit top edge (bright
+ *      inset line, as if catching light from above) and a dark, shadowed
+ *      bottom edge, cast off the scene with `filter: drop-shadow` (not
+ *      `box-shadow`: a clip-path'd element clips its own box-shadow along
+ *      with its content, so drop-shadow is the only way this gets a shadow
+ *      separating it from the background at all). The padding between this
+ *      and `.hp-inner` is wide enough to read as metal thickness, not a
+ *      hairline.
+ *   2. `.hp-inner`  the inset track, recessed *below* the bezel — its own
+ *      inward-facing shadow (dark top lip, faint bottom rim-light) sells
+ *      the depth of the channel the health layers sit inside.
+ *   3. `.hp-layer` (fill/drain/ghost)  sits inside that recess and is the
+ *      only plane that moves.
  */
 .hp-frame {
   position: relative;
   height: 2.72em;
   width: 100%;
   max-width: 29em;
-  padding: 0.16em;
-  background: linear-gradient(180deg, #454e60 0%, #171b25 10%, #06070b 48%, #0b0e17 88%, #2a3040 100%);
+  padding: 0.26em;
+  background: linear-gradient(180deg,
+    #8891a4 0%, #4b5468 7%, #1c212c 20%, #0a0c11 52%, #050609 82%, #000 100%);
   clip-path: polygon(var(--kb-cut) 0, 100% 0, calc(100% - var(--kb-cut)) 100%, 0 100%);
   box-shadow:
-    inset 0 0 0 0.05em rgba(0, 0, 0, 0.85),
-    inset 0 0.09em 0 rgba(255, 255, 255, 0.22),
-    inset 0 -0.09em 0.16em rgba(0, 0, 0, 0.65);
+    inset 0 0.07em 0 rgba(255, 255, 255, 0.65),
+    inset 0 0.14em 0.1em rgba(255, 255, 255, 0.12),
+    inset 0 -0.1em 0.06em rgba(0, 0, 0, 0.95),
+    inset 0 0 0 0.05em rgba(0, 0, 0, 0.9);
   filter: drop-shadow(0 0.55em 1.1em rgba(0, 0, 0, 0.55)) drop-shadow(0 0.1em 0.16em rgba(0, 0, 0, 0.6));
 }
 .hp-inner {
@@ -274,12 +284,15 @@
   width: 100%;
   background:
     repeating-linear-gradient(100deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 3px),
-    linear-gradient(180deg, #05060a 0%, #0d1119 55%, #070911 100%);
+    linear-gradient(180deg, #020306 0%, #0a0d15 10%, #05060a 60%, #010102 100%);
   clip-path: polygon(
     calc(var(--kb-cut) * 0.82) 0, 100% 0,
     calc(100% - var(--kb-cut) * 0.82) 100%, 0 100%
   );
-  box-shadow: inset 0 0 0 1px var(--kb-line);
+  box-shadow:
+    inset 0 0.16em 0.26em rgba(0, 0, 0, 0.95),
+    inset 0 -0.04em 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 0 1px var(--kb-line);
   overflow: hidden;
 }
 
@@ -506,21 +519,13 @@
 .round-label {
   margin-top: 0.35em;
   font-size: 0.6em;
-  letter-spacing: 0.32em;
-  text-transform: uppercase;
-  color: var(--kb-text-faint);
+  height: 1em;
+  --kb-ink-a: #aab4c6;
+  --kb-ink-b: #4b5567;
 }
 
 /* -- overdrive meter ------------------------------------------------- */
 
-/*
- * `top` has to clear the nameplate's backing chip, not just the bar — and
- * p1/p2 disagree on how much room that takes: p1's meter-block stacks
- * (label, frame) so the frame is already pushed down by the label's own
- * line, but p2's stacks (frame, label) so the frame sits flush at the top
- * of the row with nothing above it to push it clear. Sized for p2, the
- * tighter case.
- */
 .meter-wrap {
   position: absolute;
   top: 5.5em;
@@ -530,13 +535,35 @@
   grid-template-columns: 1fr 1fr;
   gap: 0.7em;
 }
-/* `width`, not `max-width` + `margin-left: auto` — see `.hp-block` above for
+/*
+ * P1 and P2 are built from the exact same markup in the exact same order —
+ * label into `grid-row: label`, bar into `grid-row: bar` — for both
+ * players (see `HUD#buildMeters`). `.meter-block--p2` is the only place a
+ * player-specific rule exists: one `transform: scaleX(-1)` that mirrors the
+ * whole block — bar geometry, clip-path chamfer, fill growth direction, the
+ * charge animation — as a single reflection instead of two hand-maintained
+ * halves. The label gets an equal, opposite `scaleX(-1)` so its glyphs
+ * still read left-to-right inside the mirrored block.
+ *
+ * `width`, not `max-width` + `margin-left: auto` — see `.hp-block` above for
  * why that combination silently collapses a `width: 100%` child (here,
- * `.meter-frame`) down to the label text's width instead of the bar's. */
-.meter-block { display: flex; flex-direction: column; align-items: flex-start; gap: 0.2em; width: min(27em, 100%); }
-.meter-block--p2 { align-items: flex-end; justify-self: end; }
+ * `.meter-frame`) down to the label text's width instead of the bar's.
+ */
+.meter-block {
+  display: grid;
+  grid-template-rows: [label] auto [bar] auto;
+  justify-items: start;
+  row-gap: 0.2em;
+  width: min(27em, 100%);
+}
+.meter-block--p1 { justify-self: start; }
+.meter-block--p2 { justify-self: end; transform: scaleX(-1); }
+
+.meter-label { grid-row: label; }
+.meter-block--p2 .meter-label { transform: scaleX(-1); }
 
 .meter-frame {
+  grid-row: bar;
   position: relative;
   height: 0.62em;
   width: 100%;
@@ -554,12 +581,10 @@
   background-size: 220% 100%;
   animation: meterCharge 1.6s linear infinite;
 }
-.meter-block--p2 .meter-fill { transform-origin: right center; background: linear-gradient(-90deg, var(--kb-cyan-dim), var(--kb-cyan) 60%, #bdfeff); background-size: 220% 100%; }
 @keyframes meterCharge {
   0% { background-position: 0% 0; }
   100% { background-position: -220% 0; }
 }
-.meter-block--p2 .meter-fill { animation-direction: reverse; }
 .meter-ticks {
   position: absolute; inset: 0;
   background-image: repeating-linear-gradient(90deg, rgba(0,0,0,0.55) 0 1px, transparent 1px 20%);
@@ -580,11 +605,15 @@
 }
 .meter-label {
   font-size: 0.55em;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--kb-text-faint);
+  height: 1em;
+  --kb-ink-a: #aab4c6;
+  --kb-ink-b: #4b5567;
 }
-.meter-label.meter-label--full { color: var(--kb-cyan); text-shadow: var(--kb-glow-cyan); }
+.meter-label.meter-label--full {
+  --kb-ink-a: #d8fbff;
+  --kb-ink-b: #1a94ac;
+  filter: drop-shadow(0 0 0.5em rgba(63, 224, 255, 0.65));
+}
 
 /* -- combo counters ---------------------------------------------------- */
 
@@ -756,38 +785,36 @@
 }
 
 /*
- * `.announce-inner` sizes itself to the text (an explicit-width `.kb-text`),
- * and `.announce-plate` is an absolutely-inset sibling behind it — a solid
- * beveled slab with its own cast shadow (`filter: drop-shadow`, for the same
- * clip-path reason the health bar bezel uses it), not a tint the 3D scene
- * shows through. This is the fix for the old background-clip:text banner:
- * the letters now sit *on* something instead of being a hole in the layer.
+ * No backing slab. `.announce-inner` sizes itself to the text (an
+ * explicit-width `.kb-text`); legibility against a bright, moving 3D scene
+ * comes entirely from the letterforms — weight and size from the glyph
+ * grid itself (see Typeface.js), plus a hard silhouette outline stamped
+ * here in CSS.
+ *
+ * The outline is `.announce-text::before`, a solid copy of the same glyph
+ * mask (custom properties like `--kb-mask` inherit onto pseudo-elements the
+ * same as real children) pushed out in eight directions with stacked
+ * `drop-shadow()`s. `drop-shadow` reads the mask's alpha shape, so this
+ * traces the actual letter silhouette — shoulders, counters, serifs on the
+ * digits — rather than a bounding box, which is what makes it read as a
+ * milled edge on the metal instead of a sticker outline.
  */
 .announce-inner {
   position: relative;
   display: inline-block;
-}
-.announce-plate {
-  position: absolute;
-  inset: -0.22em -0.85em;
-  background: linear-gradient(180deg, #454e60 0%, #1a1e28 16%, #05060a 55%, #0a0d16 88%, #262c38 100%);
-  clip-path: polygon(1.1em 0, 100% 0, calc(100% - 1.1em) 100%, 0 100%);
-  box-shadow:
-    inset 0 0 0 0.06em rgba(0, 0, 0, 0.8),
-    inset 0 0.1em 0 rgba(255, 255, 255, 0.2),
-    inset 0 -0.12em 0.2em rgba(0, 0, 0, 0.6),
-    inset 0 0 0 0.16em rgba(0, 0, 0, 0.4);
+  /* The outline lives here, not on a masked pseudo-element. CSS applies
+   * `filter` BEFORE `mask` on the same box, so a masked element can never show
+   * its own drop-shadow spread — the mask clips the outline away to exactly
+   * the glyph silhouette it was supposed to trace, leaving no outline at all.
+   * `.announce-inner` is unmasked and wraps the glyph layers, so the shadows
+   * read the composite alpha — still the true letter silhouette, shoulders and
+   * counters included — and are free to spread outside it. */
   filter:
-    drop-shadow(0 0.7em 1.4em rgba(0, 0, 0, 0.6))
-    drop-shadow(0 0 1.8em var(--flare-glow));
-}
-.announce-plate::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  clip-path: inherit;
-  box-shadow: inset 0 0 0 0.045em var(--flare);
-  opacity: 0.65;
+    drop-shadow(0.05em 0 0 #000) drop-shadow(-0.05em 0 0 #000)
+    drop-shadow(0 0.05em 0 #000) drop-shadow(0 -0.05em 0 #000)
+    drop-shadow(0.05em 0.05em 0 #000) drop-shadow(-0.05em -0.05em 0 #000)
+    drop-shadow(0.05em -0.05em 0 #000) drop-shadow(-0.05em 0.05em 0 #000)
+    drop-shadow(0 0 0.6em var(--flare-glow));
 }
 .announce-banner[data-kind='round'] .announce-text { font-size: clamp(28px, 6vw, 90px); }
 .announce-banner[data-kind='fight'] { --flare: var(--kb-accent); }

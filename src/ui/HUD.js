@@ -182,7 +182,7 @@ export class HUD {
     timerFrame.appendChild(timerValue);
     const roundLabel = document.createElement('div');
     roundLabel.className = 'round-label';
-    roundLabel.textContent = 'ROUND 1';
+    applyKbText(roundLabel, 'ROUND 1');
     timerWrap.append(timerFrame, roundLabel);
 
     top.append(this.sides[0].block, timerWrap, this.sides[1].block);
@@ -195,6 +195,16 @@ export class HUD {
     this.lastRoundText = roundLabel.textContent;
   }
 
+  /**
+   * Both meter blocks are built with *identical* DOM order — label, then
+   * bar, into fixed named grid rows — so there is no per-player branch left
+   * to drift out of sync. `.meter-block--p2` alone carries `transform:
+   * scaleX(-1)` in CSS, which mirrors the whole assembly (bar geometry,
+   * clip-path cut, fill growth direction) for free; the label's own text
+   * gets an equal, opposite `scaleX(-1)` so the glyphs still read left to
+   * right. The result is a true reflection, not two hand-tuned mirrors that
+   * can quietly stop matching each other.
+   */
   #buildMeters() {
     const wrap = document.createElement('div');
     wrap.className = 'meter-wrap';
@@ -204,7 +214,7 @@ export class HUD {
       block.className = `meter-block meter-block--${p}`;
       const label = document.createElement('div');
       label.className = 'meter-label';
-      label.textContent = 'OVERDRIVE';
+      applyKbText(label, 'OVERDRIVE');
       const frame = document.createElement('div');
       frame.className = 'meter-frame';
       const fill = document.createElement('div');
@@ -212,7 +222,7 @@ export class HUD {
       const ticks = document.createElement('div');
       ticks.className = 'meter-ticks';
       frame.append(fill, ticks);
-      if (i === 0) block.append(label, frame); else block.append(frame, label);
+      block.append(label, frame);
       wrap.appendChild(block);
       return { block, frame, fill, label };
     });
@@ -254,23 +264,23 @@ export class HUD {
    * opacity transition its own fly-in would render at partial opacity,
    * reading as washed-out instead of a crisp foreground overlay. Appending
    * it after `this.root` keeps it painting on top with no z-index needed.
+   *
+   * There is no backing plate. Legibility comes from the letterforms
+   * themselves — `.announce-text` layers the same shadow/body/gloss stack
+   * every `kb-text` uses, plus a hard silhouette outline (see ui.css) — so
+   * the word reads as lit cast metal hanging in front of the fight, not a
+   * rectangle with text stamped on it.
    */
   #buildAnnouncements() {
     const layer = document.createElement('div');
     layer.className = 'announce-layer';
     const banner = document.createElement('div');
     banner.className = 'announce-banner';
-    // `.announce-plate` is the opaque lit slab; `.announce-text` (the
-    // glyph mask) sits on top of it. `.announce-inner` has no styling of
-    // its own — it just sizes itself to the text so the plate, which is
-    // absolutely positioned against it, can inset around that footprint.
     const inner = document.createElement('div');
     inner.className = 'announce-inner';
-    const plateEl = document.createElement('div');
-    plateEl.className = 'announce-plate';
     const text = document.createElement('div');
     text.className = 'announce-text';
-    inner.append(plateEl, text);
+    inner.appendChild(text);
     banner.appendChild(inner);
     layer.appendChild(banner);
     this.uiRoot.appendChild(layer);
@@ -503,7 +513,7 @@ export class HUD {
     }
     const rt = `ROUND ${game.round ?? 1}`;
     if (rt !== this.lastRoundText) {
-      this.roundLabel.textContent = rt;
+      applyKbText(this.roundLabel, rt);
       this.lastRoundText = rt;
     }
   }
@@ -518,7 +528,7 @@ export class HUD {
       if (full !== m._full) {
         m.frame.classList.toggle('meter--full', full);
         m.label.classList.toggle('meter-label--full', full);
-        m.label.textContent = full ? 'OVERDRIVE READY' : 'OVERDRIVE';
+        applyKbText(m.label, full ? 'OVERDRIVE READY' : 'OVERDRIVE');
         m._full = full;
       }
     }

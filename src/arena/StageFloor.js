@@ -123,7 +123,31 @@ function bakeFloorMaps(size) {
     { x: -8.0, z: 7.5, r: 5.4, a0: -0.55, a1: 0.55, w: 0.34, ruts: 0, gain: 0.55 },
     { x: -6.2, z: -5.4, r: 7.8, a0: 0.12, a1: 1.02, w: 0.15, ruts: 1.05, gain: 0.62 },
     { x: 9.6, z: 4.2, r: 6.6, a0: 2.55, a1: 3.5, w: 0.28, ruts: 0, gain: 0.5 },
+    // Short heel skids through the combat zone itself. Everything above sweeps
+    // round the outside of the pit, which left the six metres the camera spends
+    // the whole match looking at as the cleanest concrete in the room.
+    { x: -1.2, z: 5.6, r: 4.4, a0: 1.15, a1: 1.95, w: 0.22, ruts: 0, gain: 0.78 },
+    { x: 3.6, z: 5.2, r: 3.9, a0: 1.35, a1: 2.15, w: 0.19, ruts: 0.7, gain: 0.62 },
+    { x: -4.6, z: -3.4, r: 4.2, a0: -0.35, a1: 0.5, w: 0.3, ruts: 0, gain: 0.66 },
+    { x: 6.4, z: -2.2, r: 4.6, a0: 2.3, a1: 3.05, w: 0.24, ruts: 0, gain: 0.58 },
   ];
+  /**
+   * Oil. The noise field alone spreads a thin film everywhere something might
+   * once have leaked, which averages out to no stain at all; a floor reads as
+   * used because of a specific dark patch under a specific machine. These are
+   * those patches — a soft halo with a darker core, feathered so the edge is a
+   * spread rather than an outline.
+   */
+  const stains = [
+    { x: -7.6, z: -5.2, r: 1.9, gain: 0.95 },
+    { x: 8.9, z: -4.1, r: 1.5, gain: 0.8 },
+    { x: -2.1, z: 8.6, r: 2.3, gain: 0.7 },
+    { x: 4.4, z: 9.4, r: 1.3, gain: 0.85 },
+    { x: 11.2, z: 3.0, r: 1.7, gain: 0.6 },
+    { x: -11.4, z: 4.6, r: 1.4, gain: 0.72 },
+    { x: 1.8, z: -1.4, r: 1.1, gain: 0.45 },
+  ];
+  const oilMask = new Uint8Array(n);
 
   for (const p of patches) { p.c = Math.cos(p.rot); p.s = Math.sin(p.rot); }
 
@@ -161,6 +185,15 @@ function bakeFloorMaps(size) {
         sc = Math.max(sc, d.gain * ends * (1 - smoothstep(d.w * 0.35, d.w, off)));
       }
       scuff[k] = Math.round(clamp01(sc) * 255);
+
+      let ol = 0;
+      for (const s of stains) {
+        const d = Math.hypot((wx - s.x) * (1 + s.r * 0.06), wz - s.z) / s.r;
+        if (d > 1.35) continue;
+        // Core plus halo: the core is where it soaked in, the halo where it ran.
+        ol = Math.max(ol, s.gain * (0.45 * (1 - smoothstep(0.15, 1.3, d)) + 0.55 * (1 - smoothstep(0.0, 0.65, d))));
+      }
+      oilMask[k] = Math.round(clamp01(ol) * 255);
 
       let cov = 0;
       let kind = 0;
@@ -263,16 +296,23 @@ function bakeFloorMaps(size) {
       // Oil finds the edges of a working floor: plant stands round the rim, and
       // nothing gets parked in the middle of a test cell.
       const rim = smoothstep(4.5, 10.5, Math.max(Math.abs(wx) * 0.92, Math.abs(wz - 1)));
-      const oily = smoothstep(0.6, 0.9, oi) * (0.22 + rim * 1.15);
+      const oily = clamp01(smoothstep(0.6, 0.9, oi) * (0.22 + rim * 1.15) + (oilMask[k] / 255) * 0.85);
 
       // Wetness: everything is faintly damp, cells whose id passes the
       // threshold hold standing water, and water pools where the slab dips.
       // Three things then take water away again — a dry region, a rubber smear
       // and an oil film all shed it — which is what breaks up the uniform sheen.
-      const puddleCell = smoothstep(0.42, 0.58, pid);
-      const pool = puddleCell * (1 - smoothstep(0.28, 0.62, pud)) * (1 - smoothstep(0.06, 0.34, h + 0.35));
-      const damp = clamp01(0.26 + stn * 0.44 - Math.abs(wz - 1) * 0.012);
-      const puddle = clamp01(pool * 1.95 + joint * 0.35 * puddleCell);
+      //
+      // The pool gate is deliberately generous on the dish and tight on the
+      // cell: fewer, wider pools sitting in the low spots read as a floor that
+      // drains somewhere, where many small ones read as speckle.
+      const puddleCell = smoothstep(0.38, 0.56, pid);
+      const pool = puddleCell * (1 - smoothstep(0.34, 0.74, pud)) * (1 - smoothstep(0.02, 0.4, h + 0.32));
+      // The damp base follows the fall of the slab rather than sitting flat, so
+      // one end of the pit is visibly wetter than the other instead of the
+      // whole deck carrying the same sheen.
+      const damp = clamp01(0.13 + stn * 0.4 + smoothstep(0.34, 0.78, reg) * 0.5 - Math.abs(wz - 1) * 0.01);
+      const puddle = clamp01(pool * 2.05 + joint * 0.35 * puddleCell);
       const shed = clamp01(smoothstep(0.54, 0.88, dry) * 0.6 + sc * 0.55 + oily * 0.5 + clamp01(tone) * 0.28);
       wet[k] = clamp01((damp * 0.55 + puddle) * (1 - shed * 0.62));
 

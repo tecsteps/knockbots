@@ -15,6 +15,9 @@
  *    AgX is used rather than ACES because ACES over-saturates and hue-shifts
  *    exactly the things this game is made of — coloured emissives on metal —
  *    while AgX desaturates into the highlight and keeps the hue path straight.
+ *    The one place this deviates from stock AgX is the top of the log encode,
+ *    which compresses rather than clamps: see `agx()` and `buildGradeLut()`,
+ *    because a clamped log window is what turns a specular into a flat shape.
  *
  * 2. **Shadows**. Real cascaded shadow maps in the classic three.js renderer
  *    require patching every material (`CSM.setupMaterial`), which would stomp on
@@ -31,6 +34,13 @@
  *    target that owns a real depth texture and everything downstream reads
  *    that. The dedicated view-normal prepass this replaced was a second full
  *    geometry pass — it cost as many draw calls as the scene itself.
+ *
+ * 4. **Velocity**. The one geometry pass that does earn its draw calls is
+ *    `VelocityPass`, which redraws the skinned meshes only. Depth reprojection
+ *    gives the whole frame the camera's motion for free but gives a moving limb
+ *    exactly zero, so without it the fastest thing on screen is the one thing
+ *    that never blurs. The motion blur is a reconstruction filter over the
+ *    resulting buffer, not a smear along the camera delta.
  *
  * Externally this class only needs the charter API, but it also listens for a
  * `cameraFocus` bus event (emitted by `FightCamera`) carrying the focus point
@@ -336,14 +346,20 @@ function installPcssShadows() {
  * `minScale` is deliberately tight on the top tiers. Adaptive resolution exists
  * to protect the frame rate, not to hand back the picture: a 0.75 floor is a
  * 25% linear drop, which reads as a blanket soften over the whole frame and is
- * far more damaging on a still than a dropped frame is in motion. A tier that
- * cannot hold its budget at 0.9 should be a tier down, not a blurrier ultra.
+ * far more damaging on a still than a dropped frame is in motion.
+ *
+ * Ultra takes that to its conclusion and does not scale at all. It was sitting
+ * pinned at its 0.9 floor in every capture, which is a 1728x972 frame stretched
+ * over 1920x1080 — every panel edge on the character softened, permanently, to
+ * buy frames nobody was counting. Ultra is the tier the stills are judged on,
+ * so it renders at native resolution and degrades by dropping to `high`, which
+ * keeps a real 0.78 floor and every effect except the sample counts.
  *
  * @type {Record<string, QualityTier>}
  */
 export const QUALITY_TIERS = {
   ultra: {
-    renderScale: 1.0, minScale: 0.9, shadowMapSize: 4096, pcss: true,
+    renderScale: 1.0, minScale: 1.0, shadowMapSize: 4096, pcss: true,
     depth: true, ao: true, aoSamples: 16, ssr: true, ssrSteps: 24,
     bloom: true, dof: true, dofTaps: 20, motionBlur: true, mbTaps: 12,
     grade: true, smaa: true, particleBudget: 1.0,
@@ -954,16 +970,352 @@ class HighlightBloomPass extends UnrealBloomPass {
 }
 
 // ---------------------------------------------------------------------------
+// Velocity buffer
+// ---------------------------------------------------------------------------
+
+/**
+ * Screen-space velocity for the whole frame, in UV units per rendered frame.
+ *
+ * Two writes fill it. First a fullscreen pass reprojects scene depth through
+ * last frame's view-projection, which is exact for everything that only the
+ * camera moved — the stage, the crowd, the floor. Then every `SkinnedMesh` is
+ * drawn again with a material that skins the vertex twice, once with the live
+ * bone texture and once with a per-skeleton copy of last frame's bone matrices,
+ * and writes the difference of the two clip positions. That second write is the
+ * whole point: a camera-only reprojection gives a punching arm exactly zero
+ * velocity, so the fastest thing on screen is the one thing that never blurs,
+ * and fast limbs strobe from pose to pose instead of smearing.
+ *
+ * The history snapshot has to be taken before anything renders. `Skeleton.update`
+ * runs inside `WebGLRenderer.render`, and `matrixWorld` is refreshed there too,
+ * so at the top of a frame both still hold the values the previous frame drew
+ * with — `captureHistory` simply copies them out before the beauty pass
+ * overwrites them.
+ *
+ * The pass renders through a proxy `Scene` whose `children` array is pointed
+ * straight at the live skinned meshes without re-parenting them. That keeps
+ * `renderer.render` as the draw path — so skinning defines, bind matrices and
+ * the bone texture are all set up by three exactly as they are for the beauty
+ * pass — while touching only the handful of objects that need velocity. A proxy
+ * scene has no lights and no background, so the shadow maps and the sky box are
+ * not redrawn.
+ */
+class VelocityPass extends Pass {
+  /**
+   * @param {THREE.Scene} scene
+   * @param {THREE.Camera} camera
+   */
+  constructor(scene, camera) {
+    super();
+    this.scene = scene;
+    this.camera = camera;
+    this.needsSwap = false;
+
+    this.target = new THREE.WebGLRenderTarget(1, 1, {
+      type: THREE.HalfFloatType,
+      format: THREE.RGBAFormat,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: true,
+      stencilBuffer: false,
+      samples: 0,
+    });
+    this.target.texture.name = 'RenderPipeline.velocity';
+    this.target.texture.colorSpace = THREE.NoColorSpace;
+
+    this.cameraUniforms = {
+      tDepth: { value: null },
+      uInvViewProjection: { value: new THREE.Matrix4() },
+      uPrevViewProjection: { value: new THREE.Matrix4() },
+    };
+    this._cameraMaterial = new THREE.ShaderMaterial({
+      name: 'CameraVelocity',
+      uniforms: this.cameraUniforms,
+      vertexShader: FULLSCREEN_VERT,
+      fragmentShader: /* glsl */ `
+        varying vec2 vUv;
+        uniform highp sampler2D tDepth;
+        uniform mat4 uInvViewProjection;
+        uniform mat4 uPrevViewProjection;
+
+        void main() {
+          float depth = texture2D( tDepth, vUv ).x;
+          vec4 clip = vec4( vec3( vUv, depth ) * 2.0 - 1.0, 1.0 );
+          vec4 world = uInvViewProjection * clip;
+          world /= world.w;
+          vec4 prevClip = uPrevViewProjection * world;
+          vec2 velocity = vec2( 0.0 );
+          if ( prevClip.w > 1e-4 ) velocity = vUv - ( ( prevClip.xy / prevClip.w ) * 0.5 + 0.5 );
+          gl_FragColor = vec4( velocity, 0.0, 1.0 );
+        }`,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this._fsQuad = new FullScreenQuad(this._cameraMaterial);
+
+    this._proxy = new THREE.Scene();
+    this._proxy.matrixWorldAutoUpdate = false;
+    /** @type {THREE.SkinnedMesh[]} */
+    this._meshes = [];
+    /** @type {WeakMap<THREE.SkinnedMesh, THREE.ShaderMaterial>} */
+    this._materials = new WeakMap();
+    /** @type {WeakMap<THREE.Skeleton, {data:Float32Array, texture:THREE.DataTexture}>} */
+    this._skeletons = new WeakMap();
+    /** @type {WeakMap<THREE.Object3D, THREE.Matrix4>} */
+    this._prevWorld = new WeakMap();
+    this._owned = [];
+
+    this._prevViewProjection = new THREE.Matrix4();
+    this._viewProjection = new THREE.Matrix4();
+    this._primed = false;
+    this._hasHistory = false;
+    this._resolution = new THREE.Vector2(1, 1);
+  }
+
+  get texture() { return this.target.texture; }
+
+  /**
+   * Half resolution. Velocity is a low-frequency field over a smear that is
+   * tens of pixels wide, and the reconstruction filter that reads it already
+   * dilates over a neighbourhood, so the extra half-texel of silhouette
+   * accuracy buys nothing and costs four times the fill on a pass that redraws
+   * every fighter.
+   */
+  setSize(width, height) {
+    const w = Math.max(1, Math.floor(width) >> 1);
+    const h = Math.max(1, Math.floor(height) >> 1);
+    this.target.setSize(w, h);
+    this._resolution.set(w, h);
+  }
+
+  /**
+   * Copies the pose and transform the previous frame was drawn with. Must run
+   * before anything in the frame renders, and after that the live values may
+   * move freely — the shader reads the copies, not the originals.
+   * @param {THREE.Scene} scene
+   */
+  captureHistory(scene) {
+    this._meshes.length = 0;
+    scene.traverse((obj) => {
+      if (obj.isSkinnedMesh && obj.visible && obj.skeleton) this._meshes.push(obj);
+    });
+
+    for (const mesh of this._meshes) {
+      const state = this.#skeletonState(mesh.skeleton);
+      state.data.set(mesh.skeleton.boneMatrices);
+      state.texture.needsUpdate = true;
+
+      let world = this._prevWorld.get(mesh);
+      if (!world) {
+        world = new THREE.Matrix4();
+        this._prevWorld.set(mesh, world);
+      }
+      world.copy(mesh.matrixWorld);
+    }
+
+    this._viewProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+    if (!this._primed) {
+      this._prevViewProjection.copy(this._viewProjection);
+      this._primed = true;
+    }
+    this.cameraUniforms.uInvViewProjection.value.copy(this._viewProjection).invert();
+    this.cameraUniforms.uPrevViewProjection.value.copy(this._prevViewProjection);
+    this._hasHistory = true;
+  }
+
+  /** Rolls the reprojection history forward; call after rendering. */
+  advance() {
+    this._prevViewProjection.copy(this._viewProjection);
+  }
+
+  render(renderer) {
+    const prevAutoClear = renderer.autoClear;
+    const prevTarget = renderer.getRenderTarget();
+
+    renderer.setRenderTarget(this.target);
+    renderer.autoClear = false;
+    // Colour starts at zero so anything neither pass writes reads as static;
+    // depth starts at one so the skinned draw below resolves against itself.
+    renderer.clear(true, true, false);
+    this._fsQuad.render(renderer);
+
+    if (this._hasHistory && this._meshes.length > 0) {
+      const swapped = [];
+      const children = this._proxy.children;
+      children.length = 0;
+      for (const mesh of this._meshes) {
+        const material = this.#velocityMaterial(mesh);
+        material.uniforms.prevBoneTexture.value = this.#skeletonState(mesh.skeleton).texture;
+        material.uniforms.prevModelMatrix.value.copy(this._prevWorld.get(mesh));
+        material.uniforms.prevViewProjection.value.copy(this._prevViewProjection);
+        material.uniforms.tDepth.value = this.cameraUniforms.tDepth.value;
+        material.uniforms.uResolution.value.copy(this._resolution);
+        swapped.push([mesh, mesh.material]);
+        mesh.material = material;
+        children.push(mesh);
+      }
+      renderer.render(this._proxy, this.camera);
+      for (const [mesh, material] of swapped) mesh.material = material;
+      children.length = 0;
+    }
+
+    renderer.autoClear = prevAutoClear;
+    renderer.setRenderTarget(prevTarget);
+  }
+
+  /**
+   * Per-skeleton store for the previous frame's bone matrices, laid out exactly
+   * like `Skeleton.computeBoneTexture` so the shader can index it with the same
+   * arithmetic three's own `getBoneMatrix` uses.
+   * @param {THREE.Skeleton} skeleton
+   */
+  #skeletonState(skeleton) {
+    let state = this._skeletons.get(skeleton);
+    if (state && state.bones === skeleton.bones.length) return state;
+    if (state) state.texture.dispose();
+
+    let size = Math.sqrt(skeleton.bones.length * 4);
+    size = Math.ceil(size / 4) * 4;
+    size = Math.max(size, 4);
+
+    const data = new Float32Array(size * size * 4);
+    data.set(skeleton.boneMatrices);
+    const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.FloatType);
+    texture.name = 'RenderPipeline.prevBones';
+    texture.needsUpdate = true;
+
+    state = { data, texture, bones: skeleton.bones.length };
+    this._skeletons.set(skeleton, state);
+    this._owned.push(texture);
+    return state;
+  }
+
+  /**
+   * One material per mesh, because every one of them carries a different
+   * previous pose and a different previous world matrix.
+   * @param {THREE.SkinnedMesh} mesh
+   */
+  #velocityMaterial(mesh) {
+    let material = this._materials.get(mesh);
+    if (material) return material;
+
+    material = new THREE.ShaderMaterial({
+      name: 'SkinnedVelocity',
+      uniforms: {
+        prevBoneTexture: { value: null },
+        prevModelMatrix: { value: new THREE.Matrix4() },
+        prevViewProjection: { value: new THREE.Matrix4() },
+        tDepth: { value: null },
+        uResolution: { value: new THREE.Vector2(1, 1) },
+      },
+      vertexShader: /* glsl */ `
+        #include <common>
+        #include <skinning_pars_vertex>
+
+        uniform mat4 prevModelMatrix;
+        uniform mat4 prevViewProjection;
+        uniform highp sampler2D prevBoneTexture;
+
+        varying vec4 vCurrentClip;
+        varying vec4 vPreviousClip;
+
+        #ifdef USE_SKINNING
+        mat4 getPrevBoneMatrix( const in float i ) {
+          int size = textureSize( prevBoneTexture, 0 ).x;
+          int j = int( i ) * 4;
+          int x = j % size;
+          int y = j / size;
+          vec4 v1 = texelFetch( prevBoneTexture, ivec2( x, y ), 0 );
+          vec4 v2 = texelFetch( prevBoneTexture, ivec2( x + 1, y ), 0 );
+          vec4 v3 = texelFetch( prevBoneTexture, ivec2( x + 2, y ), 0 );
+          vec4 v4 = texelFetch( prevBoneTexture, ivec2( x + 3, y ), 0 );
+          return mat4( v1, v2, v3, v4 );
+        }
+        #endif
+
+        void main() {
+          vec3 transformed = vec3( position );
+          vec3 previous = vec3( position );
+
+          #ifdef USE_SKINNING
+            #include <skinbase_vertex>
+            #include <skinning_vertex>
+
+            // Same weighting as the chunk above, against last frame's matrices.
+            vec4 bindPos = bindMatrix * vec4( position, 1.0 );
+            vec4 prevSkinned = vec4( 0.0 );
+            prevSkinned += getPrevBoneMatrix( skinIndex.x ) * bindPos * skinWeight.x;
+            prevSkinned += getPrevBoneMatrix( skinIndex.y ) * bindPos * skinWeight.y;
+            prevSkinned += getPrevBoneMatrix( skinIndex.z ) * bindPos * skinWeight.z;
+            prevSkinned += getPrevBoneMatrix( skinIndex.w ) * bindPos * skinWeight.w;
+            previous = ( bindMatrixInverse * prevSkinned ).xyz;
+          #endif
+
+          vCurrentClip = projectionMatrix * modelViewMatrix * vec4( transformed, 1.0 );
+          vPreviousClip = prevViewProjection * prevModelMatrix * vec4( previous, 1.0 );
+          gl_Position = vCurrentClip;
+        }`,
+      fragmentShader: /* glsl */ `
+        uniform highp sampler2D tDepth;
+        uniform vec2 uResolution;
+
+        varying vec4 vCurrentClip;
+        varying vec4 vPreviousClip;
+
+        void main() {
+          // This target owns a depth buffer, which resolves the character
+          // against itself, but nothing in it knows about stage geometry
+          // standing in front of the fighter. Test against the beauty pass's
+          // depth so an occluded limb cannot write velocity over a wall. The
+          // tolerance is loose because this pass rasterises at half the beauty
+          // pass's resolution, so a silhouette texel can legitimately disagree
+          // by a pixel's worth of depth slope.
+          float sceneDepth = texture2D( tDepth, gl_FragCoord.xy / uResolution ).x;
+          if ( gl_FragCoord.z > sceneDepth + 5e-4 ) discard;
+
+          vec2 velocity = vec2( 0.0 );
+          if ( vPreviousClip.w > 1e-4 ) {
+            velocity = ( vCurrentClip.xy / vCurrentClip.w - vPreviousClip.xy / vPreviousClip.w ) * 0.5;
+          }
+          gl_FragColor = vec4( velocity, 0.0, 1.0 );
+        }`,
+      side: mesh.material?.side ?? THREE.FrontSide,
+    });
+
+    this._materials.set(mesh, material);
+    this._owned.push(material);
+    return material;
+  }
+
+  dispose() {
+    this.target.dispose();
+    this._cameraMaterial.dispose();
+    this._fsQuad.dispose();
+    for (const item of this._owned) item.dispose();
+    this._owned.length = 0;
+    this._meshes.length = 0;
+    this._proxy.children.length = 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Motion blur
 // ---------------------------------------------------------------------------
 
 /**
- * Camera-velocity motion blur by depth reprojection: unproject each pixel with
- * the current inverse view-projection, reproject with last frame's, and smear
- * along the resulting screen-space delta. The fight camera whips, punches in
- * and orbits, so this carries most of the motion the eye reads; per-object
- * velocity would need a velocity buffer written by every skinned material,
- * which is not this module's to touch.
+ * Gather motion blur over the velocity buffer, using McGuire's reconstruction
+ * filter rather than a plain smear along the centre pixel's velocity.
+ *
+ * The plain smear is what a depth-reprojection blur can do and no more: it
+ * blurs a moving object into itself and leaves its silhouette against the
+ * background perfectly sharp, which on a thrown punch reads as a crisp arm with
+ * a soft interior — worse than no blur at all. The reconstruction filter
+ * instead searches a neighbourhood for the fastest velocity nearby, walks the
+ * tap line along *that*, and decides per tap whether it is looking at moving
+ * foreground spreading over static background (`cone` against the tap's own
+ * speed), static foreground the centre is behind (`cone` against the centre's
+ * speed), or two surfaces moving together (`cylinder`). Depth decides which,
+ * softly, so an edge does not switch categories in one pixel.
  */
 class MotionBlurPass extends Pass {
   constructor(camera, taps = 10) {
@@ -972,10 +1324,12 @@ class MotionBlurPass extends Pass {
     this.uniforms = {
       tDiffuse: { value: null },
       tDepth: { value: null },
-      uInvViewProjection: { value: new THREE.Matrix4() },
-      uPrevViewProjection: { value: new THREE.Matrix4() },
+      tVelocity: { value: null },
+      uInvProjection: { value: new THREE.Matrix4() },
+      uNear: { value: 0.1 },
+      uFar: { value: 200 },
       uIntensity: { value: 0.45 },
-      uMaxRadius: { value: 0.011 },
+      uMaxRadius: { value: 0.022 },
       uResolution: { value: new THREE.Vector2(1, 1) },
     };
     this.material = new THREE.ShaderMaterial({
@@ -987,70 +1341,100 @@ class MotionBlurPass extends Pass {
         varying vec2 vUv;
         uniform sampler2D tDiffuse;
         uniform highp sampler2D tDepth;
-        uniform mat4 uInvViewProjection;
-        uniform mat4 uPrevViewProjection;
+        uniform sampler2D tVelocity;
         uniform float uIntensity;
         uniform float uMaxRadius;
         uniform vec2 uResolution;
+        ${DEPTH_HELPERS}
 
-        float ign( vec2 p ) {
-          return fract( 52.9829189 * fract( dot( p, vec2( 0.06711056, 0.00583715 ) ) ) );
+        /** Shutter-scaled, radius-limited velocity in UV units. */
+        vec2 velocityAt( vec2 uv ) {
+          vec2 v = texture2D( tVelocity, uv ).xy * uIntensity;
+          float len = length( v );
+          if ( len > uMaxRadius ) v *= uMaxRadius / len;
+          return v;
+        }
+
+        float depthAt( vec2 uv ) {
+          float d = texture2D( tDepth, uv ).x;
+          return d >= 1.0 ? uFar : linearDepth( d );
+        }
+
+        // Softened "a is in front of b", in metres. A hard test speckles along
+        // every silhouette because neighbouring taps flip category.
+        float inFront( float a, float b ) {
+          return clamp( 1.0 - ( a - b ) / 0.06, 0.0, 1.0 );
+        }
+        float cone( float dist, float speed ) {
+          return clamp( 1.0 - dist / max( speed, 1e-5 ), 0.0, 1.0 );
+        }
+        float cylinder( float dist, float speed ) {
+          return 1.0 - smoothstep( 0.95 * speed, 1.05 * speed, dist );
         }
 
         void main() {
           vec3 base = texture2D( tDiffuse, vUv ).rgb;
-          float depth = texture2D( tDepth, vUv ).x;
+          vec2 texel = 1.0 / uResolution;
+          float minLen = texel.y * 0.75;
 
-          vec4 clip = vec4( vec3( vUv, depth ) * 2.0 - 1.0, 1.0 );
-          vec4 world = uInvViewProjection * clip;
-          world /= world.w;
-          vec4 prevClip = uPrevViewProjection * world;
-          if ( prevClip.w <= 0.0 ) { gl_FragColor = vec4( base, 1.0 ); return; }
-          vec2 prevUv = ( prevClip.xy / prevClip.w ) * 0.5 + 0.5;
+          // Neighbourhood maximum. Without it a fast limb blurs only inside its
+          // own silhouette; with it the smear reaches out over the background
+          // the limb is passing in front of, which is where the eye reads speed.
+          vec2 vMax = velocityAt( vUv );
+          float lenMax = length( vMax );
+          for ( int i = 0; i < 4; i ++ ) {
+            float a = ( float( i ) + 0.5 ) * 1.5707963;
+            vec2 offset = vec2( cos( a ), sin( a ) ) * uMaxRadius * 0.65;
+            vec2 v = velocityAt( vUv + offset );
+            float len = length( v );
+            if ( len > lenMax ) { lenMax = len; vMax = v; }
+          }
+          if ( lenMax < minLen ) { gl_FragColor = vec4( base, 1.0 ); return; }
 
-          vec2 velocity = ( vUv - prevUv ) * uIntensity;
-          float len = length( velocity );
-          if ( len < 0.6 / uResolution.y ) { gl_FragColor = vec4( base, 1.0 ); return; }
-          if ( len > uMaxRadius ) velocity *= uMaxRadius / len;
+          vec2 vCentre = velocityAt( vUv );
+          float lenCentre = max( length( vCentre ), minLen );
+          float zCentre = depthAt( vUv );
+
+          // McGuire weights the centre sample by the inverse of its own speed so
+          // a static pixel under a fast neighbour keeps most of its own colour.
+          float weight = 1.0 / lenCentre;
+          vec3 sum = base * weight;
+          float total = weight;
 
           float jitter = ign( gl_FragCoord.xy ) - 0.5;
-          vec3 sum = vec3( 0.0 );
           for ( int i = 0; i < MB_TAPS; i ++ ) {
             float t = ( float( i ) + 0.5 + jitter ) / float( MB_TAPS ) - 0.5;
-            sum += texture2D( tDiffuse, vUv - velocity * t ).rgb;
+            vec2 uv = vUv + vMax * t;
+            float dist = abs( t ) * lenMax;
+
+            vec2 vTap = velocityAt( uv );
+            float lenTap = max( length( vTap ), minLen );
+            float zTap = depthAt( uv );
+
+            float w =
+              inFront( zTap, zCentre ) * cone( dist, lenTap ) +
+              inFront( zCentre, zTap ) * cone( dist, lenCentre ) +
+              cylinder( dist, lenTap ) * cylinder( dist, lenCentre ) * 2.0;
+
+            sum += texture2D( tDiffuse, uv ).rgb * w;
+            total += w;
           }
-          gl_FragColor = vec4( sum / float( MB_TAPS ), 1.0 );
+
+          gl_FragColor = vec4( sum / total, 1.0 );
         }`,
     });
     this._fsQuad = new FullScreenQuad(this.material);
-
-    this._prevViewProjection = new THREE.Matrix4();
-    this._viewProjection = new THREE.Matrix4();
-    this._primed = false;
   }
 
   setSize(width, height) {
     this.uniforms.uResolution.value.set(width, height);
   }
 
-  /** Called once per frame after the composer has finished with this camera. */
-  captureCamera() {
-    this._viewProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
-    if (!this._primed) {
-      this._prevViewProjection.copy(this._viewProjection);
-      this._primed = true;
-    }
-    this.uniforms.uInvViewProjection.value.copy(this._viewProjection).invert();
-    this.uniforms.uPrevViewProjection.value.copy(this._prevViewProjection);
-  }
-
-  /** Rolls the reprojection history forward; call after rendering. */
-  advance() {
-    this._prevViewProjection.copy(this._viewProjection);
-  }
-
   render(renderer, writeBuffer, readBuffer) {
     this.uniforms.tDiffuse.value = readBuffer.texture;
+    this.uniforms.uInvProjection.value.copy(this.camera.projectionMatrixInverse);
+    this.uniforms.uNear.value = this.camera.near;
+    this.uniforms.uFar.value = this.camera.far;
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     if (this.clear) renderer.clear();
     this._fsQuad.render(renderer);
@@ -1098,6 +1482,16 @@ const smoothstep01 = (e0, e1, x) => {
  * as "browser demo" in a side-by-side, because it turns every unlit surface
  * into the same milky grey.
  *
+ * **The top end never clips.** The grade this replaced ran the contrast pivot
+ * across the whole range and then clamped, which put everything the display
+ * transform had placed above 0.96 onto the same handful of code values: a
+ * measured closeup had a two-hundred-pixel-wide plateau sitting flat at 250-252
+ * across the chest armour, so the brightest specular on the character carried
+ * no gradient and no hue at all. Above `SHOULDER` the contrast slope now hands
+ * over to a monotone cubic Hermite that lands exactly on white with a shallow
+ * slope, so the same range of radiance arrives spread over ~15 code values
+ * instead of 3 and a specular keeps its shape.
+ *
  * @returns {THREE.DataTexture}
  */
 function buildGradeLut() {
@@ -1107,9 +1501,15 @@ function buildGradeLut() {
 
   const shadowTint = [-0.004, 0.004, 0.014]; // cold teal, display-space delta
   const highTint = [0.019, 0.004, -0.014];   // warm amber
-  const lift = 0.004;
+  const lift = 0.002;
   const pivot = 0.42;
-  const contrast = 1.13;
+  const contrast = 1.18;
+  const SHOULDER = 0.78;   // where contrast hands over to the roll-off
+  const END_SLOPE = 0.30;  // slope arriving at white; > 0 keeps it monotone
+
+  // Hermite endpoint: the contrast line evaluated at the hand-over point.
+  const shoulderY = pivot + (SHOULDER - pivot) * contrast;
+  const shoulderSpan = 1 - SHOULDER;
 
   for (let b = 0; b < n; b++) {
     for (let g = 0; g < n; g++) {
@@ -1133,13 +1533,27 @@ function buildGradeLut() {
 
         const dLum = 0.2126 * dr + 0.7152 * dg + 0.0722 * db;
         const shadowW = 1 - smoothstep01(0.02, 0.42, dLum);
-        const highW = smoothstep01(0.5, 0.97, dLum);
+        // The warm high tint is a band, not a ramp to white. Carrying it to the
+        // top of the range adds 0.019 to red where red is already at 1.0, which
+        // clips one channel and snaps the brightest specular to a flat wash.
+        const highW = smoothstep01(0.46, 0.80, dLum) * (1 - smoothstep01(0.88, 1.0, dLum));
 
         const shape = (x, tint) => {
-          let v = x * (1 - lift) + lift;             // lifted blacks
-          v = pivot + (v - pivot) * contrast;        // contrast pivot
-          v -= 0.05 * smoothstep01(0.7, 1.0, v);     // crushed highs
-          return clamp01(v + tint);
+          const v = x * (1 - lift) + lift;           // lifted blacks
+          if (v <= SHOULDER) return clamp01(pivot + (v - pivot) * contrast + tint);
+          // Cubic Hermite from (SHOULDER, shoulderY) with the contrast slope to
+          // (1, 1) with END_SLOPE. Both slopes stay under 3x the chord, which
+          // is the Fritsch-Carlson bound for monotonicity, so the roll-off can
+          // never fold back on itself.
+          const t = (v - SHOULDER) / shoulderSpan;
+          const t2 = t * t;
+          const t3 = t2 * t;
+          const rolled =
+            (2 * t3 - 3 * t2 + 1) * shoulderY +
+            (t3 - 2 * t2 + t) * shoulderSpan * contrast +
+            (-2 * t3 + 3 * t2) +
+            (t3 - t2) * shoulderSpan * END_SLOPE;
+          return clamp01(rolled + tint);
         };
         dr = shape(dr, shadowTint[0] * shadowW + highTint[0] * highW);
         dg = shape(dg, shadowTint[1] * shadowW + highTint[1] * highW);
@@ -1192,6 +1606,7 @@ class GradePass extends Pass {
       uLutSize: { value: LUT_SIZE },
       uLutStrength: { value: 1.0 },
       uExposure: { value: 1.0 },
+      uShoulder: { value: 0.75 },
       uDistortion: { value: 0.028 },
       uChroma: { value: 0.0016 },
       uGrain: { value: 0.032 },
@@ -1212,6 +1627,7 @@ class GradePass extends Pass {
         uniform float uLutSize;
         uniform float uLutStrength;
         uniform float uExposure;
+        uniform float uShoulder;
         uniform float uDistortion;
         uniform float uChroma;
         uniform float uGrain;
@@ -1272,7 +1688,20 @@ class GradePass extends Pass {
           col = max( col, vec3( 1e-10 ) );
           col = log2( col );
           col = ( col - minEv ) / ( maxEv - minEv );
-          col = clamp( col, 0.0, 1.0 );
+
+          // Highlight latitude. Stock AgX clamps the normalised log to 1, which
+          // means every radiance above +4 EV lands on the identical point of the
+          // sigmoid: a 6x specular and a 60x one become the same pixel, and
+          // because the clamp is per channel a coloured highlight snaps to pure
+          // white on the way. Compressing instead of clamping keeps the mapping
+          // strictly monotonic all the way out, so the roll-off is the sigmoid's
+          // own shoulder rather than a wall. Below uShoulder nothing moves, so
+          // the mid-tones the rest of the grade is built on are untouched.
+          col = max( col, 0.0 );
+          vec3 over = max( col - uShoulder, 0.0 );
+          float span = 1.0 - uShoulder;
+          col = min( col, vec3( uShoulder ) ) + span * ( 1.0 - exp( - over / span ) );
+
           col = agxContrast( col );
           col = agxLook( col );
           col = AGX_OUTSET * col;
@@ -1440,11 +1869,11 @@ export class RenderPipeline {
      * may push mood-specific values here through `setGrade` / `setBloom`.
      */
     this.look = {
-      exposure: 0.92, lutStrength: 1.0, saturation: 1.0,
+      exposure: 0.64, shoulder: 0.68, lutStrength: 1.0, saturation: 1.0,
       chroma: 0.0009, distortion: 0.018, grain: 0.02, vignette: 0.3,
-      bloomStrength: 0.24, bloomRadius: 0.62, bloomThreshold: 1.15,
-      bloomKnee: 0.55, bloomClamp: 4.0,
-      ssrIntensity: 0.62, aoIntensity: 0.92, dofStrength: 0.9, motionBlur: 0.45,
+      bloomStrength: 0.15, bloomRadius: 0.55, bloomThreshold: 2.4,
+      bloomKnee: 0.6, bloomClamp: 2.0,
+      ssrIntensity: 0.62, aoIntensity: 0.92, dofStrength: 0.9, motionBlur: 0.55,
     };
 
     /**
@@ -1618,8 +2047,15 @@ export class RenderPipeline {
     }
 
     if (tier.motionBlur && this.effects.motionBlur && depthTexture) {
+      const velocity = new VelocityPass(this.scene, this.camera);
+      velocity.cameraUniforms.tDepth.value = depthTexture;
+      velocity.setSize(w, h);
+      passes.velocity = velocity;
+      composer.addPass(velocity);
+
       const mb = new MotionBlurPass(this.camera, tier.mbTaps);
       mb.uniforms.tDepth.value = depthTexture;
+      mb.uniforms.tVelocity.value = velocity.texture;
       mb.uniforms.uIntensity.value = this.look.motionBlur;
       passes.motionBlur = mb;
       composer.addPass(mb);
@@ -1629,6 +2065,7 @@ export class RenderPipeline {
       const grade = new GradePass(this._lut);
       const soft = this.quality === 'low' || this.quality === 'medium';
       grade.uniforms.uExposure.value = this.look.exposure;
+      grade.uniforms.uShoulder.value = this.look.shoulder;
       grade.uniforms.uLutStrength.value = this.look.lutStrength;
       grade.uniforms.uSaturation.value = this.look.saturation;
       grade.uniforms.uChroma.value = soft ? this.look.chroma * 0.55 : this.look.chroma;
@@ -1709,9 +2146,16 @@ export class RenderPipeline {
 
   /**
    * Tunes the display transform without rebuilding the chain. Any subset of
-   * `exposure`, `lutStrength`, `saturation`, `chroma`, `distortion`, `grain`
-   * and `vignette` may be given; values persist across quality changes so a
-   * lighting mood can own the look.
+   * `exposure`, `shoulder`, `lutStrength`, `saturation`, `chroma`,
+   * `distortion`, `grain` and `vignette` may be given; values persist across
+   * quality changes so a lighting mood can own the look.
+   *
+   * `shoulder` is where the AgX log encoding stops being linear in stops and
+   * starts compressing, as a fraction of the 16.5-stop window: lower it to buy
+   * more highlight latitude on a scene with hot speculars, raise it toward 1
+   * for the stock AgX response. It is the knob that decides whether a bright
+   * highlight has gradient or is a flat white shape.
+   *
    * @param {Partial<RenderPipeline['look']>} values
    */
   setGrade(values = {}) {
@@ -1720,6 +2164,7 @@ export class RenderPipeline {
     if (!g) return;
     const soft = this.quality === 'low' || this.quality === 'medium';
     g.uniforms.uExposure.value = this.look.exposure;
+    g.uniforms.uShoulder.value = this.look.shoulder;
     g.uniforms.uLutStrength.value = this.look.lutStrength;
     g.uniforms.uSaturation.value = this.look.saturation;
     g.uniforms.uChroma.value = soft ? this.look.chroma * 0.55 : this.look.chroma;
@@ -1861,7 +2306,7 @@ export class RenderPipeline {
 
     if (this.composer) {
       this.composer.render(dt || 1 / 60);
-      this._passes.motionBlur?.advance();
+      this._passes.velocity?.advance();
     } else {
       this.renderer.setRenderTarget(null);
       this.renderer.render(scene, cam);
@@ -1942,10 +2387,15 @@ export class RenderPipeline {
       // curve, which is what gives the stage its separation.
       p.dof.uniforms.uNearRange.value = this.dofFocus.nearRange;
     }
-    if (p.motionBlur) {
-      p.motionBlur.camera = camera;
-      p.motionBlur.captureCamera();
+    if (p.velocity) {
+      p.velocity.scene = scene;
+      p.velocity.camera = camera;
+      // Must happen before anything renders: `Skeleton.update` and the world
+      // matrix refresh both run inside `WebGLRenderer.render`, so this is the
+      // last moment at which they still describe the previous frame.
+      p.velocity.captureHistory(scene);
     }
+    if (p.motionBlur) p.motionBlur.camera = camera;
   }
 
   #recordFrame(ms) {

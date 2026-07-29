@@ -22,10 +22,12 @@
  */
 
 import * as THREE from 'three';
+import { LAYER } from '../core/Constants.js';
 import { Rng } from '../core/Rng.js';
 import {
   bevelBox, place, mergeAll, worldUv, truss, railing, pipeRun, tube,
   hydraulicRam, crowdFigure, CROWD_ARCHETYPES, insetPanel, boltRow, catenary, spanX,
+  portalCrane, chimney,
 } from './GeoKit.js';
 
 const PIT_BACK = -8.6;      // z of the pit's rear kerb
@@ -33,6 +35,36 @@ const PIT_FRONT = 13.6;     // z of the front service edge
 const CATWALK_Y = 5.7;
 const ROOF_Y = 12.0;
 const SHELL_Z = -19.0;      // the hangar's rear shell wall
+
+// Spectator terrace: four treads climbing away from the fence. The crowd
+// placement reads the same numbers, so a rank always lands on a step.
+const TERRACE_RANKS = 4;
+const TERRACE_Z0 = PIT_BACK - 0.6;   // z of the lowest tread's front edge
+const TERRACE_BACK = PIT_BACK - 4.6; // z the terrace runs back to
+const TERRACE_RUN = 0.9;             // tread depth
+const TERRACE_RISE = 0.42;
+const TERRACE_Y0 = 1.15;             // top of the lowest tread
+const TERRACE_TOP = TERRACE_Y0 + (TERRACE_RANKS - 1) * TERRACE_RISE;
+
+const MACHINE_Z = -13.9;    // front face of the machinery bank
+
+/**
+ * Crowd clothing. Working coats, denim, waxed cotton and two hi-vis pieces —
+ * the palette of people who walked in off an industrial estate, kept dark
+ * enough that nobody out-reads the fighters but hued enough that overlapping
+ * silhouettes still separate.
+ */
+const CROWD_PALETTE = [
+  0x1c222c, 0x121824, 0x25303e, 0x18262f, 0x2e2620, 0x38231a,
+  0x1e2a22, 0x3c372e, 0x4a2422, 0x3b3f45, 0x4d483f, 0x0e1015,
+  0x2a2029, 0x22333c, 0x2c333a, 0x6a3410,
+];
+
+/** Trousers: the coat colour dropped toward a common dark. */
+const CROWD_LOWER = 0x0a0c11;
+
+/** Skin, held out of the clothing tint by the figure's own vertex mask. */
+const CROWD_SKIN = [0x8f7259, 0x77563c, 0x573925, 0x3a2419, 0xa08265, 0x644731];
 
 /** Stand-in until each city layer's own shader is built a few lines later. */
 const PLACEHOLDER = new THREE.MeshBasicMaterial();
@@ -60,6 +92,8 @@ export class StageStructure {
 
     /** Shared clock for every shader-side animation in the set. */
     this.timeUniform = { value: 0 };
+    /** Linear radiance the mid and far layers fade toward; follows the mood. */
+    this.midgroundHaze = { value: new THREE.Color(0x131b26) };
 
     // Static geometry goes into the arena-wide bins; the Stage merges every
     // producer's contributions into one mesh per material at the end of init.
@@ -77,6 +111,7 @@ export class StageStructure {
     this.#hangingCable();
 
     this.#midground();
+    this.#backdrop();
     this.#foreground();
 
     this.#containers();
@@ -91,16 +126,34 @@ export class StageStructure {
   // Near field
   // -------------------------------------------------------------------------
 
-  /** The pit's rear kerb, its fence, and the platform the crowd stands on. */
+  /** The pit's rear kerb, its fence, and the terrace the crowd stands on. */
   #backEdge() {
     const W = 24;
     const b = this.bins;
     b.concrete.push(place(bevelBox(W, 1.15, 0.6, 0.03), { pos: [0, 0.575, PIT_BACK - 0.3] }));
     b.steel.push(place(bevelBox(W, 0.1, 0.72, 0.02), { pos: [0, 1.2, PIT_BACK - 0.3] }));
 
-    // Spectator deck, one step up and set back so the crowd overlaps the fence.
-    b.concrete.push(place(bevelBox(W, 1.0, 5.2, 0.03), { pos: [0, 0.5, PIT_BACK - 3.2] }));
-    b.concrete.push(place(bevelBox(W, 0.5, 5.2, 0.03), { pos: [0, 1.25, PIT_BACK - 4.6] }));
+    // Spectator terrace. Four steps rather than one shelf, because a crowd on
+    // a single level is a row: every figure sits at one height, occludes its
+    // neighbours edge-on and gives the eye nothing to sort front from back
+    // with. Stepping them puts each rank's heads clear of the rank in front,
+    // which is both what a real stand does and the only way overlapping
+    // silhouettes read as depth instead of clutter.
+    for (let i = 0; i < TERRACE_RANKS; i++) {
+      const front = TERRACE_Z0 - i * TERRACE_RUN;
+      const h = TERRACE_Y0 + i * TERRACE_RISE;
+      // Each tread is a whole box running back to the rear wall, so the flanks
+      // would otherwise be four coincident faces fighting for the same depth.
+      // Two centimetres of stagger costs nothing and settles it.
+      b.concrete.push(place(bevelBox(W - i * 0.04, h, front - TERRACE_BACK, 0.03), {
+        pos: [0, h / 2, (front + TERRACE_BACK) / 2],
+      }));
+      // Nosing on the step edge: the one line that catches the practicals and
+      // separates one tread from the next at twelve metres.
+      b.steel.push(place(bevelBox(W, 0.05, 0.1, 0.015), {
+        pos: [0, TERRACE_Y0 + i * TERRACE_RISE - 0.02, front + 0.05],
+      }));
+    }
 
     const fenceH = 2.3;
     const fence = new THREE.PlaneGeometry(W, fenceH);
@@ -214,7 +267,9 @@ export class StageStructure {
   #machineryBank() {
     const b = this.bins;
     const rng = this.rng;
-    const z0 = -12.6;
+    // Set back far enough to clear the top terrace tread and the road cases
+    // stacked on it; the crowd owns everything in front of this line.
+    const z0 = MACHINE_Z;
 
     for (let i = 0; i < 11; i++) {
       const x = -13 + i * 2.6;
@@ -235,7 +290,7 @@ export class StageStructure {
     // Horizontal pressure vessels laid on saddles, stage right.
     for (let i = 0; i < 3; i++) {
       const y = 1.3 + i * 0.05;
-      const z = z0 - 3.4 - i * 1.9;
+      const z = z0 - 1.9 - i * 1.3;
       b.dark.push(place(new THREE.CylinderGeometry(1.05, 1.05, 7.5, 20, 1), { pos: [8.5 - i * 0.4, y + 1.0, z], rot: [0, 0, Math.PI / 2] }));
       for (const dx of [-2.6, 0, 2.6]) {
         b.steel.push(place(bevelBox(0.5, 1.4, 1.9, 0.02), { pos: [8.5 - i * 0.4 + dx, 0.7, z] }));
@@ -243,8 +298,8 @@ export class StageStructure {
     }
 
     // Conveyor running out of the dark, stage left.
-    b.steel.push(place(truss(11, 0.7, { thickness: 0.05, width: 0.06, bays: 8 }), { pos: [-12.5, 3.4, z0 - 5.5], rot: [0, 0.34, -0.13] }));
-    b.dark.push(place(bevelBox(11, 0.22, 1.3, 0.02), { pos: [-12.5, 4.2, z0 - 5.5], rot: [0, 0.34, -0.13] }));
+    b.steel.push(place(truss(11, 0.7, { thickness: 0.05, width: 0.06, bays: 8 }), { pos: [-12.5, 3.4, z0 - 3.4], rot: [0, 0.34, -0.13] }));
+    b.dark.push(place(bevelBox(11, 0.22, 1.3, 0.02), { pos: [-12.5, 4.2, z0 - 3.4], rot: [0, 0.34, -0.13] }));
   }
 
   /** Pipe runs: the connective tissue that makes a set look built. */
@@ -294,10 +349,15 @@ export class StageStructure {
   #shellWall() {
     const b = this.bins;
     const W = 46, H = 26;
+    // The openings sit low on purpose. Cut at roof height they framed nothing
+    // the fight camera could reach: it solves for the fighters, so at the shell
+    // wall the top of frame is barely nine metres up. Dropping the sills to
+    // just above the machinery bank is what turns them from decoration into the
+    // only aperture the yard beyond is seen through.
     const holes = [
-      { x: -9.5, y: 9.5, w: 7.5, h: 6.0 },
-      { x: 2.0, y: 11.5, w: 9.5, h: 7.5 },
-      { x: 13.0, y: 8.0, w: 6.0, h: 5.0 },
+      { x: -10.0, y: 7.0, w: 9.0, h: 7.0 },
+      { x: 2.5, y: 9.5, w: 10.0, h: 8.0 },
+      { x: 13.5, y: 6.5, w: 7.0, h: 6.0 },
     ];
     // The wall is built as horizontal bands that skip where a hole is, which is
     // cheaper and more controllable than any boolean.
@@ -433,36 +493,38 @@ export class StageStructure {
     const parts = [];
     const rng = this.rng;
 
-    // --- layer 0: back of house, z = -12.2 ---------------------------------
+    // --- layer 0: back of house, on the top terrace tread ------------------
     // Directly behind the standing crowd and squarely inside the only band the
     // combat camera can see. Road cases, drum stacks and lighting stands: all
     // objects with a known size, so the crowd in front of them gets a scale.
+    const L0 = -12.95;
+    const L0Y = TERRACE_TOP;
     for (const [x, w, h, d] of [
       [-10.4, 1.3, 1.9, 0.9], [-9.0, 1.1, 1.3, 0.85], [-7.4, 1.5, 2.4, 1.0],
       [4.9, 1.2, 1.7, 0.9], [6.2, 1.4, 2.5, 1.0], [11.2, 1.25, 2.1, 0.9],
     ]) {
       const yaw = rng.range(-0.14, 0.14);
-      parts.push(place(bevelBox(w, h, d, 0.04), { pos: [x, 1.5 + h / 2, -12.2], rot: [0, yaw, 0] }));
-      parts.push(place(bevelBox(w + 0.09, 0.1, d + 0.09, 0.02), { pos: [x, 1.5 + h, -12.2], rot: [0, yaw, 0] }));
+      parts.push(place(bevelBox(w, h, d, 0.04), { pos: [x, L0Y + h / 2, L0], rot: [0, yaw, 0] }));
+      parts.push(place(bevelBox(w + 0.09, 0.1, d + 0.09, 0.02), { pos: [x, L0Y + h, L0], rot: [0, yaw, 0] }));
       for (const s of [-1, 1]) {
-        parts.push(place(bevelBox(0.09, h - 0.2, 0.09, 0.02), { pos: [x + s * (w / 2 - 0.06), 1.5 + h / 2, -12.2 - d / 2], rot: [0, yaw, 0] }));
+        parts.push(place(bevelBox(0.09, h - 0.2, 0.09, 0.02), { pos: [x + s * (w / 2 - 0.06), L0Y + h / 2, L0 - d / 2], rot: [0, yaw, 0] }));
       }
     }
     for (const [x, n] of [[-3.4, 4], [2.1, 3], [8.6, 5]]) {
       for (let i = 0; i < n; i++) {
         parts.push(place(new THREE.CylinderGeometry(0.29, 0.29, 0.86, 12, 1), {
-          pos: [x + (i % 3) * 0.62, 1.93 + Math.floor(i / 3) * 0.88, -12.3 + (i % 2) * 0.5],
+          pos: [x + (i % 3) * 0.62, L0Y + 0.43 + Math.floor(i / 3) * 0.88, L0 - 0.1 + (i % 2) * 0.5],
         }));
       }
     }
     // A-frame lighting stands: thin verticals against all that stacked mass.
     for (const x of [-5.8, 0.4, 9.9]) {
-      parts.push(place(new THREE.CylinderGeometry(0.045, 0.06, 2.6, 9, 1), { pos: [x, 2.8, -12.4] }));
-      parts.push(place(bevelBox(1.3, 0.07, 0.07, 0.015), { pos: [x, 4.02, -12.4] }));
+      parts.push(place(new THREE.CylinderGeometry(0.045, 0.06, 2.6, 9, 1), { pos: [x, L0Y + 1.3, L0 - 0.2] }));
+      parts.push(place(bevelBox(1.3, 0.07, 0.07, 0.015), { pos: [x, L0Y + 2.52, L0 - 0.2] }));
       for (const s of [-1, 1]) {
-        const leg = spanX([x, 1.62, -12.4], [x + s * 0.55, 1.5, -12.4 + s * 0.35]);
+        const leg = spanX([x, L0Y + 0.12, L0 - 0.2], [x + s * 0.55, L0Y, L0 - 0.2 + s * 0.35]);
         parts.push(place(bevelBox(leg.length, 0.05, 0.05, 0.012), { pos: leg.pos, rot: leg.rot }));
-        parts.push(place(new THREE.CylinderGeometry(0.13, 0.11, 0.3, 10, 1), { pos: [x + s * 0.52, 3.86, -12.4], rot: [-0.5, 0, 0] }));
+        parts.push(place(new THREE.CylinderGeometry(0.13, 0.11, 0.3, 10, 1), { pos: [x + s * 0.52, L0Y + 2.36, L0 - 0.2], rot: [-0.5, 0, 0] }));
       }
     }
 
@@ -544,30 +606,206 @@ export class StageStructure {
     parts.push(place(truss(jib.length, 0.5, { thickness: 0.075, width: 0.09, bays: 5 }), { pos: jib.pos, rot: jib.rot }));
     parts.push(place(new THREE.CylinderGeometry(0.04, 0.04, 2.4, 5), { pos: [-2.7, 4.2, SZ + 1.4] }));
 
-    // --- layer 4: through the blown-out panels, z = -31 --------------------
-    // Read only as flat shapes against the city glow, which is exactly what a
-    // silhouette 30 metres out through a hole in a wall should be.
-    const FZ = -31;
-    for (const [x, h] of [[-11.5, 21], [-2.5, 17.5], [14.5, 19]]) {
-      parts.push(place(new THREE.CylinderGeometry(1.0, 1.5, h, 12, 1), { pos: [x, h / 2, FZ + rng.range(-3, 3)] }));
-      parts.push(place(new THREE.CylinderGeometry(1.25, 1.25, 0.6, 12, 1), { pos: [x, h - 0.3, FZ] }));
-    }
-    // Two distant gantry cranes, legs and all.
-    for (const [gx, gz, gs] of [[3.5, -29, 1], [-16, -36, 0.8]]) {
-      const top = 15 * gs;
-      for (const dx of [-4.5 * gs, 4.5 * gs]) {
-        parts.push(place(bevelBox(0.5 * gs, top, 0.5 * gs, 0.04), { pos: [gx + dx, top / 2, gz] }));
-      }
-      parts.push(place(bevelBox(22 * gs, 0.9 * gs, 0.8 * gs, 0.04), { pos: [gx, top, gz] }));
-      parts.push(place(bevelBox(1.6 * gs, 2.2 * gs, 1.2 * gs, 0.04), { pos: [gx - 6 * gs, top + 1.5 * gs, gz] }));
-    }
+    // Depth haze on top of the scene fog. The scene fog is solved for a room
+    // twelve metres across; over the six metres that separate the back of the
+    // crowd from the shell wall it moves the value by almost nothing, so four
+    // layers of plant that are genuinely at four different depths arrive as one
+    // flat card. This second falloff is steep and starts where the crowd ends,
+    // which is the only band the fight camera can see any of it in.
+    const mat = this.materials.darkMetal.clone();
+    mat.name = 'arena.midgroundHaze';
+    const uHaze = this.midgroundHaze;
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uHaze = uHaze;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying float vViewDepth;')
+        .replace('#include <project_vertex>', '#include <project_vertex>\nvViewDepth = -mvPosition.z;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform vec3 uHaze;\nvarying float vViewDepth;')
+        .replace('#include <opaque_fragment>', /* glsl */ `
+          #include <opaque_fragment>
+          gl_FragColor.rgb = mix( gl_FragColor.rgb, uHaze, 1.0 - exp( -max( 0.0, vViewDepth - 17.0 ) * 0.055 ) );
+        `);
+    };
+    mat.customProgramCacheKey = () => 'kb-midground';
+    this.midgroundMaterial = mat;
 
-    const mesh = new THREE.Mesh(worldUv(mergeAll(parts), 2.2), this.materials.darkMetal);
+    const mesh = new THREE.Mesh(worldUv(mergeAll(parts), 2.2), mat);
     mesh.name = 'arena.structure.midground';
     mesh.castShadow = false;
     mesh.receiveShadow = false;
     mesh.matrixAutoUpdate = false;
     this.midground = mesh;
+    this.group.add(mesh);
+  }
+
+  /**
+   * The yard outside, seen through the shell wall's blown-out panels: three
+   * bands of pure silhouette at roughly 25, 50 and 85 metres.
+   *
+   * Everything inside the hangar shares one lighting rig and one fog, so from
+   * twelve metres to nineteen it is all the same value and the eye reads it as
+   * one flat card. Distance is not a matter of putting things further away, it
+   * is a matter of *contrast falling off* with distance — so this set is unlit
+   * and each fragment fades toward the mood's haze on its own view depth. A
+   * crane at fifty metres then sits visibly behind a container stack at
+   * twenty-five, and the chimney bank behind both is barely a stain.
+   *
+   * The shapes are chosen for the same reason the crane inside is: they have
+   * sizes everybody already knows, so their apparent size *is* the distance
+   * cue. And the whole set — three depth bands plus the beacons blinking on top
+   * of the stacks — is one merged mesh and one draw call, because there is
+   * nothing here that needs to be addressed separately.
+   */
+  #backdrop() {
+    const parts = [];
+    const lamps = [];
+    const rng = this.rng;
+
+    // --- band 0: the yard, z = -25 -----------------------------------------
+    const YZ = -25;
+    for (const [bx, bz, cols, rows] of [[-11, 0, 3, 3], [3.5, -2.5, 2, 4], [15.5, 1.5, 3, 2]]) {
+      for (let c = 0; c < cols; c++) {
+        for (let r = 0; r < rows; r++) {
+          // Ragged stacks: the top course is never full, which is what stops a
+          // container block reading as one extruded rectangle.
+          if (r === rows - 1 && rng.next() < 0.45) continue;
+          parts.push(place(bevelBox(6.06, 2.59, 2.44, 0.05), {
+            pos: [bx + c * 2.6 + rng.range(-0.2, 0.2), 1.3 + r * 2.62, YZ + bz - c * 2.55],
+            rot: [0, rng.range(-0.05, 0.05), 0],
+          }));
+        }
+      }
+    }
+    // Lift and stair tower, the tall vertical that gives the stacks a ceiling.
+    parts.push(place(bevelBox(4.4, 15.0, 4.4, 0.08), { pos: [-19.5, 7.5, YZ - 3] }));
+    parts.push(place(bevelBox(5.2, 0.7, 5.2, 0.06), { pos: [-19.5, 15.3, YZ - 3] }));
+    for (let i = 0; i < 6; i++) {
+      parts.push(place(bevelBox(4.6, 0.16, 0.7, 0.03), { pos: [-19.5, 2.4 + i * 2.3, YZ - 0.8] }));
+    }
+    // Two flat-roofed sheds and a run of mast lighting.
+    for (const [sx, sw, sh] of [[9, 13, 6.5], [-3, 9, 5.0]]) {
+      parts.push(place(bevelBox(sw, sh, 7, 0.08), { pos: [sx, sh / 2, YZ - 8] }));
+      parts.push(place(bevelBox(sw + 0.6, 0.5, 7.6, 0.05), { pos: [sx, sh + 0.2, YZ - 8] }));
+    }
+    for (const mx of [-14.5, 1.5, 18]) {
+      parts.push(place(new THREE.CylinderGeometry(0.22, 0.4, 17, 8, 1), { pos: [mx, 8.5, YZ - 6] }));
+      parts.push(place(bevelBox(3.2, 0.9, 1.2, 0.06), { pos: [mx, 17.4, YZ - 6] }));
+      lamps.push(place(new THREE.SphereGeometry(0.34, 6, 5), { pos: [mx, 18.1, YZ - 6] }));
+    }
+
+    // --- band 1: the dock, z = -50 -----------------------------------------
+    const DZ = -50;
+    for (const [cx, cz, span, h, boom] of [[-16, 0, 30, 19, 11], [14, -7, 24, 15, 8]]) {
+      parts.push(place(portalCrane(span, h, { boom }), { pos: [cx, 0, DZ + cz] }));
+      lamps.push(place(new THREE.SphereGeometry(0.5, 6, 5), { pos: [cx - span / 2, h + 1.2, DZ + cz] }));
+    }
+    for (let i = 0; i < 5; i++) {
+      const h = 20 + rng.next() * 6;
+      parts.push(place(new THREE.CylinderGeometry(3.2, 3.2, h, 14, 1), { pos: [30 + i * 7.2, h / 2, DZ - 10] }));
+      parts.push(place(new THREE.CylinderGeometry(3.4, 1.1, 3.4, 14, 1), { pos: [30 + i * 7.2, h + 1.6, DZ - 10] }));
+    }
+    parts.push(place(bevelBox(34, 13, 18, 0.1), { pos: [-2, 6.5, DZ - 14] }));
+    parts.push(place(bevelBox(35, 0.8, 19, 0.06), { pos: [-2, 13.3, DZ - 14] }));
+    for (let i = 0; i < 4; i++) {
+      parts.push(place(new THREE.CylinderGeometry(0.8, 0.8, 5.5, 10, 1), { pos: [-14 + i * 8, 15.8, DZ - 14] }));
+    }
+
+    // --- band 2: the power station, z = -88 --------------------------------
+    const PZ = -88;
+    for (const [px, ph, pr] of [[-34, 46, 3.0], [-22, 55, 3.6], [10, 38, 2.6], [27, 50, 3.2]]) {
+      parts.push(place(chimney(ph, pr, 5), { pos: [px, 0, PZ + rng.range(-8, 8)] }));
+      lamps.push(place(new THREE.SphereGeometry(1.0, 6, 5), { pos: [px, ph + 0.6, PZ] }));
+    }
+    // Cooling tower: the one profile in the set that cannot be mistaken.
+    for (const [tx, tz] of [[-56, 6], [46, -10]]) {
+      parts.push(place(new THREE.CylinderGeometry(15, 21, 38, 20, 1), { pos: [tx, 19, PZ + tz] }));
+      parts.push(place(new THREE.CylinderGeometry(16.5, 15, 2.4, 20, 1), { pos: [tx, 39, PZ + tz] }));
+    }
+    // Boiler house block, so the stacks are standing on something.
+    parts.push(place(bevelBox(46, 22, 24, 0.12), { pos: [-6, 11, PZ - 16] }));
+
+    const solid = mergeAll(parts);
+    const beacons = mergeAll(lamps);
+    const geo = mergeAll([solid, beacons]);
+    const lamp = new Float32Array(geo.attributes.position.count);
+    lamp.fill(1, solid.attributes.position.count);
+    geo.setAttribute('aLamp', new THREE.Float32BufferAttribute(lamp, 1));
+
+    this.backdropMaterial = new THREE.ShaderMaterial({
+      name: 'arena.backdrop',
+      uniforms: {
+        uTime: this.timeUniform,
+        uBase: { value: new THREE.Color(0x0d1219) },
+        uTop: { value: new THREE.Color(0x1e2a38) },
+        uHaze: { value: new THREE.Color(0x1b2634) },
+        uLamp: { value: new THREE.Color(0xff4028) },
+      },
+      vertexShader: /* glsl */ `
+        attribute float aLamp;
+        varying vec3 vNrm;
+        varying vec3 vWorld;
+        varying float vLamp;
+        varying float vDepth;
+        void main() {
+          vNrm = normalize( mat3( modelMatrix ) * normal );
+          vec4 w = modelMatrix * vec4( position, 1.0 );
+          vWorld = w.xyz;
+          vLamp = aLamp;
+          vec4 mv = viewMatrix * w;
+          vDepth = -mv.z;
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uBase;
+        uniform vec3 uTop;
+        uniform vec3 uHaze;
+        uniform vec3 uLamp;
+        uniform float uTime;
+        varying vec3 vNrm;
+        varying vec3 vWorld;
+        varying float vLamp;
+        varying float vDepth;
+
+        void main() {
+          // Two-tone shade off the normal. Enough to keep a roof from merging
+          // into the wall under it, not enough to imply a light source out
+          // there that the rig does not have.
+          float up = clamp( vNrm.y * 0.5 + 0.5, 0.0, 1.0 );
+          float side = 0.5 + 0.5 * vNrm.x;
+          vec3 col = mix( uBase, uTop, up * up * 0.8 + side * 0.2 );
+
+          // Depth haze, thickened toward the ground: real air is dirtiest where
+          // the yard is, which is why a distant crane's legs vanish before its
+          // girder does.
+          float haze = 1.0 - exp( -max( 0.0, vDepth - 14.0 ) * 0.0165 );
+          haze *= mix( 1.15, 0.74, clamp( vWorld.y / 44.0, 0.0, 1.0 ) );
+          col = mix( col, uHaze, clamp( haze, 0.0, 0.94 ) );
+
+          // Obstruction beacons. They blink out of phase and they are the only
+          // thing out here allowed to survive the haze.
+          if ( vLamp > 0.5 ) {
+            float ph = fract( sin( dot( vWorld.xz, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );
+            float on = step( 0.55, fract( uTime * 0.34 + ph ) );
+            col = mix( col, uLamp * ( 0.35 + 2.4 * on ), 0.9 );
+          }
+          gl_FragColor = vec4( col, 1.0 );
+        }
+      `,
+      fog: false,
+    });
+
+    const mesh = new THREE.Mesh(geo, this.backdropMaterial);
+    mesh.name = 'arena.structure.backdrop';
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.matrixAutoUpdate = false;
+    mesh.frustumCulled = false;
+    // Twenty-five metres beyond a wall: nothing out here has a line to the pit
+    // floor, so it has no business in the mirror pass either.
+    mesh.layers.set(LAYER.NO_REFLECT);
+    this.backdrop = mesh;
     this.group.add(mesh);
   }
 
@@ -726,58 +964,103 @@ export class StageStructure {
   }
 
   /**
-   * Onlookers behind the fence and on the catwalks.
+   * Onlookers on the terrace, the catwalks and the containers.
    *
-   * One instanced mesh would be one silhouette repeated forty times, and a
-   * repeated silhouette is the loudest "unfinished" signal a stage can send. So
-   * the crowd is six instanced meshes, one per body archetype, and the roster
-   * of placements is dealt across them: six outlines, each stretched by a
-   * per-instance height and bulk, turned to its own heading, tinted off a
-   * per-instance colour and swayed off its own phase. Six draw calls buys a
-   * crowd that never shows a matching pair.
+   * Three things kill a crowd, and all three have to be fixed at once or the
+   * remaining two still read as wallpaper:
+   *
+   *   1. **One silhouette.** So the figure comes in six postures, each built at
+   *      two proportion seeds — twelve outlines, dealt across the roster and
+   *      then stretched, turned and leant per instance.
+   *   2. **One value.** Clothing is dealt from a palette of real garment
+   *      colours and skin is masked out of it in the geometry, so heads and
+   *      hands sit a stop above the coats. This is the whole difference between
+   *      a crowd and a row of bollards, and it is why the tint is a custom
+   *      attribute rather than `instanceColor`: three only folds `instanceColor`
+   *      into the fragment when `vertexColors` is on, which would demand a real
+   *      colour attribute on every figure and still leave no way to hold skin
+   *      out of the clothing tint.
+   *   3. **One depth.** They stand on four terrace treads, so the ranks recede
+   *      and overlap instead of lining up on a shelf.
+   *
+   * Twelve draw calls, no shadow pass, and no matching pair anywhere in it.
    */
   #crowd(quality) {
-    const count = quality === 'low' ? 18 : quality === 'medium' ? 30 : 52;
+    const count = quality === 'low' ? 22 : quality === 'medium' ? 44 : 78;
+    const seeds = quality === 'low' ? 1 : 2;
     const mat = this.materials.crowd.clone();
     mat.name = 'arena.crowdSway';
+    // The shared crowd material is near-black so that a plain instance reads as
+    // a silhouette. Here the per-instance tint is the albedo, so the base has to
+    // be white or the palette multiplies into the same black it started from.
+    mat.color.setRGB(1, 1, 1);
+    // Behind a chain-link fence at twelve metres the crowd should be the last
+    // thing the eye lands on, so it takes barely any of the environment.
+    mat.envMapIntensity = 0.2;
     const uTime = this.timeUniform;
+    const uLower = { value: new THREE.Color().setHex(CROWD_LOWER, THREE.SRGBColorSpace) };
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = uTime;
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute float aPhase;\nuniform float uTime;')
+        .replace('#include <common>', /* glsl */ `
+          #include <common>
+          attribute float aPhase;
+          attribute float aSkin;
+          attribute float aLean;
+          attribute vec3 aTint;
+          attribute vec3 aFlesh;
+          uniform float uTime;
+          uniform vec3 uLower;
+          varying vec3 vTint;
+        `)
         .replace('#include <begin_vertex>', /* glsl */ `
           #include <begin_vertex>
           {
             float ph = aPhase * 6.2831853;
-            float sway = sin( uTime * 0.85 + ph ) * 0.05 + sin( uTime * 0.31 + ph * 2.7 ) * 0.03;
+            // A standing lean the figure holds, plus a slow shift of weight on
+            // top of it. The static part is what makes two instances of one
+            // posture read as two people; the moving part is what stops the
+            // whole terrace looking frozen.
+            float sway = aLean + sin( uTime * 0.85 + ph ) * 0.05 + sin( uTime * 0.31 + ph * 2.7 ) * 0.03;
             float bob = sin( uTime * 1.6 + ph * 1.9 ) * 0.014;
             float c = cos( sway ), s = sin( sway );
             transformed.xz = mat2( c, -s, s, c ) * transformed.xz;
             transformed.x += sway * transformed.y * 0.42;
             transformed.y += bob;
           }
+          // Trousers are darker than the coat above them, always. A figure in
+          // one value head to foot is a jumpsuit, and forty jumpsuits is a
+          // chain gang; the waist break is what makes them people in clothes.
+          float garment = smoothstep( 0.74, 0.94, position.y );
+          vTint = mix( mix( uLower, aTint, garment * 0.55 + 0.12 ), aFlesh, aSkin );
         `);
+      shader.uniforms.uLower = uLower;
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vTint;')
+        .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vTint;');
     };
     mat.customProgramCacheKey = () => 'kb-crowd';
 
     const rng = this.rng;
-    // Deal the placements first, then split them by archetype, so the mix is
-    // spread evenly across the fence rather than clumping by body type.
+    // Deal the placements first, then split them by figure, so the mix is
+    // spread evenly across the terrace rather than clumping by body type.
+    const variants = CROWD_ARCHETYPES * seeds;
+    const pick = (leaner) => (leaner && rng.next() < 0.5 ? 2 : rng.int(CROWD_ARCHETYPES)) + rng.int(seeds) * CROWD_ARCHETYPES;
     const slots = [];
     for (let i = 0; i < count; i++) {
       const r = rng.next();
-      if (r < 0.6) {
-        // Pressed against the rear fence, two ranks deep. The front rank leans
-        // on the barrier, so it is weighted toward the leaning archetypes.
-        const rank = rng.next() < 0.62 ? 0 : 1;
+      if (r < 0.72) {
+        // On the terrace. The back ranks are fuller than the front because the
+        // people who get to the barrier early are the ones already there.
+        const rank = Math.min(TERRACE_RANKS - 1, rng.int(TERRACE_RANKS) + (rng.next() < 0.3 ? 1 : 0));
         slots.push({
           x: rng.range(-11.5, 11.5),
-          y: 1.5 + rank * 0.5,
-          z: PIT_BACK - 1.5 - rank * 1.4 + rng.range(-0.25, 0.25),
-          ry: Math.PI + rng.range(-0.35, 0.35),
-          k: rank === 0 ? (rng.next() < 0.55 ? 2 : rng.int(CROWD_ARCHETYPES)) : rng.int(CROWD_ARCHETYPES),
+          y: TERRACE_Y0 + rank * TERRACE_RISE,
+          z: TERRACE_Z0 - rank * TERRACE_RUN - rng.range(0.3, 0.75),
+          ry: Math.PI + rng.range(-0.4, 0.4),
+          k: pick(rank === 0),
         });
-      } else if (r < 0.87) {
+      } else if (r < 0.92) {
         // On the side catwalks, leaning over the rail.
         const side = rng.next() < 0.5 ? -1 : 1;
         slots.push({
@@ -785,7 +1068,7 @@ export class StageStructure {
           y: CATWALK_Y + 0.02,
           z: rng.range(-9, 13),
           ry: (side > 0 ? -Math.PI / 2 : Math.PI / 2) + rng.range(-0.3, 0.3),
-          k: rng.next() < 0.5 ? 2 : rng.int(CROWD_ARCHETYPES),
+          k: pick(true),
         });
       } else {
         // A few up on the containers.
@@ -794,23 +1077,29 @@ export class StageStructure {
           y: 5.2,
           z: rng.range(-14, -6),
           ry: Math.PI + rng.range(-0.6, 0.6),
-          k: rng.int(CROWD_ARCHETYPES),
+          k: pick(false),
         });
       }
     }
 
     this.crowdMeshes = [];
     const scale = new THREE.Vector3();
-    for (let k = 0; k < CROWD_ARCHETYPES; k++) {
+    for (let k = 0; k < variants; k++) {
       const mine = slots.filter((s) => s.k === k);
       if (!mine.length) continue;
-      const geo = crowdFigure(11 + k * 7, k);
+      const geo = crowdFigure(11 + k * 7, k % CROWD_ARCHETYPES);
       const mesh = new THREE.InstancedMesh(geo, mat, mine.length);
       mesh.name = `arena.structure.crowd${k}`;
       mesh.castShadow = false;
       mesh.receiveShadow = false;
-      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(mine.length * 3), 3);
+      // The terrace stands behind a metre of kerb and four metres of barrier:
+      // no part of it can reach the floor's reflection, and at twelve meshes it
+      // is the most expensive thing in the set to render a second time.
+      mesh.layers.set(LAYER.NO_REFLECT);
       const phases = new Float32Array(mine.length);
+      const leans = new Float32Array(mine.length);
+      const tints = new Float32Array(mine.length * 3);
+      const flesh = new Float32Array(mine.length * 3);
       mine.forEach((s, i) => {
         _e.set(0, s.ry, 0);
         _q.setFromEuler(_e);
@@ -819,16 +1108,23 @@ export class StageStructure {
         scale.set(rng.range(0.9, 1.14), rng.range(0.93, 1.11), rng.range(0.9, 1.14));
         _m.compose(_p.set(s.x, s.y, s.z), _q, scale);
         mesh.setMatrixAt(i, _m);
-        // Clothing is not one colour, and a silhouette that is one flat value
-        // flattens into a cardboard cut-out the moment two of them overlap.
-        const v = rng.range(0.55, 1.5);
-        _c.setRGB(v * rng.range(0.9, 1.1), v, v * rng.range(0.92, 1.18));
-        mesh.setColorAt(i, _c);
+        // Garment colours, not a grey ramp. They are dark — this is a night
+        // hangar — but they hold hue, so the cyan practicals behind the fence
+        // separate a blue coat from a rust one instead of flattening both.
+        _c.setHex(CROWD_PALETTE[rng.int(CROWD_PALETTE.length)], THREE.SRGBColorSpace)
+          .multiplyScalar(rng.range(0.72, 1.28));
+        _c.toArray(tints, i * 3);
+        _c.setHex(CROWD_SKIN[rng.int(CROWD_SKIN.length)], THREE.SRGBColorSpace)
+          .multiplyScalar(rng.range(0.62, 1.06));
+        _c.toArray(flesh, i * 3);
         phases[i] = rng.next();
+        leans[i] = rng.range(-0.11, 0.11);
       });
       mesh.instanceMatrix.needsUpdate = true;
-      mesh.instanceColor.needsUpdate = true;
       geo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phases, 1));
+      geo.setAttribute('aLean', new THREE.InstancedBufferAttribute(leans, 1));
+      geo.setAttribute('aTint', new THREE.InstancedBufferAttribute(tints, 3));
+      geo.setAttribute('aFlesh', new THREE.InstancedBufferAttribute(flesh, 3));
       this.crowdMeshes.push(mesh);
       this.group.add(mesh);
     }
@@ -959,6 +1255,7 @@ export class StageStructure {
       mesh.castShadow = false;
       mesh.receiveShadow = false;
       mesh.frustumCulled = false;
+      mesh.layers.set(LAYER.NO_REFLECT);
       this.cityMaterials.push(mat);
       this.group.add(mesh);
     }
@@ -1097,12 +1394,21 @@ export class StageStructure {
         mat.uniforms.uHaze.value.copy(envParams.fog.color).multiplyScalar(2.4);
         mat.uniforms.uWindow.value.copy(envParams.rimB?.color ?? mat.uniforms.uWindow.value).lerp(new THREE.Color(0xffc98a), 0.6);
       }
+      // The yard sits in the same air as the skyline but nearer, so it takes
+      // the mood's fog at a lower gain: enough to separate its bands, not so
+      // much that a container stack at twenty-five metres joins the sky.
+      const u = this.backdropMaterial.uniforms;
+      u.uHaze.value.copy(envParams.fog.color).multiplyScalar(1.7);
+      u.uTop.value.copy(envParams.fog.color).multiplyScalar(1.1);
+      this.midgroundHaze.value.copy(envParams.fog.color).multiplyScalar(0.85);
     }
   }
 
   dispose() {
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     for (const m of this.cityMaterials ?? []) m.dispose();
+    this.backdropMaterial?.dispose();
+    this.midgroundMaterial?.dispose();
     this.crowdMaterial?.dispose();
     this.droneLightMaterial?.dispose();
   }

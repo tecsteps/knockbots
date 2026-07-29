@@ -31,6 +31,9 @@ import { PointBurst } from './StageParticles.js';
 
 const FIXTURES = 4;
 
+/** Caption bands in the screen text plate; one per board, power of two. */
+const BOARD_ROWS = 8;
+
 /** Colour slots the light pools sample: the four fixtures plus the neon strip. */
 const POOL_SLOTS = 5;
 
@@ -49,21 +52,65 @@ const POOLS = [
   { pos: [0, 0.02, -7.85], rot: [-Math.PI / 2, 0, 0], w: 26, h: 2.4, slot: 4, edge: [0.74, 0], gain: 0.85 },
 ];
 
-/** Linear radiance per unit of `sqrt(power)` for a pool card. */
-const POOL_GAIN = 0.1;
+/**
+ * Linear radiance per unit of `sqrt(power)` for a pool card. Held low on
+ * purpose: the pool says where the light landed, and once it is bright enough to
+ * compete with the fighters standing in it the floor stops being the floor.
+ */
+const POOL_GAIN = 0.115;
+
+/**
+ * Scene-referred luminance where `RenderPipeline`'s bright pass starts to bloom.
+ * Every emitter in this file is authored against it: a lamp face that sits under
+ * it is a pale grey rectangle with a light bolted on somewhere else, and the eye
+ * refuses to accept it as the source. Above it the bloom does the work — the
+ * fixture spreads, the glass around it lifts, and the thing reads as hot.
+ */
+const BLOOM_THRESHOLD = 1.15;
 
 const _tmp = new THREE.Color();
 const _white = new THREE.Color(1, 1, 1);
 const _amber = new THREE.Color(0xffa02a);
 const _down = new THREE.Vector3(0.15, -1, 0.1).normalize();
 
-/** Text plate sampled by the screens: four stacked captions in one texture. */
-function screenCaptions(size = 256) {
+/**
+ * The boards, in the order they are built. Each carries its own caption, its
+ * own program and its own size, because a wall of displays all running the
+ * same loop is one display copied — the thing the eye picks up on first is
+ * that two screens are in step.
+ *
+ * `prog`: 0 spectrum, 1 armed-status block, 2 oscilloscope, 3 ticker board.
+ */
+const BOARDS = [
+  // The two bank boards are letterboxed and sit in the 3.6-5.2m band, which is
+  // all the fight camera can see above the fence: any taller and the caption
+  // rides out of frame, any lower and the crowd swallows the whole panel.
+  { pos: [-6.2, 4.42, -13.7], rot: [0.14, 0, 0], w: 4.3, h: 1.5, prog: 0, cap: 'sublevel 09 diagnostic' },
+  { pos: [5.9, 4.38, -13.7], rot: [0.14, 0, 0], w: 3.4, h: 1.35, prog: 1, cap: 'cell 09 armed' },
+  { pos: [0.6, 6.2, -13.85], rot: [0.22, 0, 0], w: 6.0, h: 2.4, prog: 3, cap: 'mech test - round 01' },
+  { pos: [-12.35, 3.6, 4.0], rot: [0, Math.PI / 2, 0], w: 2.0, h: 1.2, prog: 2, cap: 'hydraulic nominal' },
+  { pos: [12.35, 4.1, -3.2], rot: [0, -Math.PI / 2, 0], w: 2.4, h: 1.4, prog: 0, cap: 'rig telemetry' },
+  { pos: [-11.7, 3.75, -13.72], rot: [0.1, 0, 0], w: 1.6, h: 1.0, prog: 2, cap: 'pit feed 04' },
+  { pos: [11.4, 3.9, -13.72], rot: [0.1, 0, 0], w: 1.8, h: 1.05, prog: 1, cap: 'coolant loop b' },
+  { pos: [12.35, 6.0, 8.4], rot: [0, -Math.PI / 2, 0], w: 1.8, h: 1.1, prog: 3, cap: 'gantry hold' },
+];
+
+/**
+ * Caption plate: one row per board, stacked bottom-up in a single texture.
+ *
+ * The cell size is solved per row so the string fills the plate rather than
+ * running off the end of it. The previous fixed cell clipped every caption
+ * longer than ten characters mid-word, and a caption cut mid-word under
+ * anisotropic filtering is indistinguishable from a texture that is simply
+ * broken.
+ */
+function screenCaptions(rows, size = 512) {
+  const band = size / BOARD_ROWS;
   const mask = new Float32Array(size * size);
-  const cell = Math.max(2, Math.round(size / 64));
-  const rows = ['sublevel 09 diag', 'hydraulic nominal', 'cell 09 armed', 'rig telemetry'];
   for (let r = 0; r < rows.length; r++) {
-    stampText(mask, size, rows[r], Math.round(size * 0.06), Math.round((r + 0.32) * (size / 4)), cell, cell * 0.5);
+    const cell = Math.max(2, Math.min(Math.floor(band * 0.42), Math.floor((size * 0.9) / (rows[r].length * 6))));
+    const w = rows[r].length * 6 * cell - cell;
+    stampText(mask, size, rows[r], Math.round((size - w) / 2), Math.round(r * band + (band - 7 * cell) / 2), cell, cell * 0.5);
   }
   const soft = blur(mask, size, 1, 1);
   const data = new Uint8Array(size * size * 4);
@@ -172,7 +219,7 @@ export class StagePracticals {
     this.practicalPositions = [];
 
     this.atlas = fixtureAtlas(512);
-    this.captions = screenCaptions(256);
+    this.captions = screenCaptions(BOARDS.map((b) => b.cap), 512);
 
     this.#fixtures(bins);
     this.#pools();
@@ -492,23 +539,31 @@ export class StagePracticals {
   }
 
   /**
-   * Diagnostic screens on the machinery bank. All four share one shader; the
-   * content varies by the screen's own world position, so a single draw call
-   * produces four displays that are visibly running different programs.
+   * The boards: diagnostic displays on the machinery bank, the house board over
+   * the pit, and repeaters on the side walls.
+   *
+   * All eight share one shader and one draw call, and each one carries its
+   * board index in a vertex attribute. That attribute is the whole point. The
+   * index used to be derived from the fragment's world position, which meant it
+   * changed *across* a panel — every thirty centimetres the display jumped to a
+   * different caption, a different bar seed and a different trace phase, and
+   * what came out looked like a screen showing reversed, sliced-up text. An
+   * index is a property of the board, so it belongs to the board's vertices.
    */
   #screens(bins) {
     const panels = [];
     const bezels = bins.dark;
-    const place4 = [
-      { pos: [-3.4, 3.0, -12.42], rot: [0, 0, 0], w: 2.2, h: 1.3 },
-      { pos: [3.9, 3.4, -12.42], rot: [0, 0, 0], w: 1.7, h: 1.1 },
-      { pos: [-12.35, 3.6, 4.0], rot: [0, Math.PI / 2, 0], w: 2.0, h: 1.2 },
-      { pos: [12.35, 4.1, -3.2], rot: [0, -Math.PI / 2, 0], w: 2.4, h: 1.4 },
-    ];
-    for (const p of place4) {
-      panels.push(place(new THREE.PlaneGeometry(p.w, p.h), { pos: p.pos, rot: p.rot }));
+    const counts = [];
+    for (const p of BOARDS) {
+      // Expanded here rather than left to the merge, so the vertex counts the
+      // board attribute is filled from are the ones that end up in the buffer.
+      const geo = place(new THREE.PlaneGeometry(p.w, p.h), { pos: p.pos, rot: p.rot }).toNonIndexed();
+      counts.push(geo.attributes.position.count);
+      panels.push(geo);
+      // Housing sits a few centimetres behind the face, along the face normal.
+      const n = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(...p.rot)).multiplyScalar(0.03);
       bezels.push(place(insetPanel(p.w + 0.2, p.h + 0.2, 0.09, 0.1), {
-        pos: [p.pos[0] - Math.sin(p.rot[1]) * 0.03, p.pos[1], p.pos[2] - Math.cos(p.rot[1]) * 0.03],
+        pos: [p.pos[0] - n.x, p.pos[1] - n.y, p.pos[2] - n.z],
         rot: p.rot,
       }));
     }
@@ -524,19 +579,26 @@ export class StagePracticals {
           uCaptions: { value: null },
           uColor: { value: new THREE.Color(0x63d0ff) },
           uWarn: { value: new THREE.Color(0xffa02a) },
-          uGain: { value: 1.6 },
+          // The trace and its head end up near four times BLOOM_THRESHOLD, the
+          // bar graph just over it, the dark field far under. A screen is only
+          // convincing when its own contrast survives the bright pass.
+          uGain: { value: 2.7 },
+          uRows: { value: BOARD_ROWS },
         },
       ]),
       vertexShader: /* glsl */ `
         #include <common>
         #include <fog_pars_vertex>
+        attribute float aBoard;
+        attribute float aProgram;
         varying vec2 vUv;
-        varying vec3 vWorld;
+        varying float vBoard;
+        varying float vProgram;
         void main() {
           vUv = uv;
-          vec4 w = modelMatrix * vec4( position, 1.0 );
-          vWorld = w.xyz;
-          vec4 mvPosition = viewMatrix * w;
+          vBoard = aBoard;
+          vProgram = aProgram;
+          vec4 mvPosition = viewMatrix * modelMatrix * vec4( position, 1.0 );
           gl_Position = projectionMatrix * mvPosition;
           #include <fog_vertex>
         }
@@ -549,16 +611,85 @@ export class StagePracticals {
         uniform vec3 uColor;
         uniform vec3 uWarn;
         uniform float uGain;
+        uniform float uRows;
         varying vec2 vUv;
-        varying vec3 vWorld;
+        varying float vBoard;
+        varying float vProgram;
 
         float hash11( float n ) { return fract( sin( n ) * 43758.5453 ); }
 
+        // Spectrum: a bank of bars over a sweeping trace. The generalist.
+        vec3 spectrum( vec2 uv, float seed ) {
+          vec3 col = vec3( 0.0 );
+          float bars = floor( uv.x * 22.0 );
+          float h = 0.08 + 0.34 * abs( sin( bars * 1.7 + uTime * ( 1.3 + fract( seed * 0.31 ) ) + seed ) )
+                        * ( 0.5 + 0.5 * hash11( bars + seed ) );
+          float inBar = step( uv.y, h ) * step( 0.06, uv.y ) * step( 0.12, fract( uv.x * 22.0 ) );
+          col += mix( uColor, uWarn, step( 0.3, h ) ) * inBar * 0.9;
+
+          float trace = 0.62 + 0.13 * sin( uv.x * 21.0 + uTime * 2.6 + seed ) * sin( uv.x * 7.0 - uTime * 1.1 );
+          col += uColor * 1.4 * ( 1.0 - smoothstep( 0.0, 0.012, abs( uv.y - trace ) ) );
+          float head = fract( uTime * 0.22 + fract( seed * 0.77 ) );
+          col += uColor * 2.2 * ( 1.0 - smoothstep( 0.0, 0.02, length( vec2( ( uv.x - head ) * 1.6, uv.y - trace ) ) ) );
+          return col;
+        }
+
+        // Armed status: a channel list filling in sequence under a bar that
+        // pulses amber. Reads as something counting down to a go condition.
+        vec3 status( vec2 uv, float seed ) {
+          vec3 col = vec3( 0.0 );
+          float rows = 6.0;
+          float r = floor( uv.y * rows );
+          float rf = fract( uv.y * rows );
+          float lit = step( fract( uTime * 0.19 + r * 0.17 + seed * 0.13 ), 0.62 );
+          // Label block on the left, a value bar on the right.
+          float label = step( 0.06, uv.x ) * step( uv.x, 0.34 ) * step( 0.28, rf ) * step( rf, 0.68 );
+          float fill = 0.4 + 0.5 * hash11( r + seed );
+          float bar = step( 0.40, uv.x ) * step( uv.x, 0.40 + fill * 0.54 ) * step( 0.3, rf ) * step( rf, 0.66 );
+          col += uColor * 0.55 * label * ( 0.35 + 0.65 * lit );
+          col += mix( uColor, uWarn, step( 0.72, fill ) ) * bar * ( 0.3 + 1.1 * lit );
+          // Alert bar across the top of the field, breathing.
+          float pulse = 0.45 + 0.55 * abs( sin( uTime * 2.1 + seed ) );
+          col += uWarn * pulse * 1.5 * step( 0.74, uv.y ) * step( uv.y, 0.8 ) * step( 0.06, uv.x ) * step( uv.x, 0.94 );
+          return col;
+        }
+
+        // Oscilloscope: one bright trace on a graticule, with a cursor.
+        vec3 scope( vec2 uv, float seed ) {
+          vec3 col = vec3( 0.0 );
+          vec2 g = abs( fract( uv * vec2( 10.0, 6.0 ) ) - 0.5 );
+          col += uColor * 0.07 * step( 0.44, max( g.x, g.y ) );
+          float t = uv.x * 12.0 + uTime * 3.4 + seed;
+          float y = 0.42 + 0.24 * ( sin( t ) * 0.7 + sin( t * 2.7 + seed ) * 0.3 );
+          col += uColor * 2.0 * ( 1.0 - smoothstep( 0.0, 0.016, abs( uv.y - y ) ) );
+          col += uColor * 0.5 * ( 1.0 - smoothstep( 0.0, 0.09, abs( uv.y - y ) ) );
+          float cur = fract( uTime * 0.31 + seed * 0.41 );
+          col += uWarn * 1.1 * ( 1.0 - smoothstep( 0.0, 0.004, abs( uv.x - cur ) ) );
+          return col;
+        }
+
+        // Ticker board: a scrolling block ribbon over a progress bar. The house
+        // board, which wants to read from the back of the hall.
+        vec3 ticker( vec2 uv, float seed ) {
+          vec3 col = vec3( 0.0 );
+          float x = uv.x * 9.0 + uTime * 0.9 + seed;
+          float cell = floor( x );
+          float on = step( 0.42, hash11( cell * 1.7 + seed ) );
+          float body = step( 0.08, fract( x ) ) * step( fract( x ), 0.9 )
+                     * step( 0.42, uv.y ) * step( uv.y, 0.72 );
+          col += mix( uColor, uWarn, step( 0.86, hash11( cell + 3.1 ) ) ) * body * on * 1.1;
+          float p = fract( uTime * 0.07 + seed * 0.29 );
+          col += uColor * 1.3 * step( 0.08, uv.x ) * step( uv.x, 0.08 + p * 0.84 )
+               * step( 0.2, uv.y ) * step( uv.y, 0.3 );
+          col += uColor * 0.25 * step( 0.08, uv.x ) * step( uv.x, 0.92 )
+               * step( 0.19, uv.y ) * step( uv.y, 0.31 );
+          return col;
+        }
+
         void main() {
-          // Each screen gets its own seed and its own caption row from where it
-          // is standing, so one material drives four different displays.
-          float seed = floor( vWorld.x * 3.1 + vWorld.y * 7.7 + vWorld.z * 1.3 );
-          float row = floor( fract( seed * 0.2137 ) * 4.0 );
+          // The board index is a vertex attribute, so every fragment of a panel
+          // agrees on which display it belongs to.
+          float seed = vBoard * 7.31 + 1.7;
           vec2 uv = vUv;
 
           // Occasional horizontal tear.
@@ -567,27 +698,19 @@ export class StagePracticals {
           if ( tearBand > 0.0 && abs( uv.y - tearY ) < 0.03 ) uv.x += 0.05;
 
           vec3 col = vec3( 0.008, 0.02, 0.03 );
-
-          // Faint grid.
           vec2 g = abs( fract( uv * vec2( 16.0, 9.0 ) ) - 0.5 );
           col += uColor * 0.05 * step( 0.46, max( g.x, g.y ) );
 
-          // Bar graph across the lower half.
-          float bars = floor( uv.x * 22.0 );
-          float h = 0.08 + 0.34 * abs( sin( bars * 1.7 + uTime * ( 1.3 + fract( seed * 0.31 ) ) + seed ) )
-                        * ( 0.5 + 0.5 * hash11( bars + seed ) );
-          float inBar = step( uv.y, h ) * step( 0.06, uv.y ) * step( 0.12, fract( uv.x * 22.0 ) );
-          col += mix( uColor, uWarn, step( 0.3, h ) ) * inBar * 0.9;
+          if ( vProgram < 0.5 ) col += spectrum( uv, seed );
+          else if ( vProgram < 1.5 ) col += status( uv, seed );
+          else if ( vProgram < 2.5 ) col += scope( uv, seed );
+          else col += ticker( uv, seed );
 
-          // A trace sweeping the upper half.
-          float trace = 0.62 + 0.13 * sin( uv.x * 21.0 + uTime * 2.6 + seed ) * sin( uv.x * 7.0 - uTime * 1.1 );
-          col += uColor * 1.4 * ( 1.0 - smoothstep( 0.0, 0.012, abs( uv.y - trace ) ) );
-          float head = fract( uTime * 0.22 + fract( seed * 0.77 ) );
-          col += uColor * 2.2 * ( 1.0 - smoothstep( 0.0, 0.02, length( vec2( ( uv.x - head ) * 1.6, uv.y - trace ) ) ) );
-
-          // Caption strip, one row of the shared text plate.
-          vec2 cuv = vec2( uv.x, ( row + clamp( ( uv.y - 0.84 ) / 0.14, 0.0, 1.0 ) ) * 0.25 );
-          if ( uv.y > 0.84 ) col += uColor * 1.8 * texture2D( uCaptions, cuv ).r;
+          // Caption strip: this board's own row of the shared text plate.
+          if ( uv.y > 0.82 ) {
+            vec2 cuv = vec2( uv.x, ( vBoard + clamp( ( uv.y - 0.82 ) / 0.16, 0.0, 1.0 ) ) / uRows );
+            col += uColor * 1.8 * texture2D( uCaptions, cuv ).r;
+          }
 
           // Scanlines and a slow rolling frame bar.
           col *= 0.72 + 0.28 * step( 0.5, fract( uv.y * 120.0 ) );
@@ -606,7 +729,19 @@ export class StagePracticals {
     });
     // UniformsUtils.merge clones, so the caption plate is bound afterwards.
     this.screenMaterial.uniforms.uCaptions.value = this.captions;
-    this.screens = new THREE.Mesh(mergeAll(panels), this.screenMaterial);
+
+    const geo = mergeAll(panels);
+    const board = new Float32Array(geo.attributes.position.count);
+    const program = new Float32Array(geo.attributes.position.count);
+    let at = 0;
+    counts.forEach((n, i) => {
+      board.fill(i, at, at + n);
+      program.fill(BOARDS[i].prog, at, at + n);
+      at += n;
+    });
+    geo.setAttribute('aBoard', new THREE.Float32BufferAttribute(board, 1));
+    geo.setAttribute('aProgram', new THREE.Float32BufferAttribute(program, 1));
+    this.screens = new THREE.Mesh(geo, this.screenMaterial);
     this.screens.name = 'arena.practicals.screens';
     this.group.add(this.screens);
   }
@@ -657,11 +792,14 @@ export class StagePracticals {
       const p = params?.[i];
       if (!p) continue;
       // Radiance under a knee rather than a straight scale. A 26-unit doorway
-      // and a 4.5-unit sign box have to end up within a stop of each other on
-      // screen, or the bright one clips to a white rectangle and stops reading
-      // as a lit surface at all.
+      // and a 4.5-unit sign box have to end up within a stop or two of each
+      // other on screen, or the bright one clips to a white rectangle and stops
+      // reading as a lit surface at all. The curve is anchored on the dimmest
+      // fixture any mood authors, so even the sign box clears BLOOM_THRESHOLD
+      // and the light banks land three to four times over it — hot enough that
+      // the bright pass, not the albedo, is what the eye reads them by.
       const live = Math.max(0, light?.intensity ?? p.power);
-      const power = Math.pow(live, 0.62) * (i === 3 ? 0.28 : 0.4);
+      const power = BLOOM_THRESHOLD * Math.pow(live / 4.5, 0.62) * (i === 3 ? 1.35 : 2.1);
       cols[i].copy(light?.color ?? p.color).multiplyScalar(power);
       // The pool is scatter, so it follows the source's flicker at a square
       // root: a lamp that dips 10% dims its pool, it does not switch it off.
@@ -695,11 +833,15 @@ export class StagePracticals {
     if (rimA) {
       // Neon and screens take their hue from the mood's rim pair, which is what
       // keeps the practicals and the lighting reading as one design.
-      const pulse = 1.7 + 0.22 * Math.sin(time * 0.8);
+      // A tube has to clear BLOOM_THRESHOLD at the bottom of its cycle, not the
+      // top: a strip that only blooms on the peak reads as a flickering decal
+      // rather than as glass with current in it.
+      const pulse = 2.8 + 0.36 * Math.sin(time * 0.8);
       this.neonMaterial.color.copy(rimA).multiplyScalar(pulse);
       this.screenMaterial.uniforms.uColor.value.copy(rimA).lerp(_white, 0.25);
-      // The strip's own wash on the barrier and the floor at its foot.
-      this.poolMaterial.uniforms.uPool.value[4].copy(rimA).multiplyScalar(pulse * 0.22);
+      // The strip's own wash on the barrier and the floor at its foot. The
+      // deposit is scatter and stays where it was — only the tube got hotter.
+      this.poolMaterial.uniforms.uPool.value[4].copy(rimA).multiplyScalar(pulse * 0.11);
     }
     if (rimB) this.screenMaterial.uniforms.uWarn.value.copy(rimB).lerp(_amber, 0.4);
 
@@ -707,7 +849,7 @@ export class StagePracticals {
     for (let i = 0; i < this._beaconPhase.length; i++) {
       const ph = this._beaconPhase[i];
       const sweep = Math.pow(Math.max(0, Math.sin(time * 1.9 + ph)), 12);
-      _tmp.setRGB(1, 0.32, 0.08).multiplyScalar(0.25 + sweep * 6.5);
+      _tmp.setRGB(1, 0.32, 0.08).multiplyScalar(0.4 + sweep * 11);
       this.beacons.setColorAt(i, _tmp);
     }
     this.beacons.instanceColor.needsUpdate = true;

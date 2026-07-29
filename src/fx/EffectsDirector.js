@@ -4,7 +4,7 @@
  * One subscriber to the event bus, one owner of every particle system, one
  * per-frame entry point. Nothing else in the game knows that FX exist: the
  * simulation emits `hit` and this file decides that a heavy counter-hit on the
- * head means ninety white-hot sparks along the contact normal, a screen-facing
+ * head means a thousand white-hot sparks along the contact normal, a screen-facing
  * shock with real refraction, five armour shards, a coolant spray that will
  * splat on the floor two hundred milliseconds from now, a point light that
  * flashes the robot's chrome, and three frames of radial speed lines.
@@ -64,45 +64,53 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
  * Per-weight impact recipe. Every number here is a readability decision.
  *
  * The persistence hierarchy is deliberate and it is the opposite of the obvious
- * one: `flashLife` is two to four frames, `coreLife` and the spark life are
- * most of a second. The flare is the event; the cooling metal and the falling
- * embers are the evidence it left. Getting that the wrong way round leaves a
- * reaction animation playing out over a contact point with nothing at it.
+ * one: `flashLife` is two to four frames, `coreLife` is under a second, and the
+ * sparks burn for two. The flare is the event; the cooling metal is the moment
+ * after it; the embers falling out of the air are the evidence it left. Getting
+ * that the wrong way round leaves a reaction animation playing out over a
+ * contact point that is still a bright ball half a second later, which is the
+ * single loudest way an impact announces itself as geometry — and leaves the
+ * rest of the reaction with nothing in it at all.
+ *
+ * The spark counts are large on purpose. `SparkSystem` splits every burst into
+ * three size tiers, and a tier that only gets a dozen particles does not read as
+ * a population — it reads as a handful of stray dots. A launcher throwing a
+ * thousand sparks is one buffer upload and one draw call.
  */
 const HIT_FX = {
   [WEIGHT.LIGHT]: {
-    sparks: 30, jet: 10, speed: 7.4, size: 0.026, heat: 2.6, sparkLife: 0.85,
+    sparks: 190, jet: 64, speed: 7.4, size: 0.028, heat: 2.6, sparkLife: 1.1,
     ring: 0.48, ringLife: 0.17, thick: 0.2, ringHeat: 1.5,
     flash: 0.26, flashHeat: 3.2, flashLife: 0.075,
-    core: 0.13, coreHeat: 2.6, coreLife: 0.42,
+    core: 0.10, coreHeat: 2.6, coreLife: 0.42, ember: 40,
     debris: 0, fluid: 0, light: 3.0, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
-    sparks: 54, jet: 16, speed: 8.6, size: 0.03, heat: 3.0, sparkLife: 1.0,
+    sparks: 340, jet: 105, speed: 8.6, size: 0.032, heat: 3.0, sparkLife: 1.35,
     ring: 0.82, ringLife: 0.22, thick: 0.2, ringHeat: 1.9,
     flash: 0.36, flashHeat: 3.8, flashLife: 0.09,
-    core: 0.18, coreHeat: 3.4, coreLife: 0.6,
+    core: 0.13, coreHeat: 3.4, coreLife: 0.55, ember: 90,
     debris: 0, fluid: 5, light: 5.0, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
-    sparks: 108, jet: 30, speed: 10.4, size: 0.036, heat: 3.4, sparkLife: 1.2,
+    sparks: 680, jet: 200, speed: 10.4, size: 0.038, heat: 3.4, sparkLife: 1.65,
     ring: 1.5, ringLife: 0.3, thick: 0.24, ringHeat: 2.4,
     flash: 0.56, flashHeat: 4.6, flashLife: 0.11,
-    core: 0.28, coreHeat: 4.4, coreLife: 0.85,
+    core: 0.19, coreHeat: 4.4, coreLife: 0.72, ember: 220,
     debris: 8, fluid: 12, light: 12.0, impact: 0.55, dust: 6,
   },
   [WEIGHT.LAUNCHER]: {
-    sparks: 122, jet: 34, speed: 11.4, size: 0.038, heat: 3.5, sparkLife: 1.3,
+    sparks: 780, jet: 225, speed: 11.4, size: 0.04, heat: 3.5, sparkLife: 1.8,
     ring: 1.8, ringLife: 0.34, thick: 0.25, ringHeat: 2.6,
     flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
-    core: 0.31, coreHeat: 4.8, coreLife: 0.92,
+    core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 260,
     debris: 10, fluid: 14, light: 14.0, impact: 0.62, dust: 8,
   },
   [WEIGHT.ULTRA]: {
-    sparks: 200, jet: 56, speed: 14.5, size: 0.046, heat: 4.0, sparkLife: 1.45,
+    sparks: 1150, jet: 330, speed: 14.5, size: 0.048, heat: 4.0, sparkLife: 2.0,
     ring: 2.85, ringLife: 0.44, thick: 0.28, ringHeat: 3.0,
-    flash: 0.95, flashHeat: 6.0, flashLife: 0.16,
-    core: 0.46, coreHeat: 5.6, coreLife: 1.1,
+    flash: 0.7, flashHeat: 6.0, flashLife: 0.16,
+    core: 0.28, coreHeat: 5.6, coreLife: 0.9, ember: 380,
     debris: 18, fluid: 26, light: 26.0, impact: 1.0, dust: 14,
   },
 };
@@ -190,14 +198,21 @@ export class EffectsDirector {
     const b = this.budget;
     const n = (x) => Math.max(24, Math.round(x * b));
 
-    this.sparks = new SparkSystem(this.textures.spark, n(3072), this.floorY);
+    // Sized against the worst realistic case rather than the theoretical one: a
+    // three-hit juggle of launchers is a little under four thousand live sparks,
+    // so this is a shade over two times headroom before the ring starts eating
+    // the oldest burst.
+    this.sparks = new SparkSystem(this.textures.spark, n(8192), this.floorY);
     this.fluid = new FluidSystem(this.textures.droplet, n(768), this.floorY);
     this.smoke = new SmokeSystem(this.textures.smoke, this.textures.curl, n(720));
     this.debris = new DebrisSystem(n(176), this.textures.shard, this.floorY);
     this.shock = new ShockwaveSystem(this.textures.ring, 48);
     this.flashes = new FlashSystem(64);
     this.decals = new DecalSystem(this.textures.decals, 160, this.floorY);
-    this.trails = new TrailSystem(10, 30);
+    // Eighteen samples is a third of a second of arc at 60Hz. Half a second of
+    // history is long enough that the ribbon is still on screen after the limb
+    // has changed direction twice, which reads as a smear rather than a swing.
+    this.trails = new TrailSystem(10, 18);
 
     this.group.add(
       this.decals.mesh, this.smoke.mesh, this.fluid.mesh,
@@ -334,14 +349,16 @@ export class EffectsDirector {
     // Sparks travel the way the blow did. The wide fan carries the volume of
     // the burst, biased only slightly upward so it stays legible against the
     // floor; the tight jet down the hit normal is what makes the direction
-    // readable in a single frame instead of leaving an isotropic ball.
-    _v2.copy(_n).setY(_n.y * 0.7 + 0.3).normalize();
+    // readable in a single frame instead of leaving an isotropic ball. The
+    // inherited velocity is the other half of that: it shifts the *whole*
+    // population downrange, so even the slow motes drift the way the hit went.
+    _v2.copy(_n).setY(_n.y * 0.78 + 0.22).normalize();
     this.sparks.burst(e.point, _v2, {
       count: recipe.sparks * scale,
       speed: recipe.speed * scale,
-      spread: 0.46,
+      spread: 0.5,
       life: recipe.sparkLife,
-      inherit: _v3.copy(_n).multiplyScalar(recipe.speed * 0.22),
+      inherit: _v3.copy(_n).multiplyScalar(recipe.speed * 0.42),
       size: recipe.size,
       heat: recipe.heat,
       tint: counter ? _c.setRGB(1.0, 0.86, 0.72) : null,
@@ -349,11 +366,30 @@ export class EffectsDirector {
     this.sparks.burst(e.point, _n, {
       count: recipe.jet * scale,
       speed: recipe.speed * 1.55 * scale,
-      spread: 0.14,
+      spread: 0.12,
       life: recipe.sparkLife * 0.8,
+      inherit: _v3.copy(_n).multiplyScalar(recipe.speed * 0.5),
       size: recipe.size * 1.15,
       heat: recipe.heat * 1.15,
     });
+
+    // Slow embers, thrown almost straight up out of the contact. Deliberately
+    // slow: the fast sparks are nine metres away and out of frame within a
+    // second, and a reaction animation that runs for two needs something left at
+    // the place the blow landed. These arc up, fall back through the contact,
+    // bounce, and are cherry-red by the time they settle.
+    if (recipe.ember) {
+      _v2.copy(_n).setY(_n.y * 0.35 + 1.1).normalize();
+      this.sparks.burst(e.point, _v2, {
+        count: recipe.ember * scale,
+        speed: recipe.speed * 0.26,
+        spread: 0.85,
+        life: recipe.sparkLife * 1.5,
+        inherit: _v3.copy(_n).multiplyScalar(recipe.speed * 0.12),
+        size: recipe.size * 0.8,
+        heat: recipe.heat * 0.85,
+      });
+    }
 
     // The flare at the contact point: the brightest element and the one the
     // bloom pass actually feeds on. Its streak lies along the blow.
@@ -427,7 +463,7 @@ export class EffectsDirector {
     const roll = this.#screenRoll(_n);
 
     this.sparks.burst(e.point, _n, {
-      count: 34, speed: 7.2, spread: 0.34, life: 0.65, size: 0.026,
+      count: 210, speed: 7.2, spread: 0.34, life: 0.65, size: 0.028,
       heat: 2.6, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.6),
     });
     this.shock.spawn(e.point, {
@@ -447,7 +483,7 @@ export class EffectsDirector {
       heat: 3.4, tint: _c2.copy(_c).lerp(_c3.setRGB(1, 1, 1), 0.5), distort: 1.2,
     });
     this.sparks.burst(e.point, _v.set(0, 1, 0), {
-      count: 56, speed: 8.5, spread: 1.0, life: 0.85, size: 0.03, heat: 3.2, tint: _c,
+      count: 320, speed: 8.5, spread: 1.0, life: 0.85, size: 0.032, heat: 3.2, tint: _c,
     });
     this.flashes.pop(e.point, { size: 0.6, life: 0.11, heat: 4.4, tint: _c });
     this.flashes.pop(e.point, { size: 0.24, life: 0.55, heat: 3.2, cool: true });
@@ -458,7 +494,7 @@ export class EffectsDirector {
   #onArmor(e) {
     if (!this.enabled || !e?.point) return;
     this.sparks.burst(e.point, _v.set(0, 0.6, 0).normalize(), {
-      count: 44, speed: 5.4, spread: 1.0, life: 0.75, size: 0.03, heat: 2.7,
+      count: 260, speed: 5.4, spread: 1.0, life: 0.75, size: 0.032, heat: 2.7,
     });
     this.shock.spawn(e.point, {
       mode: 'facing', radius: 0.9, life: 0.3, thickness: 0.24,
@@ -479,7 +515,7 @@ export class EffectsDirector {
       count: 18, speed: 6.4, spread: 1.3, size: 0.085, life: 6.5, color: _c,
     });
     this.sparks.burst(e.point, _n, {
-      count: 120, speed: 9.6, spread: 0.72, life: 1.05, size: 0.038, heat: 3.4,
+      count: 700, speed: 9.6, spread: 0.72, life: 1.05, size: 0.04, heat: 3.4,
     });
     this.#palette(e.fighter, 'emissive', _c2);
     this.fluid.spray(e.point, _n, {
@@ -515,7 +551,7 @@ export class EffectsDirector {
     // reaction rather than just its first four frames.
     _v3.copy(_v).setY(this.floorY + 0.12);
     this.sparks.burst(_v3, _v2.set(0, 1, 0), {
-      count: 34, speed: 5.4, spread: 0.9, life: 1.5, size: 0.03, heat: 2.6,
+      count: 200, speed: 5.4, spread: 0.9, life: 1.5, size: 0.032, heat: 2.6,
     });
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.9, { life: 14, strength: 0.34 });
   }
@@ -542,7 +578,7 @@ export class EffectsDirector {
     _n.copy(e.normal && e.normal.lengthSq() > 1e-6 ? e.normal : _v.set(0, 1, 0)).normalize();
     const roll = this.#screenRoll(_n);
     this.sparks.burst(e.point, _n, {
-      count: 140, speed: 11.6, spread: 0.62, life: 1.1, size: 0.045, heat: 3.6,
+      count: 820, speed: 11.6, spread: 0.62, life: 1.1, size: 0.046, heat: 3.6,
     });
     this.#palette(e.fighter, 'trim', _c);
     this.debris.burst(e.point, _n, {
@@ -583,7 +619,7 @@ export class EffectsDirector {
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.7 + 0.8 * k, { life: 16, strength: 0.3 + 0.22 * k });
     if (k > 0.9) {
       this.sparks.burst(_v, _v2.set(0, 1, 0), {
-        count: 40, speed: 5.0, spread: 1.0, life: 0.8, size: 0.028, heat: 2.5,
+        count: 240, speed: 5.0, spread: 1.0, life: 0.8, size: 0.03, heat: 2.5,
       });
       this.decals.add(DECAL.FRACTURE, _v.x, _v.z, 0.9, { life: 20, strength: 0.4 });
     }
@@ -631,7 +667,7 @@ export class EffectsDirector {
       tint: _c2, emissive: 0.9,
     });
     this.sparks.burst(_v, _v2, {
-      count: 18, speed: 6.5, spread: 0.35, life: 0.3, size: 0.02,
+      count: 90, speed: 6.5, spread: 0.35, life: 0.3, size: 0.022,
       heat: 2.2, tint: _c2,
     });
     this.#flashLight(_v, 3, _c2.getHex());
@@ -661,7 +697,7 @@ export class EffectsDirector {
       tint: _c, emissive: 0.55,
     });
     this.sparks.burst(_v.setY(this.floorY + 0.2), _v2.set(0, 1, 0), {
-      count: 60, speed: 7.0, spread: 0.55, life: 0.8, size: 0.026, heat: 2.8, tint: _c,
+      count: 340, speed: 7.0, spread: 0.55, life: 0.8, size: 0.028, heat: 2.8, tint: _c,
     });
   }
 
@@ -686,7 +722,7 @@ export class EffectsDirector {
     });
     _v3.copy(_v).setY(this.floorY + 0.1);
     this.sparks.burst(_v3, _v2.set(0, 1, 0), {
-      count: 110, speed: 9.0, spread: 0.5, life: 1.2, size: 0.026,
+      count: 560, speed: 9.0, spread: 0.5, life: 1.2, size: 0.028,
       heat: 2.8, tint: _c,
     });
     // The plume is charged, not incandescent. Pushing its self-illumination up
@@ -716,7 +752,7 @@ export class EffectsDirector {
     _n.set(e?.attacker?.facing || 1, 0.2, 0).normalize();
     const roll = this.#screenRoll(_n);
     this.sparks.burst(_v, _v2.copy(_n).setY(0.55).normalize(), {
-      count: 150, speed: 14.0, spread: 0.7, life: 1.2, size: 0.036, heat: 3.6,
+      count: 900, speed: 14.0, spread: 0.7, life: 1.2, size: 0.038, heat: 3.6,
     });
     this.shock.spawn(_v, {
       mode: 'facing', tilt: roll, radius: 2.8, life: 0.55, thickness: 0.28,
@@ -730,10 +766,14 @@ export class EffectsDirector {
     this.debris.burst(_v, _v2.set(0, 0.6, 0).normalize(), {
       count: 26, speed: 8.0, spread: 1.4, size: 0.09, life: 6, color: _c2,
     });
-    this.flashes.pop(_v, { size: 1.0, life: 0.16, heat: 5.5, roll, tint: _c });
-    this.flashes.pop(_v, { size: 0.5, life: 1.2, heat: 5.0, cool: true });
+    // The super's flare is the brightest thing in the game and the camera is a
+    // metre and a half away on this cinematic. It is sized for radiance, not for
+    // coverage — `FlashSystem` caps its projected radius, and the drama comes
+    // from the frame around it still being readable.
+    this.flashes.pop(_v, { size: 0.62, life: 0.16, heat: 3.6, roll, tint: _c });
+    this.flashes.pop(_v, { size: 0.26, life: 0.7, heat: 3.0, cool: true });
     this.#punch(_v, 1.0, true);
-    this.#flashLight(_v, 22, 0xffffff);
+    this.#flashLight(_v, 10, 0xffffff);
   }
 
   #onRoundEnd(e) {
@@ -902,7 +942,7 @@ export class EffectsDirector {
 
         if (s.handle < 0 && wanted) {
           s.handle = this.trails.acquire(s.bone, s.joint, {
-            tint: _c, extend: 0.75, width,
+            tint: _c, extend: 0.5, width,
           });
         } else if (s.handle >= 0 && !keep) {
           this.trails.release(s.handle, 0.14);
@@ -948,17 +988,19 @@ export class EffectsDirector {
     if (env && this.scene.environmentIntensity) _c2.multiplyScalar(this.scene.environmentIntensity);
     this.smoke.setLighting(_lightDir, _c, _c2, this.camera);
 
-    // Soft particles, when the pipeline is running its depth prepass.
+    // Soft particles, when the pipeline is running its depth prepass. The
+    // flashes need it as much as the smoke does: a contact flare sits right on
+    // the surface it struck, and without the fade its halo cuts a hard circular
+    // arc across the fighter that reads as a sphere hanging in the air.
     const gbuffer = this.pipeline?._passes?.gbuffer;
     const depth = gbuffer?.depthTexture || null;
     const size = this.pipeline?.renderer?.getDrawingBufferSize?.(_size) || null;
-    this.smoke.setDepth(
-      depth,
-      size ? size.x : 1920,
-      size ? size.y : 1080,
-      this.camera.near ?? 0.15,
-      this.camera.far ?? 260,
-    );
+    const w = size ? size.x : 1920;
+    const h = size ? size.y : 1080;
+    const near = this.camera.near ?? 0.15;
+    const far = this.camera.far ?? 260;
+    this.smoke.setDepth(depth, w, h, near, far);
+    this.flashes.setDepth(depth, w, h, near, far);
   }
 
   /** Drives the composer overlay: refraction rings, impact frames, overdrive. */
@@ -1063,6 +1105,11 @@ export class EffectsDirector {
     this.trails.setIntensity(high ? 1.6 : 1.3);
     this.sparks.setScale(high ? 1 : 1.15);
     this.flashes.setScale(high ? 1 : 0.9);
+    // Hard ceiling on how much of the frame any single flare may cover, in NDC
+    // half-heights. 0.46 puts the outer falloff at under a quarter of the frame
+    // height, and the hot core is a fraction of that again. This is what stops a
+    // super connecting at close range from whiting out the shot.
+    this.flashes.setMaxRadius(0.46);
     this.smoke.setScale(high ? 1 : 1.2);
     this.smoke.material.uniforms.uOpacity.value = q === 'low' ? 0.72 : 1;
     this.fluid.setScale(1);
