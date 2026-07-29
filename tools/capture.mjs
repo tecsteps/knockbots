@@ -202,7 +202,25 @@ async function main() {
     try {
       await page.evaluate(`(() => { try { ${ENTER_MATCH} } catch (e) { console.error('enter', e); } })()`);
       await page.waitForTimeout(500);
-      if (shot.freezeOnHit) await page.evaluate(ARM_HIT_FREEZE(shot.impactOffset ?? 0));
+      if (shot.freezeOnHit) {
+        // A frozen shot has no settle window by construction, so the framing
+        // that is live at contact is the framing that gets photographed — and
+        // `KB.paused` stops the simulation but NOT the camera rig, which keeps
+        // integrating off the render loop. Both failures therefore have to be
+        // headed off *before* the hit rather than waited out after it: waiting
+        // after the freeze does not help, because the FX advance on render dt
+        // and drain away while the camera is still whipping.
+        //
+        // Restarting the match puts the fighters back on their neutral marks
+        // and the rig back on the pair, so by the time `forceHit` fires the
+        // camera is already where it wants to be and is barely moving. The
+        // freeze then catches a near-static camera: correctly framed, and with
+        // almost no reprojection velocity for motion blur to smear.
+        await page.evaluate(`window.KB.startMatch(0, 1); window.KB.setPhase('fight'); window.KB.fightCamera.cinematic('fight');`);
+        await page.waitForFunction('window.KB.phaseTicks > 60', null, { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(900);
+        await page.evaluate(ARM_HIT_FREEZE(shot.impactOffset ?? 0));
+      }
       await page.evaluate(`(() => { try { ${shot.setup} } catch (e) { console.error('shot setup', e); } })()`);
       if (shot.freezeOnHit) {
         await page.waitForFunction('window.__kbHit && window.__kbHit.frozen', null, { timeout: 15000 })
