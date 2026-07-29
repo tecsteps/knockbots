@@ -120,3 +120,38 @@ report CPU frame time and GPU timer queries separately as median and p95.
 4. Equality check in `setCharacter`; cache or incrementally build in `rosterLineup`.
 5. Replace the three zero-intensity `PointLight`s (~3 ms) with emissive sprites.
 6. PCSS → PCF on lower tiers (1.8 ms).
+
+---
+
+## Select screen is not responsive (user-reported, mobile)
+
+Diagnosed but NOT fixed here — `src/ui/MenuSystem.js` is owned by the character-select
+workstream, which is mid-rebuild. Handing over rather than editing underneath it.
+
+`.kbs-screen` is a fixed three-column grid:
+
+```
+grid-template-columns: clamp(18em, 29vw, 37em) minmax(0, 1fr) clamp(17em, 19vw, 26em);
+grid-template-areas: "head head head" / "rack stage doss" / "foot foot foot";
+```
+
+The two flanks have hard `em` minimums — 18em + 17em = **35em before the centre column gets a
+single pixel**. At the screen's own `font-size: clamp(13px, 1.12vw, 34px)` that is roughly
+455px, so any phone narrower than that in portrait overflows, and the 3D preview column is
+squeezed to nothing well before it.
+
+There are only two `@media` queries in the whole file and **neither is width-based** — one is
+`max-height: 840px` (hides tile frames) and one is `prefers-reduced-motion`.
+
+What it needs:
+
+- A width breakpoint that collapses the three columns to a single stacked column: roster,
+  then preview, then dossier. Around 720px is the natural place given the 35em floor.
+- `GRID_COLS` is hard-coded to 2 for the roster tiles; on a narrow portrait screen that wants
+  to become a horizontally scrollable strip or a 3-4 column compact grid, since 2 columns of
+  ten characters is a very long scroll on a phone.
+- Landscape phones are the more important case for a fighting game (the fight itself is
+  landscape) — 844x390 has plenty of width but only 390px of height, and `grid-template-rows:
+  auto minmax(0,1fr) auto` with 1.8em padding leaves very little for the preview.
+- Safe-area insets: the screen currently pads in `em` only, so on a notched device the rack
+  column can sit under the notch in landscape.

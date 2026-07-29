@@ -85,6 +85,7 @@ export class Input {
 
   endTick() {
     this.prevKeys = new Set(this.keys);
+    this.touch?.endTick();
   }
 
   #pollGamepads() {
@@ -93,7 +94,23 @@ export class Input {
     for (let i = 0; i < 2; i++) this.gamepads[i] = pads[i] || null;
   }
 
+  /**
+   * Attach a touch pad. Player 0 only — a second thumb pair on one screen is
+   * not a thing, and P2 on mobile is the CPU.
+   * @param {import('./TouchControls.js').TouchControls} touch
+   */
+  attachTouch(touch) {
+    this.touch = touch;
+  }
+
   #rawAxis(player) {
+    // Touch wins outright once it has been used, rather than being merged: a
+    // phone has no keyboard to blend with, and merging would let a stale key
+    // fight the stick.
+    if (player === 0 && this.touch?.active) {
+      return { x: Math.sign(this.touch.axis.x), y: Math.sign(this.touch.axis.y) };
+    }
+
     const km = KEYMAP[player];
     let x = 0, y = 0;
     if (km.right.some((k) => this.keys.has(k))) x += 1;
@@ -115,6 +132,9 @@ export class Input {
   }
 
   #buttons(player) {
+    if (player === 0 && this.touch?.active) {
+      return { held: new Set(this.touch.held), pressed: new Set(this.touch.pressed) };
+    }
     const km = KEYMAP[player];
     const held = new Set();
     const pressed = new Set();
@@ -163,7 +183,12 @@ export class Input {
 
     cmd.notation = this.#notation(cmd, pressed);
     cmd.buffer = hist.map((h) => h.dir).join('') ? hist.map((h) => String(h.dir)) : [];
-    cmd.motion = this.#motion(hist);
+    // A recognised swipe is authoritative — the pad already decided what the
+    // player meant, and re-deriving it from the snapped 8-way history would
+    // only lose that intent.
+    cmd.motion = (player === 0 && this.touch?.active && this.touch.motion)
+      ? this.touch.motion
+      : this.#motion(hist);
     return cmd;
   }
 

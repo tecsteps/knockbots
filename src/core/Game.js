@@ -29,6 +29,7 @@ import { AudioDirector } from '../audio/AudioDirector.js';
 import { CPU } from '../ai/CPU.js';
 import { ROSTER } from '../characters/roster.js';
 import { makeTestHarness } from '../combat/TestHarness.js';
+import { TouchControls } from './TouchControls.js';
 
 export const PHASE = {
   BOOT: 'boot',
@@ -85,6 +86,10 @@ export class Game {
     await this.stage.init();
 
     this.input = new Input(window);
+    // Touch mounts unconditionally but stays hidden until a finger lands, so a
+    // laptop with a touchscreen never gets a pad it did not ask for.
+    this.touch = new TouchControls(this.uiRoot);
+    this.input.attachTouch(this.touch);
     this.audio = new AudioDirector();
     this.fx = await step('Compiling effects', 0.5, () => new EffectsDirector(this.scene, this.renderer));
     await this.fx.init();
