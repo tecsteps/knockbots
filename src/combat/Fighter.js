@@ -15,8 +15,17 @@
  *
  * Facing convention
  * -----------------
- * `facing` is +1 when the opponent sits at a greater X. The rig faces -Z at
- * identity yaw (see Skeleton.js), so the visible yaw is `-facing * PI/2`.
+ * `facing` is +1 when the opponent sits at a greater X.
+ *
+ * The rig's front is its local **+Z**. Skeleton.js's prose header says -Z, but
+ * its geometry says otherwise and the geometry is what everything else is built
+ * on: `toe_*` sits at +Z of the foot, `IK_CHAINS` aims the knee poles at +Z and
+ * the elbow poles at -Z, and every animation clip was authored against that
+ * frame (see `animations/punches.js`, which states it outright). Hitboxes come
+ * off those posed bones, so combat has to agree with the animation or a jab
+ * would travel backwards. `FORWARD_SIGN` is the single switch if the rig is
+ * ever re-authored.
+ *
  * A fighter auto-turns when crossed up, but never in the middle of an attack —
  * that is what makes crossovers and back throws readable.
  */
@@ -70,6 +79,11 @@ const JUGGLE_GRAVITY = 0.42;
 const LAUNCH_SCALE = 0.85;
 const FOOT_CLEAR = 0.055;       // ankle height above the floor when planted
 
+/** +1 when the rig's local +Z is its front. See the file header. */
+export const FORWARD_SIGN = 1;
+/** Root yaw that points the rig's front along the fighter's facing. */
+export const yawForFacing = (facing) => facing * FORWARD_SIGN * Math.PI / 2;
+
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
@@ -103,7 +117,7 @@ export class Fighter {
     this.environment = environment;
 
     this.facing = index === 0 ? 1 : -1;
-    this.visualYaw = -this.facing * Math.PI / 2;
+    this.visualYaw = yawForFacing(this.facing);
     this.position = new THREE.Vector3((index === 0 ? -1.9 : 1.9), 0, 0);
     this.prevPosition = this.position.clone();
     this.velocity = new THREE.Vector3();
@@ -313,7 +327,7 @@ export class Fighter {
     this.prevPosition.copy(this.position);
     this.velocity.set(0, 0, 0);
     this.facing = facing;
-    this.visualYaw = -facing * Math.PI / 2;
+    this.visualYaw = yawForFacing(facing);
     this.health = MAX_HEALTH;
     this.recoverable = 0;
     this.meter = Math.min(this.meter, METER_MAX * 0.25);
@@ -370,12 +384,13 @@ export class Fighter {
     this.#updateGuard(cmd);
     this.#updateState(cmd);
     this.#applyMoveMotion();
+    this.#advanceAnimation();
     this.#integrate();
     this.#pushApart();
     this.#clampToArena();
     this.#regen();
     this.#updateFlags();
-    this.#drivePose();
+    this.#writePose();
     this.#buildHurtboxes();
     this.#buildHitboxes();
     this.#footIk();
@@ -1257,7 +1272,7 @@ export class Fighter {
 
   #drivePose() {
     this.group.position.copy(this.position);
-    this.group.rotation.y = -this.facing * Math.PI / 2;
+    this.group.rotation.y = yawForFacing(this.facing);
     if (this.animator) {
       this.animator.simulate(this.simTick);
       this.animator.applyTo(this.bones, 1);
@@ -1382,7 +1397,7 @@ export class Fighter {
     _v.lerpVectors(this.prevPosition, this.position, alpha);
     this.group.position.copy(_v);
 
-    const targetYaw = -this.facing * Math.PI / 2;
+    const targetYaw = yawForFacing(this.facing);
     let delta = targetYaw - this.visualYaw;
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;

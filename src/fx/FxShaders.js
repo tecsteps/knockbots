@@ -26,7 +26,8 @@
 /** Cheap high-quality hashes; the sine-fract kind bands badly on Apple GPUs. */
 export const GLSL_HASH = /* glsl */ `
 float hash11( float p ) {
-  uint n = uint( p * 1000.0 ) * 747796405u + 2891336453u;
+  // int() first: float->uint of a negative value is undefined, int->uint is not.
+  uint n = uint( int( p * 1000.0 ) ) * 747796405u + 2891336453u;
   n = ( ( n >> ( ( n >> 28u ) + 4u ) ) ^ n ) * 277803737u;
   return float( ( n >> 22u ) ^ n ) / 4294967295.0;
 }

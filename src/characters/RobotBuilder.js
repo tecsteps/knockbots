@@ -34,6 +34,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BONES } from './Skeleton.js';
 import { LAYER } from '../core/Constants.js';
+import { Rng } from '../core/Rng.js';
 import { makeMaterialLibrary } from './Materials.js';
 
 const DEG = Math.PI / 180;
@@ -742,8 +743,7 @@ function decalKeyFor(def) {
     num: String(1 + (h % 9)),
     label: String(def?.name ?? 'KNOCKBOT').toUpperCase().slice(0, 11),
   };
-  k.toString = () => `${k.serial}/${k.label}`;
-  // cache by value, not identity
+  // cached by value, not identity: two Fighters on the same character share one atlas
   for (const existing of decalCache.keys()) {
     if (existing.serial === k.serial && existing.label === k.label) return existing;
   }
@@ -806,7 +806,7 @@ function restWorldMatrices(bones) {
  * scene-graph update.
  */
 class ActuatorRig extends THREE.Object3D {
-  constructor(actuators, geo, mats, detail) {
+  constructor(actuators, geo, mats) {
     super();
     this.name = 'actuators';
     this.actuators = actuators;
@@ -829,7 +829,6 @@ class ActuatorRig extends THREE.Object3D {
     this._q = new THREE.Quaternion();
     this._s = new THREE.Vector3();
     this._m = new THREE.Matrix4();
-    this.detail = detail;
   }
 
   updateMatrixWorld(force) {
@@ -928,8 +927,6 @@ class Rig {
     this._tmp = new THREE.Matrix4();
   }
 
-  has(bone) { return !!this.byName[bone]; }
-
   /** Local frame matrix for a part attached to `bone`. */
   frame(bone, o) {
     const rw = this.restWorld[bone];
@@ -974,11 +971,6 @@ class Rig {
     bindRigid(g, this.index[bone]);
     this.parts.push({ geo: g, mat, tier });
     return this;
-  }
-
-  /** Same as `add`, but for a list of geometries sharing one frame. */
-  addAll(bone, geos, mat, o = {}) {
-    return this.add(bone, joinGeometries(geos), mat, o);
   }
 
   /** Emissive plate. `group` selects which emissive material/mesh it lands in. */
@@ -2329,6 +2321,112 @@ function addTail(rig, spec) {
   rig.emitter('tailTip', 'hips', [0, y + 0.02, z], [0, -1, 0], 0.05);
 }
 
+/**
+ * Per-character variation.
+ *
+ * The roster reuses each chassis across several fighters, so palette alone is
+ * not enough separation — two heavies must not be the same model in different
+ * paint. This adds a handful of seeded hardware choices on top of the chassis
+ * plan. The seed comes from `def.id`, so both players' copies of a character
+ * are always identical and nothing here touches the simulation.
+ */
+function buildVariation(rig, spec, def) {
+  const seed = hashId(def?.id ?? def?.name ?? 'kb');
+  const rng = new Rng(seed);
+  const t = spec.torso;
+  const pd = spec.pauldron;
+  const back = -FRONT;
+
+  // 1. shoulder crest blades — 0, 1 or 2 per side, swept back over the pauldron
+  const blades = rng.int(3);
+  for (let i = 0; i < blades; i++) {
+    const len = 0.16 + rng.range(0, 0.12);
+    for (const { s, sign, mirror } of SIDES) {
+      rig.add(`clavicle_${s}`, bevelBox(0.020, len, 0.05, 0.005,
+        { topX: 0.28, topZ: 0.42, shearZ: back * 0.05 }), 'armorAccent', {
+        p: [sign * (pd.out + pd.w * (0.30 + i * 0.22)), pd.up + pd.h * 0.56, back * pd.d * 0.14],
+        r: [(-24 - i * 12) * DEG, 0, sign * -(pd.tilt + 14 + i * 10) * DEG],
+        mirror, tier: TIER.PRIMARY,
+      });
+    }
+  }
+
+  // 2. hip stowage: an ammo drum or a utility block on one side
+  const stow = rng.int(3);
+  if (stow > 0) {
+    const sign = rng.sign();
+    const mirror = sign < 0;
+    if (stow === 1) {
+      rig.add('hips', latheProfile([
+        { r: 0, y: -0.055 }, { r: 0.052, y: -0.055 }, { r: 0.058, y: -0.042, smooth: true },
+        { r: 0.058, y: 0.042, smooth: true }, { r: 0.052, y: 0.055 }, { r: 0, y: 0.055 },
+      ], 16), 'darkMetal', {
+        p: [sign * t.pelvisW * 0.56, -0.04, back * t.waistD * 0.30],
+        r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY,
+      });
+      rig.add('hips', boltRing(6, 0.038, 0.008, 0.010), 'trim', {
+        p: [sign * (t.pelvisW * 0.56 + 0.056), -0.04, back * t.waistD * 0.30],
+        r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.GREEBLE,
+      });
+    } else {
+      rig.add('hips', bevelBox(0.075, 0.15, 0.11, 0.010, { topX: 0.82, topZ: 0.86 }), 'armorSecondary', {
+        p: [sign * t.pelvisW * 0.58, -0.05, back * t.waistD * 0.22],
+        r: [0, 0, sign * -8 * DEG], mirror, tier: TIER.PRIMARY,
+      });
+      rig.decal('hips', DECAL.BARCODE, 0.06, 0.03, {
+        p: [sign * (t.pelvisW * 0.58 + 0.040), -0.05, back * t.waistD * 0.22],
+        r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
+      });
+    }
+  }
+
+  // 3. dorsal antenna mast — height and count vary
+  const masts = rng.int(3);
+  for (let i = 0; i < masts; i++) {
+    const sx = i === 0 ? 0 : (i === 1 ? 1 : -1);
+    const len = 0.16 + rng.range(0, 0.22);
+    rig.add('chest', latheProfile([
+      { r: 0.009, y: 0 }, { r: 0.009, y: len * 0.30 }, { r: 0.0045, y: len * 0.33 },
+      { r: 0.0045, y: len }, { r: 0, y: len + 0.012 },
+    ], 10), 'trim', {
+      p: [sx * t.chestW * 0.22, 0.20, back * (t.chestD * 0.5 + 0.03)],
+      r: [-(10 + i * 6) * DEG, 0, sx * 9 * DEG], tier: TIER.SECONDARY,
+    });
+    rig.glow('chest', latheProfile([{ r: 0, y: 0 }, { r: 0.009, y: 0 }, { r: 0, y: 0.011 }], 8), 'joints', {
+      p: [sx * t.chestW * 0.22, 0.20 + len * 0.98, back * (t.chestD * 0.5 + 0.03) + len * 0.16 * FRONT],
+    });
+  }
+
+  // 4. torso insignia plate, placed off-centre and rotated per character
+  const cell = rng.pick([DECAL.ROUNDEL, DECAL.TRIANGLE, DECAL.CHEVRON, DECAL.GAUGE, DECAL.CAUTION]);
+  rig.decal('spine02', cell, 0.075, 0.075, {
+    p: [rng.sign() * t.waistW * 0.44, 0.02, back * (t.waistD * 0.60)],
+    r: [0, YAW_BACK, rng.range(-0.2, 0.2)], tier: TIER.GREEBLE,
+  });
+
+  // 5. an extra armour rib across the abdomen, or a bare segmented gap
+  if (rng.next() < 0.55) {
+    const ribs = 2 + rng.int(2);
+    for (let i = 0; i < ribs; i++) {
+      rig.add('spine01', bevelBox(t.waistW * (0.52 + i * 0.10), 0.020, 0.026, 0.005), 'trim', {
+        p: [0, 0.010 + i * 0.036, FRONT * (t.waistD * 0.5 + 0.016)],
+        r: [(8 - i * 6) * DEG, 0, 0], tier: TIER.GREEBLE,
+      });
+    }
+  }
+}
+
+/** Stable 32-bit hash of a character id, so a seed never depends on load order. */
+function hashId(id) {
+  let h = 0x811c9dc5;
+  const str = String(id);
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0 || 1;
+}
+
 // ---------------------------------------------------------------------------
 // Joint mechanism: actuators + cable looms
 // ---------------------------------------------------------------------------
@@ -2497,6 +2595,7 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
       break;
   }
   if (spec.tail) addTail(rig, spec);
+  buildVariation(rig, spec, def);
 
   buildMechanism(rig, spec);
 
@@ -2562,7 +2661,7 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
   // ---- actuators --------------------------------------------------------
   const actSegments = maxTier >= 2 ? 16 : 10;
   const actGeo = { housing: actuatorHousingGeo(actSegments), rod: actuatorRodGeo(actSegments) };
-  const actuatorRig = new ActuatorRig(rig.actuators, actGeo, mats, maxTier);
+  const actuatorRig = new ActuatorRig(rig.actuators, actGeo, mats);
   group.add(actuatorRig);
   group.updateMatrixWorld(true);
 

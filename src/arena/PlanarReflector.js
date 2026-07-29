@@ -1,0 +1,213 @@
+/**
+ * Knockbots — horizontal planar reflection for the arena floor.
+ *
+ * The floor is the surface the fighters are standing on, so it is the surface
+ * that carries their reflection, and a screen-space approximation cannot do
+ * that job: the thing being reflected is the *underside* of the fighters, which
+ * by definition is not on screen. So the scene is rendered a second time from a
+ * camera mirrored through the floor plane.
+ *
+ * Two details do most of the work:
+ *
+ *   - **Oblique near-plane clipping.** The mirrored camera's near plane is
+ *     skewed onto the floor plane itself, so nothing below the floor — the
+ *     underside of the set, the mirrored copies of the walls' foundations —
+ *     can leak into the reflection. Without this the reflection of a wall
+ *     appears to start below the floor line and the illusion dies instantly.
+ *   - **A stencil layer.** Anything on `LAYER.NO_REFLECT` is skipped, which is
+ *     how the floor excludes itself (infinite recursion) and how additive
+ *     volumetrics stay out of a buffer they would double-count in.
+ *
+ * The pass is driven from the floor mesh's `onBeforeRender`, exactly as
+ * three's stock `Reflector` does, so it always sees the final camera transform
+ * for the frame and never runs when the floor is culled. The RenderPipeline
+ * renders the scene more than once per frame (main pass, then a normal/depth
+ * prepass with `scene.overrideMaterial` set); a frame token from `Stage.update`
+ * makes sure the reflection is built exactly once, during the main pass.
+ */
+
+import * as THREE from 'three';
+import { LAYER } from '../core/Constants.js';
+
+const _normal = new THREE.Vector3(0, 1, 0);
+const _plane = new THREE.Plane();
+const _clipPlane = new THREE.Vector4();
+const _q = new THREE.Vector4();
+const _camPos = new THREE.Vector3();
+const _lookAt = new THREE.Vector3();
+const _target = new THREE.Vector3();
+const _view = new THREE.Vector3();
+const _rot = new THREE.Matrix4();
+const _origin = new THREE.Vector3();
+
+export class PlanarReflector {
+  /**
+   * @param {THREE.Scene} scene
+   * @param {object} [opts]
+   * @param {number} [opts.planeY=0] world height of the mirror plane
+   * @param {number} [opts.width=1024] render target width
+   * @param {number} [opts.height=512] render target height
+   * @param {number} [opts.clipBias=0.004]
+   */
+  constructor(scene, opts = {}) {
+    this.scene = scene;
+    this.planeY = opts.planeY ?? 0;
+    this.clipBias = opts.clipBias ?? 0.004;
+    this.enabled = true;
+
+    this.target = new THREE.WebGLRenderTarget(opts.width ?? 1024, opts.height ?? 512, {
+      type: THREE.HalfFloatType,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      generateMipmaps: false,
+      depthBuffer: true,
+      samples: opts.samples ?? 0,
+    });
+    this.target.texture.name = 'arena.reflection';
+
+    /** Sampled by the floor material. */
+    this.texture = this.target.texture;
+    /** Projects world position into reflection UV; uploaded as a uniform. */
+    this.textureMatrix = new THREE.Matrix4();
+
+    this.camera = new THREE.PerspectiveCamera();
+    this.camera.layers.enableAll();
+    this.camera.layers.disable(LAYER.NO_REFLECT);
+
+    this._token = -1;
+    this._busy = false;
+    this._hidden = [];
+  }
+
+  /**
+   * Resizes the reflection buffer. Half the drawing buffer is enough: the
+   * result is blurred by the floor's roughness anyway, and the saving buys the
+   * second scene render.
+   */
+  setSize(width, height) {
+    const w = Math.max(64, Math.round(width));
+    const h = Math.max(64, Math.round(height));
+    if (this.target.width === w && this.target.height === h) return;
+    this.target.setSize(w, h);
+  }
+
+  /** Called once per game frame; arms the pass for the next scene render. */
+  arm(token) {
+    this._token = token;
+  }
+
+  /**
+   * Renders the mirrored view. Safe to call from `onBeforeRender`; it no-ops
+   * unless armed, which keeps it out of the pipeline's depth/normal prepass.
+   * @param {THREE.WebGLRenderer} renderer
+   * @param {THREE.Camera} camera the camera the scene is being drawn with
+   * @param {THREE.Object3D} self the floor mesh, hidden during the pass
+   */
+  render(renderer, camera, self) {
+    if (!this.enabled || this._busy || this._token < 0) return;
+    if (!camera.isPerspectiveCamera) return;
+    this._token = -1;
+    this._busy = true;
+
+    _camPos.setFromMatrixPosition(camera.matrixWorld);
+    // A camera at or below the plane has nothing to mirror; keeping the last
+    // frame's buffer is far less noticeable than a black flash.
+    if (_camPos.y <= this.planeY + 0.02) { this._busy = false; return; }
+
+    _origin.set(0, this.planeY, 0);
+
+    // Mirror the eye point.
+    _view.subVectors(_origin, _camPos).reflect(_normal).negate().add(_origin);
+
+    // Mirror the look-at point through the same plane.
+    _rot.extractRotation(camera.matrixWorld);
+    _lookAt.set(0, 0, -1).applyMatrix4(_rot).add(_camPos);
+    _target.subVectors(_origin, _lookAt).reflect(_normal).negate().add(_origin);
+
+    const cam = this.camera;
+    cam.position.copy(_view);
+    cam.up.set(0, 1, 0).applyMatrix4(_rot).reflect(_normal);
+    cam.lookAt(_target);
+    cam.near = camera.near;
+    cam.far = camera.far;
+    cam.fov = camera.fov;
+    cam.aspect = camera.aspect;
+    cam.zoom = camera.zoom;
+    cam.filmOffset = camera.filmOffset;
+    cam.updateMatrixWorld();
+    cam.projectionMatrix.copy(camera.projectionMatrix);
+
+    // World -> reflection UV, with the perspective divide left to the shader.
+    this.textureMatrix.set(
+      0.5, 0.0, 0.0, 0.5,
+      0.0, 0.5, 0.0, 0.5,
+      0.0, 0.0, 0.5, 0.5,
+      0.0, 0.0, 0.0, 1.0,
+    );
+    this.textureMatrix.multiply(cam.projectionMatrix);
+    this.textureMatrix.multiply(cam.matrixWorldInverse);
+
+    // Skew the near plane onto the mirror plane (Lengyel's oblique frustum).
+    _plane.setFromNormalAndCoplanarPoint(_normal, _origin);
+    _plane.applyMatrix4(cam.matrixWorldInverse);
+    _clipPlane.set(_plane.normal.x, _plane.normal.y, _plane.normal.z, _plane.constant);
+    const p = cam.projectionMatrix;
+    _q.x = (Math.sign(_clipPlane.x) + p.elements[8]) / p.elements[0];
+    _q.y = (Math.sign(_clipPlane.y) + p.elements[9]) / p.elements[5];
+    _q.z = -1.0;
+    _q.w = (1.0 + p.elements[10]) / p.elements[14];
+    _clipPlane.multiplyScalar(2.0 / _clipPlane.dot(_q));
+    p.elements[2] = _clipPlane.x;
+    p.elements[6] = _clipPlane.y;
+    p.elements[10] = _clipPlane.z + 1.0 - this.clipBias;
+    p.elements[14] = _clipPlane.w;
+
+    // --- render -------------------------------------------------------------
+    const prevTarget = renderer.getRenderTarget();
+    const prevActiveCube = renderer.getActiveCubeFace();
+    const prevActiveMip = renderer.getActiveMipmapLevel();
+    const prevXr = renderer.xr.enabled;
+    const prevShadowAuto = renderer.shadowMap.autoUpdate;
+    const prevOverride = this.scene.overrideMaterial;
+
+    // Shadow maps were built by the main pass a moment ago and are valid for
+    // any camera; rebuilding them for the mirror would double the cost of the
+    // most expensive pass in the frame for no visible gain.
+    renderer.shadowMap.autoUpdate = false;
+    renderer.xr.enabled = false;
+    this.scene.overrideMaterial = null;
+
+    const selfVisible = self ? self.visible : false;
+    if (self) self.visible = false;
+    for (const o of this._hidden) o.visible = false;
+
+    renderer.setRenderTarget(this.target);
+    renderer.state.buffers.depth.setMask(true);
+    if (!renderer.autoClear) renderer.clear();
+    renderer.render(this.scene, cam);
+
+    for (const o of this._hidden) o.visible = true;
+    if (self) self.visible = selfVisible;
+
+    this.scene.overrideMaterial = prevOverride;
+    renderer.xr.enabled = prevXr;
+    renderer.shadowMap.autoUpdate = prevShadowAuto;
+    renderer.setRenderTarget(prevTarget, prevActiveCube, prevActiveMip);
+
+    this._busy = false;
+  }
+
+  /**
+   * Objects hidden for the duration of the reflection pass. Use for anything
+   * whose reflection would be wrong rather than merely expensive — ground fog
+   * cards, the floor decals, sprites that face the main camera.
+   * @param {THREE.Object3D[]} objects
+   */
+  exclude(objects) {
+    for (const o of objects) if (o && !this._hidden.includes(o)) this._hidden.push(o);
+  }
+
+  dispose() {
+    this.target.dispose();
+  }
+}
