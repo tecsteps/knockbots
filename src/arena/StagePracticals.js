@@ -25,7 +25,7 @@
 import * as THREE from 'three';
 import { Rng } from '../core/Rng.js';
 import { bevelBox, place, mergeAll, boltRing, insetPanel } from './GeoKit.js';
-import { fbm, stampText, blur, clamp01, makeTexture, encodeSrgb, hexToLinear } from './ProcTex.js';
+import { fbm, stampText, blur, clamp01, smoothstep, makeTexture, encodeSrgb } from './ProcTex.js';
 import { PointBurst } from './StageParticles.js';
 
 const FIXTURES = 4;
@@ -53,26 +53,79 @@ function screenCaptions(size = 256) {
   return makeTexture(data, size, { clamp: true, anisotropy: 4 });
 }
 
-/** Frosted diffuser: a faint cell pattern so the light bank is not a white bar. */
-function diffuserTexture(size = 256) {
-  const n = fbm(size, 26, { octaves: 3, seed: 401 });
-  const fine = fbm(size, 90, { octaves: 2, seed: 409 });
-  const base = hexToLinear(0xffffff);
+/**
+ * The four fixtures share one draw call, so they share one texture: a 2x2
+ * atlas of transmission masks, selected in the shader by fixture index.
+ *
+ *   bottom-left  frosted diffuser — the overhead light banks
+ *   bottom-right louvred panel    — the lit doorway
+ *   top-left     backlit sign     — the sign box on the near barrier
+ *
+ * They are masks, not colours: the fixture's own emissive tint multiplies
+ * through them, so a mood cross-fade recolours the sign along with its light.
+ * Mipmaps are off; at these sizes the saving is nil and the quadrant bleed is
+ * not.
+ */
+function fixtureAtlas(size = 512) {
+  const half = size >> 1;
+  const n = fbm(half, 26, { octaves: 3, seed: 401 });
+  const fine = fbm(half, 90, { octaves: 2, seed: 409 });
+  const grit = fbm(half, 14, { octaves: 4, seed: 419 });
+
+  // The sign's lettering, rasterised into the top-left quadrant's own space.
+  const text = new Float32Array(half * half);
+  const cellA = Math.max(3, Math.round(half / 26));
+  const cellB = Math.max(2, Math.round(half / 40));
+  const wA = 'cell 09'.length * 6 * cellA - cellA;
+  const wB = 'mech test'.length * 6 * cellB - cellB;
+  stampText(text, half, 'cell 09', Math.round((half - wA) / 2), Math.round(half * 0.42), cellA, cellA * 0.45);
+  stampText(text, half, 'mech test', Math.round((half - wB) / 2), Math.round(half * 0.2), cellB, cellB * 0.5);
+  const ink = blur(text, half, 1, 1);
+
   const data = new Uint8Array(size * size * 4);
-  for (let j = 0; j < size; j++) {
-    for (let i = 0; i < size; i++) {
-      const k = j * size + i;
-      // Longitudinal tube banding, plus grime toward the ends of the fitting.
-      const u = i / size;
-      const tube = 0.72 + 0.28 * Math.abs(Math.sin(u * Math.PI * 3));
+  const write = (i, j, v) => {
+    const o = (j * size + i) * 4;
+    const b = encodeSrgb(clamp01(v));
+    data[o] = b; data[o + 1] = b; data[o + 2] = b; data[o + 3] = 255;
+  };
+
+  for (let j = 0; j < half; j++) {
+    for (let i = 0; i < half; i++) {
+      const k = j * half + i;
+      const u = i / half;
+      const v = j / half;
+
+      // Diffuser: three tubes behind frosted acrylic, dirtier at the ends.
+      const tube = 0.7 + 0.3 * Math.abs(Math.sin(u * Math.PI * 3));
       const grime = 1 - Math.pow(Math.abs(u * 2 - 1), 4) * 0.5;
-      const v = clamp01(tube * grime * (0.8 + n[k] * 0.3 + fine[k] * 0.15));
-      const o = k * 4;
-      for (let ch = 0; ch < 3; ch++) data[o + ch] = encodeSrgb(base[ch] * v);
-      data[o + 3] = 255;
+      write(i, j, tube * grime * (0.8 + n[k] * 0.3 + fine[k] * 0.15));
+
+      // Louvre: horizontal slats and two mullions, unevenly lit.
+      const slat = 0.34 + 0.66 * smoothstep(0.1, 0.34, Math.abs(((v * 11) % 1) - 0.5));
+      const mullion = Math.min(
+        smoothstep(0.0, 0.03, Math.abs(u - 0.34)),
+        smoothstep(0.0, 0.03, Math.abs(u - 0.67)),
+      );
+      write(half + i, j, slat * (0.25 + mullion * 0.75) * (0.72 + grit[k] * 0.5));
+
+      // Sign: bright field, dark lettering, dark frame, a little scuffing.
+      const frame = Math.min(
+        smoothstep(0.0, 0.035, Math.min(u, 1 - u)),
+        smoothstep(0.0, 0.05, Math.min(v, 1 - v)),
+      );
+      const face = frame * (0.82 + grit[k] * 0.34) * (1 - ink[k] * 0.94);
+      write(i, half + j, face);
+
+      // Unused quadrant: flat, so a stray sample can never be a black hole.
+      write(half + i, half + j, 0.9);
     }
   }
-  return makeTexture(data, size, { srgb: true, anisotropy: 4 });
+
+  const tex = makeTexture(data, size, { srgb: true, clamp: true, anisotropy: 4 });
+  tex.generateMipmaps = false;
+  tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
 }
 
 export class StagePracticals {
@@ -96,7 +149,7 @@ export class StagePracticals {
      */
     this.practicalPositions = [];
 
-    this.diffuser = diffuserTexture(256);
+    this.atlas = fixtureAtlas(512);
     this.captions = screenCaptions(256);
 
     this.#fixtures(bins);
@@ -148,8 +201,8 @@ export class StagePracticals {
         housings.push(place(new THREE.CylinderGeometry(0.018, 0.018, 0.55, 6), { pos: [x + w * 0.28, y + 0.6, z + dz] }));
         housings.push(place(new THREE.CylinderGeometry(0.018, 0.018, 0.55, 6), { pos: [x - w * 0.28, y + 0.6, z + dz] }));
       }
-      // The emitting face looks down and slightly toward the pit.
-      emitter(w, h, { pos: [x, y, z], rot: [-Math.PI / 2, 0, 0] }, f);
+      // The emitting face looks straight down into the pit.
+      emitter(w, h, { pos: [x, y, z], rot: [Math.PI / 2, 0, 0] }, f);
       this.practicalPositions.push({
         position: new THREE.Vector3(x, y, z),
         color: new THREE.Color(spec?.[f]?.color ?? 0xdff0ff),
@@ -202,7 +255,7 @@ export class StagePracticals {
     this.emitterMaterial = new THREE.ShaderMaterial({
       name: 'arena.practicals.emitters',
       uniforms: {
-        map: { value: this.diffuser },
+        map: { value: this.atlas },
         uColor: { value: [new THREE.Color(1, 1, 1), new THREE.Color(1, 1, 1), new THREE.Color(1, 1, 1), new THREE.Color(1, 1, 1)] },
       },
       defines: { FIXTURES },
@@ -226,10 +279,16 @@ export class StagePracticals {
           for ( int i = 1; i < FIXTURES; i++ ) {
             if ( abs( vFixture - float( i ) ) < 0.5 ) c = uColor[ i ];
           }
-          gl_FragColor = vec4( c * texture2D( map, vUv ).rgb, 1.0 );
+          // Fixtures 0 and 1 take the diffuser, 2 the louvre, 3 the sign.
+          vec2 quad = vFixture < 1.5 ? vec2( 0.0, 0.0 )
+                    : vFixture < 2.5 ? vec2( 0.5, 0.0 )
+                    : vec2( 0.0, 0.5 );
+          vec2 auv = clamp( vUv, 0.004, 0.996 ) * 0.5 + quad;
+          gl_FragColor = vec4( c * texture2D( map, auv ).rgb, 1.0 );
         }
       `,
-      side: THREE.DoubleSide,
+      // Single-sided: a fitting seen from behind is a box, not a lamp.
+      side: THREE.FrontSide,
       toneMapped: true,
       fog: false,
     });
@@ -446,9 +505,11 @@ export class StagePracticals {
       const light = lights?.[i];
       const p = params?.[i];
       if (!p) continue;
-      // Radiance, scaled well below the light's own power: the fitting should
-      // bloom, not clip to a white rectangle.
-      const power = (light?.intensity ?? p.power) * 0.12;
+      // Radiance under a knee rather than a straight scale. A 26-unit doorway
+      // and a 4.5-unit sign box have to end up within a stop of each other on
+      // screen, or the bright one clips to a white rectangle and stops reading
+      // as a lit surface at all.
+      const power = Math.pow(Math.max(0, light?.intensity ?? p.power), 0.62) * (i === 3 ? 0.28 : 0.4);
       cols[i].copy(light?.color ?? p.color).multiplyScalar(power);
       const pub = this.practicalPositions[i];
       if (pub) {
@@ -523,7 +584,7 @@ export class StagePracticals {
     this.beaconMaterial.dispose();
     this.screenMaterial.dispose();
     this.sparks.dispose();
-    this.diffuser.dispose();
+    this.atlas.dispose();
     this.captions.dispose();
   }
 }

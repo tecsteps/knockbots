@@ -72,6 +72,7 @@ export class StageStructure {
     this.#machineryBank();
     this.#pipework();
     this.#shellWall();
+    this.#outerShell();
     this.#fanShroud();
     this.#hangingCable();
 
@@ -158,7 +159,10 @@ export class StageStructure {
       b.dark.push(place(bevelBox(0.1, 0.24, 27, 0.02), { pos: [x, ROOF_Y + 1.5, 2] }));
     }
     // Roof deck, dark and mostly implied — it stops the sky from showing.
-    b.dark.push(place(bevelBox(31, 0.12, 29, 0.02), { pos: [0, ROOF_Y + 1.75, 2] }));
+    // It deliberately stops short of z = -14: past that are the shell wall's
+    // blown-out panels, and the light raking in through them has to get past
+    // the roof line to be seen at all.
+    b.dark.push(place(bevelBox(48, 0.12, 38, 0.02), { pos: [0, ROOF_Y + 1.75, 5] }));
   }
 
   /** Catwalks along both long sides, with grating decks and handrails. */
@@ -337,6 +341,63 @@ export class StageStructure {
     // Columns of the shell, in front of the plating.
     for (let i = -5; i <= 5; i++) {
       b.dark.push(place(bevelBox(0.3, H, 0.42, 0.02), { pos: [i * 4.2, H / 2, SHELL_Z + 0.3] }));
+    }
+  }
+
+  /**
+   * The other three walls of the hangar.
+   *
+   * They exist for exactly one reason: the fight camera is allowed to swing
+   * behind the pit on a knockout, and from there an open +Z end would show the
+   * bare environment cube. A room has to be a room from every angle the camera
+   * can legally reach.
+   */
+  #outerShell() {
+    const b = this.bins;
+    const H = 24;
+    const FRONT_Z = 23;
+    const SIDE_X = 24;
+
+    // Camera-side wall, with a shuttered vehicle door on the axis.
+    const doorW = 11, doorH = 8.4;
+    for (let i = 0; i < 16; i++) {
+      const y0 = (i * H) / 16;
+      const y1 = ((i + 1) * H) / 16;
+      const yc = (y0 + y1) / 2;
+      if (yc < doorH) {
+        for (const sx of [-1, 1]) {
+          const w = SIDE_X - doorW / 2;
+          b.container.push(place(bevelBox(w, y1 - y0 - 0.02, 0.34, 0.015), {
+            pos: [sx * (doorW / 2 + w / 2), yc, FRONT_Z],
+          }));
+        }
+      } else {
+        b.container.push(place(bevelBox(SIDE_X * 2, y1 - y0 - 0.02, 0.34, 0.015), { pos: [0, yc, FRONT_Z] }));
+      }
+    }
+    // The shutter itself: horizontal slats, and a hazard-striped frame.
+    for (let i = 0; i < 21; i++) {
+      b.dark.push(place(bevelBox(doorW, doorH / 21 - 0.02, 0.22, 0.012), {
+        pos: [0, (i + 0.5) * (doorH / 21), FRONT_Z - 0.06],
+      }));
+    }
+    for (const sx of [-1, 1]) {
+      b.hazard.push(place(bevelBox(0.5, doorH + 0.6, 0.5, 0.02), { pos: [sx * (doorW / 2 + 0.25), (doorH + 0.6) / 2, FRONT_Z - 0.3] }));
+    }
+    b.dark.push(place(bevelBox(doorW + 1.4, 0.55, 0.6, 0.02), { pos: [0, doorH + 0.3, FRONT_Z - 0.3] }));
+    for (let i = -5; i <= 5; i++) {
+      b.dark.push(place(bevelBox(0.3, H, 0.42, 0.02), { pos: [i * 4.4, H / 2, FRONT_Z - 0.3] }));
+    }
+
+    // Flanks. Plain plating; they are only ever seen at the edge of frame.
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < 14; i++) {
+        const y0 = (i * H) / 14;
+        b.container.push(place(bevelBox(0.34, H / 14 - 0.02, 44, 0.015), { pos: [sx * SIDE_X, y0 + H / 28, 2] }));
+      }
+      for (let i = -4; i <= 4; i++) {
+        b.dark.push(place(bevelBox(0.42, H, 0.3, 0.02), { pos: [sx * (SIDE_X - 0.3), H / 2, 2 + i * 4.6] }));
+      }
     }
   }
 
