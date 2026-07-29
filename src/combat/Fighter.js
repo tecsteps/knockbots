@@ -504,6 +504,11 @@ export class Fighter {
   /** Swap character without rebuilding the scene graph wrapper. */
   setCharacter(def) {
     if (!def) return;
+    // Rebuilding a robot is 96-135ms of procedural geometry and material work,
+    // and `startMatch` calls this for both fighters on every rematch — so a
+    // rematch with the same two characters was paying ~250ms of stall to
+    // reconstruct meshes identical to the ones already on screen.
+    if (this.ready && this.def === def && this.robot) return;
     this.def = def;
     this.stats = def.stats || this.stats;
     this.moveSetKey = def.moveSet && MOVES[def.moveSet] ? def.moveSet : 'standard';
