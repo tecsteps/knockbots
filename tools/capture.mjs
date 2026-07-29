@@ -194,15 +194,38 @@ async function main() {
   // Arms a one-shot bus listener that records the tick a hit lands on and
   // freezes the simulation `offset` ticks later. This is the only way to
   // photograph an impact whose effects live a fifth of a second.
+  // Pinning the frame clock is the only thing that makes an offset mean what it
+  // says. `Game.#frame` calls `#render(raw, ...)` unconditionally — `paused`
+  // gates the accumulator, not the render — and `visualDt` is raw wall time. So
+  // `paused = true` freezes the simulation while the effects keep ageing at
+  // wall-clock rate until the shutter, and `timeScale` (which scales only the
+  // accumulator) makes that worse rather than better: at 0.05 an eight-tick
+  // offset costs 2.7 seconds of effect time. Pinning getDelta to 1/60 makes one
+  // rendered frame exactly one tick for both the sim and the visuals; pinning it
+  // to 0 stops the frame ageing the instant it freezes.
+  const PIN_CLOCK = `
+    if (!window.__kbClock) window.__kbClock = window.KB.clock.getDelta.bind(window.KB.clock);
+    window.KB.timeScale = 1;
+    window.KB.clock.getDelta = () => 1 / 60;
+  `;
+  const RESTORE_CLOCK = `
+    if (window.__kbClock) { window.KB.clock.getDelta = window.__kbClock; window.__kbClock = null; }
+    window.KB.timeScale = 1;
+  `;
+
   const ARM_HIT_FREEZE = (offset) => `(() => {
     window.__kbHit = null;
-    window.KB.timeScale = 0.05;
+    ${PIN_CLOCK}
     const off = ${offset};
     const stop = window.KB.bus.on('hit', (e) => {
       window.__kbHit = { tick: window.KB.tick };
       stop();
       const wait = () => {
-        if (window.KB.tick - window.__kbHit.tick >= off) { window.KB.paused = true; window.__kbHit.frozen = true; }
+        if (window.KB.tick - window.__kbHit.tick >= off) {
+          window.KB.paused = true;
+          window.KB.clock.getDelta = () => 0;  // stop the effects ageing before the shutter
+          window.__kbHit.frozen = true;
+        }
         else requestAnimationFrame(wait);
       };
       wait();
@@ -273,7 +296,7 @@ async function main() {
         return cv.toDataURL('image/jpeg', 0.86);
       }, { cells: frames, label: `${shot.name}  ·  ticks after damage` });
       writeFileSync(file.replace(/\.png$/, '.jpg'), Buffer.from(sheet.split(',')[1], 'base64'));
-      await page.evaluate('window.KB.timeScale = 1;');
+      await page.evaluate(`(() => { ${RESTORE_CLOCK} })()`);
       manifest.push({ name: shot.name, note: shot.note, file: file.replace(/\.png$/, '.jpg') });
       console.log(`[capture] ${shot.name} (tick strip)`);
       continue;
@@ -281,7 +304,7 @@ async function main() {
 
     await page.screenshot({ path: file });
     if (shot.freezeOnHit) {
-      await page.evaluate('window.KB.paused = false; window.KB.timeScale = 1;');
+      await page.evaluate(`(() => { window.KB.paused = false; ${RESTORE_CLOCK} })()`);
     }
     manifest.push({ name: shot.name, note: shot.note, file });
     console.log(`[capture] ${shot.name}${shot.freezeOnHit ? ' (frozen at contact)' : ''}`);

@@ -9,8 +9,16 @@
  * need, do not retain the payload):
  *
  *   'hit'        { attacker, defender, move, point:Vector3, normal:Vector3,
+ *                  velocity:Vector3, bone:string,
  *                  damage, counter:boolean, region:string, comboCount:number }
- *   'block'      { attacker, defender, move, point:Vector3 }
+ *   'block'      { attacker, defender, move, point:Vector3,
+ *                  velocity:Vector3, bone:string }
+ *
+ *   `normal` is the capsule-separation axis between the two bodies. It is NOT
+ *   the direction the blow travelled — effects driven from it spray along an
+ *   arbitrary axis. Use `velocity`, the striking bone's swept world velocity in
+ *   m/s over the contact tick, to orient sparks, trails and shockwaves, and
+ *   `bone` to anchor them.
  *   'parry'      { attacker, defender, point:Vector3 }
  *   'whiff'      { fighter, move }
  *   'launch'     { fighter, velocity:Vector3 }
