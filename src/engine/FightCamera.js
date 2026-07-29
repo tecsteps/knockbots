@@ -727,8 +727,10 @@ export class FightCamera {
     if (!Number.isFinite(p.center.x)) p.center.copy(look);
     p.radius = this.focusRadius;
     p.distance = pos.distanceTo(p.center);
-    p.nearRange = THREE.MathUtils.clamp(p.distance * 0.34, 1.1, 4.2);
-    p.farRange = THREE.MathUtils.clamp(p.distance * 1.05, 3.5, 18);
+    // Generous ranges: the fighters and the near stage must stay sharp, only
+    // the far walls and ceiling rig are allowed to soften.
+    p.nearRange = THREE.MathUtils.clamp(p.distance * 0.45, 1.8, 5.5);
+    p.farRange = THREE.MathUtils.clamp(p.distance * 2.4, 9, 45);
     bus.emit('cameraFocus', p);
   }
 

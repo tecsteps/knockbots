@@ -422,8 +422,11 @@ export class CombatSystem {
   #resolveWalls(f) {
     const wi = f.wallImpact;
     if (!wi) return;
+    // Anything the fighter did not choose counts: a knockdown flying backwards
+    // splats just as hard as a juggle does.
     const stunned = f.state === STATE.HITSTUN || f.state === STATE.LAUNCHED ||
-      f.state === STATE.JUGGLED || f.state === STATE.BLOCKSTUN;
+      f.state === STATE.JUGGLED || f.state === STATE.BLOCKSTUN ||
+      f.state === STATE.KNOCKDOWN;
     _pt.copy(f.position);
     _pt.y += 1.0;
     if (!stunned || wi.speed < WALL_SPLAT_SPEED) {

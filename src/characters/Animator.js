@@ -1282,9 +1282,15 @@ export class Animator {
       want = fp.weight;
       lift = Math.min(-gap, fp.maxLift);
     } else if (gap < fp.probe) {
-      // Just above the floor: pull down so the contact reads as solid.
-      want = fp.weight * (1 - gap / fp.probe);
-      lift = -gap;
+      // Just above the floor: pull down so the contact reads as solid. Both the
+      // weight AND the correction fall off across the probe band, so they reach
+      // zero together and the foot leaves the ground without a step. Smoothstep
+      // rather than a linear ramp, so the derivative is continuous at both ends
+      // of the band and there is no kink as the foot breaks contact.
+      const u = 1 - gap / fp.probe;
+      const falloff = u * u * (3 - 2 * u);
+      want = fp.weight * falloff;
+      lift = -gap * falloff;
     }
 
     const w = (fp._w[chainName] += (want - fp._w[chainName]) * fp.responsiveness);

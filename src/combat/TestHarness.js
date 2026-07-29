@@ -104,6 +104,14 @@ export function makeTestHarness(game) {
     defender.juggleCount = 0;
     attacker.inputBuffer.length = 0;
     defender.inputBuffer.length = 0;
+    for (const f of [attacker, defender]) {
+      f.upHeldTicks = 0;
+      f.gravityScale = 1;
+      f.throwData = null;
+      f.throwPartner = null;
+      f.connected.clear();
+      f.hitboxes.length = 0;
+    }
   }
 
   /**
@@ -112,9 +120,8 @@ export function makeTestHarness(game) {
    */
   function armAtImpact(fighter, move, lead = 2) {
     fighter.startMove(move);
-    fighter.moveTick = Math.max(0, move.startup - lead);
-    fighter.playClip(move.clip, 0, false);
     if (fighter.animator?.play) fighter.animator.play(move.clip, { blend: 0, loop: false });
+    fighter.fastForward(Math.max(0, move.startup - lead));
   }
 
   function hideLineup() {

@@ -35,13 +35,40 @@ import { defineMove } from './MoveSchema.js';
 // Authoring helpers
 // ---------------------------------------------------------------------------
 
-/** A hitbox anchored to a posed bone. `length` makes it a capsule down bone -Y. */
-const B = (bone, radius, offset = [0, 0, 0], length = 0) =>
-  (length > 0 ? { bone, radius, offset, length } : { bone, radius, offset });
+/**
+ * A hitbox anchored to a posed bone. `length` makes it a capsule down bone -Y.
+ *
+ * `fwd` shifts the box a few centimetres along the *fighter's* facing after the
+ * bone transform. Every fighting game does this: the hitbox leads the visual so
+ * a strike that clearly reaches on screen cannot whiff because the animation
+ * stopped a hand's width short. It stays anchored to the live bone — it just
+ * sits slightly in front of the fist.
+ */
+const B = (bone, radius, offset = [0, 0, 0], length = 0, fwd = 0) => {
+  const b = { bone, radius, offset };
+  if (length > 0) b.length = length;
+  if (fwd) b.fwd = fwd;
+  return b;
+};
 
 /** An active window. `damage` overrides the move damage for multi-hit strings. */
 const W = (from, to, boxes, damage) =>
   (damage != null ? { from, to, boxes, damage } : { from, to, boxes });
+
+/**
+ * How far in front of each anchor bone an un-annotated box sits, by limb. Long
+ * limbs lead further because their strikes travel further; a body check leads
+ * most of all because the chest bone is buried inside the torso.
+ */
+const DEFAULT_FWD = [
+  [/^(hand|wrist|fingers)_/, 0.19],
+  [/^elbow_/, 0.17],
+  [/^(foot|ankle|toe)_/, 0.20],
+  [/^knee_/, 0.16],
+  [/^(shoulder|clavicle)_/, 0.24],
+  [/^(chest|spine|hips)/, 0.36],
+  [/^(head|neck)/, 0.22],
+];
 
 // Reusable hitbox shapes, so a "right straight" reads the same on every set.
 const FIST_R = (r = 0.21) => [B('hand_R', r, [0, -0.05, 0]), B('wrist_R', r * 0.8, [0, -0.04, 0])];
@@ -138,10 +165,18 @@ function make(s, cfg) {
   s.props = s.props || {};
   shiftSpec(s, s.lockFrames ? 0 : cfg.shift);
 
-  // Reach and power scaling.
+  // Reach: default the forward lead by limb, then scale the whole box by the
+  // archetype's reach so a Bulwark's arms really do out-range a Wraith's.
   const reach = s.lockReach ? 1 : cfg.reach;
-  if (reach !== 1) {
-    for (const w of s.active) for (const b of w.boxes) b.radius = Math.round(b.radius * reach * 1000) / 1000;
+  for (const w of s.active) {
+    for (const b of w.boxes) {
+      if (b.fwd == null) {
+        b.fwd = 0.2;
+        for (const [re, v] of DEFAULT_FWD) if (re.test(b.bone)) { b.fwd = v; break; }
+      }
+      b.radius = Math.round(b.radius * reach * 1000) / 1000;
+      b.fwd = Math.round(b.fwd * reach * 1000) / 1000;
+    }
   }
   const power = s.lockPower ? 1 : cfg.power;
   s.damage = Math.max(1, Math.round(s.damage * power));
@@ -947,7 +982,11 @@ function matchesEntry(p, e, live, tick) {
  * @param {string|Object} moveSet   move-set key, or a move table
  * @param {Object} cmd              the live Command this tick (may be null)
  * @param {Object} fighterState     { buffer, tick, meter, airborne, crouching,
- *                                    currentMove, moveTick, stance, canCancel }
+ *                                    currentMove, moveTick, stance, canCancel,
+ *                                    allowRoot }
+ *   `allowRoot: false` restricts matching to string continuations, which is what
+ *   a fighter mid-attack must do — otherwise any button would cancel any move at
+ *   any frame and the whole frame-data contract collapses.
  * @returns {?Object} the Move to start, or null
  */
 export function findMove(moveSet, cmd, fighterState = {}) {
@@ -988,6 +1027,7 @@ export function findMove(moveSet, cmd, fighterState = {}) {
   }
 
   // 2. Root moves, most specific input first.
+  if (fighterState.allowRoot === false) return null;
   for (const mv of set.__ordered) {
     if (tryMatch(mv, mv.parsed)) return mv;
   }

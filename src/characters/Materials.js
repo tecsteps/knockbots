@@ -10,11 +10,13 @@
  *   1. **Detail sets** are greyscale, character-agnostic and expensive. A
  *      "plate" set (panel lines, rivets, vents, chips, scratches, grime) and a
  *      "metal" set (anisotropic brush, pitting) and so on are generated ONCE
- *      and memoised at module scope. Six characters pay for them once.
- *   2. **Albedo** is the only thing that differs per character, and it is a
- *      cheap per-pixel recombination of the cached masks — no noise is
- *      re-evaluated. Composing it in *linear* light and re-encoding to sRGB is
- *      what stops recoloured paint from going muddy.
+ *      and memoised at module scope. The whole roster pays for them once.
+ *   2. **Colour is not baked.** Every map is hue-neutral and the character's
+ *      palette arrives through `material.color`, so one bake serves every
+ *      fighter and a consumer may clone a material and re-tint it — which
+ *      `RobotBuilder` does, to drive the primary, secondary and accent parts of
+ *      a robot from a single plate texture. Building a character therefore
+ *      costs a few materials and no texture memory whatsoever.
  *   3. Every channel is derived from the same few fields, so the maps agree
  *      with each other by construction: a scratch is a dent in the height
  *      field, therefore it appears in the normal map, it removes paint so
@@ -222,7 +224,7 @@ function fbm(size, opts = {}) {
 }
 
 /**
- * Periodic Worley/cellular noise. Returns F1 and F2 distances normalised into
+ * Periodic Worley/cellular noise. Returns the F1 distance normalised into
  * roughly 0..1 plus a per-cell random id, which is what drives blotchy
  * oxidation, paint chips and cast-metal pitting.
  */
@@ -240,7 +242,6 @@ function worley(size, cells, seed) {
     }
   }
   const f1 = new Float32Array(size * size);
-  const f2 = new Float32Array(size * size);
   const cid = new Float32Array(size * size);
   const scale = cells / size;
   for (let y = 0; y < size; y++) {
@@ -251,7 +252,6 @@ function worley(size, cells, seed) {
       const fx = (x + 0.5) * scale;
       const cx = Math.floor(fx);
       let d1 = 1e9;
-      let d2 = 1e9;
       let best = 0;
       for (let oy = -1; oy <= 1; oy++) {
         const wy = ((cy + oy) % cells + cells) % cells;
@@ -263,17 +263,15 @@ function worley(size, cells, seed) {
           const dx = px[i] + shiftX - fx;
           const dy = py[i] + shiftY - fy;
           const d = dx * dx + dy * dy;
-          if (d < d1) { d2 = d1; d1 = d; best = id[i]; }
-          else if (d < d2) d2 = d;
+          if (d < d1) { d1 = d; best = id[i]; }
         }
       }
       const i = row + x;
       f1[i] = clamp01(Math.sqrt(d1));
-      f2[i] = clamp01(Math.sqrt(d2));
       cid[i] = best;
     }
   }
-  return { f1, f2, id: cid };
+  return { f1, id: cid };
 }
 
 /**
@@ -543,7 +541,10 @@ function buildPanelLayout(rng, { minCell = 0.055, depth = 7, stopChance = 0.09 }
       vent: small && !tiny && variation > 0.72,
       rivets: z < 0.5 && !tiny,
       bead: z > 0.88,
-      glow: small && variation < 0.14,
+      // A light strip lives in the groove around its plate, and the groove on
+      // the unit-square border is shared with the tiled neighbour. Letting a
+      // border plate glow would light only one side of that seam.
+      glow: small && variation < 0.14 && x0 > 0 && y0 > 0 && x1 < 1 && y1 < 1,
     });
   };
 
@@ -894,17 +895,17 @@ function buildMetalDetail(size) {
 
   const pit = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    pit[i] = clamp01(smoothstep(0.34, 0.06, pits.f1[i]) * smoothstep(0.42, 0.6, pits.id[i]));
+    pit[i] = clamp01(smoothstep(0.19, 0.03, pits.f1[i]) * smoothstep(0.68, 0.86, pits.id[i]));
   }
 
   const height = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     height[i] =
-      macro[i] * 0.06 +
-      brush[i] * 0.05 +
-      grain[i] * 0.02 +
+      macro[i] * 0.05 +
+      brush[i] * 0.115 +
+      grain[i] * 0.038 +
       tooth[i] * 0.006 -
-      pit[i] * 0.09 -
+      pit[i] * 0.06 -
       scratch[i] * 0.05;
   }
 
@@ -944,10 +945,13 @@ function buildMetalDetail(size) {
     modPx[o] = modPx[o + 1] = modPx[o + 2] = encodeSrgb(v + d);
     modPx[o + 3] = 255;
 
-    // Anisotropy: the brush runs along U, so the tangent direction is close to
-    // (1,0); a slight per-region rotation keeps the highlight from looking
-    // printed on, and the strength collapses wherever pitting or soot has
-    // destroyed the microstructure.
+    // Anisotropy. The vector three wants is the *rough* axis, not the groove
+    // axis: micro-grooves only let the normal tilt across themselves, so a
+    // brush running along V is rough along U and throws a highlight streaked
+    // horizontally — which is why brushed steel with vertical grain shows
+    // horizontal banding. Hence a direction near (1,0). A slight per-region
+    // rotation keeps it from looking printed on, and the strength collapses
+    // wherever pitting or soot has destroyed the microstructure.
     const ang = grain[i] * 0.22;
     anPx[o] = (Math.cos(ang) * 0.5 + 0.5) * 255;
     anPx[o + 1] = (Math.sin(ang) * 0.5 + 0.5) * 255;
@@ -1174,26 +1178,48 @@ function dither(i) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-character albedo composition
+// Plate albedo composition
 // ---------------------------------------------------------------------------
 
-const BARE_STEEL = [0.145, 0.150, 0.160];   // cast/forged steel under the paint
-const CUT_STEEL = [0.36, 0.365, 0.375];     // freshly exposed metal in a scratch
-const GRIME = [0.016, 0.013, 0.010];        // oil and carbon soot
-const DUST = [0.20, 0.19, 0.175];           // settled pale grit
+/**
+ * Reflectance values for the plate albedo, expressed as a multiplier on the
+ * material's paint colour rather than as absolute colours.
+ *
+ * The map is deliberately hue-neutral and the palette hue is carried by
+ * `material.color`. That is the only formulation that survives a consumer
+ * cloning a material and assigning its own colour — which `RobotBuilder` does,
+ * so that one plate bake can serve the primary, secondary and accent parts of
+ * a robot — and it means the whole roster shares a single plate albedo instead
+ * of paying for one per character.
+ *
+ * The cost is that a paint chip is tinted by the paint colour instead of
+ * showing neutral steel. That matters far less than it sounds: bare metal reads
+ * as bare metal because the ORM map drives metalness to 1 and roughness down
+ * while the clearcoat map cuts the lacquer away, so a chip catches the rim
+ * light and the environment. Albedo is the weakest of the four cues.
+ */
+const V_PAINT = [0.85, 0.36, 0.60];  // by plate role: primary, secondary, accent
+const V_STRUCTURE = 0.05;            // unpainted frame seen down a panel gap
+const V_BARE = 1.0;                  // cast steel where the paint has failed
+const V_CUT = 1.0;                   // freshly cut metal in a scratch
+const V_GRIME = 0.09;                // oil and carbon soot
+const V_DUST = 0.86;                 // settled pale grit
 
 /**
- * Recolours the cached plate detail for one character. Works entirely in linear
- * light: the paint is picked per plate from the palette, the panel line darkens
- * it, chips replace it with bare steel, scratches cut bright metal, grime
- * multiplies down into the cavities and dust lifts the upward faces.
+ * Composes the plate albedo from the cached detail masks, in linear light.
+ *
+ * Plate role sets the base value so the panel layout still reads as designed
+ * under a single hue; the panel gap falls to unpainted structure; chips step
+ * through a thin primer ring to bare steel; scratches cut bright metal; grime
+ * multiplies down into the cavities and dust lifts the upward-facing lips.
+ *
+ * @param {number} wear      multiplier on the chip mask, >1 strips more paint
+ * @param {number} wearFloor baseline wear applied everywhere, for battle-stripped plate
  */
-function composePlateAlbedo(detail, colors, wear, wearFloor = 0) {
+function composePlateAlbedo(detail, wear, wearFloor = 0) {
   const { size, maskA, maskB } = detail;
   const n = size * size;
   const px = new Uint8Array(n * 4);
-  const [a, b, c] = colors;
-  const tmp = [0, 0, 0];
 
   for (let i = 0; i < n; i++) {
     const o = i * 4;
@@ -1206,54 +1232,34 @@ function composePlateAlbedo(detail, colors, wear, wearFloor = 0) {
     const ao = maskB[o + 2] / 255;
     const mottle = maskB[o + 3] / 255;
 
-    // Per-plate paint role, unpacked from (paint + variation) / 3, plus a small
-    // value break so no two adjacent plates read as the same sprayed batch.
+    // Per-plate role, unpacked from (paint + variation) / 3, plus a small value
+    // break so no two adjacent plates read as the same sprayed batch.
     const t3 = pid * 3;
     const role = t3 < 1 ? 0 : t3 < 2 ? 1 : 2;
-    const src = role === 0 ? a : role === 1 ? b : c;
-    const tone = (0.87 + (t3 - role) * 0.28) * (0.82 + mottle * 0.36);
-    tmp[0] = src[0] * tone;
-    tmp[1] = src[1] * tone;
-    tmp[2] = src[2] * tone;
+    let v = V_PAINT[role] * (0.87 + (t3 - role) * 0.28) * (0.82 + mottle * 0.36);
 
-    // Panel lines and louvre depth: darkened paint, not black lines.
-    tmp[0] *= 1 - cav * 0.5;
-    tmp[1] *= 1 - cav * 0.5;
-    tmp[2] *= 1 - cav * 0.5;
+    // Panel lines and louvre depth. Shallow gaps are darkened paint rather than
+    // black lines, but the floor of a gap is unpainted structure: converging on
+    // a constant there is both physically right and what makes a groove read
+    // the same from either of the two plates that share it.
+    v = lerp(v * (1 - cav * 0.42), V_STRUCTURE, smoothstep(0.5, 1.0, cav));
 
-    // Layered edge wear: paint -> primer-thin -> bare steel.
+    // Layered edge wear: paint -> thin primer ring -> bare steel.
     const w = clamp01(chip * wear + wearFloor * (0.55 + grm * 0.45));
     const primer = smoothstep(0.15, 0.6, w) * (1 - smoothstep(0.6, 0.95, w));
-    tmp[0] = lerp(tmp[0], BARE_STEEL[0], w);
-    tmp[1] = lerp(tmp[1], BARE_STEEL[1], w);
-    tmp[2] = lerp(tmp[2], BARE_STEEL[2], w);
-    // A thin ring of dulled undercoat where the paint feathers out.
-    tmp[0] = lerp(tmp[0], tmp[0] * 0.55 + 0.02, primer * 0.7);
-    tmp[1] = lerp(tmp[1], tmp[1] * 0.55 + 0.018, primer * 0.7);
-    tmp[2] = lerp(tmp[2], tmp[2] * 0.55 + 0.016, primer * 0.7);
+    v = lerp(v, V_BARE, w);
+    v = lerp(v, v * 0.58, primer * 0.7);
 
-    const s = clamp01(scr * (0.34 + wear * 0.34));
-    tmp[0] = lerp(tmp[0], CUT_STEEL[0], s);
-    tmp[1] = lerp(tmp[1], CUT_STEEL[1], s);
-    tmp[2] = lerp(tmp[2], CUT_STEEL[2], s);
-
-    const g = clamp01(grm * 0.9);
-    tmp[0] = lerp(tmp[0], tmp[0] * 0.25 + GRIME[0], g);
-    tmp[1] = lerp(tmp[1], tmp[1] * 0.25 + GRIME[1], g);
-    tmp[2] = lerp(tmp[2], tmp[2] * 0.25 + GRIME[2], g);
-
-    const d = dst * 0.6;
-    tmp[0] = lerp(tmp[0], DUST[0], d);
-    tmp[1] = lerp(tmp[1], DUST[1], d);
-    tmp[2] = lerp(tmp[2], DUST[2], d);
+    v = lerp(v, V_CUT, clamp01(scr * (0.34 + wear * 0.34)));
+    v = lerp(v, v * 0.25 + V_GRIME, clamp01(grm * 0.9));
+    v = lerp(v, V_DUST, dst * 0.6);
 
     // A touch of the baked cavity term in the diffuse keeps plates reading as
     // separate objects even under flat fill light.
-    const k = 0.55 + ao * 0.45;
-    const dth = dither(i);
-    px[o] = encodeSrgb(tmp[0] * k + dth);
-    px[o + 1] = encodeSrgb(tmp[1] * k + dth);
-    px[o + 2] = encodeSrgb(tmp[2] * k + dth);
+    const b = encodeSrgb(v * (0.55 + ao * 0.45) + dither(i));
+    px[o] = b;
+    px[o + 1] = b;
+    px[o + 2] = b;
     px[o + 3] = 255;
   }
   return px;
@@ -1317,6 +1323,9 @@ function getShared(sizes, maxAniso) {
 
   s = {
     detail: { plate, metal, soft, carbon },
+    plateAlbedo: t(composePlateAlbedo(plate, 1.0), plate.size, 1, { srgb: true }),
+    plateAlbedoTrim: t(composePlateAlbedo(plate, 0.8), plate.size, 2, { srgb: true }),
+    plateAlbedoWorn: t(composePlateAlbedo(plate, 2.4, 0.45), plate.size, 2, { srgb: true }),
     plateNormal: t(plate.normalPx, plate.size, 1),
     plateOrmPainted: t(plate.ormPainted, plate.size, 1),
     plateOrmWorn: t(plate.ormWorn, plate.size, 2),
@@ -1411,42 +1420,35 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
   } catch { /* headless or stubbed renderer: keep the default */ }
 
   const shared = getShared(sizes, maxAniso);
-  const { plate } = shared.detail;
 
   const primary = hexToLinear(p.primary);
   const secondary = hexToLinear(p.secondary);
   const accent = hexToLinear(p.accent);
-  const trim = hexToLinear(p.trim);
   const emissiveColor = new THREE.Color(p.emissive);
 
-  const owned = [];
-  const own = (tex) => { owned.push(tex); return tex; };
+  // Every map in the library is character-independent greyscale detail; the
+  // whole of a character's identity is these colours. A seventh character costs
+  // a handful of materials and no texture memory at all.
+  const armorAlbedo = shared.plateAlbedo;
+  const trimAlbedo = shared.plateAlbedoTrim;
+  const wornAlbedo = shared.plateAlbedoWorn;
 
-  // --- per-character albedo ---------------------------------------------
-  // The only maps that are not shared. Everything else in the library is
-  // greyscale detail plus a `color`, which is why a sixth character costs a few
-  // milliseconds and six megabytes rather than a whole second bake.
-  const armorAlbedo = own(makeTexture(
-    composePlateAlbedo(plate, [primary, secondary, accent], 1.0), plate.size, { srgb: true, maxAniso },
-  ));
-  const trimSrc = downsampleRGBA(composePlateAlbedo(plate, [accent, trim, primary], 0.8), plate.size, 2);
-  const trimAlbedo = own(makeTexture(trimSrc.px, trimSrc.size, { srgb: true, maxAniso }));
-  const wornSrc = downsampleRGBA(
-    composePlateAlbedo(plate, [secondary, primerTone(secondary), primary], 2.4, 0.45), plate.size, 2,
-  );
-  const wornAlbedo = own(makeTexture(wornSrc.px, wornSrc.size, { srgb: true, maxAniso }));
+  const paintPrimary = linearColor(primary);
+  const paintAccent = linearColor(accent);
 
   // Alloy F0 values. Real metals sit high and near-neutral; the palette only
   // gets to tilt the hue, otherwise a dark character produces black "metal".
   const gunmetal = linearColor(alloy([0.115, 0.122, 0.135], secondary, 0.5));
   const honedSteel = linearColor([0.55, 0.555, 0.565]);
   const chromeAlloy = linearColor(alloy([0.76, 0.765, 0.78], accent, 0.13));
+  const wornSteel = linearColor(alloy([0.30, 0.305, 0.315], secondary, 0.28));
   const rubberBase = linearColor(alloy([0.021, 0.022, 0.024], secondary, 0.35));
   const cableBase = linearColor(alloy([0.017, 0.017, 0.019], accent, 0.3));
 
   // --- materials ---------------------------------------------------------
   const armor = new THREE.MeshPhysicalMaterial({
     name: 'kb.armor',
+    color: paintPrimary,
     map: armorAlbedo,
     normalMap: shared.plateNormal,
     normalScale: new THREE.Vector2(1.0, 1.0),
@@ -1472,6 +1474,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
 
   const trimMat = new THREE.MeshPhysicalMaterial({
     name: 'kb.trim',
+    color: paintAccent,
     map: trimAlbedo,
     normalMap: shared.plateNormal,
     normalScale: new THREE.Vector2(0.9, 0.9),
@@ -1495,6 +1498,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
 
   const worn = new THREE.MeshPhysicalMaterial({
     name: 'kb.worn',
+    color: wornSteel,
     map: wornAlbedo,
     normalMap: shared.plateNormal,
     normalScale: new THREE.Vector2(1.15, 1.15),
@@ -1505,9 +1509,8 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     metalness: 1,
     clearcoat: 0.12,
     clearcoatRoughness: 0.55,
-    anisotropy: 0.35,
+    anisotropy: 0.28,
     anisotropyRotation: 0,
-    anisotropyMap: shared.metalAniso,
     envMapIntensity: 1.1,
   });
 
@@ -1539,10 +1542,12 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     metalnessMap: shared.metalOrm,
     roughness: 0.5,
     metalness: 1,
-    // A honed hydraulic rod is brushed around its axis, i.e. across U on a
-    // cylinder, so the highlight is rotated a quarter turn from the frame.
+    // A drawn and polished rod carries its tool marks along its length, exactly
+    // like the frame stock, so the anisotropy axis matches the brush in the
+    // shared normal map rather than fighting it. Only the strength differs: a
+    // polished rod holds a much tighter, more mirror-like streak.
     anisotropy: 0.85,
-    anisotropyRotation: Math.PI * 0.5,
+    anisotropyRotation: 0,
     anisotropyMap: shared.metalAniso,
     envMapIntensity: 1.25,
   });
@@ -1689,15 +1694,9 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     carbon, rubber, cable, glass, visor, emissive,
   };
 
-  LIB_META.set(lib, { key, refs: 1, textures: owned, materials: Object.values(lib) });
+  LIB_META.set(lib, { key, refs: 1, textures: [], materials: Object.values(lib) });
   LIB_CACHE.set(key, lib);
   return lib;
-}
-
-/** Desaturated, darkened variant of a palette colour — the "primer" under the paint. */
-function primerTone(c) {
-  const l = lumaOf(c);
-  return [lerp(c[0], l, 0.75) * 0.6, lerp(c[1], l, 0.75) * 0.6, lerp(c[2], l, 0.75) * 0.62];
 }
 
 /**

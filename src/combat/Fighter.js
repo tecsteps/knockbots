@@ -61,6 +61,13 @@ const JUMP_HOLD_TICKS = 7;      // hold up this long and the sidestep becomes a 
 const GROUND_FRICTION = 0.80;
 const SLIDE_FRICTION = 0.93;    // while stunned — knockback should actually carry
 const AIR_DRAG = 0.996;
+// Juggle gravity is deliberately weaker than jump gravity. A jump wants to feel
+// snappy; a juggle needs a full second of hang time or there is no combo to
+// perform. Every fighting game runs two gravities and so do we.
+const JUGGLE_GRAVITY = 0.42;
+// Authored launch heights are tuned against normal gravity; under juggle gravity
+// they need trimming or the victim floats above the camera framing.
+const LAUNCH_SCALE = 0.85;
 const FOOT_CLEAR = 0.055;       // ankle height above the floor when planted
 
 const _v = new THREE.Vector3();
@@ -514,21 +521,24 @@ export class Fighter {
       return;
     }
     if (this.airborne) { this.#tickAir(cmd); return; }
-    if (!cmd) { this.#idle(); return; }
+    if (!cmd) { this.upHeldTicks = 0; this.#idle(); return; }
 
-    // Tap up = sidestep, hold up = jump. Straight out of Tekken.
+    // Tap up = sidestep, hold up = jump. Straight out of Tekken. A held-through
+    // jump parks the counter at -1 so landing does not immediately re-launch.
     if (cmd.up) {
-      this.upHeldTicks++;
-      if (this.upHeldTicks >= JUMP_HOLD_TICKS) { this.#jump(cmd); return; }
+      if (this.upHeldTicks >= 0) {
+        this.upHeldTicks++;
+        if (this.upHeldTicks >= JUMP_HOLD_TICKS) { this.#jump(cmd); return; }
+      }
       this.#idle();
       return;
     }
-    if (this.upHeldTicks > 0) {
+    if (this.upHeldTicks !== 0) {
+      const held = this.upHeldTicks;
       this.upHeldTicks = 0;
       // Step toward the middle of the arena so a sidestep never buries the
       // fighter in the back wall.
-      this.#sidestep(this.position.z > 0 ? -1 : 1);
-      return;
+      if (held > 0) { this.#sidestep(this.position.z > 0 ? -1 : 1); return; }
     }
 
     if (cmd.motion === 'ff' && this.#consumeMotion('ff')) { this.#dash(1); return; }
@@ -582,7 +592,7 @@ export class Fighter {
     this.velocity.y = JUMP_VY;
     if (cmd?.fwd) this.velocity.x = this.facing * 3.4;
     else if (cmd?.back) this.velocity.x = -this.facing * 3.0;
-    this.upHeldTicks = 0;
+    this.upHeldTicks = -1;
     this.#play('loco.jumpStart', 3, false);
     bus.emit('jump', { fighter: this });
   }
@@ -622,6 +632,10 @@ export class Fighter {
 
   // --- attacks -------------------------------------------------------------
 
+  /**
+   * @param {boolean} allowCancel true while an attack is running — only string
+   *   continuations inside the current move's cancel window may come out.
+   */
   #tryMove(allowCancel) {
     if (!this.cmd) return null;
     const st = {
@@ -634,12 +648,35 @@ export class Fighter {
       currentMove: allowCancel ? this.currentMove : null,
       moveTick: this.moveTick,
       canCancel: allowCancel,
+      allowRoot: !allowCancel,
     };
     return findMove(this.moveSetKey, this.cmd, st);
   }
 
   /** Begin a move. Public so the CPU and the QA harness can drive fighters. */
   startMove(move) { if (move) this.#startMove(move); }
+
+  /**
+   * Scrub the current move forward, keeping the animation in lockstep with the
+   * frame counter. Jumping `moveTick` on its own would build hitboxes from a
+   * wind-up pose, which is exactly the kind of desync that makes a capture look
+   * wrong; this keeps the two clocks together.
+   * @param {number} ticks
+   */
+  fastForward(ticks) {
+    const mv = this.currentMove;
+    if (!mv) return;
+    const n = Math.max(0, Math.min(Math.round(ticks), mv.total - this.moveTick - 1));
+    if (n === 0) return;
+    this.moveTick += n;
+    if (this.animator) {
+      for (let i = 0; i < n; i++) this.animator.simulate();
+      this.animator.applyTo(this.bones, 1);
+    }
+    this.group.updateMatrixWorld(true);
+    this.#buildHurtboxes();
+    this.#buildHitboxes();
+  }
 
   #startMove(move) {
     if (move.meterCost > 0) {
@@ -879,7 +916,7 @@ export class Fighter {
     const launching = info.launch || reaction === REACTION.LAUNCH;
     const wasAirborne = this.airborne;
     if (launching || wasAirborne) {
-      const h = (info.juggleHeight ?? move.juggleHeight ?? 4.2) * (info.juggleScale ?? 1) * weightScale;
+      const h = (info.juggleHeight ?? move.juggleHeight ?? 4.2) * (info.juggleScale ?? 1) * weightScale * LAUNCH_SCALE;
       // A fresh launch sets the arc; an airborne hit only tops it up, which is
       // what keeps juggles from floating forever.
       if (!wasAirborne) this.velocity.y = h;
@@ -1099,6 +1136,8 @@ export class Fighter {
 
   #integrate() {
     const dt = TICK_DT;
+    const juggling = this.state === STATE.LAUNCHED || this.state === STATE.JUGGLED;
+    this.gravityScale = juggling ? JUGGLE_GRAVITY : 1;
     if (this.airborne) {
       this.velocity.y += GRAVITY * dt * this.gravityScale;
       this.velocity.x *= AIR_DRAG;
@@ -1248,6 +1287,13 @@ export class Fighter {
         hb.p1.set(b.offset[0], b.offset[1] - b.length, b.offset[2]).applyMatrix4(bone.matrixWorld);
       } else {
         hb.p1.copy(hb.p0);
+      }
+      // The authored forward lead is in fighter space, not bone space, so a
+      // strike reaches where the player expects regardless of limb orientation.
+      if (b.fwd) {
+        const lead = this.facing * b.fwd;
+        hb.p0.x += lead;
+        hb.p1.x += lead;
       }
       hb.radius = b.radius + bonus;
       hb.bone = b.bone;

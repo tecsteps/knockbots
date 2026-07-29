@@ -839,7 +839,9 @@ class ActuatorRig extends THREE.Object3D {
       this._d.multiplyScalar(1 / len);
       this._q.setFromUnitVectors(UP, this._d);
 
-      this._s.set(a.radius, a.housingLength, a.radius);
+      // A cylinder can never be longer than the span it bridges: under extreme
+      // compression squash the housing rather than let it burst out of the joint.
+      this._s.set(a.radius, Math.min(a.housingLength, len * 0.92), a.radius);
       this._m.compose(this._a, this._q, this._s);
       this.housings.setMatrixAt(i, this._m);
 
@@ -1054,7 +1056,7 @@ class Rig {
       extension: 0,
       radius,
       rodRadius: radius * (o.rodRatio ?? 0.52),
-      housingLength: restLength * (o.housing ?? 0.54),
+      housingLength: restLength * (o.housing ?? 0.48),
     });
 
     // clevis brackets, rigid to their own bone
@@ -1246,6 +1248,18 @@ function buildPelvis(rig, spec) {
     }
   }
 
+  addPanelDetail(rig, 'hips', {
+    p: [0, -0.01, -FRONT * (d * 0.62 + 0.006)], r: [0, YAW_BACK, 0],
+    w: w * 0.52, h: 0.13, bolts: 4, splitsY: [0.10], splitsX: [-0.24, 0.24],
+  });
+  for (const { sign, mirror } of SIDES) {
+    addPipeRun(rig, 'hips', [
+      [sign * w * 0.12, 0.06, -FRONT * d * 0.5],
+      [sign * w * 0.30, 0.01, -FRONT * d * 0.52],
+      [sign * w * 0.42, -0.06, -FRONT * d * 0.34],
+    ], { radius: 0.010, mirror });
+  }
+
   rig.decal('hips', DECAL.HAZARD, w * 0.42, 0.05, {
     p: [0, -0.085, FRONT * (d * 0.5 + 0.052)], r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
   });
@@ -1334,6 +1348,22 @@ function buildTorso(rig, spec, def) {
       p: [sign * cw * 0.26, 0.085, -FRONT * (cd * 0.42 + cd * 0.16)],
       r: [0, sign * -10 * DEG, 0], mirror, tier: TIER.SECONDARY,
     });
+  }
+
+  addPanelDetail(rig, 'chest', {
+    p: [0, 0.06, -FRONT * (cd * 0.42 + cd * 0.15 + 0.004)], r: [0, YAW_BACK, 0],
+    w: cw * 0.80, h: ch * 0.82, bolts: 5,
+  });
+  for (const { sign, mirror } of SIDES) {
+    addPanelDetail(rig, 'chest', {
+      p: [sign * (cw * 0.52), 0.055, 0], r: [0, sign * 90 * DEG, 0],
+      w: cd * 0.68, h: ch * 0.62, bolts: 3, splitsY: [0.22], splitsX: [-0.2], mirror,
+    });
+    addPipeRun(rig, 'chest', [
+      [sign * cw * 0.18, -0.06, -FRONT * cd * 0.46],
+      [sign * cw * 0.34, 0.02, -FRONT * cd * 0.48],
+      [sign * cw * 0.40, 0.13, -FRONT * cd * 0.36],
+    ], { radius: 0.011, mirror });
   }
 
   buildChestCore(rig, spec, cw, cd, ch);
@@ -1596,6 +1626,78 @@ function addLouvres(rig, bone, o) {
   }
 }
 
+/**
+ * Panel breakup for a large flat armour face: raised split strips, corner
+ * brackets and a fastener row. Authored in a +Z-facing local frame so it drops
+ * onto any plate with the same placement convention as `addLouvres`.
+ */
+function addPanelDetail(rig, bone, o) {
+  const { p = [0, 0, 0], r = [0, 0, 0], w, h, mirror = false, bolts = 4, accent = 'trim' } = o;
+  const strips = [];
+  const t = 0.0075;
+  for (const fy of (o.splitsY ?? [-0.22, 0.26])) {
+    const g = bevelBox(w * 0.92, t, 0.012, 0.0022);
+    g.translate(0, h * fy, 0.005);
+    strips.push(g);
+  }
+  for (const fx of (o.splitsX ?? [0.18])) {
+    const g = bevelBox(t, h * 0.80, 0.012, 0.0022);
+    g.translate(w * fx, 0, 0.005);
+    strips.push(g);
+  }
+  rig.add(bone, joinGeometries(strips), 'armorSecondary', { p, r, mirror, tier: TIER.SECONDARY });
+
+  const brackets = [];
+  const bw = w * 0.20, bh = h * 0.20;
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+    const a = bevelBox(bw, 0.009, 0.014, 0.003);
+    a.translate(sx * (w * 0.5 - bw * 0.5 - 0.004), sy * (h * 0.5 - 0.008), 0.006);
+    const b = bevelBox(0.009, bh, 0.014, 0.003);
+    b.translate(sx * (w * 0.5 - 0.008), sy * (h * 0.5 - bh * 0.5 - 0.004), 0.006);
+    brackets.push(a, b);
+  }
+  rig.add(bone, joinGeometries(brackets), accent, { p, r, mirror, tier: TIER.SECONDARY });
+
+  if (bolts > 0) {
+    const heads = [];
+    for (let i = 0; i < bolts; i++) {
+      const g = hexBolt(0.0062, 0.0075);
+      g.rotateX(-Math.PI / 2);
+      g.translate(-w * 0.5 + w * ((i + 0.5) / bolts), -h * 0.5 + 0.014, 0.007);
+      heads.push(g);
+    }
+    rig.add(bone, joinGeometries(heads), 'trim', { p, r, mirror, tier: TIER.GREEBLE });
+  }
+}
+
+/**
+ * Greeble pipe run: a tube threaded through a list of bone-local points with a
+ * connector collar at each end. Purely tertiary — the kind of detail that reads
+ * as "this machine was assembled" rather than "this mesh was extruded".
+ */
+function addPipeRun(rig, bone, points, o = {}) {
+  const radius = o.radius ?? 0.010;
+  const pts = points.map((q) => new THREE.Vector3(q[0], q[1], q[2]));
+  if (pts.length < 2) return;
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.4);
+  const tube = new THREE.TubeGeometry(curve, o.segments ?? 14, radius, 6, false);
+  rig.add(bone, tube, o.mat ?? 'darkMetal', { mirror: o.mirror, tier: o.tier ?? TIER.GREEBLE });
+
+  const collars = [];
+  for (const end of [0, 1]) {
+    const at = curve.getPoint(end);
+    const tan = curve.getTangent(end);
+    const g = latheProfile([
+      { r: radius * 1.9, y: -0.012 }, { r: radius * 1.9, y: 0.006 },
+      { r: radius * 1.45, y: 0.012 }, { r: radius * 1.45, y: 0.018 },
+    ], 12);
+    const q = new THREE.Quaternion().setFromUnitVectors(UP, tan.multiplyScalar(end === 0 ? -1 : 1).normalize());
+    g.applyMatrix4(new THREE.Matrix4().compose(at, q, new THREE.Vector3(1, 1, 1)));
+    collars.push(g);
+  }
+  rig.add(bone, joinGeometries(collars), 'trim', { mirror: o.mirror, tier: o.tier ?? TIER.GREEBLE });
+}
+
 // ---------------------------------------------------------------------------
 // Head
 // ---------------------------------------------------------------------------
@@ -1830,6 +1932,11 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     p: [sign * (pd.out + pd.w * 0.62), pd.up + pd.h * 0.42, 0],
     r: [0, 0, sign * -pd.tilt * DEG], mirror, tier: TIER.SECONDARY,
   });
+  addPanelDetail(rig, `clavicle_${S}`, {
+    p: [sign * (pd.out + pd.w * 0.30), pd.up + pd.h * 0.10, FRONT * (pd.d * 0.50 + 0.004)],
+    r: [0, YAW_FRONT, sign * -pd.tilt * DEG],
+    w: pd.w * 0.78, h: pd.h * 0.72, bolts: 3, splitsY: [0.24], splitsX: [-0.18], mirror,
+  });
   rig.decal(`clavicle_${S}`, DECAL.HAZARD, pd.d * 0.7, 0.038, {
     p: [sign * (pd.out + pd.w * 0.30), pd.up + pd.h * 0.50, 0],
     r: [-90 * DEG, 0, sign * -pd.tilt * DEG], mirror, tier: TIER.GREEBLE,
@@ -1882,6 +1989,15 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     { p: [0, -fLen * 0.44, FRONT * fore * 0.82], mirror, tier: TIER.SECONDARY });
   rig.add(`elbow_${S}`, boltRing(4, fore * 0.42, 0.007, 0.009), 'trim',
     { p: [0, -fLen * 0.44, FRONT * (fore * 0.84)], r: FACE_FRONT, mirror, tier: TIER.GREEBLE });
+  addPanelDetail(rig, `elbow_${S}`, {
+    p: [0, -fLen * 0.44, FRONT * (fore * 0.82 + 0.004)], r: [0, YAW_FRONT, 0],
+    w: fore * 1.10, h: fLen * 0.56, bolts: 3, splitsY: [0.20], splitsX: [], mirror,
+  });
+  addPipeRun(rig, `elbow_${S}`, [
+    [sign * fore * 0.70, -0.03, -FRONT * fore * 0.55],
+    [sign * fore * 0.86, -0.13, -FRONT * fore * 0.40],
+    [sign * fore * 0.76, -0.23, -FRONT * fore * 0.20],
+  ], { radius: 0.008, mirror });
   rig.decal(`elbow_${S}`, DECAL.SERIAL, fore * 1.1, fore * 1.1, {
     p: [sign * fore * 0.86, -fLen * 0.45, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
   });
@@ -2011,6 +2127,10 @@ function buildLeg(rig, spec, side, sign, mirror) {
     { p: [sign * L.thigh * 0.76, -tLen * 0.42, 0], mirror, tier: TIER.SECONDARY });
   rig.add(`hip_${S}`, channelStrip(L.thigh * 0.9, tLen * 0.5, 0.010), 'darkMetal',
     { p: [0, -tLen * 0.40, FRONT * L.thigh * 0.78], r: FACE_FRONT, mirror, tier: TIER.SECONDARY });
+  addPanelDetail(rig, `hip_${S}`, {
+    p: [sign * (L.thigh * 0.76), -tLen * 0.40, 0], r: [0, sign * 90 * DEG, 0],
+    w: L.thigh * 1.05, h: tLen * 0.58, bolts: 4, mirror,
+  });
   rig.decal(`hip_${S}`, DECAL.ARROW, L.thigh * 0.7, L.thigh * 0.7, {
     p: [sign * L.thigh * 0.80, -tLen * 0.6, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
   });
@@ -2062,15 +2182,21 @@ function buildLeg(rig, spec, side, sign, mirror) {
     rig.add(`knee_${S}`, bevelBox(0.024, sLen * 0.5, L.shin * 0.9, 0.006, { topX: 0.8 }), 'carbon',
       { p: [sign * L.shin * 0.76, -sLen * 0.42, 0], mirror, tier: TIER.SECONDARY });
   }
+  addPanelDetail(rig, `knee_${S}`, {
+    p: [0, -sLen * 0.46, FRONT * (L.shin * 0.76 + 0.004)], r: [0, YAW_FRONT, 0],
+    w: L.shin * 1.08, h: sLen * 0.46, bolts: 4, splitsY: [0.24], splitsX: [], mirror,
+  });
   rig.decal(`knee_${S}`, DECAL.RIVETS, L.shin * 1.1, L.shin * 0.28, {
     p: [0, -sLen * 0.16, FRONT * (L.shin * 0.80)], r: [0, YAW_FRONT, 0], mirror, tier: TIER.GREEBLE,
   });
 
   // --- ankle
+  // Radius stays under the ankle's height above the floor plane, or the joint
+  // housing would clip through the ground on a flat-footed stance.
   rig.add(`ankle_${S}`, latheProfile([
-    { r: 0, y: -0.02 }, { r: L.shin * 0.60, y: -0.02 }, { r: L.shin * 0.66, y: 0.004, smooth: true },
-    { r: L.shin * 0.66, y: 0.024 }, { r: L.shin * 0.52, y: 0.038 }, { r: 0, y: 0.038 },
-  ], 20), 'darkMetal', { world: true, p: [0, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
+    { r: 0, y: -0.018 }, { r: L.shin * 0.34, y: -0.018 }, { r: L.shin * 0.38, y: 0.004, smooth: true },
+    { r: L.shin * 0.38, y: 0.022 }, { r: L.shin * 0.30, y: 0.034 }, { r: 0, y: 0.034 },
+  ], 20), 'darkMetal', { world: true, p: [0, 0.006, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
 
   // --- foot
   const fw = L.footW, fl = L.foot;
@@ -2078,42 +2204,42 @@ function buildLeg(rig, spec, side, sign, mirror) {
     // slim pad + long toe + rearward heel spur
     rig.add(`foot_${S}`, bevelBox(fw * 1.05, 0.075, fl * 0.62, 0.010,
       { topX: 1.05, botX: 0.86, botZ: 0.9 }), 'armorPrimary',
-    { p: [0, -0.005, FRONT * fl * 0.04], mirror, tier: TIER.PRIMARY });
+    { p: [0, 0.020, FRONT * fl * 0.04], mirror, tier: TIER.PRIMARY });
     rig.add(`foot_${S}`, bevelBox(fw * 0.55, 0.05, fl * 0.42, 0.008, { topX: 0.9, botZ: 0.6, shearZ: -FRONT * 0.05 }), 'armorSecondary',
-      { p: [0, 0.03, -FRONT * fl * 0.34], r: [-30 * DEG, 0, 0], mirror, tier: TIER.PRIMARY });
+      { p: [0, 0.055, -FRONT * fl * 0.34], r: [-30 * DEG, 0, 0], mirror, tier: TIER.PRIMARY });
     rig.add(`toe_${S}`, bevelBox(fw * 0.95, 0.055, fl * 0.55, 0.008,
       { topX: 0.85, botX: 0.62, botZ: 0.55, shearZ: FRONT * 0.03 }), 'armorPrimary',
-    { p: [0, 0.005, FRONT * fl * 0.10], mirror, tier: TIER.PRIMARY });
+    { p: [0, 0.047, FRONT * fl * 0.10], mirror, tier: TIER.PRIMARY });
     for (let i = -1; i <= 1; i++) {
       rig.add(`toe_${S}`, bevelBox(fw * 0.20, 0.030, fl * 0.24, 0.005, { topX: 0.4, topZ: 0.3, shearZ: FRONT * 0.02 }), 'trim',
-        { p: [i * fw * 0.30, -0.012, FRONT * fl * 0.34], r: [8 * DEG, 0, 0], mirror, tier: TIER.SECONDARY });
+        { p: [i * fw * 0.30, 0.029, FRONT * fl * 0.34], r: [8 * DEG, 0, 0], mirror, tier: TIER.SECONDARY });
     }
     rig.add(`foot_${S}`, bevelBox(fw * 0.95, 0.020, fl * 0.55, 0.005), 'rubber',
-      { p: [0, -0.042, FRONT * fl * 0.04], mirror, tier: TIER.SECONDARY });
+      { p: [0, -0.020, FRONT * fl * 0.04], mirror, tier: TIER.SECONDARY });
   } else {
     // heavy boot: sole, toe cap, ankle collar, cleats
     rig.add(`foot_${S}`, bevelBox(fw * 1.25, 0.11, fl * 0.86, 0.012,
       { topX: 0.90, topZ: 0.86, botX: 1.0, botZ: 1.0, shearZ: FRONT * 0.012 }), 'armorPrimary',
-    { p: [0, 0.005, 0], mirror, tier: TIER.PRIMARY });
+    { p: [0, 0.036, 0], mirror, tier: TIER.PRIMARY });
     rig.add(`foot_${S}`, bevelBox(fw * 1.28, 0.030, fl * 0.90, 0.006), 'rubber',
-      { p: [0, -0.058, 0], mirror, tier: TIER.PRIMARY });
+      { p: [0, -0.015, 0], mirror, tier: TIER.PRIMARY });
     rig.add(`toe_${S}`, bevelBox(fw * 1.1, 0.085, fl * 0.42, 0.010,
       { topX: 0.82, topZ: 0.7, botZ: 0.9, shearZ: FRONT * 0.02 }), 'armorAccent',
-    { p: [0, 0.02, FRONT * fl * 0.06], r: [-6 * DEG, 0, 0], mirror, tier: TIER.PRIMARY });
+    { p: [0, 0.060, FRONT * fl * 0.06], r: [-6 * DEG, 0, 0], mirror, tier: TIER.PRIMARY });
     rig.add(`toe_${S}`, bevelBox(fw * 1.12, 0.022, fl * 0.44, 0.005), 'rubber',
-      { p: [0, -0.024, FRONT * fl * 0.06], mirror, tier: TIER.SECONDARY });
+      { p: [0, 0.026, FRONT * fl * 0.06], mirror, tier: TIER.SECONDARY });
     // heel block
     rig.add(`foot_${S}`, bevelBox(fw * 0.9, 0.09, fl * 0.26, 0.008, { topX: 0.85, shearZ: -FRONT * 0.02 }), 'armorSecondary',
-      { p: [0, 0.02, -FRONT * fl * 0.40], mirror, tier: TIER.PRIMARY });
+      { p: [0, 0.048, -FRONT * fl * 0.40], mirror, tier: TIER.PRIMARY });
     // cleats
     for (let i = 0; i < 3; i++) {
       rig.add(`foot_${S}`, bevelBox(fw * 1.1, 0.012, 0.022, 0.004), 'darkMetal',
-        { p: [0, -0.070, FRONT * (fl * 0.26 - i * fl * 0.26)], mirror, tier: TIER.GREEBLE });
+        { p: [0, -0.026, FRONT * (fl * 0.26 - i * fl * 0.26)], mirror, tier: TIER.GREEBLE });
     }
     if (splay) {
       for (const o of [-1, 1]) {
         rig.add(`foot_${S}`, bevelBox(fw * 0.34, 0.06, fl * 0.5, 0.007, { topX: 0.6, botZ: 0.9 }), 'armorSecondary',
-          { p: [o * fw * 0.72, 0.005, -FRONT * fl * 0.05], r: [0, 0, o * 14 * DEG], mirror, tier: TIER.SECONDARY });
+          { p: [o * fw * 0.72, 0.040, -FRONT * fl * 0.05], r: [0, 0, o * 14 * DEG], mirror, tier: TIER.SECONDARY });
       }
     }
   }
@@ -2175,9 +2301,10 @@ function buildMechanism(rig, spec) {
   rig.actuator('chest', [0, 0.14, back * 0.075], 'head', [0, 0.02, back * 0.075], { radius: 0.014 * k, rodRatio: 0.55 });
 
   for (const { s, sign } of SIDES) {
-    // shoulder
-    rig.actuator('chest', [sign * t.chestW * 0.34, 0.15, back * t.chestD * 0.32],
-      `shoulder_${s}`, [0, -0.085, back * a.upper * 0.85], { radius: 0.020 * k });
+    // shoulder — anchored on the clavicle just above and behind the ball joint,
+    // so the ram sweeps with the arm instead of collapsing across the pivot
+    rig.actuator(`clavicle_${s}`, [sign * 0.155, 0.105, back * 0.10],
+      `shoulder_${s}`, [0, -0.16, back * a.upper * 1.0], { radius: 0.020 * k });
     // elbow
     rig.actuator(`shoulder_${s}`, [0, -0.20, back * a.upper * 0.95],
       `elbow_${s}`, [0, -0.085, back * a.fore * 0.95], { radius: 0.018 * k });
@@ -2188,11 +2315,13 @@ function buildMechanism(rig, spec) {
     rig.actuator('hips', [sign * t.pelvisW * 0.44, 0.02, back * t.waistD * 0.30],
       `hip_${s}`, [sign * L.thigh * 0.70, -0.14, back * L.thigh * 0.55], { radius: 0.022 * k });
     // knee
-    rig.actuator(`hip_${s}`, [0, -0.24, back * L.thigh * 1.05],
-      `knee_${s}`, [0, -0.13, back * L.shin * 1.05], { radius: 0.022 * k });
+    // front-mounted so flexion EXTENDS it: the knee folds backwards, so a rear
+    // ram would collapse into its own housing
+    rig.actuator(`hip_${s}`, [sign * L.thigh * 0.62, -0.245, -back * L.thigh * 0.95],
+      `knee_${s}`, [sign * L.shin * 0.62, -0.125, -back * L.shin * 0.95], { radius: 0.022 * k });
     // ankle
-    rig.actuator(`knee_${s}`, [0, -0.28, back * L.shin * 0.95],
-      `foot_${s}`, [0, 0.02, back * L.foot * 0.36], { radius: 0.016 * k, rodRatio: 0.5 });
+    rig.actuator(`knee_${s}`, [sign * L.shin * 0.34, -0.26, back * L.shin * 1.05],
+      `foot_${s}`, [sign * L.footW * 0.34, 0.03, back * L.foot * 0.42], { radius: 0.016 * k, rodRatio: 0.5 });
   }
 
   // --- cable looms -------------------------------------------------------

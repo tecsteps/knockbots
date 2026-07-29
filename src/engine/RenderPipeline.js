@@ -597,9 +597,12 @@ class WetFloorSsrPass extends Pass {
 
           for ( int i = 0; i < SSR_STEPS; i ++ ) {
             prev = p;
-            float grow = 1.0 + float( i ) * 0.11;
-            p += rayDir * stepLen * grow;
-            travelled += stepLen * grow;
+            // Gentle geometric growth. Steeper growth bands badly, because the
+            // thickness test starts missing thin geometry between samples.
+            float grow = 1.0 + float( i ) * 0.05;
+            float advance = stepLen * grow;
+            p += rayDir * advance;
+            travelled += advance;
 
             vec4 clip = uProjection * vec4( p, 1.0 );
             if ( clip.w <= 0.0 ) break;
@@ -611,7 +614,11 @@ class WetFloorSsrPass extends Pass {
             vec3 scenePos = viewPosFromDepth( suv, sd );
             float diff = scenePos.z - p.z;
 
-            if ( diff > 0.0 && diff < uThickness ) {
+            // Accept a surface as a hit if the ray passed behind it by less
+            // than one step's worth of depth, so a coarse march cannot tunnel
+            // through a thin object and leave a dashed reflection.
+            float thick = uThickness + advance * 0.75;
+            if ( diff > 0.0 && diff < thick ) {
               // Binary refine between the last miss and this hit.
               vec3 lo = prev;
               vec3 hi = p;
@@ -697,10 +704,10 @@ class BokehDofPass extends Pass {
       uFar: { value: 200 },
       uResolution: { value: new THREE.Vector2(1, 1) },
       uFocus: { value: 6.0 },
-      uNearRange: { value: 2.2 },
-      uFarRange: { value: 9.0 },
-      uMaxRadius: { value: 9.0 },
-      uStrength: { value: 1.0 },
+      uNearRange: { value: 2.6 },
+      uFarRange: { value: 18.0 },
+      uMaxRadius: { value: 7.0 },
+      uStrength: { value: 0.85 },
     };
     this.material = new THREE.ShaderMaterial({
       name: 'BokehDOF',
@@ -763,7 +770,7 @@ class BokehDofPass extends Pass {
   setSize(width, height) {
     this.uniforms.uResolution.value.set(width, height);
     // Keep the bokeh disc a constant fraction of the frame, not of the pixels.
-    this.uniforms.uMaxRadius.value = Math.max(4, height * 0.0085);
+    this.uniforms.uMaxRadius.value = Math.max(3, height * 0.0058);
   }
 
   render(renderer, writeBuffer, readBuffer) {
@@ -912,9 +919,15 @@ const smoothstep01 = (e0, e1, x) => {
 
 /**
  * Builds the grade as a 32^3 LUT, laid out as a horizontally tiled 1024x32
- * 2D texture. Everything the grade does — teal shadow / amber highlight split
- * tone, lifted blacks, a shoulder that crushes the top end, a contrast pivot
- * and highlight desaturation — is baked here rather than evaluated per pixel.
+ * 2D texture.
+ *
+ * Saturation shaping is done in linear light, where it is physically
+ * meaningful; the split tone, lift, contrast pivot and highlight shoulder are
+ * done in display space, where a "+0.03 blue in the shadows" actually means
+ * three percent of the visible range. Doing the split tone in linear — the
+ * obvious-looking choice — puts a 30% blue floor under the whole frame,
+ * because 0.09 linear is 0.33 display.
+ *
  * @returns {THREE.DataTexture}
  */
 function buildGradeLut() {
@@ -922,67 +935,50 @@ function buildGradeLut() {
   const width = n * n;
   const data = new Uint8Array(width * n * 4);
 
-  const shadowTint = [0.016, 0.052, 0.086]; // cold teal
-  const highTint = [0.082, 0.046, 0.011];   // warm amber
-  const lift = 0.0135;
-  const pivot = 0.44;
-  const contrast = 1.09;
+  const shadowTint = [-0.006, 0.007, 0.027]; // cold teal, display-space delta
+  const highTint = [0.021, 0.005, -0.015];   // warm amber
+  const lift = 0.011;
+  const pivot = 0.45;
+  const contrast = 1.08;
 
   for (let b = 0; b < n; b++) {
     for (let g = 0; g < n; g++) {
       for (let r = 0; r < n; r++) {
-        const sr = r / (n - 1);
-        const sg = g / (n - 1);
-        const sb = b / (n - 1);
+        // Saturation shaping in linear light.
+        let lr = srgbToLinear(r / (n - 1));
+        let lg = srgbToLinear(g / (n - 1));
+        let lb = srgbToLinear(b / (n - 1));
 
-        // Split tone and saturation work in linear light.
-        let lr = srgbToLinear(sr);
-        let lg = srgbToLinear(sg);
-        let lb = srgbToLinear(sb);
+        const lum = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb;
+        // Punchier mids, but pull the very top back toward white the way real
+        // stock does, so blown emissives never go neon.
+        const sat = 1.09 - 0.3 * smoothstep01(0.5, 1.4, lum);
+        lr = lum + (lr - lum) * sat;
+        lg = lum + (lg - lum) * sat;
+        lb = lum + (lb - lum) * sat;
 
-        const luma = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb;
-        const shadowW = 1 - smoothstep01(0.0, 0.3, luma);
-        const highW = smoothstep01(0.28, 0.95, luma);
-
-        lr += shadowTint[0] * shadowW + highTint[0] * highW;
-        lg += shadowTint[1] * shadowW + highTint[1] * highW;
-        lb += shadowTint[2] * shadowW + highTint[2] * highW;
-
-        // Saturation: lift midtones, pull the very top back toward white the
-        // way real film stock does so blown emissives do not go neon.
-        const l2 = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb;
-        const sat = 1.1 - 0.34 * smoothstep01(0.55, 1.6, l2);
-        lr = l2 + (lr - l2) * sat;
-        lg = l2 + (lg - l2) * sat;
-        lb = l2 + (lb - l2) * sat;
-
-        // Back to display space for the tonal shaping.
         let dr = linearToSrgb(Math.max(lr, 0));
         let dg = linearToSrgb(Math.max(lg, 0));
         let db = linearToSrgb(Math.max(lb, 0));
 
-        const shape = (x) => {
-          let v = x * (1 - lift) + lift;                      // lifted blacks
-          v = pivot + (v - pivot) * contrast;                 // contrast pivot
-          v -= 0.045 * smoothstep01(0.72, 1.0, v);            // crushed highs
-          return clamp01(v);
+        const dLum = 0.2126 * dr + 0.7152 * dg + 0.0722 * db;
+        const shadowW = 1 - smoothstep01(0.02, 0.42, dLum);
+        const highW = smoothstep01(0.5, 0.97, dLum);
+
+        const shape = (x, tint) => {
+          let v = x * (1 - lift) + lift;             // lifted blacks
+          v = pivot + (v - pivot) * contrast;        // contrast pivot
+          v -= 0.05 * smoothstep01(0.7, 1.0, v);     // crushed highs
+          return clamp01(v + tint);
         };
-        dr = shape(dr);
-        dg = shape(dg);
-        db = shape(db);
+        dr = shape(dr, shadowTint[0] * shadowW + highTint[0] * highW);
+        dg = shape(dg, shadowTint[1] * shadowW + highTint[1] * highW);
+        db = shape(db, shadowTint[2] * shadowW + highTint[2] * highW);
 
-        // Very slight channel skew: cyan bias in the low end, warm in the top.
-        dg += 0.006 * (1 - dg) * shadowW;
-        db += 0.011 * (1 - db) * shadowW;
-        dr += 0.008 * (1 - dr) * highW;
-
-        const slice = b * n;
-        const x = slice + r;
-        const y = g;
-        const i = (y * width + x) * 4;
-        data[i] = Math.round(clamp01(dr) * 255);
-        data[i + 1] = Math.round(clamp01(dg) * 255);
-        data[i + 2] = Math.round(clamp01(db) * 255);
+        const i = ((g * width) + (b * n + r)) * 4;
+        data[i] = Math.round(dr * 255);
+        data[i + 1] = Math.round(dg * 255);
+        data[i + 2] = Math.round(db * 255);
         data[i + 3] = 255;
       }
     }
@@ -1263,6 +1259,17 @@ export class RenderPipeline {
       motionBlur: true, grade: true, smaa: true, adaptiveResolution: true,
     };
 
+    /**
+     * The look. Survives quality changes and composer rebuilds; other modules
+     * may push mood-specific values here through `setGrade` / `setBloom`.
+     */
+    this.look = {
+      exposure: 1.0, lutStrength: 1.0, saturation: 1.0,
+      chroma: 0.0016, distortion: 0.028, grain: 0.032, vignette: 0.42,
+      bloomStrength: 0.32, bloomRadius: 0.74, bloomThreshold: 0.92,
+      ssrIntensity: 0.62, aoIntensity: 0.92, dofStrength: 0.85, motionBlur: 0.55,
+    };
+
     /** Exposed for the QA harness. */
     this.stats = { fps: 60, frameMs: 16.7, drawCalls: 0, triangles: 0, renderScale: 1 };
 
@@ -1373,7 +1380,7 @@ export class RenderPipeline {
       const gtao = new GTAOPass(this.scene, this.camera, w, h);
       gtao.setGBuffer(passes.gbuffer.depthTexture, passes.gbuffer.normalTexture);
       gtao.output = GTAOPass.OUTPUT.Default;
-      gtao.blendIntensity = 0.92;
+      gtao.blendIntensity = this.look.aoIntensity;
       gtao.updateGtaoMaterial({
         radius: 0.45,
         distanceExponent: 1.6,
@@ -1392,6 +1399,7 @@ export class RenderPipeline {
       const ssr = new WetFloorSsrPass(this.camera, tier.ssrSteps);
       ssr.uniforms.tDepth.value = passes.gbuffer.depthTexture;
       ssr.uniforms.tNormal.value = passes.gbuffer.normalTexture;
+      ssr.uniforms.uIntensity.value = this.look.ssrIntensity;
       passes.ssr = ssr;
       composer.addPass(ssr);
     }
@@ -1399,7 +1407,10 @@ export class RenderPipeline {
     if (tier.bloom && this.effects.bloom) {
       // Restrained: only genuine highlights bloom, and they bloom wide and
       // faint. A glow bath is the single fastest way to look cheap.
-      const bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.34, 0.86, 0.92);
+      const bloom = new UnrealBloomPass(
+        new THREE.Vector2(w, h),
+        this.look.bloomStrength, this.look.bloomRadius, this.look.bloomThreshold,
+      );
       passes.bloom = bloom;
       composer.addPass(bloom);
     }
@@ -1407,6 +1418,7 @@ export class RenderPipeline {
     if (tier.dof && this.effects.dof && passes.gbuffer) {
       const dof = new BokehDofPass(this.camera, tier.dofTaps);
       dof.uniforms.tDepth.value = passes.gbuffer.depthTexture;
+      dof.uniforms.uStrength.value = this.look.dofStrength;
       dof.setSize(w, h);
       passes.dof = dof;
       composer.addPass(dof);
@@ -1415,14 +1427,21 @@ export class RenderPipeline {
     if (tier.motionBlur && this.effects.motionBlur && passes.gbuffer) {
       const mb = new MotionBlurPass(this.camera, tier.mbTaps);
       mb.uniforms.tDepth.value = passes.gbuffer.depthTexture;
+      mb.uniforms.uIntensity.value = this.look.motionBlur;
       passes.motionBlur = mb;
       composer.addPass(mb);
     }
 
     if (tier.grade && this.effects.grade) {
       const grade = new GradePass(this._lut);
-      grade.uniforms.uChroma.value = this.quality === 'low' ? 0.0009 : 0.0016;
-      grade.uniforms.uGrain.value = this.quality === 'low' ? 0.022 : 0.032;
+      const soft = this.quality === 'low' || this.quality === 'medium';
+      grade.uniforms.uExposure.value = this.look.exposure;
+      grade.uniforms.uLutStrength.value = this.look.lutStrength;
+      grade.uniforms.uSaturation.value = this.look.saturation;
+      grade.uniforms.uChroma.value = soft ? this.look.chroma * 0.55 : this.look.chroma;
+      grade.uniforms.uDistortion.value = this.look.distortion;
+      grade.uniforms.uGrain.value = soft ? this.look.grain * 0.7 : this.look.grain;
+      grade.uniforms.uVignette.value = this.look.vignette;
       passes.grade = grade;
       composer.addPass(grade);
     }
@@ -1493,6 +1512,64 @@ export class RenderPipeline {
     }
     if (name === 'adaptiveResolution') return;
     this.#buildComposer();
+  }
+
+  /**
+   * Tunes the display transform without rebuilding the chain. Any subset of
+   * `exposure`, `lutStrength`, `saturation`, `chroma`, `distortion`, `grain`
+   * and `vignette` may be given; values persist across quality changes so a
+   * lighting mood can own the look.
+   * @param {Partial<RenderPipeline['look']>} values
+   */
+  setGrade(values = {}) {
+    Object.assign(this.look, values);
+    const g = this._passes.grade;
+    if (!g) return;
+    const soft = this.quality === 'low' || this.quality === 'medium';
+    g.uniforms.uExposure.value = this.look.exposure;
+    g.uniforms.uLutStrength.value = this.look.lutStrength;
+    g.uniforms.uSaturation.value = this.look.saturation;
+    g.uniforms.uChroma.value = soft ? this.look.chroma * 0.55 : this.look.chroma;
+    g.uniforms.uDistortion.value = this.look.distortion;
+    g.uniforms.uGrain.value = soft ? this.look.grain * 0.7 : this.look.grain;
+    g.uniforms.uVignette.value = this.look.vignette;
+  }
+
+  /**
+   * Retunes the wet-floor reflections in place.
+   *
+   * The pass has no roughness channel to read, so it masks on geometry: any
+   * upward-facing surface within `slab` metres of `floorY` reflects. A stage
+   * with a matte floor should turn `intensity` down or off rather than let it
+   * mirror.
+   *
+   * @param {{intensity?:number, floorY?:number, slab?:number,
+   *          maxDistance?:number, thickness?:number}} values
+   */
+  setSsr({ intensity, floorY, slab, maxDistance, thickness } = {}) {
+    if (typeof intensity === 'number') this.look.ssrIntensity = intensity;
+    const u = this._passes.ssr?.uniforms;
+    if (!u) return;
+    u.uIntensity.value = this.look.ssrIntensity;
+    if (typeof floorY === 'number') u.uFloorY.value = floorY;
+    if (typeof slab === 'number') u.uSlab.value = slab;
+    if (typeof maxDistance === 'number') u.uMaxDistance.value = maxDistance;
+    if (typeof thickness === 'number') u.uThickness.value = thickness;
+  }
+
+  /**
+   * Retunes bloom in place.
+   * @param {{strength?:number, radius?:number, threshold?:number}} values
+   */
+  setBloom({ strength, radius, threshold } = {}) {
+    if (typeof strength === 'number') this.look.bloomStrength = strength;
+    if (typeof radius === 'number') this.look.bloomRadius = radius;
+    if (typeof threshold === 'number') this.look.bloomThreshold = threshold;
+    const b = this._passes.bloom;
+    if (!b) return;
+    b.strength = this.look.bloomStrength;
+    b.radius = this.look.bloomRadius;
+    b.threshold = this.look.bloomThreshold;
   }
 
   /**
