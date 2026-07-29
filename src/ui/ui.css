@@ -296,12 +296,23 @@
   50% { filter: brightness(1.35) saturate(1.3); }
 }
 
+/*
+ * A dark backing chip behind the name — the stage behind it is a moving
+ * render (crowd, fencing, bloom), and pale text with only a drop-shadow
+ * was reading as washed-out against it. This gives the name a fixed-contrast
+ * surface to sit on, cut with the same parallelogram language as the bars.
+ */
 .nameplate {
+  position: relative;
   display: flex;
   align-items: baseline;
   gap: 0.55em;
   max-width: 100%;
   min-width: 0;
+  padding: 0.16em 0.5em;
+  background: linear-gradient(180deg, rgba(11, 14, 22, 0.88), rgba(5, 7, 12, 0.72));
+  clip-path: polygon(0.4em 0, 100% 0, calc(100% - 0.4em) 100%, 0 100%);
+  box-shadow: inset 0 0 0 1px var(--kb-line), inset 0 0.05em 0 rgba(255, 255, 255, 0.06);
 }
 .hp-block--p2 .nameplate { flex-direction: row-reverse; }
 
@@ -376,9 +387,17 @@
 
 /* -- overdrive meter ------------------------------------------------- */
 
+/*
+ * `top` has to clear the nameplate's backing chip, not just the bar — and
+ * p1/p2 disagree on how much room that takes: p1's meter-block stacks
+ * (label, frame) so the frame is already pushed down by the label's own
+ * line, but p2's stacks (frame, label) so the frame sits flush at the top
+ * of the row with nothing above it to push it clear. Sized for p2, the
+ * tighter case.
+ */
 .meter-wrap {
   position: absolute;
-  top: 3.2em;
+  top: 4.45em;
   left: 1.1em;
   right: 1.1em;
   display: grid;

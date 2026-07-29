@@ -423,6 +423,13 @@ vec2 vogel( int i, int n, float phi ) {
  * View normals are gone with it. GTAO reconstructs them from depth (its own
  * default path) and the wet-floor SSR does the same in two derivatives, which
  * is exact on the flat surface it is masked to.
+ *
+ * The same feedback rule applies inside the scene: soft particles want to fade
+ * against opaque depth, but they are drawn into the very target that owns it.
+ * So the pass also keeps a half-resolution copy, refreshed at the end of every
+ * frame and exposed as `depthTexture` — one frame stale, which no soft-particle
+ * fade can resolve, and safe to sample from any material in the scene. The live
+ * attachment is `liveDepth`, for post passes only.
  */
 class ScenePass extends Pass {
   /**
@@ -454,6 +461,18 @@ class ScenePass extends Pass {
     this.target.texture.colorSpace = THREE.NoColorSpace;
     this.target.depthTexture = depth;
 
+    // Half resolution is plenty: the only consumer is a soft-particle fade,
+    // which is a low-frequency term over a puff several hundred pixels wide.
+    this.depthCopy = new THREE.WebGLRenderTarget(1, 1, {
+      type: THREE.FloatType,
+      format: THREE.RedFormat,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: false,
+      stencilBuffer: false,
+    });
+    this.depthCopy.texture.name = 'RenderPipeline.sceneDepth';
+
     this.material = new THREE.ShaderMaterial({
       name: 'SceneBlit',
       uniforms: { tDiffuse: { value: this.target.texture } },
@@ -465,14 +484,32 @@ class ScenePass extends Pass {
       depthTest: false,
       depthWrite: false,
     });
+    this.copyMaterial = new THREE.ShaderMaterial({
+      name: 'SceneDepthCopy',
+      uniforms: { tDepth: { value: depth } },
+      vertexShader: FULLSCREEN_VERT,
+      fragmentShader: /* glsl */ `
+        varying vec2 vUv;
+        uniform highp sampler2D tDepth;
+        void main() { gl_FragColor = vec4( texture2D( tDepth, vUv ).x, 0.0, 0.0, 1.0 ); }`,
+      depthTest: false,
+      depthWrite: false,
+    });
     this._fsQuad = new FullScreenQuad(this.material);
   }
 
-  get depthTexture() { return this.target.depthTexture; }
+  /** Previous-frame depth copy, safe to sample from materials in the scene. */
+  get depthTexture() { return this.depthCopy.texture; }
+  /** Live depth attachment. Post passes only — sampling it in the scene is a
+   * feedback loop, and the driver will simply drop the draw. */
+  get liveDepth() { return this.target.depthTexture; }
   get texture() { return this.target.texture; }
 
   setSize(width, height) {
-    this.target.setSize(Math.max(1, Math.floor(width)), Math.max(1, Math.floor(height)));
+    const w = Math.max(1, Math.floor(width));
+    const h = Math.max(1, Math.floor(height));
+    this.target.setSize(w, h);
+    this.depthCopy.setSize(Math.max(1, w >> 1), Math.max(1, h >> 1));
   }
 
   render(renderer, writeBuffer) {
@@ -489,6 +526,11 @@ class ScenePass extends Pass {
     this.stats.sceneDrawCalls = renderer.info.render.calls;
     this.stats.sceneTriangles = renderer.info.render.triangles;
 
+    this._fsQuad.material = this.copyMaterial;
+    renderer.setRenderTarget(this.depthCopy);
+    this._fsQuad.render(renderer);
+
+    this._fsQuad.material = this.material;
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this._fsQuad.render(renderer);
   }
@@ -496,7 +538,9 @@ class ScenePass extends Pass {
   dispose() {
     this.target.depthTexture?.dispose();
     this.target.dispose();
+    this.depthCopy.dispose();
     this.material.dispose();
+    this.copyMaterial.dispose();
     this._fsQuad.dispose();
   }
 }
@@ -1512,7 +1556,8 @@ export class RenderPipeline {
     if (wantsDepth) {
       passes.scene = new ScenePass(this.scene, this.camera, this.stats);
       passes.scene.setSize(w, h);
-      // `_passes.gbuffer` is the name EffectsDirector reads its depth from.
+      // `_passes.gbuffer.depthTexture` is the name EffectsDirector reads its
+      // soft-particle depth from, and it must resolve to the scene-safe copy.
       passes.gbuffer = passes.scene;
       composer.addPass(passes.scene);
     } else {
@@ -1520,7 +1565,7 @@ export class RenderPipeline {
       composer.addPass(passes.render);
     }
 
-    const depthTexture = passes.scene?.depthTexture || null;
+    const depthTexture = passes.scene?.liveDepth || null;
 
     if (tier.ao && this.effects.ao && depthTexture) {
       const gtao = new HalfResGtaoPass(this.scene, this.camera, w >> 1, h >> 1);
@@ -1733,8 +1778,17 @@ export class RenderPipeline {
   }
 
   /**
-   * Focus report from the camera. Drives shadow fitting and DOF plane.
-   * @param {{center?:THREE.Vector3, radius?:number, distance?:number}} e
+   * Focus report from the camera. Drives shadow fitting and the DOF plane.
+   *
+   * `nearRange` is honoured literally — nothing inside it blurs. `farRange` is
+   * recorded but not used as a hard limit: the far side of the lens follows the
+   * distance-ratio curve in `BokehDofPass`, which is what gives the stage its
+   * separation, and clamping it to a declared range switches depth of field off
+   * in every framing where the back wall happens to sit inside the subject
+   * volume the camera reported.
+   *
+   * @param {{center?:THREE.Vector3, radius?:number, distance?:number,
+   *          nearRange?:number, farRange?:number}} e
    */
   setCameraFocus(e) {
     if (!e) return;

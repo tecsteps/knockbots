@@ -979,10 +979,10 @@ class Rig {
     for (const [n, m] of Object.entries(restWorld)) this.restPos[n] = new THREE.Vector3().setFromMatrixPosition(m);
     this.mats = mats;
     this.maxTier = maxTier;
-    /** Rest-pose metrics of this particular skeleton; see `measure()`. */
-    this.dim = measure(this);
     /** Uniform author-space scale applied by `scaled()`. */
     this.autoScale = 1;
+    /** Rest-pose metrics of this particular skeleton; see `measure()`. */
+    this.dim = measure(this);
     /** @type {Array<{geo:THREE.BufferGeometry, mat:string, tier:number}>} */
     this.parts = [];
     this.actuators = [];
@@ -1441,7 +1441,9 @@ function buildTorso(rig, spec, def) {
     y0: -m.lumbar * 0.46, y1: m.mid * 0.66,
     w0: P.waistLo.w * 0.98, w1: P.waistHi.w,
     d0: P.waistLo.d * 0.98, d1: P.waistHi.d,
-    mat: 'armorSecondary', bevel: 0.014,
+    // primary paint, not the dark underskin: on a dark-secondary palette a
+    // shaded waist reads as a hole straight through the robot
+    mat: 'armorPrimary', bevel: 0.014,
   });
 
   // abdominal segment plates

@@ -82,6 +82,7 @@ const SHAFT_FRAG = /* glsl */ `
   uniform float uNoiseScale;
   uniform float uNoiseAmp;
   uniform float uFloorFade;
+  uniform vec2 uSlat;        // x = louvre pitch in metres (0 = none), y = sharpness
   uniform vec2 uNearFade;    // view distances over which the shaft fades in
   uniform vec3 uClearCenter;
   uniform vec3 uClearHalf;
@@ -163,6 +164,16 @@ const SHAFT_FRAG = /* glsl */ `
       float carve = smoothstep( 1.0, 1.9, max( q.x, max( q.y, q.z ) ) );
       if ( carve <= 0.0 ) continue;
 
+      // Louvres. A six metre strip light is a softbox and a softbox throws no
+      // visible shaft at all — the scatter comes out as an even slab, which is
+      // the thing this file is trying not to be. Real industrial linears carry
+      // an egg-crate, and the crate is what turns one fitting into a row of
+      // readable beams with dark air between them.
+      float slats = 1.0;
+      if ( uSlat.x > 0.0 ) {
+        slats = pow( abs( sin( p.x * 3.14159265 / uSlat.x ) ), uSlat.y );
+      }
+
       // Two noise layers crawling down the beam at different rates.
       float n1 = texture2D( uNoise, vec2( p.x, p.z ) * uNoiseScale + vec2( 0.03, -0.02 ) * uTime ).r;
       float n2 = texture2D( uNoise, vec2( p.z * 0.7, d ) * uNoiseScale * 1.9 - vec2( 0.0, 0.05 * uTime ) ).g;
@@ -170,7 +181,7 @@ const SHAFT_FRAG = /* glsl */ `
 
       float fall = exp( -d * uExtinction );
       float floorFade = smoothstep( uLength, uLength - uFloorFade, d );
-      acc += edge * dust * fall * floorFade * lens * carve * stepLen;
+      acc += edge * slats * dust * fall * floorFade * lens * carve * stepLen;
     }
 
     if ( acc <= 0.0005 ) discard;
@@ -233,11 +244,11 @@ export class StageVolumetrics {
      * surface in the frame and cannot.
      */
     this.specs = [
-      { pos: [-6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.32, round: 0.15, edge: 2.2, extinction: 0.16, pool: 0.05 },
-      { pos: [6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.32, round: 0.15, edge: 2.2, extinction: 0.16, pool: 0.05 },
-      { pos: [-9.5, 22.0, -18.4], rot: [0.34, 0.12, 0.16], half: [1.9, 1.5], spread: [0.035, 0.035], length: 23, color: 0x8fb4e8, intensity: 0.055, round: 0.55, edge: 2.1, extinction: 0.038, pool: 0.02 },
-      { pos: [2.0, 24.0, -18.4], rot: [0.4, -0.1, -0.13], half: [2.4, 1.9], spread: [0.035, 0.035], length: 25, color: 0x9dc0ee, intensity: 0.05, round: 0.55, edge: 2.0, extinction: 0.034, pool: 0.018 },
-      { pos: [-10.2, 4.6, -8.4], rot: [0.1, 0, -0.55], half: [1.1, 0.9], spread: [0.1, 0.1], length: 6.5, color: 0x9fdcff, intensity: 0.2, round: 0.85, edge: 2.2, extinction: 0.14, pool: 0.032 },
+      { pos: [-6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.95, round: 0.15, edge: 2.2, extinction: 0.16, slat: [1.02, 3.2], pool: 0.05 },
+      { pos: [6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.95, round: 0.15, edge: 2.2, extinction: 0.16, slat: [1.02, 3.2], pool: 0.05 },
+      { pos: [-9.5, 22.0, -18.4], rot: [0.34, 0.12, 0.16], half: [1.9, 1.5], spread: [0.035, 0.035], length: 23, color: 0x8fb4e8, intensity: 0.055, round: 0.55, edge: 2.1, extinction: 0.038, slat: [0, 0], pool: 0.02 },
+      { pos: [2.0, 24.0, -18.4], rot: [0.4, -0.1, -0.13], half: [2.4, 1.9], spread: [0.035, 0.035], length: 25, color: 0x9dc0ee, intensity: 0.05, round: 0.55, edge: 2.0, extinction: 0.034, slat: [0, 0], pool: 0.018 },
+      { pos: [-10.2, 4.6, -8.4], rot: [0.1, 0, -0.55], half: [1.1, 0.9], spread: [0.1, 0.1], length: 6.5, color: 0x9fdcff, intensity: 0.34, round: 0.85, edge: 2.2, extinction: 0.14, slat: [0, 0], pool: 0.032 },
     ];
     const budget = quality === 'low' ? 2 : quality === 'medium' ? 3 : this.specs.length;
 
@@ -261,9 +272,13 @@ export class StageVolumetrics {
           uEdge: { value: s.edge },
           uRound: { value: s.round },
           uExtinction: { value: s.extinction },
-          uNoiseScale: { value: 0.07 },
-          uNoiseAmp: { value: 0.75 },
+          // Fine enough that a single six-metre fitting has several cells of
+          // variation across it; at the old 14m period every louvre came out
+          // the same brightness and the row read as a printed pattern.
+          uNoiseScale: { value: 0.15 },
+          uNoiseAmp: { value: 0.8 },
           uFloorFade: { value: 1.4 },
+          uSlat: { value: new THREE.Vector2(s.slat[0], s.slat[1]) },
           uNearFade: { value: new THREE.Vector2(1.2, 4.5) },
           uClearCenter: { value: clearCenter },
           uClearHalf: { value: clearHalf },
@@ -299,8 +314,8 @@ export class StageVolumetrics {
       color: 0xd6e6ff,
       size: 0.024,
       drift: 0.19,
-      intensity: 0.2,
-      maxPixels: 9,
+      intensity: 0.28,
+      maxPixels: 11,
       nearFade: [1.4, 4.0],
       floorY: this.floorY,
       clear: this.clear,
@@ -498,7 +513,7 @@ export class StageVolumetrics {
     // The mood's fog colour is the right hue but it is authored for FogExp2,
     // where it is a destination colour rather than an emitted one; scattering
     // toward the eye needs it several stops up to register at all.
-    if (envParams?.fog?.color) this.hazeMaterial.uniforms.uColor.value.copy(envParams.fog.color).multiplyScalar(9);
+    if (envParams?.fog?.color) this.hazeMaterial.uniforms.uColor.value.copy(envParams.fog.color).multiplyScalar(16);
 
     this.motes.update(time, 0.55 + breathe * 0.7);
     this.steam.update(time);
