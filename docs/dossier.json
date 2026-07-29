@@ -309,5 +309,10 @@
         }
       ]
     }
-  ]
+  ],
+  "deploy": {
+    "url": "https://knockbots.vercel.app",
+    "rev": "0.6.0",
+    "note": "Static Vite build on Vercel. Redeployed from main after each iteration."
+  }
 }
