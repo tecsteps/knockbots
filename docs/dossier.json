@@ -1,20 +1,38 @@
 {
   "status": {
-    "rev": "0.3.0",
-    "commits": 14,
-    "modules": 60,
-    "lines": "29.9k",
+    "rev": "0.4.0",
+    "commits": 17,
+    "modules": 63,
+    "lines": "34k",
     "clips": 89,
     "moves": 191,
     "characters": 10
   },
   "verdicts": [
-    { "axis": "Stage detail", "score": 58 },
-    { "axis": "Interface craft", "score": 58 },
-    { "axis": "Lighting & atmosphere", "score": 45 },
-    { "axis": "Character rendering", "score": 43 },
-    { "axis": "Impact & effects", "score": 42 },
-    { "axis": "Animation quality", "score": 0 }
+    {
+      "axis": "Stage detail",
+      "score": 64
+    },
+    {
+      "axis": "Interface craft",
+      "score": 60
+    },
+    {
+      "axis": "Lighting & atmosphere",
+      "score": 58
+    },
+    {
+      "axis": "Character rendering",
+      "score": 57
+    },
+    {
+      "axis": "Impact & effects",
+      "score": 41
+    },
+    {
+      "axis": "Animation quality",
+      "score": 28
+    }
   ],
   "log": [
     {
@@ -27,9 +45,30 @@
         "Also pinned a clip-ID manifest so the animation and combat workstreams could reference each other's output without coordinating, and a static integrity checker that validates every clip against the skeleton and every move against the schema."
       ],
       "tags": [
-        { "label": "rig", "state": "done" }, { "label": "clip format", "state": "done" },
-        { "label": "move schema", "state": "done" }, { "label": "event bus", "state": "done" },
-        { "label": "game loop", "state": "done" }, { "label": "QA harness", "state": "done" }
+        {
+          "label": "rig",
+          "state": "done"
+        },
+        {
+          "label": "clip format",
+          "state": "done"
+        },
+        {
+          "label": "move schema",
+          "state": "done"
+        },
+        {
+          "label": "event bus",
+          "state": "done"
+        },
+        {
+          "label": "game loop",
+          "state": "done"
+        },
+        {
+          "label": "QA harness",
+          "state": "done"
+        }
       ]
     },
     {
@@ -38,14 +77,31 @@
       "rev": "rev 0.2.0",
       "title": "Twelve workstreams, disjoint files",
       "paras": [
-        "Fanned out the whole engine at once against the pinned charter. Twelve agents, zero errors, and the contracts held: two animation workstreams that never communicated produced 89 clips matching the manifest exactly — no missing ids, no extras, none invalid.",
+        "Fanned out the whole engine at once against the pinned charter. Twelve agents, zero errors, and the contracts held: two animation workstreams that never communicated produced 89 clips matching the manifest exactly \u2014 no missing ids, no extras, none invalid.",
         "Every one of the 43 attack clips drives the hips or spine. Arm-isolated strikes are the classic tell of amateur animation and there are none in the set.",
-        "Notable engineering: r185 deprecated PCFSoftShadowMap, so the render agent replaced three's shadow shader chunk with a real PCSS implementation — blocker search, penumbra estimate, variable-radius PCF — guarded by a signature check that falls back to stock if upstream changes."
+        "Notable engineering: r185 deprecated PCFSoftShadowMap, so the render agent replaced three's shadow shader chunk with a real PCSS implementation \u2014 blocker search, penumbra estimate, variable-radius PCF \u2014 guarded by a signature check that falls back to stock if upstream changes."
       ],
       "tags": [
-        { "label": "60 modules", "state": "done" }, { "label": "89 clips", "state": "done" },
-        { "label": "191 moves", "state": "done" }, { "label": "10 characters", "state": "done" },
-        { "label": "builds clean", "state": "done" }
+        {
+          "label": "60 modules",
+          "state": "done"
+        },
+        {
+          "label": "89 clips",
+          "state": "done"
+        },
+        {
+          "label": "191 moves",
+          "state": "done"
+        },
+        {
+          "label": "10 characters",
+          "state": "done"
+        },
+        {
+          "label": "builds clean",
+          "state": "done"
+        }
       ]
     },
     {
@@ -54,13 +110,27 @@
       "rev": "rev 0.2.1",
       "title": "It renders, and it is wrong",
       "paras": [
-        "The first capture showed a live round with combat resolving — but a milky veil buried the lower half of the frame and everything was uniformly soft. Disabling bloom, SSR, depth of field and motion blur left the veil untouched, which proved it was stage geometry rather than post.",
+        "The first capture showed a live round with combat resolving \u2014 but a milky veil buried the lower half of the frame and everything was uniformly soft. Disabling bloom, SSR, depth of field and motion blur left the veil untouched, which proved it was stage geometry rather than post.",
         "Two root causes, both found by measurement rather than guesswork. Four additive stage emitters were each unbounded and their sum was the veil: light pools were covering 4.2x the shaft footprint at 5.5x intensity, and 1000 dust motes had no size cap, so a 6cm mote a metre from the lens covered 200 pixels.",
-        "The blanket softness was not depth of field at all. Adaptive resolution had a 0.75 floor and captures were rendering at 0.79 scale then upscaling. The DOF circle-of-confusion was separately wrong — linear in metres, so a fighter half a metre off the focus plane picked up 40% blur immediately."
+        "The blanket softness was not depth of field at all. Adaptive resolution had a 0.75 floor and captures were rendering at 0.79 scale then upscaling. The DOF circle-of-confusion was separately wrong \u2014 linear in metres, so a fighter half a metre off the focus plane picked up 40% blur immediately."
       ],
       "tags": [
-        { "label": "veil removed", "state": "done" }, { "label": "contrast +172%", "state": "done" },
-        { "label": "prepass cut", "state": "done" }, { "label": "247→176 calls", "state": "done" }
+        {
+          "label": "veil removed",
+          "state": "done"
+        },
+        {
+          "label": "contrast +172%",
+          "state": "done"
+        },
+        {
+          "label": "prepass cut",
+          "state": "done"
+        },
+        {
+          "label": "247\u2192176 calls",
+          "state": "done"
+        }
       ]
     },
     {
@@ -70,12 +140,85 @@
       "title": "Five blind comparisons, five losses",
       "paras": [
         "Ten official Tekken 8 press screenshots were put on disk as the benchmark, and critics ran the blind protocol: describe both images without labelling them, pick the one that reads as shipped AAA, only then reveal which was which.",
-        "Every axis lost. Character rendering 43, lighting 45, impact 42, stage 58, interface 58. The verdicts were specific rather than vague — the character critic's finding was that the shapes are fine but the surfaces are empty: \"every facet is a single smooth value ramp, no machining marks, no paint fade, no grime in the recesses.\" The lighting critic could not tell from the pixels where the light source was.",
+        "Every axis lost. Character rendering 43, lighting 45, impact 42, stage 58, interface 58. The verdicts were specific rather than vague \u2014 the character critic's finding was that the shapes are fine but the surfaces are empty: \"every facet is a single smooth value ramp, no machining marks, no paint fade, no grime in the recesses.\" The lighting critic could not tell from the pixels where the light source was.",
         "Two defects the critics missed and I caught by eye: Vulkan reads as headless because the head is recessed between the shoulder masses, and Kestrel's idle stance splays rather than braces. Both are in round 2."
       ],
       "tags": [
-        { "label": "10 refs on disk", "state": "done" }, { "label": "blind protocol", "state": "done" },
-        { "label": "round 2 running", "state": "run" }
+        {
+          "label": "10 refs on disk",
+          "state": "done"
+        },
+        {
+          "label": "blind protocol",
+          "state": "done"
+        },
+        {
+          "label": "round 2 running",
+          "state": "run"
+        }
+      ]
+    },
+    {
+      "phase": "PHASE 04",
+      "when": "Round 2",
+      "rev": "rev 0.4.0",
+      "title": "Four axes move, one does not",
+      "paras": [
+        "Character rendering 43 to 57, lighting 45 to 58, stage 58 to 64, interface 58 to 60. Impact went 42 to 41 and animation reached 28 from an unscored start.",
+        "The most valuable finding was a root cause nobody had asked for. The materials agent traced the flat surfaces not to the texture bake but to the projection: RobotBuilder computed UVs from each plate's own origin at a fixed tile rate, so all forty plates sampled nearly the same small window. No amount of detail in the bake could fix that. The fix samples an object-space triplanar field instead, so where a plate sits on the body now decides how it has aged.",
+        "A second latent bug surfaced the same way: Environment.update() was never called by anything, so the light flicker, hue drift and mood cross-fades had never once run since they were written.",
+        "One critic verdict had to be discarded. The impact critic concluded the effects system was byte-identical by checking git log \u2014 but agents do not commit, so their work sits uncommitted in the working tree. Seven files under src/fx/ had in fact changed. Later critics were explicitly instructed to judge the images and never the git history."
+      ],
+      "tags": [
+        {
+          "label": "character +14",
+          "state": "done"
+        },
+        {
+          "label": "lighting +13",
+          "state": "done"
+        },
+        {
+          "label": "stage +6",
+          "state": "done"
+        },
+        {
+          "label": "interface +2",
+          "state": "done"
+        },
+        {
+          "label": "impact -1",
+          "state": "wait"
+        },
+        {
+          "label": "round 3 running",
+          "state": "run"
+        }
+      ]
+    },
+    {
+      "phase": "PHASE 05",
+      "when": "Instrumentation",
+      "rev": "rev 0.4.1",
+      "title": "Making motion judgeable",
+      "paras": [
+        "The animation critic scored 28 and every fix it named pointed at the capture tool rather than the animation \u2014 which was fair. A contact sheet that samples on wall-clock drifts against a 60Hz tick, and a 36-tick move finishes in 600ms, far quicker than a screenshot round trip.",
+        "The tool now slows the simulation for capture, polls the engine's own tick counter, and chooses which frames to sample from the move's real frame data so the wind-up extreme, the contact frame and the settle are always present. The interface is hidden and each frame is cropped to the fighter's projected bone bounds, because the camera re-solves its framing every tick and will not hold a requested cinematic distance.",
+        "One earlier alarm turned out to be a false positive worth recording. When the first sheet showed a frozen pose I suspected 89 clips were not playing at all. A direct probe of the posed bones showed the hip rotating through 72 degrees across a kick. The animation was fine; the tool was stepping the animator behind the state machine's back."
+      ],
+      "tags": [
+        {
+          "label": "tick-exact",
+          "state": "done"
+        },
+        {
+          "label": "frame-data targets",
+          "state": "done"
+        },
+        {
+          "label": "bounds crop",
+          "state": "done"
+        }
       ]
     }
   ]
