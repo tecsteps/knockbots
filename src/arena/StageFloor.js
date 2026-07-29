@@ -32,7 +32,7 @@ import {
   fbm, worley, blur, resample, clamp01, lerp, smoothstep, hexToLinear, encodeSrgb,
   heightToNormal, heightToAo, sampleWrap, stampText, makeTexture,
 } from './ProcTex.js';
-import { bevelBox, place, mergeAll, worldUv } from './GeoKit.js';
+import { bevelBox, place } from './GeoKit.js';
 
 /** Extent of the fully textured slab, in metres. */
 export const FLOOR = { w: 32, d: 28, cx: 0, cz: 2 };
@@ -154,7 +154,10 @@ function bakeFloorMaps(size) {
       const mac = sampleWrap(macro, FIELD, fx, fy);
       const stn = sampleWrap(stain, FIELD, fx, fy);
       const wr = sampleWrap(wearF, FIELD, fx, fy);
-      const agg = sampleWrap(aggregate, FIELD, fx, fy);
+      // Aggregate is sampled eight times denser than the other fields: at
+      // 32m across the slab, one Worley cell has to be a 5cm stone, not a 40cm
+      // blotch.
+      const agg = sampleWrap(aggregate, FIELD, fx * 8, fy * 8);
       const crk = sampleWrap(crackF, FIELD, fx, fy);
       const pud = sampleWrap(puddleCells.f1, FIELD, fx, fy);
       const pid = sampleWrap(puddleCells.id, FIELD, fx, fy);
@@ -171,7 +174,7 @@ function bakeFloorMaps(size) {
       const crack = smoothstep(0.9, 0.995, crk) * (1 - joint);
       const dish = (mac - 0.5) * 0.5;
 
-      let h = fine * 0.22 + smoothstep(0.2, 0, agg) * 0.3 + dish;
+      let h = fine * 0.22 + smoothstep(0.14, 0, agg) * 0.11 + dish;
       h -= joint * 0.9 + crack * 0.5;
       height[k] = h;
 
@@ -192,7 +195,7 @@ function bakeFloorMaps(size) {
       const paint = kind === 1 ? paintYellow : kind === 2 ? paintBlack : paintWhite;
 
       for (let ch = 0; ch < 3; ch++) {
-        let v = lerp(conc[ch], concPale[ch], fine * 0.55 + smoothstep(0.22, 0, agg) * 0.6);
+        let v = lerp(conc[ch], concPale[ch], fine * 0.5 + smoothstep(0.16, 0, agg) * 0.28);
         v = lerp(v, concDark[ch], mac * 0.42 + stn * 0.3);
         v = lerp(v, oilCol[ch], smoothstep(0.62, 0.92, oi) * 0.55);
         v *= 1 - crack * 0.55 - joint * 0.45;
@@ -363,7 +366,7 @@ export class StageFloor {
    * @param {Record<string, THREE.Texture>} deps.textures arena texture library
    * @param {'ultra'|'high'|'medium'|'low'} [deps.quality]
    */
-  constructor({ reflector, materials, textures, quality = 'high' }) {
+  constructor({ reflector, materials, textures, bins, quality = 'high' }) {
     this.reflector = reflector;
     this.group = new THREE.Group();
     this.group.name = 'arena.floor';
@@ -389,6 +392,9 @@ export class StageFloor {
       uRippleAmp: { value: 0.09 },
       uTime: { value: 0 },
     };
+
+    /** Scaled to zero when the quality tier turns the mirror pass off. */
+    this.reflectionScale = 1;
 
     this.material = new THREE.MeshPhysicalMaterial({
       name: 'arena.floorWet',
@@ -428,8 +434,8 @@ export class StageFloor {
     };
     this.group.add(this.mesh);
 
-    this.#buildApron(materials);
-    this.#buildDrains(materials);
+    this.#buildApron();
+    this.#buildDrains(bins);
     this.#buildDecals(textures);
   }
 
@@ -438,7 +444,7 @@ export class StageFloor {
    * distance keeps the horizon from showing void in the reflection, and it is
    * the cheapest possible geometry: two triangles.
    */
-  #buildApron(materials) {
+  #buildApron() {
     const apron = new THREE.Mesh(
       new THREE.PlaneGeometry(160, 160),
       new THREE.MeshStandardMaterial({
@@ -455,9 +461,9 @@ export class StageFloor {
     apron.receiveShadow = false;
     apron.matrixAutoUpdate = false;
     apron.updateMatrix();
+    apron.name = 'arena.floor.apron';
     this.apron = apron;
     this.group.add(apron);
-    void materials;
   }
 
   /**
@@ -465,37 +471,24 @@ export class StageFloor {
    * outside the play bounds so nothing can trip on them, and they break the
    * slab up exactly where the eye would otherwise notice it tiling.
    */
-  #buildDrains(materials) {
-    const trenches = [];
+  #buildDrains(bins) {
     const runs = [
       { pos: [0, 0, -7.6], size: [22, 0.9], rot: 0 },
       { pos: [-11.1, 0, 2.5], size: [17, 0.8], rot: Math.PI / 2 },
       { pos: [11.1, 0, 2.5], size: [17, 0.8], rot: Math.PI / 2 },
     ];
-    const grates = [];
     for (const r of runs) {
       const [w, d] = r.size;
       // The pit under the grating: a dark box, so the grating reads as holes.
-      trenches.push(place(bevelBox(w, 0.34, d, 0.02), { pos: [r.pos[0], -0.19, r.pos[2]], rot: [0, r.rot, 0] }));
+      bins.dark.push(place(bevelBox(w, 0.34, d, 0.02), { pos: [r.pos[0], -0.19, r.pos[2]], rot: [0, r.rot, 0] }));
       const g = new THREE.PlaneGeometry(w, d);
       g.rotateX(-Math.PI / 2);
       g.rotateY(r.rot);
       g.translate(r.pos[0], this.floorY - 0.025, r.pos[2]);
       const uv = g.attributes.uv;
       for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * (w / 0.9), uv.getY(i) * (d / 0.9));
-      g.setAttribute('uv1', uv.clone());
-      grates.push(g);
+      bins.grate.push(g);
     }
-
-    const trenchMesh = new THREE.Mesh(worldUv(mergeAll(trenches), 1.6), materials.darkMetal);
-    trenchMesh.receiveShadow = true;
-    trenchMesh.name = 'arena.floor.trench';
-    this.group.add(trenchMesh);
-
-    const grateMesh = new THREE.Mesh(mergeAll(grates), materials.grating);
-    grateMesh.receiveShadow = true;
-    grateMesh.name = 'arena.floor.grating';
-    this.group.add(grateMesh);
   }
 
   /**
@@ -593,10 +586,9 @@ export class StageFloor {
   /** @param {number} dt @param {object} envParams live Environment mood params */
   update(dt, time, envParams) {
     this.uniforms.uTime.value = time;
-    if (envParams?.floorRefl !== undefined) {
-      // The mood decides how wet the room is; the floor decides how that reads.
-      this.uniforms.uReflStrength.value = 0.28 + envParams.floorRefl * 1.05;
-    }
+    // The mood decides how wet the room is; the floor decides how that reads.
+    const refl = envParams?.floorRefl ?? 0.32;
+    this.uniforms.uReflStrength.value = (0.28 + refl * 1.05) * this.reflectionScale;
     // Scuffs dry out over the round rather than vanishing on a timer.
     let dirty = false;
     for (let i = 0; i < this._decalLife.length; i++) {

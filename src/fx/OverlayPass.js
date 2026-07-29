@@ -48,6 +48,7 @@ uniform float uSuperFlash;
 
 uniform vec3  uFlashColor;
 uniform float uFlashAmount;
+uniform sampler2D uBeam;
 
 varying vec2 vUv;
 
@@ -159,23 +160,31 @@ void main() {
     if ( uSuper > 0.002 ) {
       vec2 rel = p - sc;
       float ang = atan( rel.y, rel.x );
-      // Volumetric-looking beams: two counter-rotating harmonics so the fan
-      // reads as depth rather than as a spinning wheel.
-      float b1 = pow( abs( sin( ang * 7.0 + uTime * 1.9 ) ), 14.0 );
-      float b2 = pow( abs( sin( ang * 11.0 - uTime * 1.2 + 0.7 ) ), 22.0 );
-      float falloff = exp( -rad * 1.5 ) * smoothstep( 0.02, 0.16, rad );
-      float beams = ( b1 * 0.7 + b2 * 0.45 ) * falloff * uSuper;
-      // A hot core and a wide bloom halo centred on the fighter.
-      float core = exp( -rad * rad * 46.0 ) * uSuper;
-      float halo = exp( -rad * 2.6 ) * 0.35 * uSuper;
-      col += uSuperColor * ( beams * 1.6 + halo ) + vec3( 1.0 ) * core * 0.55;
+      // Volumetric-looking beams. Two counter-rotating harmonics give the fan
+      // its structure; the baked striation map, sampled in polar coordinates and
+      // scrolled outward, gives each shaft the flickering internal detail that
+      // makes it read as light travelling through dust rather than as a wedge.
+      float polarU = ang / 6.2831853;
+      float striateA = texture2D( uBeam, vec2( polarU * 6.0, rad * 1.3 - uTime * 0.55 ) ).r;
+      float striateB = texture2D( uBeam, vec2( polarU * 9.0 + 0.37, rad * 0.8 + uTime * 0.31 ) ).b;
+      float b1 = pow( abs( sin( ang * 7.0 + uTime * 1.9 ) ), 14.0 ) * ( 0.45 + striateA * 1.3 );
+      float b2 = pow( abs( sin( ang * 11.0 - uTime * 1.2 + 0.7 ) ), 22.0 ) * ( 0.45 + striateB * 1.3 );
+      // Everything here stays *local*. Tinting the whole frame with the
+      // character colour reads as a broken gel, not as a character powering up;
+      // the drama comes from the desaturated surroundings, not from more paint.
+      float falloff = exp( -rad * 2.4 ) * smoothstep( 0.02, 0.14, rad );
+      float beams = ( b1 * 0.6 + b2 * 0.4 ) * falloff * uSuper;
+      // A hot core and a tight bloom halo centred on the fighter.
+      float core = exp( -rad * rad * 60.0 ) * uSuper;
+      float halo = exp( -rad * 4.2 ) * 0.14 * uSuper;
+      col += uSuperColor * ( beams * 0.5 + halo ) + vec3( 1.0 ) * core * 0.35;
       // Charge ripple travelling outward through the drained world.
       float ripple = sin( rad * 26.0 - uTime * 7.0 ) * 0.5 + 0.5;
-      col += uSuperColor * pow( ripple, 6.0 ) * falloff * uSuper * 0.35;
-      col *= 1.0 - smoothstep( 0.35, 1.05, rad ) * uSuper * 0.45;
+      col += uSuperColor * pow( ripple, 8.0 ) * falloff * uSuper * 0.14;
+      col *= 1.0 - smoothstep( 0.3, 0.95, rad ) * uSuper * 0.55;
     }
 
-    col = mix( col, uSuperColor * 1.4 + vec3( 0.85 ), uSuperFlash );
+    col = mix( col, uSuperColor * 0.55 + vec3( 0.92 ), uSuperFlash * 0.85 );
   }
 
   // --- punctuation ----------------------------------------------------------
@@ -220,6 +229,7 @@ export class OverlayPass extends Pass {
       uSuperFlash: { value: 0 },
       uFlashColor: { value: new THREE.Color(1, 1, 1) },
       uFlashAmount: { value: 0 },
+      uBeam: { value: null },
     };
 
     this.material = new THREE.ShaderMaterial({
@@ -232,6 +242,12 @@ export class OverlayPass extends Pass {
 
     this.fsQuad = new FullScreenQuad(this.material);
   }
+
+  /**
+   * Supplies the baked striation map used by the overdrive beams.
+   * @param {THREE.Texture} beam
+   */
+  setBeamTexture(beam) { this.uniforms.uBeam.value = beam || null; }
 
   /**
    * Recomputes the master gate. Skipping the whole shader body when nothing is

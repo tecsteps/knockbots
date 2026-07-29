@@ -94,7 +94,11 @@ export function bakeSmokePuff(size = 192, seed = 4211) {
       const w = fbm3(u * 3.1 + 11, v * 3.1 + 5, 0.5, { octaves: 3, period: 8, seed: seed + 7 });
       const n = ridged3(u * 4.6 + w * 0.55, v * 4.6 + w * 0.55, 1.7, { octaves: 5, period: 12, seed });
       const lobes = 1 - smoothstep(0.42, 1.02, r - (n - 0.5) * 0.42);
-      density[y * size + x] = clamp01(lobes * (0.45 + n * 0.75));
+      // Hard cutoff at the sprite border. Without it the billow noise leaves a
+      // few percent of alpha on the quad edge and every puff shows as a
+      // rectangle the moment two of them overlap.
+      const border = 1 - smoothstep(0.74, 0.99, r);
+      density[y * size + x] = clamp01(lobes * (0.45 + n * 0.75) * border);
     }
   }
 
@@ -119,32 +123,8 @@ export function bakeSmokePuff(size = 192, seed = 4211) {
       data[o] = b(nx * 0.5 + 0.5);
       data[o + 1] = b(ny * 0.5 + 0.5);
       data[o + 2] = b(clamp01(Math.pow(d, 0.7)));
-      data[o + 3] = b(clamp01(smoothstep(0.03, 0.55, d)));
-    }
-  }
-  return finish(data, size, size);
-}
-
-/**
- * Radial glow kernel used for flashes, thruster cores and muzzle bloom. Two
- * stacked exponentials: a tight core plus a wide halo, which is what a real
- * lens does and what a single gaussian never gets right.
- */
-export function bakeGlowTexture(size = 128) {
-  const data = new Uint8Array(size * size * 4);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const u = (x + 0.5) / size - 0.5;
-      const v = (y + 0.5) / size - 0.5;
-      const r = Math.min(1, Math.sqrt(u * u + v * v) * 2);
-      const core = Math.exp(-r * r * 26);
-      const halo = Math.exp(-r * 3.4) * 0.34;
-      const a = clamp01((core + halo) * (1 - smoothstep(0.85, 1.0, r)));
-      const i = (y * size + x) * 4;
-      data[i] = b(clamp01(a + core * 0.8));
-      data[i + 1] = b(a);
-      data[i + 2] = b(clamp01(a * 0.92));
-      data[i + 3] = b(a);
+      // A gentle coverage ramp: a steep one turns every puff into a cutout.
+      data[o + 3] = b(clamp01(Math.pow(clamp01(d / 0.68), 1.3)));
     }
   }
   return finish(data, size, size);
@@ -199,8 +179,8 @@ export function bakeRingProfile(w = 512) {
     // both squares it and the ring collapses into a wireframe hoop.
     // The outer boundary tapers over the last fifth of the profile; a hard cut
     // there is what turns an expanding shell back into a drawn circle.
-    const envelope = clamp01(Math.exp(-Math.pow((t - 0.76) * 2.7, 2)) * 0.92 + wake * 0.7)
-      * (1 - smoothstep(0.86, 1.0, t));
+    const envelope = clamp01(Math.exp(-Math.pow((t - 0.78) * 3.5, 2)) * 0.95 + wake * 0.26)
+      * (1 - smoothstep(0.87, 1.0, t));
     const refract = Math.exp(-Math.pow((t - 0.79) * 8.0, 2)) - Math.exp(-Math.pow((t - 0.55) * 6.0, 2)) * 0.7;
     for (let y = 0; y < h; y++) {
       const i = (y * w + x) * 4;
@@ -315,6 +295,11 @@ export function bakeDecalAtlas(size = 1024, aniso = 8) {
       const v = (y + 0.5) / half - 0.5;
       const r = Math.sqrt(u * u + v * v) * 2;
       const ang = Math.atan2(v, u);
+      // Every cell must vanish inside its inscribed circle. A decal quad is
+      // rotated per instance, so any alpha surviving to the cell border shows up
+      // on the floor as a hard-edged rectangle — the single most obvious tell
+      // that a "decal" is really a sprite.
+      const border = 1 - smoothstep(0.78, 0.97, r);
 
       // --- scorch -------------------------------------------------------
       {
@@ -323,7 +308,7 @@ export function bakeDecalAtlas(size = 1024, aniso = 8) {
         const soot = Math.pow(edge, 1.5) * (0.55 + wob * 0.7);
         const cracks = 1 - smoothstep(0.0, 0.12, worley2(u * 7 + 3, v * 7 + 3, 7, 4242));
         const hot = clamp01(cracks * (1 - smoothstep(0.05, 0.5, r)) * edge);
-        const a = clamp01(soot * 0.95);
+        const a = clamp01(soot * 0.95) * border;
         put(0, 0, x, y, clamp01(0.05 + hot * 0.9), clamp01(0.035 + hot * 0.35), 0.03 + hot * 0.08, a);
       }
 
@@ -341,7 +326,7 @@ export function bakeDecalAtlas(size = 1024, aniso = 8) {
           if (d2 > rad * rad) continue;
           sat = Math.max(sat, 1 - smoothstep(rad * 0.6, rad, Math.sqrt(d2)));
         }
-        const a = clamp01(Math.max(body, sat) * (1 - smoothstep(0.92, 1.0, r)));
+        const a = clamp01(Math.max(body, sat) * (1 - smoothstep(0.92, 1.0, r))) * border;
         const rim = Math.pow(a, 6) * 0.4 + Math.pow(clamp01(1 - Math.abs(a - 0.6) * 4), 3) * 0.5;
         put(1, 0, x, y, clamp01(0.06 + rim), clamp01(0.08 + rim * 1.1), clamp01(0.1 + rim * 1.25), a);
       }
@@ -353,7 +338,7 @@ export function bakeDecalAtlas(size = 1024, aniso = 8) {
         const reach = 1 - smoothstep(0.25, 0.98, r);
         const dust = Math.pow(1 - smoothstep(0.1, 0.75, r), 1.6) * 0.42;
         const detail = fbm3(u * 9, v * 9, 4.0, { octaves: 4, period: 9, seed: 5150 });
-        const a = clamp01(crack * reach * (0.6 + detail * 0.8) + dust * detail);
+        const a = clamp01(crack * reach * (0.6 + detail * 0.8) + dust * detail) * border;
         put(0, 1, x, y, clamp01(0.1 + crack * reach * 0.35), clamp01(0.1 + crack * reach * 0.32), clamp01(0.11 + crack * reach * 0.3), a);
       }
 
@@ -361,8 +346,9 @@ export function bakeDecalAtlas(size = 1024, aniso = 8) {
       {
         const smear = fbm3(u * 3.0, v * 8.0, 6.0, { octaves: 4, period: 8, seed: 2718 });
         const shape = 1 - smoothstep(0.2, 1.0, r * (0.7 + Math.abs(v) * 1.4));
-        const a = clamp01(shape * (0.25 + smear * 0.85) * 0.7);
-        const tone = 0.55 + smear * 0.4;
+        // Ground dust, not paint: low contrast, low alpha, warm-grey.
+        const a = clamp01(shape * (0.2 + smear * 0.7) * 0.44) * border;
+        const tone = 0.4 + smear * 0.26;
         put(1, 1, x, y, tone, tone * 0.97, tone * 0.92, a);
       }
     }
@@ -408,7 +394,6 @@ export function bakeFxTextures(quality = 'ultra', maxAnisotropy = 8) {
   return {
     spark: bakeSparkTexture(px(64)),
     smoke: bakeSmokePuff(px(192)),
-    glow: bakeGlowTexture(px(128)),
     droplet: bakeDropletTexture(px(64)),
     ring: bakeRingProfile(512),
     beam: bakeBeamTexture(64, 256),

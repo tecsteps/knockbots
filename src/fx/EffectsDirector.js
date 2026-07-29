@@ -63,33 +63,33 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
 const HIT_FX = {
   [WEIGHT.LIGHT]: {
     sparks: 26, speed: 6.2, size: 0.028, heat: 2.3,
-    ring: 0.48, ringLife: 0.17, thick: 0.5, ringHeat: 0.8,
+    ring: 0.48, ringLife: 0.17, thick: 0.34, ringHeat: 1.0,
     flash: 0.34, flashHeat: 1.3, flashLife: 0.1,
-    debris: 0, fluid: 0, light: 26, impact: 0, dust: 0,
+    debris: 0, fluid: 0, light: 3.0, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
     sparks: 50, speed: 7.6, size: 0.033, heat: 2.7,
-    ring: 0.82, ringLife: 0.22, thick: 0.55, ringHeat: 1.1,
+    ring: 0.82, ringLife: 0.22, thick: 0.36, ringHeat: 1.3,
     flash: 0.5, flashHeat: 1.7, flashLife: 0.13,
-    debris: 0, fluid: 5, light: 44, impact: 0, dust: 2,
+    debris: 0, fluid: 5, light: 5.0, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
     sparks: 104, speed: 9.6, size: 0.04, heat: 3.2,
-    ring: 1.5, ringLife: 0.32, thick: 0.6, ringHeat: 1.5,
+    ring: 1.5, ringLife: 0.3, thick: 0.42, ringHeat: 1.7,
     flash: 0.82, flashHeat: 2.3, flashLife: 0.17,
-    debris: 5, fluid: 12, light: 88, impact: 0.55, dust: 6,
+    debris: 5, fluid: 12, light: 12.0, impact: 0.55, dust: 6,
   },
   [WEIGHT.LAUNCHER]: {
     sparks: 118, speed: 10.6, size: 0.042, heat: 3.3,
-    ring: 1.8, ringLife: 0.38, thick: 0.62, ringHeat: 1.6,
+    ring: 1.8, ringLife: 0.34, thick: 0.44, ringHeat: 1.8,
     flash: 0.95, flashHeat: 2.5, flashLife: 0.19,
-    debris: 6, fluid: 14, light: 96, impact: 0.62, dust: 8,
+    debris: 6, fluid: 14, light: 14.0, impact: 0.62, dust: 8,
   },
   [WEIGHT.ULTRA]: {
     sparks: 200, speed: 13.5, size: 0.052, heat: 3.9,
-    ring: 2.85, ringLife: 0.5, thick: 0.68, ringHeat: 2.0,
+    ring: 2.85, ringLife: 0.44, thick: 0.5, ringHeat: 2.2,
     flash: 1.5, flashHeat: 3.2, flashLife: 0.26,
-    debris: 14, fluid: 26, light: 150, impact: 1.0, dust: 14,
+    debris: 14, fluid: 26, light: 26.0, impact: 1.0, dust: 14,
   },
 };
 
@@ -141,6 +141,7 @@ export class EffectsDirector {
     };
     this.overlayCenter = new THREE.Vector2();
     this._speedSeed = 0;
+    this._lightScan = 60;
 
     this._ringData = new Float32Array(MAX_DISTORT_RINGS * 4);
     /** Bound once; `update()` must not build a closure every frame. */
@@ -204,7 +205,17 @@ export class EffectsDirector {
     this._ready = true;
   }
 
-  /** Locates the arena key light so dust and smoke are lit by the same rig. */
+  /**
+   * Locates the arena key light so dust and smoke are lit by the same rig, and
+   * calibrates the impact lights against it.
+   *
+   * Lights are in physical units here, and the two kinds are not interchangeable:
+   * a directional light's intensity is irradiance, a point light's is candela,
+   * and a point light delivers `I / d^2`. So a flash that reads as "one key light
+   * at arm's length" is `keyIntensity * d^2` candela, roughly `2.25 x` at 1.5m —
+   * a couple of dozen, not a couple of hundred. Getting this wrong by the factor
+   * a naive guess produces blows the entire frame to white through the bloom.
+   */
   #findStageLight() {
     let best = null;
     let bestPower = -1;
@@ -214,6 +225,8 @@ export class EffectsDirector {
       if (p > bestPower) { bestPower = p; best = o; }
     });
     this.keyLight = best;
+    const key = best?.isDirectionalLight ? best.intensity : 3.0;
+    this.lightScale = THREE.MathUtils.clamp(key / 3.0, 0.35, 3.0);
   }
 
   // -------------------------------------------------------------------------
@@ -335,7 +348,7 @@ export class EffectsDirector {
       this.#palette(e.defender, 'secondary', _c);
       this.smoke.puff(e.point, {
         count: recipe.dust, dir: _n, speed: 1.9, spread: 1.4,
-        radius: 0.16, size: 0.34, growth: 2.4, life: 0.85,
+        radius: 0.16, size: 0.3, growth: 1.1, life: 0.85,
         buoyancy: 0.35, curl: 0.9, tint: _c.multiplyScalar(0.7),
       });
     }
@@ -359,7 +372,7 @@ export class EffectsDirector {
       heat: 1.6, tint: _c, distort: 0.4,
     });
     this.flashes.pop(e.point, { size: 0.42, life: 0.1, heat: 1.5, tint: _c });
-    this.#flashLight(e.point, 30, 0xbfe4ff);
+    this.#flashLight(e.point, 4, 0xbfe4ff);
   }
 
   #onParry(e) {
@@ -373,7 +386,7 @@ export class EffectsDirector {
       count: 56, speed: 8.5, spread: 1.0, life: 0.5, size: 0.03, heat: 3.0, tint: _c,
     });
     this.flashes.pop(e.point, { size: 1.05, life: 0.2, heat: 2.6, tint: _c });
-    this.#flashLight(e.point, 70, 0xd8f0ff);
+    this.#flashLight(e.point, 9, 0xd8f0ff);
     this.#punch(e.point, 0.3, false);
   }
 
@@ -387,7 +400,7 @@ export class EffectsDirector {
       heat: 1.4, tint: _c.setRGB(1, 0.62, 0.24), distort: 0.5,
     });
     this.flashes.pop(e.point, { size: 0.6, life: 0.14, heat: 1.6, tint: _c.setRGB(1, 0.62, 0.24) });
-    this.#flashLight(e.point, 46, 0xffb066);
+    this.#flashLight(e.point, 6, 0xffb066);
   }
 
   #onPartBreak(e) {
@@ -407,15 +420,15 @@ export class EffectsDirector {
     });
     this.smoke.puff(e.point, {
       count: 10, dir: _n, speed: 2.4, spread: 1.6, radius: 0.2,
-      size: 0.42, growth: 2.8, life: 1.4, buoyancy: 0.5, curl: 1.1,
+      size: 0.38, growth: 1.3, life: 1.4, buoyancy: 0.5, curl: 1.1,
       tint: _c.setRGB(0.16, 0.15, 0.15),
     });
     this.shock.spawn(e.point, {
-      mode: 'facing', radius: 1.6, life: 0.44, thickness: 0.34,
+      mode: 'facing', radius: 1.6, life: 0.42, thickness: 0.4,
       heat: 2.4, tint: _c2, distort: 1.0,
     });
     this.flashes.pop(e.point, { size: 1.1, life: 0.2, heat: 2.5 });
-    this.#flashLight(e.point, 110, 0xffc48a);
+    this.#flashLight(e.point, 16, 0xffc48a);
     this.#punch(e.point, 0.5, false);
   }
 
@@ -424,28 +437,28 @@ export class EffectsDirector {
     _v.copy(e.fighter.position);
     _v.y = this.floorY;
     this.shock.spawn(_v, {
-      mode: 'ground', radius: 2.1, life: 0.55, thickness: 0.3,
+      mode: 'ground', radius: 2.1, life: 0.55, thickness: 0.36,
       heat: 1.6, tint: _c.setRGB(0.9, 0.86, 0.78), distort: 0.7,
     });
-    this.#groundDust(_v, 14, 2.6, 0.55);
-    this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.9, { life: 14, strength: 0.5 });
+    this.#groundDust(_v, 14, 2.6, 0.42);
+    this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.9, { life: 14, strength: 0.34 });
   }
 
   #onKnockdown(e) {
     if (!this.enabled || !e?.point) return;
     _v.copy(e.point); _v.y = this.floorY;
-    this.#groundDust(_v, 22, 3.4, 0.75);
+    this.#groundDust(_v, 22, 3.4, 0.5);
     this.shock.spawn(_v, {
-      mode: 'ground', radius: 2.6, life: 0.6, thickness: 0.36,
+      mode: 'ground', radius: 2.6, life: 0.6, thickness: 0.4,
       heat: 1.2, tint: _c.setRGB(0.86, 0.82, 0.76), distort: 0.6,
     });
     this.#palette(e.fighter, 'trim', _c);
     this.debris.burst(_v, _v2.set(0, 1, 0), {
       count: 6, speed: 3.4, spread: 1.4, size: 0.05, life: 5, color: _c,
     });
-    this.decals.add(DECAL.SCUFF, _v.x, _v.z, 1.35, { life: 20, strength: 0.7 });
+    this.decals.add(DECAL.SCUFF, _v.x, _v.z, 1.35, { life: 20, strength: 0.45 });
     this.decals.add(DECAL.FRACTURE, _v.x, _v.z, 0.8, { life: 22, strength: 0.35 });
-    this.#flashLight(_v, 24, 0xd8c8b0);
+    this.#flashLight(_v, 4, 0xd8c8b0);
   }
 
   #onWallSplat(e) {
@@ -460,11 +473,11 @@ export class EffectsDirector {
     });
     this.smoke.puff(e.point, {
       count: 12, dir: _n, speed: 2.8, spread: 1.5, radius: 0.28,
-      size: 0.5, growth: 2.6, life: 1.5, buoyancy: 0.4, curl: 1.0,
+      size: 0.44, growth: 1.3, life: 1.5, buoyancy: 0.4, curl: 1.0,
       tint: _c2.setRGB(0.3, 0.28, 0.26),
     });
     this.shock.spawn(e.point, {
-      mode: 'facing', radius: 2.4, life: 0.6, thickness: 0.38,
+      mode: 'facing', radius: 2.4, life: 0.55, thickness: 0.42,
       heat: 2.6, tint: _c2.setRGB(1, 0.92, 0.82), distort: 1.3,
     });
     // The impact dust settles at the base of the wall.
@@ -472,7 +485,7 @@ export class EffectsDirector {
     const fz = THREE.MathUtils.clamp(e.point.z, -ARENA_HALF_DEPTH + 0.3, ARENA_HALF_DEPTH - 0.3);
     this.decals.add(DECAL.SCORCH, fx, fz, 1.1, { life: 24, strength: 0.55 });
     this.flashes.pop(e.point, { size: 1.25, life: 0.22, heat: 2.7 });
-    this.#flashLight(e.point, 120, 0xffd0a0);
+    this.#flashLight(e.point, 18, 0xffd0a0);
     this.#punch(e.point, 0.7, false);
   }
 
@@ -483,13 +496,13 @@ export class EffectsDirector {
     const k = THREE.MathUtils.clamp(speed / 12, 0.2, 1.6);
     _v.copy(e.point); _v.y = this.floorY;
 
-    this.#groundDust(_v, Math.round(10 + 20 * k), 2.2 + 2.4 * k, 0.5 + 0.4 * k);
+    this.#groundDust(_v, Math.round(10 + 18 * k), 2.2 + 2.0 * k, 0.34 + 0.2 * k);
     this.shock.spawn(_v, {
       mode: 'ground', radius: 1.4 + 1.8 * k, life: 0.4 + 0.25 * k,
-      thickness: 0.34, heat: 1.0 + k, tint: _c.setRGB(0.88, 0.84, 0.78),
+      thickness: 0.4, heat: 1.0 + k, tint: _c.setRGB(0.88, 0.84, 0.78),
       distort: 0.5 * k,
     });
-    this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.7 + 0.8 * k, { life: 16, strength: 0.4 + 0.3 * k });
+    this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.7 + 0.8 * k, { life: 16, strength: 0.3 + 0.22 * k });
     if (k > 0.9) {
       this.sparks.burst(_v, _v2.set(0, 1, 0), {
         count: 40, speed: 5.0, spread: 1.0, life: 0.45, size: 0.028, heat: 2.3,
@@ -505,7 +518,7 @@ export class EffectsDirector {
     _v.copy(e.point); _v.y = this.floorY + 0.02;
     this.smoke.puff(_v, {
       count: Math.round(1 + force * 3), dir: _v2.set(0, 1, 0), speed: 0.5 + force,
-      spread: 0.9, radius: 0.14, size: 0.2 + force * 0.14, growth: 2.6,
+      spread: 0.9, radius: 0.14, size: 0.18 + force * 0.1, growth: 1.0,
       life: 0.65 + force * 0.3, buoyancy: 0.16, curl: 0.7,
       tint: _c.setRGB(0.42, 0.4, 0.37),
     });
@@ -524,7 +537,7 @@ export class EffectsDirector {
     _v3.copy(_v).setY(this.floorY + 0.12);
     this.smoke.puff(_v3, {
       count: 12, dir: _v2, speed: 2.4, spread: 1.2, radius: 0.3,
-      size: 0.34, growth: 2.8, life: 0.95, buoyancy: 0.2, curl: 1.0,
+      size: 0.3, growth: 1.2, life: 0.95, buoyancy: 0.2, curl: 1.0,
       tint: _c.setRGB(0.46, 0.44, 0.41),
     });
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.5, { life: 8, strength: 0.28 });
@@ -535,22 +548,22 @@ export class EffectsDirector {
     _v.y += 1.15;
     _v.x += (f.facing || 1) * -0.22;
     this.smoke.puff(_v, {
-      count: 9, dir: _v2, speed: 4.2, spread: 0.7, radius: 0.1,
-      size: 0.16, growth: 3.4, life: 0.42, buoyancy: 0.1, curl: 0.5,
-      tint: _c2, emissive: 0.8,
+      count: 14, dir: _v2, speed: 5.0, spread: 0.5, radius: 0.07,
+      size: 0.11, growth: 1.6, life: 0.3, buoyancy: 0.05, curl: 0.45,
+      tint: _c2, emissive: 0.9,
     });
     this.sparks.burst(_v, _v2, {
       count: 18, speed: 6.5, spread: 0.35, life: 0.3, size: 0.02,
       heat: 2.2, tint: _c2,
     });
-    this.#flashLight(_v, 22, _c2.getHex());
+    this.#flashLight(_v, 3, _c2.getHex());
   }
 
   #onJump(e) {
     if (!this.enabled || !e?.fighter) return;
     _v.copy(e.fighter.position);
     _v.y = this.floorY;
-    this.#groundDust(_v, 10, 2.0, 0.42);
+    this.#groundDust(_v, 10, 2.0, 0.34);
     this.decals.add(DECAL.SCUFF, _v.x, _v.z, 0.44, { life: 8, strength: 0.24 });
   }
 
@@ -566,7 +579,7 @@ export class EffectsDirector {
     _v3.copy(_v).setY(this.floorY + 0.4);
     this.smoke.puff(_v3, {
       count: 16, dir: _v2.set(0, 1, 0), speed: 2.6, spread: 0.9, radius: 0.42,
-      size: 0.3, growth: 2.2, life: 1.1, buoyancy: 0.9, curl: 0.8,
+      size: 0.28, growth: 1.1, life: 1.1, buoyancy: 0.9, curl: 0.8,
       tint: _c, emissive: 0.55,
     });
     this.sparks.burst(_v.setY(this.floorY + 0.2), _v2.set(0, 1, 0), {
@@ -590,25 +603,25 @@ export class EffectsDirector {
     // A column of charge: ground ring, rising embers, a coloured plume and a
     // scorch ring that stays on the floor after the move.
     this.shock.spawn(_v, {
-      mode: 'ground', radius: 3.4, life: 0.9, thickness: 0.26,
-      heat: 3.2, tint: _c, distort: 1.4,
+      mode: 'ground', radius: 2.4, life: 0.75, thickness: 0.4,
+      heat: 1.8, tint: _c, distort: 1.0,
     });
     _v3.copy(_v).setY(this.floorY + 0.1);
     this.sparks.burst(_v3, _v2.set(0, 1, 0), {
-      count: 190, speed: 9.5, spread: 0.5, life: 1.3, size: 0.032,
-      heat: 3.0, tint: _c,
+      count: 110, speed: 9.0, spread: 0.5, life: 1.2, size: 0.026,
+      heat: 2.8, tint: _c,
     });
     _v3.setY(this.floorY + 0.7);
     this.smoke.puff(_v3, {
-      count: 26, dir: _v2.set(0, 1, 0), speed: 3.4, spread: 1.0, radius: 0.5,
-      size: 0.42, growth: 2.4, life: 1.6, buoyancy: 1.2, curl: 1.2,
-      tint: _c, emissive: 0.7,
+      count: 22, dir: _v2.set(0, 1, 0), speed: 3.6, spread: 1.0, radius: 0.34,
+      size: 0.15, growth: 1.3, life: 1.1, buoyancy: 1.3, curl: 1.3,
+      tint: _c, emissive: 0.5,
     });
     this.decals.add(DECAL.SCORCH, _v.x, _v.z, 1.9, {
       life: 26, strength: 0.7, tint: _c2.copy(_c).lerp(_c3.setRGB(0.2, 0.2, 0.2), 0.55),
     });
     _v3.setY(this.floorY + 1.1);
-    this.#flashLight(_v3, 180, _c.getHex());
+    this.#flashLight(_v3, 30, _c.getHex());
   }
 
   #onSuperHit(e) {
@@ -620,23 +633,23 @@ export class EffectsDirector {
 
     this.overdrive.flash = 1;
     this.sparks.burst(_v, _v2.set(0, 1, 0), {
-      count: 260, speed: 14.0, spread: 1.0, life: 1.0, size: 0.05, heat: 3.8,
+      count: 150, speed: 13.0, spread: 1.0, life: 0.9, size: 0.036, heat: 3.4,
     });
     this.shock.spawn(_v, {
-      mode: 'facing', radius: 4.2, life: 0.85, thickness: 0.4,
-      heat: 3.8, tint: _c, distort: 2.0,
+      mode: 'facing', radius: 2.8, life: 0.55, thickness: 0.45,
+      heat: 2.2, tint: _c, distort: 1.6,
     });
     this.shock.spawn(_v.clone().setY(this.floorY), {
-      mode: 'ground', radius: 5.0, life: 0.95, thickness: 0.32,
-      heat: 2.4, tint: _c, distort: 1.2,
+      mode: 'ground', radius: 3.4, life: 0.65, thickness: 0.42,
+      heat: 1.5, tint: _c, distort: 0.9,
     });
     this.#palette(d, 'trim', _c2);
     this.debris.burst(_v, _v2.set(0, 0.6, 0).normalize(), {
       count: 26, speed: 8.0, spread: 1.4, size: 0.09, life: 6, color: _c2,
     });
-    this.flashes.pop(_v, { size: 3.2, life: 0.34, heat: 4.0, tint: _c });
+    this.flashes.pop(_v, { size: 1.9, life: 0.3, heat: 3.4, tint: _c });
     this.#punch(_v, 1.0, true);
-    this.#flashLight(_v, 260, 0xffffff);
+    this.#flashLight(_v, 42, 0xffffff);
   }
 
   #onRoundEnd(e) {
@@ -650,15 +663,20 @@ export class EffectsDirector {
   // shared spawn helpers
   // -------------------------------------------------------------------------
 
-  /** A ring of dust kicked outward along the floor. */
+  /**
+   * A ring of dust kicked outward along the floor. Spawned a little above the
+   * floor plane: a billboard whose centre sits on the ground cuts a hard line
+   * across it on tiers that have no depth prepass to fade against.
+   */
   #groundDust(at, count, speed, size) {
     const c = Math.max(1, Math.round(count * this.budget));
+    _v3.copy(at).setY(at.y + size * 0.55);
     for (let i = 0; i < c; i += 4) {
       const a = Math.random() * Math.PI * 2;
       _v2.set(Math.cos(a), 0.42, Math.sin(a)).normalize();
-      this.smoke.puff(at, {
+      this.smoke.puff(_v3, {
         count: Math.min(4, c - i), dir: _v2, speed, spread: 0.7, radius: 0.24,
-        size, growth: 3.0, life: 1.25, buoyancy: 0.18, curl: 1.1,
+        size, growth: 1.4, life: 1.25, buoyancy: 0.18, curl: 1.1,
         tint: _c.setRGB(0.44, 0.42, 0.38),
       });
     }
@@ -674,8 +692,8 @@ export class EffectsDirector {
     this._lightCursor = (this._lightCursor + 1) % this.impactLights.length;
     l.position.copy(at);
     l.color.setHex(hex);
-    l.intensity = intensity;
-    l.distance = 5 + intensity * 0.05;
+    l.intensity = intensity * (this.lightScale ?? 1);
+    l.distance = 6.5;
     l.visible = true;
     l.userData.decay = 1;
   }
@@ -706,6 +724,12 @@ export class EffectsDirector {
 
   /**
    * The one per-frame entry point.
+   *
+   * `alpha` is accepted for interface symmetry but deliberately unused: every
+   * particle here is parameterised on the FX clock rather than on sim ticks, and
+   * the bone matrices trails read from have already been interpolated by
+   * `Fighter.render()` before this runs.
+   *
    * @param {number} dt seconds of *visual* time (already scaled by hitstop)
    * @param {number} alpha simulation interpolation factor, 0..1
    */
@@ -718,6 +742,12 @@ export class EffectsDirector {
       this.#applyQuality(this.pipeline.quality);
     }
     this.camera = this.pipeline?.camera || this.camera;
+    // The environment can swap its rig when the lighting mood cross-fades.
+    // Rescanning is a full scene traverse, so it is throttled to once a second.
+    if ((!this.keyLight || !this.keyLight.parent) && --this._lightScan <= 0) {
+      this._lightScan = 60;
+      this.#findStageLight();
+    }
 
     this.#updateTrails(step);
     this.debris.update(step);
@@ -810,7 +840,7 @@ export class EffectsDirector {
       if (d <= 0) { l.visible = false; l.intensity = 0; l.userData.decay = 0; continue; }
       l.userData.decay = d;
       l.intensity *= Math.exp(-dt * 11.0);
-      if (l.intensity < 0.4) { l.visible = false; l.intensity = 0; l.userData.decay = 0; }
+      if (l.intensity < 0.05) { l.visible = false; l.intensity = 0; l.userData.decay = 0; }
     }
   }
 
@@ -924,6 +954,7 @@ export class EffectsDirector {
     if (composer === this._installedComposer && composer.passes.includes(this._pass)) return;
 
     this._pass = new OverlayPass();
+    this._pass.setBeamTexture(this.textures.beam);
     const size = this.pipeline.renderer?.getDrawingBufferSize?.(_size);
     this._pass.setSize(size ? size.x : 1920, size ? size.y : 1080);
     composer.addPass(this._pass);

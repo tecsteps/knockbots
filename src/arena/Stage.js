@@ -40,7 +40,7 @@ import { StageStructure } from './StageStructure.js';
 import { StageVolumetrics } from './StageVolumetrics.js';
 import { StagePracticals } from './StagePracticals.js';
 import { PointBurst } from './StageParticles.js';
-import { triCount } from './GeoKit.js';
+import { triCount, mergeAll, worldUv } from './GeoKit.js';
 
 /** Reflection buffer as a fraction of the drawing buffer, per quality tier. */
 const REFLECT_SCALE = { ultra: 0.6, high: 0.5, medium: 0.36, low: 0 };
@@ -98,22 +98,33 @@ export class Stage {
     });
     this.reflector.enabled = REFLECT_SCALE[this.quality] > 0;
 
+    /**
+     * Every static surface in the arena, sorted by material. The floor's drain
+     * trenches, the barriers, the hangar and the light fittings all deposit
+     * geometry here and it is merged exactly once, at the end of `init`, into
+     * one mesh per material. That is what keeps a set of six hundred primitives
+     * inside a fighting game's draw-call budget.
+     */
+    const bins = { dark: [], steel: [], concrete: [], hazard: [], grate: [], chain: [], container: [], plate: [] };
+
     this.floor = new StageFloor({
       reflector: this.reflector,
       materials: this.materials,
       textures: this.textures,
+      bins,
       quality: this.quality,
     });
     this.root.add(this.floor.group);
     await yieldToPaint();
 
-    this.walls = new StageWalls({ materials: this.materials, textures: this.textures });
+    this.walls = new StageWalls({ materials: this.materials, textures: this.textures, bins });
     this.root.add(this.walls.group);
     await yieldToPaint();
 
     this.structure = new StageStructure({
       materials: this.materials,
       textures: this.textures,
+      bins,
       quality: this.quality,
     });
     this.root.add(this.structure.group);
@@ -126,9 +137,13 @@ export class Stage {
       environment: this.environment,
       materials: this.materials,
       textures: this.textures,
+      bins,
       sparkPoint: this.structure.sparkPoint,
     });
     this.root.add(this.practicals.group);
+
+    this.#commitBins(bins);
+    await yieldToPaint();
 
     /**
      * Where the visible emitters are, so lighting can be matched to the set.
@@ -151,6 +166,42 @@ export class Stage {
 
     this.scene.add(this.root);
     this.ready = true;
+  }
+
+  /**
+   * Merges the shared geometry bins into one mesh per material.
+   *
+   * `metresPerTile` is null for the sets whose UVs were authored deliberately —
+   * grating and chain-link carry a wire-scale layout that a world-space
+   * reprojection would destroy, and the warning plates are stencilled signs
+   * rather than a tiling surface.
+   */
+  #commitBins(bins) {
+    const spec = [
+      ['concrete', this.materials.concrete, 2.6, true],
+      ['hazard', this.materials.hazard, 1.6, true],
+      ['steel', this.materials.steel, 1.5, true],
+      ['dark', this.materials.darkMetal, 1.9, true],
+      ['container', this.materials.container, 2.2, true],
+      ['grate', this.materials.grating, null, true],
+      ['chain', this.materials.chainLink, null, false],
+      ['plate', this.materials.warningPlate, null, false],
+    ];
+    this.merged = [];
+    for (const [key, mat, uv, shadows] of spec) {
+      const list = bins[key];
+      if (!list || !list.length) continue;
+      const geo = mergeAll(list);
+      if (uv) worldUv(geo, uv);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.name = `arena.set.${key}`;
+      mesh.castShadow = shadows;
+      mesh.receiveShadow = true;
+      mesh.matrixAutoUpdate = false;
+      this.root.add(mesh);
+      this.merged.push(mesh);
+      bins[key] = null;
+    }
   }
 
   /** Dust and grit thrown off a wall or the deck, plus the wall flash lights. */
@@ -334,7 +385,7 @@ export class Stage {
     if (!this.ready) return;
     const scale = REFLECT_SCALE[q];
     this.reflector.enabled = scale > 0;
-    this.floor.uniforms.uReflStrength.value = scale > 0 ? this.floor.uniforms.uReflStrength.value : 0;
+    this.floor.reflectionScale = scale > 0 ? 1 : 0;
     this._reflectSize.w = 0;
     const shafts = q === 'low' ? 2 : q === 'medium' ? 3 : this.volumetrics.shafts.length;
     this.volumetrics.shafts.forEach((s, i) => { s.visible = i < shafts; });
@@ -368,6 +419,7 @@ export class Stage {
     this.practicals.dispose();
     this.dust.dispose();
     this.grit.dispose();
+    for (const m of this.merged ?? []) m.geometry.dispose();
     this.reflector.dispose();
     this.materialLibrary.dispose();
     this.ready = false;

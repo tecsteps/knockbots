@@ -52,7 +52,7 @@ export class StageStructure {
    * @param {Record<string, THREE.Texture>} deps.textures
    * @param {'ultra'|'high'|'medium'|'low'} [deps.quality]
    */
-  constructor({ materials, textures, quality = 'high' }) {
+  constructor({ materials, textures, bins, quality = 'high' }) {
     this.group = new THREE.Group();
     this.group.name = 'arena.structure';
     this.materials = materials;
@@ -62,7 +62,9 @@ export class StageStructure {
     /** Shared clock for every shader-side animation in the set. */
     this.timeUniform = { value: 0 };
 
-    this.bins = { dark: [], steel: [], concrete: [], grate: [], chain: [], container: [] };
+    // Static geometry goes into the arena-wide bins; the Stage merges every
+    // producer's contributions into one mesh per material at the end of init.
+    this.bins = bins;
 
     this.#backEdge();
     this.#frontEdge();
@@ -71,37 +73,14 @@ export class StageStructure {
     this.#machineryBank();
     this.#pipework();
     this.#shellWall();
+    this.#fanShroud();
+    this.#hangingCable();
 
-    this.#commit();
     this.#containers();
     this.#crowd(quality);
     this.#city(quality);
     this.#fan();
     this.#drones();
-    this.#hangingCable();
-  }
-
-  /** Merges each material bin into one mesh. */
-  #commit() {
-    const spec = [
-      ['dark', this.materials.darkMetal, 1.9],
-      ['steel', this.materials.steel, 1.5],
-      ['concrete', this.materials.concrete, 2.6],
-      ['grate', this.materials.grating, null],
-      ['chain', this.materials.chainLink, null],
-      ['container', this.materials.container, 2.2],
-    ];
-    for (const [key, mat, uv] of spec) {
-      const list = this.bins[key];
-      if (!list.length) continue;
-      const geo = mergeAll(list);
-      if (uv) worldUv(geo, uv);
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.name = `arena.structure.${key}`;
-      mesh.castShadow = key !== 'chain';
-      mesh.receiveShadow = true;
-      this.group.add(mesh);
-    }
     this.bins = null;
   }
 
@@ -477,9 +456,9 @@ export class StageStructure {
   #city(quality) {
     const layers = quality === 'low' ? 2 : 3;
     const spec = [
-      { z: -42, count: 26, w: [3, 7], h: [8, 26], spread: 78, tint: 0x1b2430, haze: 0.55, win: 0.85 },
-      { z: -64, count: 24, w: [4, 9], h: [12, 34], spread: 105, tint: 0x161d28, haze: 0.75, win: 0.55 },
-      { z: -92, count: 20, w: [5, 12], h: [16, 44], spread: 140, tint: 0x121821, haze: 0.92, win: 0.32 },
+      { z: -42, count: 26, w: [3, 7], h: [8, 26], spread: 78, tint: 0x1a222d, haze: 1.5, win: 0.8 },
+      { z: -64, count: 24, w: [4, 9], h: [12, 34], spread: 105, tint: 0x151b24, haze: 2.1, win: 0.55 },
+      { z: -92, count: 20, w: [5, 12], h: [16, 44], spread: 140, tint: 0x11161d, haze: 2.9, win: 0.34 },
     ];
     this.cityMaterials = [];
     const rng = this.rng;
@@ -564,17 +543,21 @@ export class StageStructure {
               float across = mix( vSize.x, vSize.z, abs( vNrm.x ) );
               vec2 uvw = vec2( ( abs( vNrm.x ) > 0.5 ? vLocal.z : vLocal.x ) * across,
                                vLocal.y * vSize.y );
-              vec2 cellId = floor( uvw / vec2( 1.6, 2.9 ) );
-              vec2 f = fract( uvw / vec2( 1.6, 2.9 ) );
-              float pane = step( 0.18, f.x ) * step( f.x, 0.82 ) * step( 0.22, f.y ) * step( f.y, 0.78 );
+              vec2 pitch = vec2( 0.95, 1.9 );
+              vec2 cellId = floor( uvw / pitch );
+              vec2 f = fract( uvw / pitch );
+              float pane = step( 0.24, f.x ) * step( f.x, 0.76 ) * step( 0.3, f.y ) * step( f.y, 0.74 );
               float r = hash21( cellId + vHash * 97.0 );
-              float on = step( 1.0 - uWindowDensity * 0.42, r );
+              float on = step( 1.0 - uWindowDensity * 0.3, r );
               // A handful blink; most are simply on or off for the night.
-              float blink = r > 0.985 ? step( 0.5, fract( uTime * 0.31 + r * 10.0 ) ) : 1.0;
-              float lit = pane * on * blink * ( 0.4 + r * 0.9 );
-              col = mix( col, uWindow * uWindowGain, lit );
+              float blink = r > 0.99 ? step( 0.5, fract( uTime * 0.31 + r * 10.0 ) ) : 1.0;
+              // Offices run cold, flats run warm: mixing the two is what stops a
+              // skyline reading as one orange stencil.
+              vec3 lamp = mix( uWindow, vec3( 0.55, 0.74, 1.0 ), step( 0.55, fract( r * 7.3 ) ) );
+              float lit = pane * on * blink * ( 0.25 + r * 0.55 );
+              col = mix( col, lamp * uWindowGain, lit );
             }
-            float haze = 1.0 - exp( -vDepth * 0.0125 * uHazeAmount );
+            float haze = 1.0 - exp( -max( 0.0, vDepth - 22.0 ) * 0.0125 * uHazeAmount );
             col = mix( col, uHaze, haze );
             gl_FragColor = vec4( col, 1.0 );
           }
@@ -588,6 +571,17 @@ export class StageStructure {
       mesh.frustumCulled = false;
       this.cityMaterials.push(mat);
       this.group.add(mesh);
+    }
+  }
+
+  /** Housing and guard for the extract fan. Static, so it merges with the set. */
+  #fanShroud() {
+    const b = this.bins;
+    b.dark.push(place(new THREE.CylinderGeometry(2.5, 2.5, 0.9, 24, 1, true), { pos: [-6.2, 6.3, -13.7], rot: [Math.PI / 2, 0, 0] }));
+    b.steel.push(place(new THREE.TorusGeometry(2.5, 0.09, 6, 26), { pos: [-6.2, 6.3, -13.25] }));
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI;
+      b.steel.push(place(bevelBox(5.0, 0.05, 0.05, 0.01), { pos: [-6.2, 6.3, -13.2], rot: [0, 0, a] }));
     }
   }
 
@@ -608,20 +602,6 @@ export class StageStructure {
     blades.castShadow = true;
     this.fan = blades;
     this.group.add(blades);
-
-    // Housing and guard, merged into the static dark bin is impossible now that
-    // the bins are committed, so it rides along on the fan's own material.
-    const shroud = [];
-    shroud.push(place(new THREE.CylinderGeometry(2.5, 2.5, 0.9, 24, 1, true), { pos: [-6.2, 6.3, -13.7], rot: [Math.PI / 2, 0, 0] }));
-    shroud.push(place(new THREE.TorusGeometry(2.5, 0.09, 6, 26), { pos: [-6.2, 6.3, -13.25] }));
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI;
-      shroud.push(place(bevelBox(5.0, 0.05, 0.05, 0.01), { pos: [-6.2, 6.3, -13.2], rot: [0, 0, a] }));
-    }
-    const guard = new THREE.Mesh(worldUv(mergeAll(shroud), 1.2), this.materials.steel);
-    guard.name = 'arena.structure.fanGuard';
-    guard.castShadow = true;
-    this.group.add(guard);
   }
 
   /**
@@ -685,12 +665,7 @@ export class StageStructure {
       new THREE.Vector3(10.1, 7.1, -13.2),
       new THREE.Vector3(10.35, 6.1, -13.0),
     ];
-    const geo = mergeAll([tube(pts, 0.055, 6), tube(tail, 0.045, 6)]);
-    worldUv(geo, 0.6);
-    const cable = new THREE.Mesh(geo, this.materials.rubber);
-    cable.name = 'arena.structure.cable';
-    cable.castShadow = true;
-    this.group.add(cable);
+    this.bins.dark.push(tube(pts, 0.055, 6), tube(tail, 0.045, 6));
     /** Where the arc lives; the Practicals hang the spark emitter here. */
     this.sparkPoint = new THREE.Vector3(10.35, 6.05, -13.0);
   }
@@ -730,7 +705,7 @@ export class StageStructure {
     // what keeps a magenta night and a golden dusk from sharing a grey skyline.
     if (envParams?.fog?.color && this.cityMaterials) {
       for (const mat of this.cityMaterials) {
-        mat.uniforms.uHaze.value.copy(envParams.fog.color).multiplyScalar(1.8);
+        mat.uniforms.uHaze.value.copy(envParams.fog.color).multiplyScalar(2.4);
         mat.uniforms.uWindow.value.copy(envParams.rimB?.color ?? mat.uniforms.uWindow.value).lerp(new THREE.Color(0xffc98a), 0.6);
       }
     }

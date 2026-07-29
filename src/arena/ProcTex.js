@@ -384,8 +384,12 @@ export function textWidth(text, cell) {
  * @param {number} y
  * @param {number} cell texel size of one font pixel
  * @param {number} [feather=1] edge softness in texels
+ * @param {boolean} [flipY=true] draw glyph rows bottom-up. Row 0 of a texture
+ *   lands at v=0, which is the *bottom* of a quad, so text stamped top-down
+ *   renders upside down. Defaults on because that is almost always what the
+ *   caller wants.
  */
-export function stampText(field, size, text, x, y, cell, feather = 1) {
+export function stampText(field, size, text, x, y, cell, feather = 1, flipY = true) {
   const s = text.toUpperCase();
   for (let c = 0; c < s.length; c++) {
     const glyph = FONT5x7[s[c]];
@@ -397,7 +401,7 @@ export function stampText(field, size, text, x, y, cell, feather = 1) {
       for (let b = 0; b < 5; b++) {
         if (!(bits & (1 << (4 - b)))) continue;
         const px0 = gx + b * cell;
-        const py0 = y + r * cell;
+        const py0 = y + (flipY ? 6 - r : r) * cell;
         const i0 = Math.max(0, Math.floor(px0 - feather));
         const i1 = Math.min(size - 1, Math.ceil(px0 + cell + feather));
         const j0 = Math.max(0, Math.floor(py0 - feather));
@@ -563,15 +567,18 @@ export function makeTexture(data, size, opts = {}) {
 }
 
 /**
- * A small alpha-only texture from a mask field, for decals, sprites and
- * chain-link cutouts.
+ * A cutout mask texture, for chain-link, grating and decals.
+ *
+ * The mask is written to every channel, not just alpha: three's `alphaMap`
+ * reads the **green** channel, while sprite shaders here read alpha. Filling
+ * all four means one texture serves both without a silent full-opacity bug.
  */
 export function makeAlpha(mask, size, opts = {}) {
   const data = new Uint8Array(size * size * 4);
   for (let k = 0; k < size * size; k++) {
     const v = Math.round(clamp01(mask[k]) * 255);
     const o = k * 4;
-    data[o] = 255; data[o + 1] = 255; data[o + 2] = 255; data[o + 3] = v;
+    data[o] = v; data[o + 1] = v; data[o + 2] = v; data[o + 3] = v;
   }
   return makeTexture(data, size, opts);
 }

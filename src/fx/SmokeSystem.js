@@ -121,13 +121,18 @@ void main() {
   float diffuse = pow( wrapped, 1.7 );
   // Forward scatter: strongest when the key light points back at the camera.
   float toward = clamp( uLightDir.z, 0.0, 1.0 );
-  float scatter = pow( toward, 2.2 ) * ( 1.0 - thickness ) * 1.35;
+  float scatter = pow( toward, 2.2 ) * ( 1.0 - thickness ) * 0.5;
   // Silhouette rim, where the sheet is thinnest and the most light gets through.
-  float rim = pow( 1.0 - clamp( n.z, 0.0, 1.0 ), 2.6 ) * 0.55;
+  float rim = pow( 1.0 - clamp( n.z, 0.0, 1.0 ), 2.6 ) * 0.3;
 
-  vec3 lit = uAmbient * ( 0.55 + thickness * 0.6 )
-           + uLightColor * ( diffuse * ( 0.35 + thickness * 0.9 ) + scatter + rim * toward );
-  vec3 col = vTint * lit + vTint * vEmissive;
+  // Kept deliberately under unity: dust is a dielectric with ~0.3 albedo, and a
+  // cloud that reaches the top of the display range stops reading as volume.
+  vec3 lit = uAmbient * ( 0.45 + thickness * 0.45 )
+           + uLightColor * ( diffuse * ( 0.22 + thickness * 0.42 ) + scatter + rim * toward );
+  // Self-illuminated plumes run hot in the dense core and keep the character
+  // hue at the wisps, which is what a thruster exhaust actually looks like.
+  vec3 glow = mix( vTint, vec3( 1.0 ), clamp( thickness * thickness * 0.7, 0.0, 1.0 ) );
+  vec3 col = vTint * lit + glow * vEmissive * ( 0.35 + thickness * 1.1 );
 
   // Soft particles: fade where the puff intersects opaque geometry.
   float soft = 1.0;
@@ -167,7 +172,7 @@ export class SmokeSystem {
         uAmbient: { value: new THREE.Color(0.16, 0.2, 0.28) },
         uOpacity: { value: 1 },
         uSizeScale: { value: 1 },
-        uCurlScale: { value: 0.35 },
+        uCurlScale: { value: 0.55 },
         uDragK: { value: 2.6 },
         uSoft: { value: 0 },
         uResolution: { value: new THREE.Vector2(1920, 1080) },

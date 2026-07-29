@@ -115,9 +115,9 @@ function paintedSteelSet(size, seed) {
   const ao = heightToAo(height, size, 5, 1.1);
   const normal = heightToNormal(height, size, 2.6, { wrap: true });
 
-  const paint = hexToLinear(0x3a4149);
-  const paintDark = hexToLinear(0x232830);
-  const steel = hexToLinear(0x6e6f6c);
+  const paint = hexToLinear(0x2c333b);
+  const paintDark = hexToLinear(0x1a1f26);
+  const steel = hexToLinear(0x5b5c5a);
   const grime = hexToLinear(0x181513);
 
   const albedo = bakeAlbedo(size, (i, j, k, out) => {
@@ -225,10 +225,10 @@ function containerSet(size, seed) {
   const ao = heightToAo(height, size, 6, 1.0);
   const normal = heightToNormal(height, size, 2.0, { wrap: true });
 
-  const paint = hexToLinear(0x2d4a4e);
-  const paintPale = hexToLinear(0x486a6a);
-  const rust = hexToLinear(0x6b3418);
-  const rustDark = hexToLinear(0x30170c);
+  const paint = hexToLinear(0x22383c);
+  const paintPale = hexToLinear(0x35504f);
+  const rust = hexToLinear(0x532810);
+  const rustDark = hexToLinear(0x241109);
 
   const albedo = bakeAlbedo(size, (i, j, k, out) => {
     const r = rustMask[k];
@@ -275,10 +275,10 @@ function concreteSet(size, seed) {
   const ao = heightToAo(height, size, 6, 1.15);
   const normal = heightToNormal(height, size, 2.4, { wrap: true });
 
-  const pale = hexToLinear(0x585a5c);
-  const mid = hexToLinear(0x3d3f43);
-  const dark = hexToLinear(0x24262a);
-  const stain = hexToLinear(0x191a1c);
+  const pale = hexToLinear(0x42444a);
+  const mid = hexToLinear(0x2c2e33);
+  const dark = hexToLinear(0x191a1e);
+  const stain = hexToLinear(0x111214);
 
   const albedo = bakeAlbedo(size, (i, j, k, out) => {
     const dirt = clamp01(streaks[k] * 0.95 - 0.08);

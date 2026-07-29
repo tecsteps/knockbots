@@ -19,7 +19,8 @@ export default defineConfig({
     cssCodeSplit: !single,
     chunkSizeWarningLimit: 4000,
     rollupOptions: single ? { output: { inlineDynamicImports: true } } : {},
-    minify: 'esbuild',
+    // Vite 8 ships rolldown + oxc; esbuild is no longer bundled.
+    minify: true,
   },
   server: { port: 5173, host: '127.0.0.1' },
   preview: { port: 4173, host: '127.0.0.1' },

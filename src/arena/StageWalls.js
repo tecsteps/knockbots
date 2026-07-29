@@ -51,7 +51,7 @@ export class StageWalls {
    * @param {Record<string, THREE.Material>} deps.materials
    * @param {Record<string, THREE.Texture>} deps.textures
    */
-  constructor({ materials, textures }) {
+  constructor({ materials, textures, bins }) {
     this.group = new THREE.Group();
     this.group.name = 'arena.walls';
     this.materials = materials;
@@ -59,53 +59,21 @@ export class StageWalls {
     /** @type {THREE.Vector3[]} where the impact lights sit; read by Stage. */
     this.lampPositions = [];
 
-    const bins = {
-      concrete: [], hazard: [], steel: [], plate: [], chain: [], emissive: [],
-    };
-    /** @type {THREE.BufferGeometry[][]} pads, indexed by side (0 = -x, 1 = +x) */
-    this.padGeo = [[], []];
-
-    for (const side of [-1, 1]) this.#buildSide(side, bins);
-
-    const add = (geo, mat, name, uvScale, shadows = true) => {
-      if (!geo.length) return null;
-      const merged = mergeAll(geo);
-      if (uvScale) worldUv(merged, uvScale);
-      const mesh = new THREE.Mesh(merged, mat);
-      mesh.name = `arena.wall.${name}`;
-      mesh.castShadow = shadows;
-      mesh.receiveShadow = shadows;
-      mesh.matrixAutoUpdate = false;
-      this.group.add(mesh);
-      return mesh;
-    };
-
-    add(bins.concrete, materials.concrete, 'concrete', 2.4);
-    add(bins.hazard, materials.hazard, 'kerb', 1.6);
-    add(bins.steel, materials.steel, 'frame', 1.5);
-    // The fence carries its own UV layout so the weave stays at wire scale.
-    add(bins.chain, materials.chainLink, 'fence', null, false);
-
-    // Warning plates keep their own UV layout — they are stencilled signs, not
-    // a tiling surface.
-    if (bins.plate.length) {
-      const mesh = new THREE.Mesh(mergeAll(bins.plate), materials.warningPlate);
-      mesh.name = 'arena.wall.plates';
-      mesh.receiveShadow = true;
-      this.group.add(mesh);
-    }
+    const emissive = [];
+    for (const side of [-1, 1]) this.#buildSide(side, bins, emissive);
 
     // Safety strip: a low amber line that grazes the floor and gives the wet
-    // concrete at the base of the wall something to reflect.
+    // concrete at the base of the wall something to reflect. It is unlit and
+    // animated, so unlike the rest of the barrier it keeps its own mesh.
     this.stripMaterial = new THREE.MeshBasicMaterial({
       name: 'arena.wall.strip', color: new THREE.Color(0xff8a2a), toneMapped: true, fog: true,
     });
-    const strip = new THREE.Mesh(mergeAll(bins.emissive), this.stripMaterial);
+    const strip = new THREE.Mesh(mergeAll(emissive), this.stripMaterial);
     strip.name = 'arena.wall.strip';
     this.group.add(strip);
 
     this.#buildPads(materials);
-    this.#buildLamps();
+    this.#buildLamps(bins);
     this.#buildDecals(textures);
 
     this.recoil = [new Recoil(5.2), new Recoil(5.2)];
@@ -118,7 +86,7 @@ export class StageWalls {
    * Authors one barrier. Local frame: x=0 is the surface the fighters hit and
    * everything is built outward from it; z runs along the barrier.
    */
-  #buildSide(side, bins) {
+  #buildSide(side, bins, emissive) {
     const M = (geo) => place(geo, { pos: [side * ARENA_HALF_WIDTH, 0, WALL_Z], rot: [0, side > 0 ? 0 : Math.PI, 0] });
     const half = WALL_LEN / 2;
 
@@ -159,7 +127,7 @@ export class StageWalls {
     }
 
     // Amber safety line skimming the floor.
-    bins.emissive.push(M(place(bevelBox(0.05, 0.045, WALL_LEN - 0.2, 0.008), { pos: [0.03, 0.83, 0] })));
+    emissive.push(M(place(bevelBox(0.05, 0.045, WALL_LEN - 0.2, 0.008), { pos: [0.03, 0.83, 0] })));
 
     // Mesh fence above the coping, well outside anything a fighter can reach.
     const fenceH = 1.9;
@@ -220,8 +188,8 @@ export class StageWalls {
    * stutters when the wall is hit, so their positions are published for the
    * point lights the Stage owns.
    */
-  #buildLamps() {
-    const housings = [];
+  #buildLamps(bins) {
+    const housings = bins.dark;
     const lenses = [];
     for (const side of [-1, 1]) {
       for (const z of [-6.4, 1.2, 8.6]) {
@@ -240,11 +208,6 @@ export class StageWalls {
         this.lampPositions.push(new THREE.Vector3(wx, y - 0.1, wz));
       }
     }
-    const housing = new THREE.Mesh(worldUv(mergeAll(housings), 0.7), this.materials.darkMetal);
-    housing.name = 'arena.wall.lampHousing';
-    housing.castShadow = true;
-    this.group.add(housing);
-
     this.lampMaterial = new THREE.MeshBasicMaterial({ name: 'arena.wall.lamp', color: new THREE.Color(0xfff0d0), toneMapped: true });
     this.lamps = new THREE.Mesh(mergeAll(lenses), this.lampMaterial);
     this.lamps.name = 'arena.wall.lamps';

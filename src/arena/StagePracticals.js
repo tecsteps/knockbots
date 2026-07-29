@@ -24,7 +24,7 @@
 
 import * as THREE from 'three';
 import { Rng } from '../core/Rng.js';
-import { bevelBox, place, mergeAll, worldUv, boltRing, insetPanel } from './GeoKit.js';
+import { bevelBox, place, mergeAll, boltRing, insetPanel } from './GeoKit.js';
 import { fbm, stampText, blur, clamp01, makeTexture, encodeSrgb, hexToLinear } from './ProcTex.js';
 import { PointBurst } from './StageParticles.js';
 
@@ -83,7 +83,7 @@ export class StagePracticals {
    * @param {Record<string, THREE.Texture>} deps.textures
    * @param {THREE.Vector3} deps.sparkPoint frayed cable end
    */
-  constructor({ environment, materials, textures, sparkPoint }) {
+  constructor({ environment, materials, textures, bins, sparkPoint }) {
     this.group = new THREE.Group();
     this.group.name = 'arena.practicals';
     this.environment = environment;
@@ -99,13 +99,12 @@ export class StagePracticals {
     this.diffuser = diffuserTexture(256);
     this.captions = screenCaptions(256);
 
-    this.#fixtures();
+    this.#fixtures(bins);
     this.#neon();
     this.#beacons();
-    this.#screens();
+    this.#screens(bins);
     this.#sparks(textures, sparkPoint);
     this.syncToEnvironment();
-    void materials;
   }
 
   // -------------------------------------------------------------------------
@@ -116,8 +115,8 @@ export class StagePracticals {
    * barrier. Their layout matches the Environment's default mood so the
    * geometry and the lights agree at frame one.
    */
-  #fixtures() {
-    const housings = [];
+  #fixtures(bins) {
+    const housings = bins.dark;
     const faces = [];
     const idx = [];
 
@@ -191,12 +190,6 @@ export class StagePracticals {
         size: new THREE.Vector2(w, h),
       });
     }
-
-    const housing = new THREE.Mesh(worldUv(mergeAll(housings), 0.9), this.materials.darkMetal);
-    housing.name = 'arena.practicals.housings';
-    housing.castShadow = true;
-    housing.receiveShadow = true;
-    this.group.add(housing);
 
     // One mesh for all four emitting faces; the fixture index rides along in a
     // vertex attribute and selects a colour from a four-element uniform array.
@@ -294,9 +287,9 @@ export class StagePracticals {
    * content varies by the screen's own world position, so a single draw call
    * produces four displays that are visibly running different programs.
    */
-  #screens() {
+  #screens(bins) {
     const panels = [];
-    const bezels = [];
+    const bezels = bins.dark;
     const place4 = [
       { pos: [-3.4, 3.0, -12.42], rot: [0, 0, 0], w: 2.2, h: 1.3 },
       { pos: [3.9, 3.4, -12.42], rot: [0, 0, 0], w: 1.7, h: 1.1 },
@@ -311,31 +304,37 @@ export class StagePracticals {
       }));
     }
 
-    const bezel = new THREE.Mesh(worldUv(mergeAll(bezels), 0.7), this.materials.darkMetal);
-    bezel.name = 'arena.practicals.screenBezels';
-    bezel.castShadow = true;
-    this.group.add(bezel);
-
+    // Fog has to be merged in by hand: a ShaderMaterial with `fog: true` gets
+    // the chunks but not the uniforms they read.
     this.screenMaterial = new THREE.ShaderMaterial({
       name: 'arena.screens',
-      uniforms: {
-        uTime: { value: 0 },
-        uCaptions: { value: this.captions },
-        uColor: { value: new THREE.Color(0x63d0ff) },
-        uWarn: { value: new THREE.Color(0xffa02a) },
-        uGain: { value: 1.6 },
-      },
+      uniforms: THREE.UniformsUtils.merge([
+        THREE.UniformsLib.fog,
+        {
+          uTime: { value: 0 },
+          uCaptions: { value: null },
+          uColor: { value: new THREE.Color(0x63d0ff) },
+          uWarn: { value: new THREE.Color(0xffa02a) },
+          uGain: { value: 1.6 },
+        },
+      ]),
       vertexShader: /* glsl */ `
+        #include <common>
+        #include <fog_pars_vertex>
         varying vec2 vUv;
         varying vec3 vWorld;
         void main() {
           vUv = uv;
           vec4 w = modelMatrix * vec4( position, 1.0 );
           vWorld = w.xyz;
-          gl_Position = projectionMatrix * viewMatrix * w;
+          vec4 mvPosition = viewMatrix * w;
+          gl_Position = projectionMatrix * mvPosition;
+          #include <fog_vertex>
         }
       `,
       fragmentShader: /* glsl */ `
+        #include <common>
+        #include <fog_pars_fragment>
         uniform float uTime;
         uniform sampler2D uCaptions;
         uniform vec3 uColor;
@@ -389,12 +388,15 @@ export class StagePracticals {
           col *= 1.0 - 0.55 * pow( length( uv - 0.5 ) * 1.5, 3.0 );
 
           gl_FragColor = vec4( col * uGain, 1.0 );
+          #include <fog_fragment>
         }
       `,
       toneMapped: true,
       fog: true,
       side: THREE.FrontSide,
     });
+    // UniformsUtils.merge clones, so the caption plate is bound afterwards.
+    this.screenMaterial.uniforms.uCaptions.value = this.captions;
     this.screens = new THREE.Mesh(mergeAll(panels), this.screenMaterial);
     this.screens.name = 'arena.practicals.screens';
     this.group.add(this.screens);

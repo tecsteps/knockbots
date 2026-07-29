@@ -27,6 +27,8 @@ import * as THREE from 'three';
 import { GROUND_Y, LAYER } from '../core/Constants.js';
 import { DustMotes, SteamJets } from './StageParticles.js';
 
+const _poolColor = new THREE.Color();
+
 const SHAFT_VERT = /* glsl */ `
   uniform mat4 uInvModel;
   varying vec3 vLocal;

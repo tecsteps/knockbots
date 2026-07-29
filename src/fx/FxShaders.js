@@ -23,21 +23,13 @@
  *    expands, which the eye reads as "wrong" without being able to say why.
  */
 
-/** Cheap high-quality hashes; the sine-fract kind bands badly on Apple GPUs. */
+/** Integer hash; the sine-fract kind bands badly on Apple GPUs. */
 export const GLSL_HASH = /* glsl */ `
 float hash11( float p ) {
   // int() first: float->uint of a negative value is undefined, int->uint is not.
   uint n = uint( int( p * 1000.0 ) ) * 747796405u + 2891336453u;
   n = ( ( n >> ( ( n >> 28u ) + 4u ) ) ^ n ) * 277803737u;
   return float( ( n >> 22u ) ^ n ) / 4294967295.0;
-}
-vec3 hash31( float p ) {
-  return vec3( hash11( p ), hash11( p + 17.13 ), hash11( p + 41.77 ) );
-}
-float hash21( vec2 p ) {
-  uvec2 q = uvec2( ivec2( p * 512.0 ) ) * uvec2( 1597334673u, 3812015801u );
-  uint n = ( q.x ^ q.y ) * 1597334673u;
-  return float( n ) / 4294967295.0;
 }`;
 
 /** Easing curves shared by every timed effect. */
@@ -46,7 +38,6 @@ float easeOutCubic( float t )  { float f = 1.0 - t; return 1.0 - f * f * f; }
 float easeOutQuint( float t )  { float f = 1.0 - t; return 1.0 - f * f * f * f * f; }
 float easeInCubic( float t )   { return t * t * t; }
 float easeOutExpo( float t )   { return t >= 1.0 ? 1.0 : 1.0 - exp2( -10.0 * t ); }
-float easeInOutSine( float t ) { return 0.5 - 0.5 * cos( 3.14159265 * t ); }
 /** Fast rise, long settle — the shape almost every impact flash wants. */
 float impulse( float k, float t ) { float h = k * t; return h * exp( 1.0 - h ); }`;
 
@@ -177,7 +168,3 @@ vec4 streakBillboard( vec3 worldPos, vec3 worldVel, vec2 corner, float width, fl
   alongT = corner.y + 0.5;
   return mv;
 }`;
-
-/** ACES-ish soft clip, used where an FX shader must not blow the half-float. */
-export const GLSL_SOFTCLIP = /* glsl */ `
-vec3 softClip( vec3 c, float k ) { return c / ( 1.0 + c / k ); }`;

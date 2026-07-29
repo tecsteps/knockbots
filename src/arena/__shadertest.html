@@ -1,0 +1,90 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>arena shader test</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style>
+</head><body>
+<script type="module">
+import * as THREE from 'three';
+import { Stage } from './Stage.js';
+import { Environment } from '../engine/Environment.js';
+
+const errors = [];
+window.addEventListener('error', (e) => errors.push(String(e.message)));
+const origError = console.error;
+console.error = (...a) => { errors.push(a.map(String).join(' ')); origError(...a); };
+const origWarn = console.warn;
+console.warn = (...a) => { errors.push('WARN ' + a.map(String).join(' ')); origWarn(...a); };
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setSize(1280, 720, false);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, 1280 / 720, 0.15, 260);
+camera.layers.enableAll();
+
+const env = new Environment(renderer, scene, { quality: 'high' });
+await env.init();
+
+const stage = new Stage(scene, env);
+await stage.init();
+
+// A stand-in fighter so the reflection has something to hold.
+const dummy = new THREE.Mesh(
+  new THREE.CapsuleGeometry(0.34, 1.1, 6, 14),
+  new THREE.MeshPhysicalMaterial({ color: 0x9aa4b0, metalness: 0.95, roughness: 0.28 }),
+);
+dummy.position.set(-1.6, 0.92, 0);
+dummy.castShadow = true;
+scene.add(dummy);
+const dummy2 = dummy.clone();
+dummy2.position.set(1.6, 0.92, 0.3);
+scene.add(dummy2);
+
+const shots = [
+  { name: 'fight', pos: [0, 1.75, 6.6], look: [0, 1.15, 0] },
+  { name: 'low', pos: [2.4, 0.72, 4.4], look: [-0.6, 1.3, -0.4] },
+  { name: 'wall', pos: [4.2, 2.1, 5.2], look: [8.4, 1.6, 0.5] },
+  { name: 'wide', pos: [-1.0, 3.4, 12.5], look: [0, 2.4, -6] },
+  { name: 'behind', pos: [0.5, 2.2, -9.4], look: [0, 1.4, 2] },
+];
+
+window.__shot = (i) => {
+  const s = shots[i];
+  camera.position.set(...s.pos);
+  camera.lookAt(...s.look);
+  env.update(1 / 60);
+  stage.update(1 / 60, i);
+  renderer.render(scene, camera);
+  return s.name;
+};
+
+// Warm every program up front so compile failures surface immediately.
+for (let f = 0; f < 8; f++) {
+  env.update(1 / 60);
+  stage.update(1 / 60, f);
+  camera.position.set(0, 1.75, 6.6);
+  camera.lookAt(0, 1.15, 0);
+  renderer.render(scene, camera);
+}
+stage.impact(new THREE.Vector3(8.96, 1.3, 0.6), 2.0);
+stage.impact(new THREE.Vector3(-1.2, 0.05, 1.4), 1.2);
+for (let f = 0; f < 20; f++) { env.update(1 / 60); stage.update(1 / 60, f); renderer.render(scene, camera); }
+
+window.__report = {
+  errors,
+  budget: stage.budget(),
+  info: {
+    calls: renderer.info.render.calls,
+    triangles: renderer.info.render.triangles,
+    programs: renderer.info.programs.length,
+    textures: renderer.info.memory.textures,
+  },
+};
+window.__ready = true;
+</script>
+</body></html>
