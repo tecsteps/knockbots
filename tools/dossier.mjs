@@ -109,6 +109,19 @@ function buildLog(meta) {
         </article>`).join('');
 }
 
+function buildDeploy(meta) {
+  const d = meta.deploy;
+  if (!d || !d.url) return '<div class="pending">Deploy pending</div>';
+  return `
+      <div class="deploy">
+        <a class="go" href="${esc(d.url)}" target="_blank" rel="noopener">Launch build</a>
+        <div class="meta">
+          <div class="url">${esc(d.url)}</div>
+          <div>revision <b>${esc(d.rev ?? '—')}</b> &nbsp;·&nbsp; ${esc(d.note ?? '')}</div>
+        </div>
+      </div>`;
+}
+
 function buildStatus(meta) {
   const s = meta.status || {};
   const rows = [
@@ -129,6 +142,7 @@ function buildStatus(meta) {
 const meta = existsSync(META) ? JSON.parse(readFileSync(META, 'utf8')) : {};
 let html = readFileSync(PAGE, 'utf8');
 html = replaceRegion(html, 'GALLERY', buildGallery());
+html = replaceRegion(html, 'DEPLOY', buildDeploy(meta));
 html = replaceRegion(html, 'VERDICT', buildVerdict(meta));
 if (meta.log) html = replaceRegion(html, 'LOG', buildLog(meta));
 if (meta.status) html = replaceRegion(html, 'STATUS', buildStatus(meta));

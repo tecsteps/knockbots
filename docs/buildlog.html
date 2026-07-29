@@ -168,6 +168,15 @@
   .meter::after{content:""; position:absolute; inset:0; left:80%; border-left:1px dashed var(--danger); opacity:.55;}
   .score{font-family:var(--mono); font-size:11.5px; color:var(--ink); font-variant-numeric:tabular-nums;}
 
+  .deploy{display:flex; flex-wrap:wrap; align-items:center; gap:18px; border:1px solid var(--hair);
+    background:var(--panel); padding:20px 22px;}
+  .deploy .go{font-family:var(--disp); font-size:19px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--ground); background:var(--amber); padding:11px 22px; border-bottom:none;
+    display:inline-block; transition:transform .15s ease;}
+  .deploy .go:hover{transform:translateY(-1px); border-bottom:none;}
+  .deploy .meta{font-family:var(--mono); font-size:11px; color:var(--ink-mute); line-height:1.9;}
+  .deploy .meta b{color:var(--ink); font-weight:500;}
+  .deploy .url{font-family:var(--mono); font-size:11.5px; color:var(--cyan); word-break:break-all;}
   footer{margin-top:70px; padding-top:22px; border-top:1px solid var(--hair);
     font-family:var(--mono); font-size:10px; letter-spacing:.14em; color:var(--ink-mute);
     text-transform:uppercase; display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px;}
@@ -186,12 +195,12 @@
     <div class="mark">KNOCK<b>BOTS</b><span>BUILD DOSSIER</span></div>
 
     <div class="readout"><!--STATUS-->
-      <div class="kv"><span>Revision</span><b>0.4.0</b></div>
+      <div class="kv"><span>Revision</span><b>0.6.0</b></div>
       <div class="kv"><span>Engine</span><b>three r185</b></div>
       <div class="kv"><span>Sim rate</span><b>60 Hz fixed</b></div>
-      <div class="kv"><span>Commits</span><b>17</b></div>
-      <div class="kv"><span>Modules</span><b>63</b></div>
-      <div class="kv"><span>Lines</span><b>34k</b></div>
+      <div class="kv"><span>Commits</span><b>22</b></div>
+      <div class="kv"><span>Modules</span><b>64</b></div>
+      <div class="kv"><span>Lines</span><b>38k</b></div>
       <div class="kv"><span>Clips</span><b>89</b></div>
       <div class="kv"><span>Moves</span><b>191</b></div>
       <div class="kv"><span>Characters</span><b>10</b></div><!--/STATUS--><h4>Subsystems</h4>
@@ -211,6 +220,7 @@
     </div>
 
     <nav class="toc">
+      <a href="#play">Play</a>
       <a href="#brief">Brief</a>
       <a href="#decisions">Decisions</a>
       <a href="#log">Build log</a>
@@ -236,6 +246,12 @@
         <figcaption id="rigcap">Rig · 34 bones · drawn live from src/characters/Skeleton.js</figcaption>
       </figure>
     </header>
+
+    <section id="play">
+      <h2>Play the current build</h2>
+      <p class="sublede">Deployed from main after each iteration</p>
+      <!--DEPLOY--><div class="pending">Deploy pending</div><!--/DEPLOY-->
+    </section>
 
     <section id="brief">
       <h2>The brief</h2>
@@ -372,6 +388,37 @@
             <p>One earlier alarm turned out to be a false positive worth recording. When the first sheet showed a frozen pose I suspected 89 clips were not playing at all. A direct probe of the posed bones showed the hip rotating through 72 degrees across a kick. The animation was fine; the tool was stepping the animator behind the state machine's back.</p>
             <span class="tag done">tick-exact</span><span class="tag done">frame-data targets</span><span class="tag done">bounds crop</span>
           </div>
+        </article>
+        <article class="entry">
+          <div class="stamp"><b>PHASE 06</b>Rounds 3-4<br>rev 0.5.0</div>
+          <div class="body">
+            <h3>Over-tuning, then repair</h3>
+            <p>Round 3 gained on impact and animation but cost character 5 points, lighting 2 and interface 2. Two of those three regressions traced to instructions I had written: an opaque announcement plate the critic called a placeholder, and a per-object velocity motion blur that ghosted.</p>
+            <p>Instrumenting the velocity buffer found two faults rather than one. The gather filter's centre weight was in UV units instead of pixels, giving the centre sample a weight of about 50 against 30 for all twelve taps together — 60 percent sharp image over 40 percent smear, which is a hard double image and not a blur at all. And the skinned velocities were swinging an order of magnitude between consecutive frames on a fighter that was merely idling, so the blur was faithfully reporting a real animation pop. The feature was removed rather than shipped with its correctness depending on the animation layer never popping.</p>
+            <p>The lighting regression was the opposite of what it looked like. Nothing had weakened the key; round 3 had tripled everything around it, until the rim was delivering 4.2 times the key's irradiance at the subject. Round 4 restored the ratio and every axis but animation improved.</p>
+            <span class="tag done">lighting +7</span><span class="tag done">impact +6</span><span class="tag done">interface +5</span><span class="tag done">stage +4</span><span class="tag done">character +3</span>
+          </div>
+        </article>
+        <article class="entry">
+          <div class="stamp"><b>PHASE 07</b>Second opinion<br>rev 0.6.0</div>
+          <div class="body">
+            <h3>A different model, and two harness bugs</h3>
+            <p>Every critic so far had been the same model family, so the scores could have been miscalibrated in a way that was invisible from inside. A second model was brought in as an independent blind judge, after first verifying it could genuinely assess images rather than confabulate — it was given a synthetic image containing a random four-digit number and described it exactly, including two spatial relationships never explicitly encoded.</p>
+            <p>It scored the same frame ten to twenty-five points harsher than our own critics, stably across repeats and without position bias. It also read the capture harness instead of the pictures, and found that the impact shot was photographed 700 milliseconds after contact while impact sparks live 160 to 300. Every impact score to that point had been measured after the effects had died.</p>
+            <p>Fixing that surfaced a second, subtler bug in the same harness. Pausing the simulation does not pause the effects: the render call is unconditional and takes raw wall-clock time, so a frozen frame kept ageing until the shutter — and slowing time made it worse, because the time scale applies only to the simulation accumulator. An eight-tick offset was costing 2.7 seconds of effect time. Pinning the frame clock to a fixed 1/60 fixed both.</p>
+            <p>Twice now a capture bug has invalidated a score, both in code written here. The lesson is recorded in the critic protocol: a visual score is only as trustworthy as the capture that produced it.</p>
+            <span class="tag done">second judge</span><span class="tag done">impact re-baselined</span><span class="tag done">clock pinned</span><span class="tag done">HUD strip</span>
+          </div>
+        </article>
+        <article class="entry">
+          <div class="stamp"><b>PHASE 08</b>Animation<br>rev 0.6.0</div>
+          <div class="body">
+            <h3>The fighter was skating the whole time</h3>
+            <p>A supplied Three.js animation cookbook was mined against the actual engine rather than applied as recipes — our system uses none of the mixer, clip or glTF machinery those recipes assume. The translation found something larger than anything on the existing fix list.</p>
+            <p>The walk clip is authored for a stride of 0.46 metres per second. The simulation drives the body at 2.75. That is a six-fold mismatch, so the fighter skates in every neutral-game frame. The run clip, authored correctly at 2.69 metres per second, is played by nothing at all — it is referenced only by its own export map. The right foot never plants in the walk cycle.</p>
+            <p>The critic had called this axis authoring debt. It is about a fifth authoring debt: under one percent of six thousand authored easing declarations use the fast-release curves that make a strike read, and eight impact clips have no follow-through whatsoever. But the largest single defect is a runtime constant, and no amount of keyframe polish registers while the fighter hovers.</p>
+            <span class="tag done">6x stride bug</span><span class="tag done">plan committed</span><span class="tag run">round 6 queued</span>
+          </div>
         </article><!--/LOG--></div>
     </section>
 
@@ -423,33 +470,33 @@
       <div class="verdict" id="verdictbody"><!--VERDICT-->
         <div class="row">
           <span>Stage detail</span>
-          <div class="meter"><i style="width:64%"></i></div>
-          <span class="score" style="color:var(--danger)">64</span>
-        </div>
-        <div class="row">
-          <span>Interface craft</span>
-          <div class="meter"><i style="width:60%"></i></div>
-          <span class="score" style="color:var(--danger)">60</span>
+          <div class="meter"><i style="width:70%"></i></div>
+          <span class="score" style="color:var(--danger)">70</span>
         </div>
         <div class="row">
           <span>Lighting &amp; atmosphere</span>
+          <div class="meter"><i style="width:63%"></i></div>
+          <span class="score" style="color:var(--danger)">63</span>
+        </div>
+        <div class="row">
+          <span>Interface craft</span>
+          <div class="meter"><i style="width:63%"></i></div>
+          <span class="score" style="color:var(--danger)">63</span>
+        </div>
+        <div class="row">
+          <span>Impact &amp; effects</span>
           <div class="meter"><i style="width:58%"></i></div>
           <span class="score" style="color:var(--danger)">58</span>
         </div>
         <div class="row">
           <span>Character rendering</span>
-          <div class="meter"><i style="width:57%"></i></div>
-          <span class="score" style="color:var(--danger)">57</span>
-        </div>
-        <div class="row">
-          <span>Impact &amp; effects</span>
-          <div class="meter"><i style="width:41%"></i></div>
-          <span class="score" style="color:var(--danger)">41</span>
+          <div class="meter"><i style="width:55%"></i></div>
+          <span class="score" style="color:var(--danger)">55</span>
         </div>
         <div class="row">
           <span>Animation quality</span>
-          <div class="meter"><i style="width:28%"></i></div>
-          <span class="score" style="color:var(--danger)">28</span>
+          <div class="meter"><i style="width:43%"></i></div>
+          <span class="score" style="color:var(--danger)">43</span>
         </div><!--/VERDICT--></div>
     </section>
 

@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.4.0",
-    "commits": 17,
-    "modules": 63,
-    "lines": "34k",
+    "rev": "0.6.0",
+    "commits": 22,
+    "modules": 64,
+    "lines": "38k",
     "clips": 89,
     "moves": 191,
     "characters": 10
@@ -11,27 +11,27 @@
   "verdicts": [
     {
       "axis": "Stage detail",
-      "score": 64
-    },
-    {
-      "axis": "Interface craft",
-      "score": 60
+      "score": 70
     },
     {
       "axis": "Lighting & atmosphere",
+      "score": 63
+    },
+    {
+      "axis": "Interface craft",
+      "score": 63
+    },
+    {
+      "axis": "Impact & effects",
       "score": 58
     },
     {
       "axis": "Character rendering",
-      "score": 57
-    },
-    {
-      "axis": "Impact & effects",
-      "score": 41
+      "score": 55
     },
     {
       "axis": "Animation quality",
-      "score": 28
+      "score": 43
     }
   ],
   "log": [
@@ -218,6 +218,94 @@
         {
           "label": "bounds crop",
           "state": "done"
+        }
+      ]
+    },
+    {
+      "phase": "PHASE 06",
+      "when": "Rounds 3-4",
+      "rev": "rev 0.5.0",
+      "title": "Over-tuning, then repair",
+      "paras": [
+        "Round 3 gained on impact and animation but cost character 5 points, lighting 2 and interface 2. Two of those three regressions traced to instructions I had written: an opaque announcement plate the critic called a placeholder, and a per-object velocity motion blur that ghosted.",
+        "Instrumenting the velocity buffer found two faults rather than one. The gather filter's centre weight was in UV units instead of pixels, giving the centre sample a weight of about 50 against 30 for all twelve taps together \u2014 60 percent sharp image over 40 percent smear, which is a hard double image and not a blur at all. And the skinned velocities were swinging an order of magnitude between consecutive frames on a fighter that was merely idling, so the blur was faithfully reporting a real animation pop. The feature was removed rather than shipped with its correctness depending on the animation layer never popping.",
+        "The lighting regression was the opposite of what it looked like. Nothing had weakened the key; round 3 had tripled everything around it, until the rim was delivering 4.2 times the key's irradiance at the subject. Round 4 restored the ratio and every axis but animation improved."
+      ],
+      "tags": [
+        {
+          "label": "lighting +7",
+          "state": "done"
+        },
+        {
+          "label": "impact +6",
+          "state": "done"
+        },
+        {
+          "label": "interface +5",
+          "state": "done"
+        },
+        {
+          "label": "stage +4",
+          "state": "done"
+        },
+        {
+          "label": "character +3",
+          "state": "done"
+        }
+      ]
+    },
+    {
+      "phase": "PHASE 07",
+      "when": "Second opinion",
+      "rev": "rev 0.6.0",
+      "title": "A different model, and two harness bugs",
+      "paras": [
+        "Every critic so far had been the same model family, so the scores could have been miscalibrated in a way that was invisible from inside. A second model was brought in as an independent blind judge, after first verifying it could genuinely assess images rather than confabulate \u2014 it was given a synthetic image containing a random four-digit number and described it exactly, including two spatial relationships never explicitly encoded.",
+        "It scored the same frame ten to twenty-five points harsher than our own critics, stably across repeats and without position bias. It also read the capture harness instead of the pictures, and found that the impact shot was photographed 700 milliseconds after contact while impact sparks live 160 to 300. Every impact score to that point had been measured after the effects had died.",
+        "Fixing that surfaced a second, subtler bug in the same harness. Pausing the simulation does not pause the effects: the render call is unconditional and takes raw wall-clock time, so a frozen frame kept ageing until the shutter \u2014 and slowing time made it worse, because the time scale applies only to the simulation accumulator. An eight-tick offset was costing 2.7 seconds of effect time. Pinning the frame clock to a fixed 1/60 fixed both.",
+        "Twice now a capture bug has invalidated a score, both in code written here. The lesson is recorded in the critic protocol: a visual score is only as trustworthy as the capture that produced it."
+      ],
+      "tags": [
+        {
+          "label": "second judge",
+          "state": "done"
+        },
+        {
+          "label": "impact re-baselined",
+          "state": "done"
+        },
+        {
+          "label": "clock pinned",
+          "state": "done"
+        },
+        {
+          "label": "HUD strip",
+          "state": "done"
+        }
+      ]
+    },
+    {
+      "phase": "PHASE 08",
+      "when": "Animation",
+      "rev": "rev 0.6.0",
+      "title": "The fighter was skating the whole time",
+      "paras": [
+        "A supplied Three.js animation cookbook was mined against the actual engine rather than applied as recipes \u2014 our system uses none of the mixer, clip or glTF machinery those recipes assume. The translation found something larger than anything on the existing fix list.",
+        "The walk clip is authored for a stride of 0.46 metres per second. The simulation drives the body at 2.75. That is a six-fold mismatch, so the fighter skates in every neutral-game frame. The run clip, authored correctly at 2.69 metres per second, is played by nothing at all \u2014 it is referenced only by its own export map. The right foot never plants in the walk cycle.",
+        "The critic had called this axis authoring debt. It is about a fifth authoring debt: under one percent of six thousand authored easing declarations use the fast-release curves that make a strike read, and eight impact clips have no follow-through whatsoever. But the largest single defect is a runtime constant, and no amount of keyframe polish registers while the fighter hovers."
+      ],
+      "tags": [
+        {
+          "label": "6x stride bug",
+          "state": "done"
+        },
+        {
+          "label": "plan committed",
+          "state": "done"
+        },
+        {
+          "label": "round 6 queued",
+          "state": "run"
         }
       ]
     }
