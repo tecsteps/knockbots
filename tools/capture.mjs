@@ -253,6 +253,11 @@ const SHOTS = [
     // This tiles the ticks where the motion actually happens.
     setup: `window.KB.setPhase('fight'); window.KB.fighters[0].meter = 84;
             window.KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });`,
+    // Wait for the blow to actually land before the strip starts counting, or
+    // the offsets are measured from shot start and the "ticks after damage"
+    // caption is fiction. The shot flags itself when this fails, but flagging
+    // an unusable sheet is worse than waiting 6 seconds for a usable one.
+    waitFor: 'window.__kbShotHit',
     tickStrip: [1, 4, 10, 20, 34],
     settle: 0,
   },
@@ -332,7 +337,26 @@ const SHOTS = [
     // for one was watching for something that does not exist.
     waitFor: "window.KB.phase === 'ko'",
     settle: 900,
-    verify: '__kbKo',
+    // Assert the ANNOUNCEMENT, not just the KO.
+    //
+    // This shot declared wantsBanner: true and then checked nothing about the
+    // banner, so it could -- and did -- silently photograph a knockout with no
+    // K.O. announcement on screen at all, while an earlier capture of the same
+    // shot had it. A teammate caught the discrepancy between two of their own
+    // runs. wantsBanner exempts a shot from the "no banner over this frame"
+    // rule; on its own that is a licence, not a check.
+    verify: `(() => {
+      const ko = window.__kbKo;
+      if (!ko) return null;
+      const b = document.querySelector('.announce-banner');
+      const inner = document.querySelector('.announce-inner');
+      const r = inner ? inner.getBoundingClientRect() : { width: 0, height: 0 };
+      const opacity = b ? +parseFloat(getComputedStyle(b).opacity).toFixed(2) : 0;
+      const kind = b ? b.dataset.kind : null;
+      return { ...ko, bannerKind: kind, bannerOpacity: opacity,
+               ink: [Math.round(r.width), Math.round(r.height)],
+               ok: kind === 'ko' && opacity >= 0.5 && r.width >= 40 };
+    })()`,
     prep: `window.__kbKo = null;
       (() => { const s = window.KB.bus.on('roundEnd', (e) => {
         window.__kbKo = { winner: e.winner, loserHealth: window.KB.fighters[1].health }; s(); }); })();`,
@@ -587,6 +611,49 @@ async function main() {
     });
   })()`;
 
+  /**
+   * Measure the delivered pixels of one captured frame. Kept as a function
+   * because the tick-strip branch needs it too, and it must run on a RAW frame
+   * rather than on the tiled contact sheet -- a naive check on the sheet would
+   * measure the header bar and the gaps between cells, not the game.
+   */
+  const measureFrame = (b64, wantsBanner) => page.evaluate(async ({ b64, wantsBanner }) => {
+      const im = await new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.src = 'data:image/png;base64,' + b64; });
+      const W = 320, H = Math.round(im.height * (W / im.width));
+      const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+      const g = cv.getContext('2d', { willReadFrequently: true });
+      g.drawImage(im, 0, 0, W, H);
+      const d = g.getImageData(0, 0, W, H).data;
+      const lum = [];
+      let black = 0, topBlack = 0, topN = 0;
+      const topRows = Math.round(H * 0.2);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          const L = (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
+          lum.push(L);
+          if (L < 0.012) black++;
+          if (y < topRows) { topN++; if (L < 0.012) topBlack++; }
+        }
+      }
+      lum.sort((a, b2) => a - b2);
+      const q = (f) => +lum[Math.min(lum.length - 1, Math.floor(lum.length * f))].toFixed(4);
+      const banner = document.querySelector('.announce-banner');
+      const bannerUp = !!banner && parseFloat(getComputedStyle(banner).opacity) > 0.05;
+      const out = {
+        p50: q(0.5), p95: q(0.95), p999: q(0.999),
+        blackFrac: +(black / lum.length).toFixed(3),
+        topBlackFrac: +(topBlack / Math.max(1, topN)).toFixed(3),
+        bannerOverFrame: bannerUp && !wantsBanner,
+      };
+      // Thresholds are deliberately loose -- this catches unscoreable frames,
+      // not dark art direction. 07-super sat at p50 0.0044; a normal fight
+      // frame is an order of magnitude above that.
+      out.ok = out.p50 >= 0.012 && out.p95 >= 0.06 && out.blackFrac < 0.55
+        && out.topBlackFrac < 0.9 && !out.bannerOverFrame;
+      return out;
+  }, { b64, wantsBanner });
+
   for (const shot of list) {
     try {
       await page.evaluate(`(() => { try { ${ENTER_MATCH} } catch (e) { console.error('enter', e); } })()`);
@@ -714,6 +781,19 @@ async function main() {
         await page.waitForFunction(`window.KB.tick >= ${base + off}`, null, { timeout: 15000 }).catch(() => {});
         frames.push({ t: off, b64: (await page.screenshot()).toString('base64') });
       }
+      // Certified on a RAW cell, not on the tiled sheet. This was the only shot
+      // in the list with no delivered-pixel check at all, because the tickStrip
+      // branch returns before the universal one -- so it could ship a strip of
+      // black frames and nothing would say so. Measuring the contact sheet
+      // instead would measure the header bar and the gaps between cells, which
+      // is why this runs on frames[0] rather than on the finished JPEG.
+      const cellFrame = await measureFrame(frames[0].b64, !!shot.wantsBanner);
+      verified[shot.name].frame = cellFrame;
+      if (cellFrame && !cellFrame.ok) {
+        flaw(shot.name, `FIRST STRIP CELL NOT SCOREABLE: median luma ${cellFrame.p50}, `
+          + `p95 ${cellFrame.p95}, ${Math.round(cellFrame.blackFrac * 100)}% crushed to black`);
+      }
+
       const sheet = await page.evaluate(async ({ cells, label }) => {
         const imgs = await Promise.all(cells.map((c) => new Promise((res) => {
           const im = new Image(); im.onload = () => res(im); im.src = 'data:image/png;base64,' + c.b64;
@@ -779,42 +859,8 @@ async function main() {
     // So this measures the delivered pixels for every shot: exposure, dynamic
     // range, how much of the frame is crushed to black, and whether an
     // announcement banner is sitting over a shot that is not about one.
-    const frame = await page.evaluate(async ({ b64, wantsBanner }) => {
-      const im = await new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.src = 'data:image/png;base64,' + b64; });
-      const W = 320, H = Math.round(im.height * (W / im.width));
-      const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-      const g = cv.getContext('2d', { willReadFrequently: true });
-      g.drawImage(im, 0, 0, W, H);
-      const d = g.getImageData(0, 0, W, H).data;
-      const lum = [];
-      let black = 0, topBlack = 0, topN = 0;
-      const topRows = Math.round(H * 0.2);
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const i = (y * W + x) * 4;
-          const L = (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
-          lum.push(L);
-          if (L < 0.012) black++;
-          if (y < topRows) { topN++; if (L < 0.012) topBlack++; }
-        }
-      }
-      lum.sort((a, b2) => a - b2);
-      const q = (f) => +lum[Math.min(lum.length - 1, Math.floor(lum.length * f))].toFixed(4);
-      const banner = document.querySelector('.announce-banner');
-      const bannerUp = !!banner && parseFloat(getComputedStyle(banner).opacity) > 0.05;
-      const out = {
-        p50: q(0.5), p95: q(0.95), p999: q(0.999),
-        blackFrac: +(black / lum.length).toFixed(3),
-        topBlackFrac: +(topBlack / Math.max(1, topN)).toFixed(3),
-        bannerOverFrame: bannerUp && !wantsBanner,
-      };
-      // Thresholds are deliberately loose -- this catches unscoreable frames,
-      // not dark art direction. 07-super sat at p50 0.0044; a normal fight
-      // frame is an order of magnitude above that.
-      out.ok = out.p50 >= 0.012 && out.p95 >= 0.06 && out.blackFrac < 0.55
-        && out.topBlackFrac < 0.9 && !out.bannerOverFrame;
-      return out;
-    }, { b64: png.toString('base64'), wantsBanner: !!shot.wantsBanner });
+    const frame = await measureFrame(png.toString('base64'), !!shot.wantsBanner);
+
 
     if (frame && !frame.ok) {
       const why = [];
