@@ -98,6 +98,44 @@ if (moves.mod?.MOVES && clips.mod?.CLIPS) {
     }
   }
   console.log(`moves: ${n} defined, ${orphan} referencing missing clips`);
+
+  // 3b. Every hitbox is anchored to a limb the animation actually swings.
+  //
+  // This class of bug is invisible in review and invisible on screen unless you
+  // are looking for it, and the game shipped a lot of it: an audit that drove
+  // all 191 moves through the rig found 27 anchored to the wrong limb. Every
+  // spin kick in the game — 13 moves across all four archetypes — put its hit
+  // capsule and its weapon ribbon on the planted pivot foot while the other leg
+  // swung through the opponent. The structural cause is that an archetype may
+  // override a move's *clip* (see `mirrorBoxes` in Moves.js) without the
+  // anchors following, so this cannot be fixed once and forgotten.
+  //
+  // The threshold is deliberately loose. Ratios in the 0.6-0.9 band are mostly
+  // honest: a jump kick moves both feet because the whole body translates, a
+  // two-handed blast anchors the hand that is not leading, a stomp lands with
+  // both feet planted 2% apart. Those are limits of "distance travelled from
+  // stance" as a discriminator, not defects. Below 0.35 the anchored limb is
+  // standing still while another one strikes, and that has always been a real
+  // bug every time it has been checked.
+  const rig = await tryImport('tools/rigsample.mjs');
+  if (rig.mod?.makeRig) {
+    const r = rig.mod.makeRig();
+    let worst = null, bad = 0;
+    for (const [setName, set] of Object.entries(moves.mod.MOVES)) {
+      for (const [id, mv] of Object.entries(set)) {
+        const a = rig.mod.anchorTravel(r, mv, clips.mod.CLIPS[mv.clip]);
+        if (!a) continue;
+        if (!worst || a.ratio < worst.ratio) worst = { ...a, id: `${setName}/${id}`, clip: mv.clip };
+        if (a.ratio < 0.35) {
+          bad++;
+          fail.push(`move ${setName}/${id} (${mv.clip}): hitbox on ${a.anchors.join('+')} which travels `
+            + `${a.best.toFixed(2)}m, but ${a.leader} travels ${a.lead.toFixed(2)}m at the impact tick `
+            + `— the capsule is on the wrong limb`);
+        }
+      }
+    }
+    console.log(`anchors: ${bad} on the wrong limb, worst ratio ${worst.ratio.toFixed(2)} (${worst.id})`);
+  }
 } else if (moves.missing) warn.push('no move list yet');
 
 // 4. Roster sanity.

@@ -172,6 +172,29 @@ function noteFor(m) {
  * @param {Object} s   authored spec, mutated in place
  * @param {Object} cfg archetype tuning
  */
+/**
+ * Flip a spec's hitbox anchors and weapon trail across the body's midline.
+ *
+ * An archetype that overrides a move's *clip* can silently swap the striking
+ * limb with it, and the hitbox does not follow. `heavy.clips.backfist` replaces
+ * p.backfist — which throws the left hand — with p.overhand, which throws the
+ * right; `agile.clips.midPunch` replaces p.elbow (right elbow) with p.jabAlt
+ * (left hand). Both kept the base move's anchors, so the hit capsule and the
+ * weapon ribbon sat on the limb standing still while the other one swung
+ * through the opponent. Measured at the impact tick: heavy/backfist anchored a
+ * hand travelling 0.19m while the striking hand travelled 0.95m.
+ *
+ * Listing a move in an archetype's `mirrorBoxes` states the swap instead of
+ * leaving it implicit. tools/check.mjs re-derives the striking limb from the
+ * clip the rig actually plays and fails the build on any disagreement, so a
+ * missing entry cannot ship.
+ */
+function mirrorAnchors(s) {
+  const flip = (n) => (n.endsWith('_L') ? `${n.slice(0, -2)}_R` : n.endsWith('_R') ? `${n.slice(0, -2)}_L` : n);
+  for (const w of s.active) for (const b of w.boxes) b.bone = flip(b.bone);
+  if (s.trail) s.trail = flip(s.trail);
+}
+
 function make(s, cfg) {
   s.props = s.props || {};
   shiftSpec(s, s.lockFrames ? 0 : cfg.shift);
@@ -206,6 +229,7 @@ function make(s, cfg) {
 
   if (cfg.names && cfg.names[s.id]) s.name = cfg.names[s.id];
   if (cfg.clips && cfg.clips[s.id]) s.clip = cfg.clips[s.id];
+  if (cfg.mirrorBoxes && cfg.mirrorBoxes.includes(s.id)) mirrorAnchors(s);
 
   const m = defineMove(s);
   m.followUp = m.input.includes(',');
@@ -335,7 +359,7 @@ function coreMoves(mv, cfg) {
   // --- lows ---------------------------------------------------------------
   mv({
     id: 'lowJab', name: 'Shin Poke', input: 'd+1', clip: 'p.lowJab', tag: 'low',
-    active: [W(11, 12, FIST_R(0.2))], total: 25,
+    active: [W(11, 12, FIST_L(0.2))], total: 25,
     height: HEIGHT.LOW, weight: WEIGHT.LIGHT, damage: 7,
     adv: { block: -4, hit: 3 }, reaction: REACTION.FLINCH_LOW,
     knockback: [0.9, 0, 0], blockPush: [0.7, 0, 0], meterGain: 3,
@@ -638,10 +662,10 @@ function standardExtras(mv, cfg, set) {
   });
   mv({
     id: 'railKick', name: 'Rail Driver', input: 'ff+3', clip: 'k.sideKick', tag: 'rush',
-    active: [W(18, 20, FOOT_R(0.29))], total: 44,
+    active: [W(18, 20, FOOT_L(0.29))], total: 44,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 24,
     adv: { block: -10, hit: 3 }, reaction: REACTION.KNOCKDOWN,
-    knockback: [9.0, 0.6, 0], blockPush: [5.8, 0, 0], meterGain: 9, trail: 'foot_R',
+    knockback: [9.0, 0.6, 0], blockPush: [5.8, 0, 0], meterGain: 9, trail: 'foot_L',
     props: { wallCarry: 3.2, wallBounce: true, travel: [{ from: 4, to: 19, x: 5.0, z: 0 }] },
   });
 }
@@ -702,7 +726,7 @@ function heavyExtras(mv, cfg, set) {
 function agileExtras(mv, cfg, set) {
   mv({
     id: 'flurry', name: 'Needle Flurry', input: '1,1', clip: 'p.jabAlt', tag: 'string',
-    active: [W(9, 10, FIST_R(0.19))], total: 22,
+    active: [W(9, 10, FIST_L(0.19))], total: 22,
     height: HEIGHT.HIGH, weight: WEIGHT.LIGHT, damage: 7,
     adv: { block: 0, hit: 7 }, reaction: REACTION.FLINCH_HIGH,
     knockback: [1.0, 0, 0], blockPush: [0.6, 0, 0], meterGain: 3,
@@ -726,7 +750,7 @@ function agileExtras(mv, cfg, set) {
   });
   mv({
     id: 'phaseStep', name: 'Phase Step', input: 'bb+1', clip: 'p.backfist', tag: 'evade',
-    active: [W(16, 17, FIST_R(0.23))], total: 40,
+    active: [W(16, 17, FIST_L(0.23))], total: 40,
     height: HEIGHT.HIGH, weight: WEIGHT.MEDIUM, damage: 15,
     adv: { block: -5, hit: 7 }, reaction: REACTION.FLINCH_HIGH,
     knockback: [3.4, 0, 0], blockPush: [1.8, 0, 0], meterGain: 8,
@@ -759,7 +783,7 @@ function agileExtras(mv, cfg, set) {
   });
   mv({
     id: 'shadowRush2', name: 'Shadow Terminus', input: 'ff+3,4', clip: 'k.axeKick', tag: 'string',
-    active: [W(17, 19, FOOT_R(0.27))], total: 48,
+    active: [W(17, 19, FOOT_L(0.27))], total: 48,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 22,
     adv: { block: -13, hit: 2 }, reaction: REACTION.KNOCKDOWN,
     knockback: [4.4, -1.6, 0], blockPush: [2.4, 0, 0], meterGain: 10,
@@ -801,10 +825,10 @@ function technicalExtras(mv, cfg, set) {
   });
   mv({
     id: 'orbitalKick', name: 'Orbital Arc', input: 'qcf+4', clip: 'k.launcherKick', tag: 'launcher',
-    active: [W(20, 23, FOOT_L(0.29))], total: 56,
+    active: [W(20, 23, FOOT_R(0.29))], total: 56,
     height: HEIGHT.MID, weight: WEIGHT.LAUNCHER, damage: 24,
     adv: { block: -15, hit: 22 }, reaction: REACTION.LAUNCH, juggleHeight: 7.0,
-    knockback: [3.0, 0, 0], blockPush: [2.4, 0, 0], meterGain: 12, trail: 'foot_L',
+    knockback: [3.0, 0, 0], blockPush: [2.4, 0, 0], meterGain: 12, trail: 'foot_R',
     props: { homing: true, airborne: [8, 28] },
   });
   mv({
@@ -852,6 +876,8 @@ const ARCHETYPES = {
       plasmaBurst: 'Furnace Vent', overdrive: 'Overdrive: Foundry Collapse',
     },
     clips: { midPunch: 'p.hammerFist', backfist: 'p.overhand' },
+    // p.overhand throws the right hand; the base backfist anchors the left.
+    mirrorBoxes: ['backfist'],
   },
   agile: {
     key: 'agile', label: 'Wraith', shift: -1, power: 0.84, reach: 0.93, launch: 1.06,
@@ -864,6 +890,8 @@ const ARCHETYPES = {
       plasmaBurst: 'Ion Spray', overdrive: 'Overdrive: Thousand Cuts',
     },
     clips: { midPunch: 'p.jabAlt', hammerFist: 'p.backfist', spinKick: 'k.spinKick' },
+    // p.jabAlt throws the left hand; the base midPunch anchors the right elbow.
+    mirrorBoxes: ['midPunch'],
   },
   technical: {
     key: 'technical', label: 'Arbiter', shift: 0, power: 0.94, reach: 0.99, launch: 1.0,
