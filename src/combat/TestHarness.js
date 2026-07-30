@@ -263,8 +263,19 @@ export function makeTestHarness(game) {
         game.scene.add(group);
 
         const animator = new Animator(bundle, CLIPS);
-        animator.play(poses[i % poses.length], { blend: 0, loop: true });
-        for (let t = 0; t < 40 + i * 7; t++) animator.simulate(t);
+        const poseId = poses[i % poses.length];
+        animator.play(poseId, { blend: 0, loop: true });
+        // Clamp the warm-up to the clip's own length, or a fighter runs off the
+        // end of a non-looping pose and falls back to the rig's REST POSE --
+        // which is a T-pose, in a shot whose entire job is to show the cast
+        // looking like a shipped roster screen. Only two of the six poses loop,
+        // the stagger is 40 + i*7 ticks, and i.stanceSet is 64 ticks long: at
+        // i = 6 the warm-up asks for 82. A critic spotted two fighters standing
+        // with their arms perfectly horizontal and correctly called it a rig
+        // rest pose leaking into a shipped-looking frame.
+        const dur = CLIPS[poseId]?.duration ?? 60;
+        const warm = CLIPS[poseId]?.loop ? 40 + i * 7 : Math.min(40 + i * 7, Math.max(1, dur - 6));
+        for (let t = 0; t < warm; t++) animator.simulate(t);
         animator.applyTo(bundle.bones, 1);
         group.updateMatrixWorld(true);
         lineup.push({ group, robot, animator, bundle, offset: i * 7 });

@@ -259,7 +259,41 @@ const SHOTS = [
   {
     name: '09-roster',
     note: 'All characters lined up — silhouette variety across the cast.',
-    setup: `window.KB.testHarness.rosterLineup();`,
+    // The fight HUD has no business over a roster lineup: health bars, a timer and
+    // ROUND 1 were being composited across a shot that exists to judge the cast.
+    setup: `(() => {
+      const hud = document.getElementById('ui');
+      if (hud) { window.__kbRosterHud = hud.style.visibility; hud.style.visibility = 'hidden'; }
+      return window.KB.testHarness.rosterLineup();
+    })()`,
+    teardown: `(() => {
+      const hud = document.getElementById('ui');
+      if (hud) hud.style.visibility = window.__kbRosterHud || '';
+    })()`,
+    // Prove no fighter is standing in the rig's rest pose.
+    verify: `(() => {
+      const KB = window.KB, THREE = KB.THREE;
+      let tpose = 0, n = 0;
+      KB.scene.traverse((o) => {
+        if (!o.name || !o.name.startsWith('lineup_')) return;
+        n++;
+        let l = null, r = null, h = null;
+        o.traverse((b) => {
+          if (!b.isBone) return;
+          if (b.name === 'hand_L') l = b; else if (b.name === 'hand_R') r = b;
+          else if (b.name === 'head') h = b;
+        });
+        if (!l || !r || !h) return;
+        const pl = l.getWorldPosition(new THREE.Vector3());
+        const pr = r.getWorldPosition(new THREE.Vector3());
+        const ph = h.getWorldPosition(new THREE.Vector3());
+        // A T-pose puts both hands level with the head and far out to the sides.
+        const wide = Math.abs(pl.x - pr.x) > 1.5 || Math.abs(pl.z - pr.z) > 1.5;
+        const level = Math.abs(pl.y - ph.y) < 0.28 && Math.abs(pr.y - ph.y) < 0.28;
+        if (wide && level) tpose++;
+      });
+      return { fighters: n, restPose: tpose, ok: n > 0 && tpose === 0 };
+    })()`,
     settle: 1600,
   },
   {
@@ -661,7 +695,21 @@ async function main() {
       // lives in a few ticks can actually be reviewed. Same reasoning as the
       // contact-frame freeze: a still cannot show easing.
       const frames = [];
-      const base = await page.evaluate('window.KB.tick');
+      // Measure the offsets from the tick the hit ACTUALLY landed on.
+      //
+      // This used to sample `KB.tick` after the setup evaluate returned, and
+      // then bake the caption "ticks after damage" into the image -- so the
+      // offsets were measured from an unmeasured origin and the labels were
+      // unfounded. The shared hit sentinel records the real contact tick, so
+      // use it and fall back only if no hit was seen. Caught by a critic that
+      // read the code behind the caption instead of trusting it.
+      const base = await page.evaluate(
+        'window.__kbShotHit ? window.__kbShotHit.tick : window.KB.tick');
+      const hitBased = await page.evaluate('!!window.__kbShotHit');
+      if (!hitBased) flaw(shot.name, 'tick strip offsets are measured from shot start, not from '
+        + 'contact — no hit was recorded, so the "ticks after damage" labels are not trustworthy');
+      verified[shot.name] = { baseTick: base, measuredFromContact: hitBased,
+        offsets: shot.tickStrip.slice() };
       for (const off of shot.tickStrip) {
         await page.waitForFunction(`window.KB.tick >= ${base + off}`, null, { timeout: 15000 }).catch(() => {});
         frames.push({ t: off, b64: (await page.screenshot()).toString('base64') });
