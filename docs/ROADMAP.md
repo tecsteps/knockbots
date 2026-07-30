@@ -182,3 +182,20 @@ the opponent at 168/180 with no KO, and difficulty 9 restores the CPU on exit.
 Worth adding when the UI lands: hitbox/hurtbox display, frame-data readout on the last move, and
 input history — the three things a training mode is actually for. `game.debug.hitboxes` already
 exists as a flag with nothing driving it.
+
+---
+
+## Note for agents: the repo moves under you
+
+During one Codex session the repo advanced **23 commits**, several of them the exact performance
+fixes that session was investigating — the area-light cut, the impact-light invariant, the async
+portrait readback, the `setCharacter` equality guard. An agent measuring against a stale tree is
+measuring history and will "find" problems that were fixed hours ago.
+
+Two agents have independently hit this. The habit that works, and that several agents adopted on
+their own, is to measure against a pinned `git archive HEAD` snapshot with your own files copied
+in — it also survives the tree breaking mid-run, which happened twice.
+
+Related: one agent's correction of another's light count turned out to be stale by a single
+commit. **When two agents disagree about a number, check which commit each was reading before
+deciding who is wrong.**

@@ -596,6 +596,81 @@ class ScenePass extends Pass {
       depthWrite: false,
     });
     this._fsQuad = new FullScreenQuad(this.material);
+
+    /**
+     * Depth prepass. See `#prepass` for what it does and when it pays.
+     * @type {boolean}
+     */
+    this.depthPrepass = false;
+    /**
+     * Depth-only stand-in for the prepass. `colorWrite` off rather than a
+     * `MeshDepthMaterial` so the fragment shader stays as close to empty as
+     * three will allow; the depth write is the entire point of the draw.
+     */
+    this._depthOnly = new THREE.MeshBasicMaterial({ name: 'ScenePassDepthOnly', colorWrite: false });
+    this._prepassHidden = [];
+  }
+
+  /**
+   * Lays down depth for the scene's opaque occluders before the beauty pass, so
+   * the beauty pass's fragments for anything behind them are rejected by
+   * early-Z before they reach a fragment shader that integrates fifteen
+   * analytic lights.
+   *
+   * Whether that is worth an extra geometry pass is a property of the scene,
+   * and this one looked like the case for it: at the hero framing the arena
+   * submits roughly forty fragments per covered pixel, in layers — pit floor,
+   * barrier, fence, terrace, machinery bank, shell wall, backdrop — and three's
+   * front-to-back sort cannot separate them, because the set is merged into one
+   * mesh per material and each of those meshes spans the whole hall. A merged
+   * mesh sorts once, on the distance to its own centre.
+   *
+   * Three exclusions, and they are why this is a whitelist rather than an
+   * `overrideMaterial` over everything:
+   *
+   *   - **Transparent, non-depth-writing and alpha-tested materials.** The
+   *     override carries no alpha map, so the grating and the chain-link fence
+   *     would lay down solid depth across their own holes and cull the crowd
+   *     standing behind them.
+   *   - **Instanced meshes.** Every instanced population in this scene carries
+   *     per-instance vertex animation grafted on through `onBeforeCompile` —
+   *     the crowd's sway is the load-bearing one — and an override material
+   *     does not run that graft. Its depth would disagree with the beauty
+   *     pass's by centimetres, which is enough to punch holes in a swaying
+   *     figure.
+   *   - **Points and lines.** Nothing to occlude with.
+   *
+   * Skinned meshes are safe and included: three takes `USE_SKINNING` from the
+   * object rather than from the material, so the fighters deform identically
+   * under the override.
+   */
+  #prepass(renderer) {
+    const hidden = this._prepassHidden;
+    hidden.length = 0;
+    this.scene.traverse((o) => {
+      if (!o.visible || !o.isMesh) return;
+      const m = o.material;
+      const skip = o.isInstancedMesh || !m || Array.isArray(m)
+        || m.transparent || m.depthWrite === false || m.alphaTest > 0 || m.colorWrite === false
+        // An `onBeforeRender` hook is how an object does renderer work as a
+        // side effect of being drawn — the arena floor builds its planar
+        // reflection there. Running the prepass through one would build the
+        // mirror from the prepass's visibility set instead of the frame's, and
+        // consume the once-per-frame token before the beauty pass could use it.
+        // The floor is also the one surface in this scene with nothing behind
+        // it, so it is the cheapest possible thing to leave out.
+        || o.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender;
+      if (skip) { o.visible = false; hidden.push(o); }
+    });
+    const prevOverride = this.scene.overrideMaterial;
+    this.scene.overrideMaterial = this._depthOnly;
+    renderer.render(this.scene, this.camera);
+    this.scene.overrideMaterial = prevOverride;
+    for (const o of hidden) o.visible = true;
+    hidden.length = 0;
+    // The beauty pass has to keep the depth this just wrote and clear only
+    // colour. `autoClear` is true around the call, so the sub-flag carries it.
+    renderer.autoClearDepth = false;
   }
 
   /** Previous-frame depth copy, safe to sample from materials in the scene. */
@@ -618,8 +693,10 @@ class ScenePass extends Pass {
     const prevAutoClear = renderer.autoClear;
     renderer.autoClear = true;
     renderer.setRenderTarget(this.target);
+    if (this.depthPrepass) this.#prepass(renderer);
     renderer.render(this.scene, this.camera);
     renderer.autoClear = prevAutoClear;
+    renderer.autoClearDepth = true;
 
     // Snapshot here, before any post pass has run: these are the counters the
     // charter's draw-call and triangle budgets are written against.

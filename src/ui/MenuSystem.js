@@ -33,6 +33,32 @@
  * for FX and camera.
  *
  * ---------------------------------------------------------------------------
+ * Difficulty, training, and the practice overlay
+ * ---------------------------------------------------------------------------
+ * `Game` already owns all of it — `setDifficulty(1..10)` retunes the live CPU
+ * mid-round, `setTraining(bool)` detaches it entirely, `startTraining()` does
+ * both and starts a match. This file only drives them, and it does so from
+ * three places for three different reasons:
+ *
+ *   character select footer  the last screen before a first match, and the
+ *                            only one every player passes through
+ *   options                  where a player goes looking for it
+ *   pause                    because the engine applies a level change mid-round
+ *                            and that is worth exposing
+ *
+ * The footer slot is one control with two meanings: in arcade it sets the CPU
+ * level, in training it picks which machine stands there. Both answer the same
+ * question, so they share a nav index rather than one of them being a hidden
+ * item the keyboard can still land on.
+ *
+ * The practice overlay (`kbg-` classes, a sibling of the menu tree rather than
+ * a screen inside it) is the frame-data readout, the input log and the hit/hurt
+ * volume viewer, plus the badge that says a session is running at all — the HUD
+ * keeps drawing a timer and round pips through training and neither means
+ * anything there, and `HUD.js` belongs to another workstream. Nothing in the
+ * overlay is interactive; its three switches live in the pause menu.
+ *
+ * ---------------------------------------------------------------------------
  * Why character select has no renderer of its own
  * ---------------------------------------------------------------------------
  * The obvious way to give the screen a 3D preview is a second `WebGLRenderer`
@@ -505,12 +531,9 @@ export class MenuSystem {
     /** Every difficulty control on screen, re-synced together on the bus event. */
     this._diffViews = [];
 
-    this.training = {
-      boxes: false, frames: true, inputs: true,
-      // Latched off the fighter each frame; see `#trainingSample`.
-      move: null, moveInstance: -1, result: '', resultInstance: -1,
-      history: [], lastTick: -1, raf: 0, viewW: 0, viewH: 0,
-    };
+    /** What the practice overlay shows. The pause menu's toggles write here and
+     *  nothing else does; the overlay's own scratch lives on `_train`. */
+    this.training = { boxes: false, frames: true, inputs: true };
 
     /** @type {{items:Array, index:number, cols:number, gridCount:number}} */
     this.nav = { items: [], index: 0, cols: 1, gridCount: 0 };
@@ -529,7 +552,11 @@ export class MenuSystem {
     bus.on('phase', (e) => this.#onPhase(e));
     bus.on('matchEnd', (e) => { this._lastWinner = e.winner; });
     bus.on('difficulty', () => this.#syncDifficulty());
-    bus.on('training', () => { this.#syncTrainingOverlay(); this.#syncPauseMode(); });
+    bus.on('training', ({ on }) => {
+      if (on) this.#resetTrainingReadout();
+      this.#syncTrainingOverlay();
+      this.#syncPauseMode();
+    });
     // The frame-data readout says what the last move was worth, so it has to
     // know whether it landed. `whiff` fires on the move that missed, the other
     // two on the blow that connected.
@@ -1903,8 +1930,34 @@ export class MenuSystem {
     root.append(banner, panel);
     this.uiRoot.appendChild(root);
 
-    this._train = { root, svg, banner, panel, frames, inputs, fResult, fName, fInput, fCells, histRows, lines: [] };
+    this._train = {
+      root, svg, banner, panel, frames, inputs, fResult, fName, fInput, fCells, histRows,
+      // Per-frame scratch, all of it derived and none of it authoritative.
+      lines: [], move: null, moveInstance: -1, result: '', resultInstance: -1,
+      history: [], lastTick: -1, raf: 0, viewW: 0, viewH: 0,
+    };
     this.#syncTrainingOverlay();
+  }
+
+  /** Clears the readouts so a new session does not open on the last one's
+   *  last move and a log of inputs the player has forgotten making. */
+  #resetTrainingReadout() {
+    const t = this._train;
+    if (!t) return;
+    t.move = null; t.moveInstance = -1; t.result = ''; t.resultInstance = -1;
+    t.history.length = 0; t.lastTick = -1;
+    t.fName.textContent = '—';
+    t.fInput.textContent = 'throw a move';
+    t.fResult.textContent = '';
+    t.fResult.dataset.kind = '';
+    for (const [key] of FRAME_CELLS) {
+      t.fCells[key].v.textContent = '—';
+      delete t.fCells[key].cell.dataset.sign;
+    }
+    for (const r of t.histRows) {
+      r.row.classList.add('kbg-hist-row--empty');
+      r.dir.textContent = ''; r.btns.replaceChildren(); r.gap.textContent = '';
+    }
   }
 
   /** Visible only during a live practice session with no full screen over it. */
@@ -1922,24 +1975,24 @@ export class MenuSystem {
   }
 
   #trainingStart() {
-    if (this.training.raf) return;
+    if (this._train.raf) return;
     const step = () => {
-      this.training.raf = requestAnimationFrame(step);
+      this._train.raf = requestAnimationFrame(step);
       this.#trainingSample();
     };
-    this.training.raf = requestAnimationFrame(step);
+    this._train.raf = requestAnimationFrame(step);
   }
 
   #trainingStop() {
-    if (this.training.raf) cancelAnimationFrame(this.training.raf);
-    this.training.raf = 0;
+    if (this._train.raf) cancelAnimationFrame(this._train.raf);
+    this._train.raf = 0;
   }
 
   /** Records what the player's last move did, for the frame-data readout. */
   #noteMoveResult(fighter, result) {
     if (!this.game.training || fighter !== this.game.fighters?.[0]) return;
-    this.training.result = result;
-    this.training.resultInstance = fighter.moveInstance;
+    this._train.result = result;
+    this._train.resultInstance = fighter.moveInstance;
   }
 
   #trainingSample() {
@@ -1959,17 +2012,17 @@ export class MenuSystem {
   #sampleFrameData(f) {
     const t = this._train;
     const mv = f.currentMove;
-    if (mv && f.moveInstance !== this.training.moveInstance) {
-      this.training.moveInstance = f.moveInstance;
-      this.training.move = mv;
-      this.training.result = '';
+    if (mv && f.moveInstance !== t.moveInstance) {
+      t.moveInstance = f.moveInstance;
+      t.move = mv;
+      t.result = '';
       this.#paintFrameData(mv);
-    } else if (mv && mv !== this.training.move) {
+    } else if (mv && mv !== t.move) {
       // A cancel keeps the instance and swaps the move underneath it.
-      this.training.move = mv;
+      t.move = mv;
       this.#paintFrameData(mv);
     }
-    const shown = this.training.resultInstance === this.training.moveInstance ? this.training.result : '';
+    const shown = t.resultInstance === t.moveInstance ? t.result : '';
     if (t.fResult.textContent !== shown) {
       t.fResult.textContent = shown;
       t.fResult.dataset.kind = shown.startsWith('COUNTER') ? 'counter'
@@ -2019,17 +2072,18 @@ export class MenuSystem {
   #sampleInputs() {
     const src = this.game.input?.history?.[0];
     if (!src) return;
-    const list = this.training.history;
+    const t = this._train;
+    const list = t.history;
     let added = false;
     for (const h of src) {
-      if (h.tick <= this.training.lastTick) continue;
-      this.training.lastTick = h.tick;
+      if (h.tick <= t.lastTick) continue;
+      t.lastTick = h.tick;
       list.push({ tick: h.tick, dir: h.dir, buttons: h.buttons.slice() });
       added = true;
     }
     if (!added) return;
     while (list.length > HISTORY_ROWS) list.shift();
-    const rows = this._train.histRows;
+    const rows = t.histRows;
     for (let i = 0; i < rows.length; i++) {
       // Newest at the bottom, the way a command log reads.
       const entry = list[list.length - rows.length + i];
@@ -2077,8 +2131,8 @@ export class MenuSystem {
     const w = t.root.clientWidth;
     const h = t.root.clientHeight;
     if (!w || !h) return;
-    if (w !== this.training.viewW || h !== this.training.viewH) {
-      this.training.viewW = w; this.training.viewH = h;
+    if (w !== this._train.viewW || h !== this._train.viewH) {
+      this._train.viewW = w; this._train.viewH = h;
       t.svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
     }
 
@@ -3301,8 +3355,11 @@ const KBG_CSS = `
   /* Two lines of consequence text will not fit next to a stepper on a 844px
      row that also carries the hints and two buttons; the band name and the
      ladder are what the control is for, and the note goes. */
+  /* Wide enough that the four consequence cells hold one line. Measured on a
+     touch 844x390: at 19em they wrapped to two, which added a whole line to the
+     footer and took it out of the roster rack below. */
   .kbg-step--foot {
-    flex: 0 1 19em; min-width: 13em; font-size: 0.92em;
+    flex: 0 1 23em; min-width: 15em; font-size: 0.92em;
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "top" "row" "text";
     row-gap: 0.2em;

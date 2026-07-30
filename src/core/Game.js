@@ -155,6 +155,31 @@ export class Game {
   }
 
   /**
+   * Set the quality tier across every subsystem that has one.
+   *
+   * `RenderPipeline`, `Environment` and `Stage` each implement `setQuality`, but
+   * only the renderer's was ever called — the menu reached straight past the
+   * other two. So choosing Low still ran the ultra lighting rig, the ultra
+   * environment cube and the planar reflection, and the tier was a lie on every
+   * setting but ultra. That matters most on the machines the low tier exists
+   * for: the frame is fill-bound and light-bound, and the lighting rig is
+   * exactly what the low tier is supposed to shed.
+   *
+   * Each call is guarded independently — a subsystem that has not finished
+   * initialising, or a future one that never implements tiers, must not stop the
+   * others from being told.
+   *
+   * @param {'ultra'|'high'|'medium'|'low'} tier
+   */
+  setQuality(tier) {
+    this.quality = tier;
+    try { this.renderer?.setQuality?.(tier); } catch (e) { console.warn('[quality] renderer', e); }
+    try { this.environment?.setQuality?.(tier); } catch (e) { console.warn('[quality] environment', e); }
+    try { this.stage?.setQuality?.(tier); } catch (e) { console.warn('[quality] stage', e); }
+    bus.emit('quality', { tier });
+  }
+
+  /**
    * Set CPU difficulty. Takes effect immediately, mid-round included, so a
    * player can dial it while fighting rather than restarting to find out.
    * @param {number} level 1..10
