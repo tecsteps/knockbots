@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.10.0",
-    "commits": "66",
+    "rev": "0.11.0",
+    "commits": "70",
     "modules": 67,
-    "lines": "47k",
+    "lines": "49k",
     "clips": 91,
     "moves": 191,
     "characters": 10
@@ -11,19 +11,19 @@
   "verdicts": [
     {
       "axis": "Stage detail",
-      "score": 76
+      "score": 78
     },
     {
       "axis": "Interface craft",
-      "score": 76
+      "score": 74
     },
     {
       "axis": "Lighting & atmosphere",
-      "score": 72
+      "score": 71
     },
     {
       "axis": "Impact & effects",
-      "score": 66
+      "score": 68
     },
     {
       "axis": "Character rendering",
@@ -31,7 +31,7 @@
     },
     {
       "axis": "Animation quality",
-      "score": 57
+      "score": 59
     }
   ],
   "log": [
@@ -536,11 +536,45 @@
           "state": "done"
         }
       ]
+    },
+    {
+      "phase": "PHASE 16",
+      "when": "Round 10",
+      "rev": "rev 0.11.0",
+      "title": "The brief was wrong, and the agent proved it",
+      "paras": [
+        "Stage rose to 78, impact to 68, animation to 59; character held at 62; and the two axes targeted hardest \u2014 lighting and interface \u2014 went down by one and two. The average moved from 68.2 to 68.7, which after ten rounds is a plateau rather than progress.",
+        "The cause is instructive. This round every agent was handed its own critic's ranked fix list verbatim, on the reasoning that the critic had named specific files and specific numbers and was better placed than any paraphrase of mine. The lighting agent measured the brief instead of executing it, and found it wrong in both directions: the fighter-to-deck contrast does not fall away as the camera pulls back \u2014 the wide framing is the best one \u2014 it falls away as the camera drops, because the floor's reflectivity approaches total at a grazing angle. And the target it was told to hit was not one the reference exhibits. Measured on the Tekken screenshots themselves the same ratio is 1.31 to 1.78, and this build was already above it.",
+        "It found a genuine defect while it was there. A constant naming the renderer's bright-pass threshold had been written as 1.15 while the pass itself runs at 5.5, so every lamp face in the arena was authored a factor of five too dim to bloom, and two emitters had fog applied, removing between a quarter and a third of their radiance at the wide framing. It also established that a truly clipped highlight is unreachable at any radiance, because the tone mapping compresses the logarithm asymptotically rather than clamping \u2014 the interface had been carrying the entire top of the frame's range and the set none of it.",
+        "The honest reading of ten rounds: the critics' fix lists are hypotheses, not facts, and treating them as instructions produced the weakest round so far."
+      ],
+      "tags": [
+        {
+          "label": "stage 78",
+          "state": "done"
+        },
+        {
+          "label": "lighting -1",
+          "state": "wait"
+        },
+        {
+          "label": "interface -2",
+          "state": "wait"
+        },
+        {
+          "label": "brief disproved",
+          "state": "done"
+        },
+        {
+          "label": "plateau at ~68",
+          "state": "wait"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.10.0",
+    "rev": "0.11.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
