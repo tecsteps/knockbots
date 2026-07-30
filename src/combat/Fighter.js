@@ -502,8 +502,14 @@ export class Fighter {
    * on `#strikeVelocity`'s 8 m/s fallback and would otherwise be identical.
    *
    * The reaction is armed AFTER this tick's `animator.simulate` — `CombatSystem`
-   * resolves once both fighters have advanced — so the first tick it is evaluated
-   * on is the tick after contact, at half amplitude, reaching full on the second.
+   * resolves once both fighters have advanced — and the sim then STOPS, because
+   * every path that emits `hit` or `block` emits `hitstop` with it and
+   * `Game.#frame` stops feeding the accumulator for 5 to 18 ticks. So the tick
+   * after contact does not arrive for 83 to 300 milliseconds, and until round 13
+   * the receiving fighter spent all of it in the pose it held before the blow:
+   * measured 1 - IoU = 0.009 against its own pre-hit silhouette, and 0.000
+   * between a blow from the front and the same blow from behind. `hitReaction`
+   * now stamps the contact pose for the frozen frames — see `#armContactStamp`.
    * @param {Object} p the bus payload
    * @param {boolean} blocked
    */

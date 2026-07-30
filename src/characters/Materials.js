@@ -883,6 +883,96 @@ const METAL_REPEAT = 2;
  */
 const PEEL_REPEAT = 3;
 
+/**
+ * Near-Nyquist surface grain, in units of one standard deviation.
+ *
+ * The measured deficit on the character is not detail, it is *scale*: the plate
+ * bake's finest authored octaves are `tooth` (16 texels) and `machining` (5.7
+ * texels along its short axis), which at the closest framing the game uses —
+ * about 1.1 texels per screen pixel on `kb.armor` at 1.35 m on a 24-degree lens
+ * — land at 14 and 5 screen pixels. Nothing in the set was at one to three
+ * pixels, which is where a cast, blasted or rolled surface puts most of its
+ * energy and where the eye reads "material" rather than "pattern".
+ *
+ * A hashed field tented once in each axis has its energy at two to four texels
+ * with the pure-Nyquist component — the part that only ever aliases — removed.
+ * It costs one extra full-resolution field at bake time and nothing at runtime.
+ *
+ * `aspect` stretches the lattice along V so the field reads as a directional
+ * lay rather than as isotropic pebbling. That is not decoration: measured at
+ * matched 1px energy, an isotropic field at this scale reads as hammered
+ * leather and a lay at aspect 5 reads as wood grain, and 3 is the value that
+ * reads as a rolled-and-painted plate from either direction.
+ */
+function microGrain(size, seed, aspect = 1) {
+  const n = size * size;
+  const sh = Math.max(1, Math.round(size / aspect));
+  const raw = new Float32Array(n);
+  for (let y = 0; y < size; y++) {
+    const ly = Math.floor((y * sh) / size);
+    const row = y * size;
+    for (let x = 0; x < size; x++) raw[row + x] = (ihash(x, ly, seed) & 0xffff) / 65535 - 0.5;
+  }
+  const tmp = new Float32Array(n);
+  for (let y = 0; y < size; y++) {
+    const row = y * size;
+    for (let x = 0; x < size; x++) {
+      tmp[row + x] = (raw[row + ((x + size - 1) % size)] + 2 * raw[row + x] + raw[row + ((x + 1) % size)]) * 0.25;
+    }
+  }
+  const out = new Float32Array(n);
+  for (let y = 0; y < size; y++) {
+    const a = ((y + size - 1) % size) * size;
+    const b = y * size;
+    const c = ((y + 1) % size) * size;
+    for (let x = 0; x < size; x++) out[b + x] = (tmp[a + x] + 2 * tmp[b + x] + tmp[c + x]) * 0.25;
+  }
+  // High-pass at five texels. Without it the field still carries a long low tail,
+  // and on the normal map that tail lands squarely in the 4-8 texel band that is
+  // already the loudest thing on the character. Band-limiting to 2-5 texels is
+  // what buys 1px energy without paying for it at 4px.
+  const low = boxBlurWrap(out, size, 2);
+  let sum = 0;
+  for (let i = 0; i < n; i++) { out[i] -= low[i]; sum += out[i] * out[i]; }
+  const inv = 1 / Math.sqrt(sum / n);
+  for (let i = 0; i < n; i++) out[i] *= inv;
+  return out;
+}
+
+/**
+ * Grain amplitudes, in standard deviations of {@link microGrain}.
+ *
+ * `rough` is in absolute roughness units; `height` feeds the plate height field,
+ * which `encodeNormal` differentiates at scale 5.4 over a two-texel span, so
+ * 0.013 is about a four-degree mean tilt.
+ *
+ * Both numbers are the measured answer to round 12's brief, and one half of that
+ * brief did not survive the measurement. On the deterministic head closeup with
+ * the post chain off, band energy on the 420px head crop moved as follows
+ * (baseline 1px 3.607, 4px 9.028, ratio 0.400; run-to-run sigma on the ratio is
+ * 0.0015, so everything below is far outside noise):
+ *
+ *     grain on base ROUGHNESS only, 0.10   1px +4.1%   ratio 0.399 -> 0.403
+ *     grain on the NORMAL only, 0.020      1px +44%    ratio 0.399 -> 0.489
+ *     grain on the NORMAL only, 0.035      1px +55%    ratio 0.399 -> 0.538
+ *
+ * Roughness break-up was the recommended lever and it is worth almost nothing:
+ * an absolute roughness swing of +-0.10 at this scale changes lobe width where
+ * the lobe is already broad, and the plates are lit by an environment that
+ * varies slowly. The normal is worth ten times as much, because it changes which
+ * direction each texel points and therefore which part of the environment it
+ * sees. The roughness term is kept because it is free and physically correct,
+ * not because it moves the number.
+ *
+ * The amplitude is not set by the metric. 0.035 reaches the 0.55 ratio the brief
+ * asked for and turns every plate into hammered leather; 0.020 still pebbles the
+ * darker plates. 0.013 is the largest amplitude that still reads as a cast tooth
+ * on a painted plate, and it lands the ratio at 0.448 on the head crop and 0.398
+ * on the torso. **The ratio target above 0.45 is not reachable through the normal
+ * map without visibly damaging the surface** — see the note in `resolveSizes`.
+ */
+const GRAIN = { rough: 0.075, height: 0.013, aspect: 3 };
+
 const DETAIL_CACHE = new Map();
 const SHARED_TEXTURES = new Set();
 
@@ -1052,6 +1142,8 @@ function buildPlateDetail(size) {
   // the albedo mottle; two independent breaks read as two things happening to
   // the paint, one break used twice reads as a stain.
   const patch = fbm(size, { octaves: 3, freq: 13, gain: 0.55, seed: 89 });
+  // Cast grain / blast tooth at two to four texels. See {@link microGrain}.
+  const grain = microGrain(size, 0x9e1f37, GRAIN.aspect);
   const blotch = worley(size, Math.max(8, size >> 5), 53);
   const rust = fbm(size, { octaves: 3, freq: 20, gain: 0.55, seed: 71, ridged: true });
 
@@ -1100,8 +1192,13 @@ function buildPlateDetail(size) {
   // degrees at its steepest, which is what a stamped plate really does and is
   // enough to make a hard key stretch and break as it crosses the face instead
   // of laying a single flat sheet over it.
+  //
+  // The grain rides here and not in `height`, for the same reason `dish` does:
+  // it is a shape the light travels over, not a cavity. Feeding it to `height`
+  // would put it through `aoFromHeight` and the convexity mask below, and every
+  // texel of the plate would come out reading as a chipped micro-edge.
   const shape = new Float32Array(n);
-  for (let i = 0; i < n; i++) shape[i] = height[i] + dish[i] * 0.42 + macro[i] * 0.16;
+  for (let i = 0; i < n; i++) shape[i] = height[i] + dish[i] * 0.42 + macro[i] * 0.16 + grain[i] * GRAIN.height;
   const normalPx = encodeNormal(shape, size, 5.4);
 
   // --- edge / curvature mask --------------------------------------------
@@ -1127,6 +1224,18 @@ function buildPlateDetail(size) {
     const flake = 1 - smoothstep(0.04, 0.26, blotch.f1[i]);
     const jag = flake * (0.82 + casting[i] * 0.3 + tooth[i] * 0.16);
     const gate = smoothstep(0.34, 0.86, edge[i] + (blotch.id[i] - 0.6) * 0.22);
+    // NOTE, round 13. The pale elliptical "wear blotches" that read as decals
+    // scattered across the plates are THIS mask, reaching the frame through
+    // `metalnessMap` and not through albedo: `metal` below is chip * 0.95, so a
+    // flake turns a patch of paint into a mirror and what lands on screen is a
+    // soft-edged oval of pale environment. Traced by ablation on the closeup rig
+    // — nulling `metalnessMap` alone removes every one of them, and nothing else
+    // does: albedo, clearcoat, and all eleven surface-story terms leave them
+    // untouched. Breaking the outline with a finer modulator was tried here and
+    // measured as nothing (band energy identical to four decimal places, absolute
+    // frame difference under 2/255 outside the panel lines) because
+    // `smoothstep(0.4, 0.82, jag)` saturates over the body of a flake; reverted.
+    // The lever is the `gate`/`metal` coupling, not the outline.
     // The hairline of bare metal sits on the plate *lip* — just outside the
     // groove, not inside it, where it would be buried in shadow and invisible.
     const rim = smoothstep(0.05, 0.26, bevel[i]) * (1 - smoothstep(0.36, 0.66, bevel[i]));
@@ -1222,6 +1331,7 @@ function buildPlateDetail(size) {
       casting[i] * 0.13 +    // 8cm cast and roll mottle
       tooth[i] * 0.11 +      // 1.6cm surface tooth
       machining[i] * 0.12 +  // 5mm rolling marks in the plate stock
+      grain[i] * GRAIN.rough +  // cast tooth, 2-4 texels: the octave the set had none of
       cav * 0.14;            // nothing ever wipes the bottom of a trough
     // A fastener head is rubbed bright by every hand and spanner that has been
     // near it; a weld bead is the one thing on a plate that was never finished.
@@ -1254,6 +1364,7 @@ function buildPlateDetail(size) {
     const cav = clamp01((1 - ao[i]) * 1.4);
     let rough =
       0.26 + patch[i] * 0.13 + casting[i] * 0.12 + tooth[i] * 0.07 + machining[i] * 0.06 +
+      grain[i] * GRAIN.rough +
       cav * 0.16 + (1 - chip[i]) * 0.05;
     rough -= clamp01(rivet[i]) * 0.14;
     if (bead[i] > 0) rough += Math.sqrt(bead[i]) * 0.15;
@@ -2466,6 +2577,64 @@ function paletteKey(p, sizes) {
  * with the wear blotches, which are the loudest thing in a closeup and are
  * placed without reference to the form. Target: 1px:4px >= 0.55 on the
  * character crop with the 4px band no higher than it is now.
+ *
+ * --- Round 13: half of that held, half of it did not ----------------------
+ *
+ * First, the harness. Pausing the closeup on a wall-clock delay let the idle
+ * pose drift between runs and that is where the quoted 6-9% capture spread came
+ * from. Waiting on an exact 60Hz tick count instead (`KB.tick >= t0 + 150`, then
+ * freeze) makes the pose bit-identical run to run: sigma on the 1px:4px ratio is
+ * **0.0015 over three reboots**, and on 1px energy 0.006. Every A/B below is a
+ * single rep and still two orders of magnitude outside noise. Do this before
+ * measuring anything on a character again.
+ *
+ * (a) is wrong about which channel. Grain on the base roughness at +-0.10
+ *     absolute — a huge swing — moves 1px energy 4.1% and the ratio 0.399 ->
+ *     0.403. The same grain on the *normal* at a four-degree mean tilt moves 1px
+ *     energy 39% and the ratio to 0.49. Roughness at this scale only widens a
+ *     lobe that is already wide; the normal changes which part of the
+ *     environment each texel sees. See {@link GRAIN}, which ships both, and says
+ *     so.
+ *
+ * (b) is wrong about the mechanism and about the magnitude. Ablating every term
+ *     that could paint a wear blotch, one at a time, on the frozen closeup:
+ *
+ *       whole surface-story layer off   1px +4.2%   4px -0.7%   ratio 0.406->0.426
+ *       marking / grime / oxide / fade  each within +-5% of 1px, +-4% of 4px
+ *       bare-metal, dust, heat, lattice, seam, polish, hollow   likewise
+ *       albedo map off                  1px +3.8%   4px +3.4%
+ *       clearcoat off                   1px +2.3%   4px -2.2%
+ *       metalness map off               1px +12.6%  4px +9.2%
+ *       roughness map off               1px -12.7%  4px -10.9%
+ *       normal map off                  1px -29.2%  4px -13.3%
+ *
+ *     Nothing in the weathering owns the 4-8px band. Removing the *entire*
+ *     story layer — eleven terms, the most elaborate code in this file — costs
+ *     0.7% of the 4px band while visibly changing the image a great deal. The
+ *     4px band on a character crop is geometry and lighting: plate silhouettes,
+ *     chamfer highlights, the rim against the key. It is not texture, and it
+ *     cannot be taken out by editing a bake.
+ *
+ *     The blotches themselves were traced: they are the `chip` mask arriving
+ *     through `metalnessMap` (see the note at the chip loop). They are also not
+ *     loud — deleting them *raises* both bands, because a pale mirror patch is
+ *     smoother than the paint it replaced.
+ *
+ * The 0.55 target is not reachable this way. The ratio is monotone in normal-
+ * grain amplitude — 0.399 at 0, 0.449 at 0.013, 0.489 at 0.020, 0.538 at 0.035,
+ * 0.556 at 0.055 — and the surface reads as pebbled leather from 0.020 up and as
+ * hammered hide at 0.035. **The metric and the eye disagree above about 0.45**,
+ * and where they disagree the eye is the axis being scored. Shipped at 0.013:
+ * ratio 0.449 on the head crop and 0.398 on the torso, from 0.400 and 0.336.
+ *
+ * What is left, for whoever takes the next swing: `kb.armor` runs at 2118
+ * texels/metre, which is 1.13 texels per screen pixel at the closeup framing, so
+ * the finest thing the plate bake can express is about two screen pixels and
+ * everything above that is out of reach from this atlas by construction. Real
+ * 1px content needs a second, independently tiled detail normal sampled in
+ * object space — the story shader already does exactly this for the grunge map
+ * and could carry one more fetch. That is the untested hypothesis with the most
+ * headroom left in it.
  */
 function resolveSizes(scale) {
   const q = (n) => Math.max(128, Math.round((n * scale) / 128) * 128);

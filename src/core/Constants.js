@@ -48,7 +48,43 @@ export const MIN_COMBO_SCALE = 0.25;
 export const JUGGLE_DECAY = 0.86;
 export const MIN_JUGGLE_SCALE = 0.2;
 
-// Hitstop (impact freeze) in ticks, by attack weight class.
+/**
+ * Hitstop (impact freeze) in ticks, by attack weight class.
+ *
+ * `docs/ANIMATION_RESEARCH.md` item 2 claims the industry convention is "1-3
+ * frames of freeze on connection" and that 18 ticks is therefore two to six
+ * times too long. **That claim is wrong and these numbers should not be cut.**
+ * Checked against primary sources, all of which are 60fps games quoting 60Hz
+ * frames, so there is no factor-of-two to unpick:
+ *
+ *     Street Fighter V   8 / 12 / 16 frames for light / medium / heavy
+ *                        (Capcom's own SF Seminar column, "Damage Part II")
+ *     Street Fighter IV  ~9 / ~11 / ~13 frames  (sonichurricane, "Impact Freeze")
+ *     Street Fighter II  10-14 frames regardless of button strength
+ *     Melee              floor(damage/3 + 3), capped at 20 frames
+ *     Brawl / Ultimate   damage*0.385 + 5 and damage*0.65 + 6, capped at 30
+ *
+ * Against that, Knockbots is at or *below* convention everywhere except ULTRA,
+ * and ULTRA at 18 sits between SFV's heavy and Smash's cap. The "1-3 frames"
+ * figure appears to be a conflation with the 2-4 frame *screen effect* the
+ * critic protocol asks for, which is a different thing and is authored in
+ * `EffectsDirector`'s `HIT_FX`.
+ *
+ * Two things about this constant that are easy to get wrong:
+ *
+ * 1. **Changing it cannot break a combo.** `Game.#frame` gates the accumulator
+ *    on the freeze, so *no simulation tick runs at all* while hitstop is
+ *    active — move counters, stun timers and the input buffer all hold. Every
+ *    frame-data relationship in the game is invariant under this table. What
+ *    changes is only the wall-clock window a human gets to buffer an input.
+ * 2. **The unit is a rendered frame, not a tick.** `Game.hitstopTicks` counts
+ *    down once per `requestAnimationFrame`, so the freeze lasts
+ *    `ticks x frameTime`, not `ticks/60`. Measured on a launcher (11) at the
+ *    fight framing, three repetitions: **327 ms**, not the nominal 183 ms,
+ *    because the contact burst makes those the most expensive frames in the
+ *    game (43 ms against 11 ms either side). See the note on `KICK` in
+ *    `FightCamera.js` — the fix belongs in `Game.js` and is not made here.
+ */
 export const HITSTOP = { light: 5, medium: 8, heavy: 12, launcher: 11, ultra: 18 };
 
 // Input buffer window (ticks) for motion inputs and command reads.

@@ -814,7 +814,20 @@ function resolveMaterials(environment, palette) {
   const emissiveSrc = pick('emissive');
   const glowColor = new THREE.Color(palette.emissive || '#4fd8ff');
   const GLOWS = {
-    visor: { color: glowColor, intensity: 5.2 },
+    // The eye is the focal point of every closeup in `ref/tekken8`, and what
+    // makes a focal point is not output, it is *separation*: a small element
+    // several stops above everything around it. At 5.2 a visor sits at roughly
+    // the same value as a key-lit armour plate — on a warm palette like Vulkan's
+    // it is the same hue as well — and the face reads as another panel. Measured
+    // on a 200x220 face crop at the canonical closeup framing, 5.2 put that
+    // region's 95th percentile at 155 against the head crop's 149 — the face was
+    // no brighter than the shoulder behind it.
+    //
+    // Measured on the frozen closeup, that crop's p95 goes 155 -> 218 at 12 and
+    // -> 227 at 18. 12 is where it lands: the eye clearly wins the frame, and
+    // the streak bloom off a source this small stays inside what the reference
+    // does rather than laying rays across the whole figure at fight framing.
+    visor: { color: glowColor, intensity: 12 },
     core: { color: glowColor, intensity: 4.4 },
     vents: { color: new THREE.Color(palette.accent || '#ff8a3d'), intensity: 2.6 },
     spine: { color: glowColor, intensity: 3.0 },
@@ -3439,11 +3452,24 @@ function headFurnace(rig) {
     { y: 0, w: 0.156, d: 0.028, round: 0.35 },
     { y: 0.014, w: 0.148, d: 0.020, round: 0.4 },
   ]), 'trim', { p: [0, -0.030, FRONT * 0.098], r: [16 * DEG, 0, 0], tier: TIER.SECONDARY });
+  // The furnace itself.
+  //
+  // These discs used to sit at z = 0.084. The head hull at this height is
+  // 0.195 m deep about its own origin, so its front face is at z = 0.097: the
+  // furnace was thirteen millimetres *inside solid geometry*, and Vulkan — the
+  // character the canonical `02-closeup-face` photographs — rendered with a
+  // black hole behind a grille and no eye at all. Measured on a 200x220 crop of
+  // the face at that shot's framing, the region held 0.22% of pixels above 235
+  // and a peak of 242, i.e. no focal point whatsoever; every Tekken 8 closeup in
+  // `ref/` puts its brightest, smallest, highest-frequency element on the face.
+  //
+  // They now sit proud of the hull and inside the cage's depth range, so the
+  // bars silhouette against them, which is the whole point of a caged furnace.
   for (let i = -1; i <= 1; i++) {
     rig.glow('head', latheProfile([
-      { r: 0, y: 0 }, { r: 0.019 - Math.abs(i) * 0.005, y: 0 },
-      { r: 0.016 - Math.abs(i) * 0.005, y: 0.009 }, { r: 0, y: 0.012 },
-    ], 14), 'visor', { p: [i * 0.040, 0.026, FRONT * 0.084], r: [-90 * DEG * -FRONT, 0, 0] });
+      { r: 0, y: 0 }, { r: 0.022 - Math.abs(i) * 0.006, y: 0 },
+      { r: 0.019 - Math.abs(i) * 0.006, y: 0.009 }, { r: 0, y: 0.013 },
+    ], 18), 'visor', { p: [i * 0.038, 0.026, FRONT * 0.100], r: [-90 * DEG * -FRONT, 0, 0] });
   }
 
   // riveted skull cap and a pair of flue nubs on the whip leaves

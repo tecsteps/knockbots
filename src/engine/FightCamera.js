@@ -169,6 +169,86 @@ const BONE_HEIGHT = {
   spine01: 1.06, hips: 0.96, hand_L: 1.0, hand_R: 1.0, foot_L: 0.1, foot_R: 0.1,
 };
 
+/**
+ * Contact kick — the camera's response to a blow, by attack weight class.
+ *
+ * This exists because everything else the camera does about a hit is integrated
+ * in `simulate()`, and **`simulate()` does not run during hitstop**. `Game`
+ * gates its accumulator on the freeze, so the position spring, the roll spring,
+ * `trauma` and `punch` are all held at whatever value the contact tick left
+ * them at, for the entire length of the freeze.
+ *
+ * Measured, three repetitions, a launcher landing at the fight framing:
+ *
+ *     fov during the 11-frame freeze   34.73 deg, bit-identical on every frame
+ *     camera displacement per frame    6.7-11.8 mm  (shake noise only)
+ *     the same, on the frames after     78-118 mm
+ *     wall-clock length of the freeze   327 ms
+ *
+ * So the punch-in that `#onHit` asks for arrives about a third of a second
+ * *after* the hit it is punctuating, by which time it is already decaying, and
+ * the most important 300ms in the game is photographed on a camera that is
+ * holding still. That is the difference between a freeze that reads as impact
+ * and one that reads as a dropped frame.
+ *
+ * The kick is therefore integrated in `render()` instead, on a dt floored at
+ * one tick. That floor is the whole trick: during hitstop `Game` hands
+ * `render()` a dt scaled to 8% of wall time, so the floor takes over and the
+ * envelope advances exactly one nominal frame per rendered frame — the same
+ * rate at which `Game.hitstopTicks` counts down. The kick and the freeze
+ * therefore run in lockstep whatever the framerate, and `frames` below can be
+ * read against `HITSTOP` directly.
+ *
+ *   dolly  metres in along the view axis, capped at 10% of the subject distance
+ *   slide  metres of lateral shove away from the blow
+ *   roll   radians of roll kick
+ *   frames envelope length in 60Hz frames
+ *
+ * Containment is unaffected: the dolly is applied *before* `#enforceFraming`,
+ * which re-solves the fit and pushes back out if the tighter framing would have
+ * cropped anyone. A kick that would crop is silently clamped rather than
+ * allowed, which is the same contract shake already has.
+ */
+const KICK = {
+  [WEIGHT.LIGHT]:    { dolly: 0.07, slide: 0.025, roll: 0.009, frames: 9 },
+  [WEIGHT.MEDIUM]:   { dolly: 0.13, slide: 0.045, roll: 0.016, frames: 12 },
+  [WEIGHT.HEAVY]:    { dolly: 0.26, slide: 0.075, roll: 0.028, frames: 16 },
+  [WEIGHT.LAUNCHER]: { dolly: 0.30, slide: 0.085, roll: 0.026, frames: 15 },
+  [WEIGHT.ULTRA]:    { dolly: 0.44, slide: 0.120, roll: 0.042, frames: 22 },
+};
+
+/**
+ * Kick envelope, in three beats: snap, creep, release.
+ *
+ * The first shape tried here was the obvious one — snap to full and decay — and
+ * measuring it is what produced this one. Against a launcher it peaked on the
+ * contact frame and had released most of the way back out by the fourth frozen
+ * frame, so the back two thirds of the freeze were static again and the net
+ * camera path over the freeze came out *lower* than the baseline's. A decay is
+ * the wrong shape for a beat the world is holding still through.
+ *
+ * So: two frames to 66%, then a slow continuing push to 100% across the hold,
+ * then a quick release. The creep is the load-bearing part. It is small enough
+ * per frame to be invisible as motion and large enough that the frame is never
+ * twice the same, which is the difference between a held beat and a hitch — and
+ * it is still moving inward when the reaction animation takes over, so the
+ * release reads as the world starting again rather than as the camera bouncing.
+ *
+ * `frames` per weight is set to roughly `HITSTOP[weight] + 4`, so the release
+ * lands just after `Game` unfreezes the accumulator.
+ */
+function kickEnv(u) {
+  if (u <= 0 || u >= 1) return 0;
+  const SNAP = 0.12, HOLD = 0.72;
+  if (u < SNAP) {
+    const t = 1 - u / SNAP;
+    return 0.66 * (1 - t * t);
+  }
+  if (u < HOLD) return 0.66 + 0.34 * ((u - SNAP) / (HOLD - SNAP));
+  const t = 1 - (u - HOLD) / (1 - HOLD);
+  return t * t;
+}
+
 /** Trauma an impact contributes, by attack weight class. */
 const IMPACT_TRAUMA = {
   [WEIGHT.LIGHT]: 0.15,
@@ -191,6 +271,8 @@ const _v2 = new THREE.Vector3();
 const _pt = new THREE.Vector3();
 const _lookOut = new THREE.Vector3();
 const _posOut = new THREE.Vector3();
+const _kickFwd = new THREE.Vector3();
+const _kickRight = new THREE.Vector3();
 
 export class FightCamera {
   /**
@@ -222,6 +304,12 @@ export class FightCamera {
     this.trauma = 0;
     this.traumaDecay = 1.7;
     this.punch = 0;
+
+    /**
+     * Presentation-only contact kick, integrated in `render()` so it survives
+     * hitstop. `life <= 0` means idle; nothing here is read by the simulation.
+     */
+    this.kick = { t: 0, life: 0, dolly: 0, slide: 0, roll: 0, dirX: 1 };
 
     /** Focus report consumed by RenderPipeline. */
     this.focus = new THREE.Vector3(0, 1.05, 0);
@@ -319,7 +407,21 @@ export class FightCamera {
     this._orbit = 0;
 
     // Cinematic framings are cuts. Moves are moves.
-    const cuts = { closeup: true, portrait: true, wide: true, ko: true, lineup: true };
+    //
+    // `impact` belongs in this list and its absence was measured, not guessed.
+    // It is entered only by `TestHarness`, which repositions both fighters onto
+    // fresh marks in the same call — and without a cut the look spring (4.2Hz)
+    // is still travelling toward where the pair *used to be* when the blow
+    // lands ten ticks later. Measured at 1920x1080, fighters projected to
+    // screen-x as a percentage of frame width:
+    //
+    //     settled `fight` framing   32.1% / 68.5%   symmetric about centre
+    //     at contact, no cut        58.9% / 77.3%   both in the right quarter
+    //
+    // Every impact capture this project has scored was photographed in the
+    // second state, with the contact point on the frame edge and 60% of the
+    // frame given to empty floor. The framing itself was never the problem.
+    const cuts = { closeup: true, portrait: true, wide: true, ko: true, lineup: true, impact: true };
     this._snapNext = !!cuts[mode];
 
     const durations = { intro: 150, super: 220, fight: Infinity };
@@ -366,6 +468,8 @@ export class FightCamera {
 
     if (this._snapNext) {
       this._snapNext = false;
+      // A framing that teleports must not inherit the previous shot's kick.
+      this.kick.life = 0;
       this.posSpring.snap(_desiredPos);
       this.lookSpring.snap(_desiredLook);
       this.fovSpring.snap(fov);
@@ -422,6 +526,19 @@ export class FightCamera {
       _lookOut.addScaledVector(_v, snoise(t * 1.07, 151.2) * swing);
       roll += snoise(t * 0.91, 197.6) * SHAKE.roll * k;
     }
+
+    // The blow itself, on a clock that hitstop cannot stop. Applied before the
+    // containment re-solve so a kick can be clamped but never crop a fighter.
+    //
+    // The clamp is two-sided on purpose. The floor is what carries the envelope
+    // through the freeze; the ceiling is because `Game` renders the *contact*
+    // frame unfrozen (it reads `hitstopTicks` before the tick that sets it), and
+    // that frame is routinely the slowest in the game — measured at 43ms against
+    // 11ms either side. Without a ceiling a single slow frame advanced the
+    // envelope 28% and the snap was over before anyone saw it.
+    roll += this.#contactKick(
+      THREE.MathUtils.clamp(dt || 0, TICK_DT, TICK_DT * 3), _posOut, _lookOut,
+    );
 
     if (PAIR_FRAMINGS[this.mode]) this.#enforceFraming(_posOut, _lookOut, fov);
 
@@ -924,6 +1041,57 @@ export class FightCamera {
   }
 
   /**
+   * Advances the contact kick and writes it into this frame's transform.
+   *
+   * @param {number} dt seconds, floored at one tick so the envelope keeps
+   *   running while `Game` has the simulation frozen
+   * @param {THREE.Vector3} pos camera position for this frame, modified
+   * @param {THREE.Vector3} look look target for this frame, modified
+   * @returns {number} radians of roll to add
+   */
+  #contactKick(dt, pos, look) {
+    const k = this.kick;
+    if (k.life <= 0) return 0;
+    k.t += dt;
+    if (k.t >= k.life) { k.life = 0; return 0; }
+    const env = kickEnv(k.t / k.life);
+    if (env <= 0) return 0;
+
+    _kickFwd.copy(look).sub(pos);
+    const dist = _kickFwd.length();
+    if (dist < 1e-3) return 0;
+    _kickFwd.divideScalar(dist);
+    _kickRight.crossVectors(_kickFwd, _upAxis);
+    if (_kickRight.lengthSq() < 1e-6) return 0;
+    _kickRight.normalize();
+
+    // Never more than a tenth of the way to the subject, so the same table can
+    // fire under a 1.4m closeup and a 9m wide without a special case.
+    pos.addScaledVector(_kickFwd, Math.min(k.dolly, dist * 0.1) * env);
+    pos.addScaledVector(_kickRight, -k.dirX * k.slide * env);
+    look.addScaledVector(_kickRight, k.dirX * k.slide * 0.5 * env);
+    return k.dirX * k.roll * env;
+  }
+
+  /**
+   * Arms the kick, strongest-blow-wins. A jab landing inside a launcher's
+   * envelope must not be allowed to cut the launcher's kick short — the same
+   * contention rule the single impact light uses in `EffectsDirector`.
+   */
+  #armKick(weight, gain, dirX) {
+    const spec = KICK[weight] || KICK[WEIGHT.MEDIUM];
+    const dolly = spec.dolly * gain;
+    const k = this.kick;
+    if (k.life > 0 && dolly <= k.dolly * kickEnv(k.t / k.life)) return;
+    k.t = 0;
+    k.life = spec.frames * TICK_DT;
+    k.dolly = dolly;
+    k.slide = spec.slide * gain;
+    k.roll = spec.roll * gain;
+    k.dirX = dirX;
+  }
+
+  /**
    * Extra margin, in metres, that the current trauma envelope could displace a
    * silhouette by once `render()` applies shake. Reserving it up front is what
    * makes "shake never pushes a fighter out of frame" a property of the solve
@@ -1129,6 +1297,10 @@ export class FightCamera {
       ? Math.sign(e.defender.position.x - e.point.x) || 1
       : 1);
     this.rollSpring.velocity += dirX * strength * (e.counter ? 4.6 : 2.9);
+
+    // The half of the response that has to land *on* the freeze rather than
+    // after it. See `KICK`.
+    this.#armKick(weight, e.counter ? 1.4 : 1, dirX);
 
     // Recoil: a real impulse on the position spring, which the critically
     // damped return turns into a single clean kick.

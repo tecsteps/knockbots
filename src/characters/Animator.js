@@ -557,10 +557,11 @@ export class Animator {
     this.recoil = { enabled: true, scale: 1 };
 
     /**
-     * The hit-reaction layer. `t < 0` is idle; arming sets it to 0 and every
-     * tick after is a lookup into two fixed envelopes. Nothing here is a state
-     * integrator, so it re-simulates exactly and costs one table walk a tick
-     * while a reaction is live and a single compare when it is not.
+     * The hit-reaction layer. `t < 0` is idle; arming sets it one tick short of
+     * the peak and every tick after is a lookup into two fixed envelopes.
+     * Nothing here is a state integrator, so it re-simulates exactly and costs
+     * one table walk a tick while a reaction is live and a single compare when
+     * it is not.
      */
     this.hitLayer = {
       enabled: true, scale: 1, t: -1, force: 0,
@@ -568,7 +569,19 @@ export class Animator {
       vec: new THREE.Vector3(),
       gain: HIT_LAYER.torso,
       armGain: -HIT_TORSO_SUM.torso * HIT_ARM_SLACK,
+      /**
+       * The contact stamp — see `#armContactStamp`. `on` counts DOWN one per
+       * simulate(), so it can only ever outlive the frozen frames by the single
+       * tick the pose interpolation needs: 2 is "the sim is frozen, show the
+       * whole stamp", 1 is "`cur` has the layer for real but `prev` predates it,
+       * so add back the share the slerp is still missing", 0 is off.
+       */
+      on: 0,
+      q: Array.from({ length: this.count }, () => new THREE.Quaternion()),
+      live: new Uint8Array(this.count),
     };
+    /** Scratch pose the contact stamp is evaluated into. Never rendered. */
+    this._stampPose = new Pose(this.names);
 
     this.bodyVelocity = new THREE.Vector3();
     this._prevBodyVelocity = new THREE.Vector3();
@@ -1194,7 +1207,52 @@ export class Animator {
     H.gain = HIT_LAYER[region] || HIT_LAYER.torso;
     H.armGain = -(HIT_TORSO_SUM[region] ?? HIT_TORSO_SUM.torso) * HIT_ARM_SLACK;
     H.force = force;
-    H.t = 0;
+    // The freeze IS the rise — see `#armContactStamp`. `t` is left one tick short
+    // of the peak so the first tick the sim actually runs reproduces the stamped
+    // pose exactly and the reaction continues from there without a step.
+    H.t = Math.max(0, H.rise - 1);
+    this.#armContactStamp();
+  }
+
+  /**
+   * Show the impact on the frame the impact is frozen on.
+   *
+   * MEASURED, and it is the whole reason this method exists. `Game.#frame` stops
+   * feeding the accumulator for `HITSTOP[weight]` ticks on every connection —
+   * 5 for a light, 18 for an ultra, so 83ms to 300ms of wall clock — and during
+   * that window `simulate()` is never called, only `applyTo()`. Both halves of
+   * the reaction are armed by `CombatSystem` AFTER this tick's `simulate()` has
+   * already run, so neither one is evaluated until the freeze releases.
+   *
+   * The silhouette of the receiving fighter during hitstop, against its own
+   * pose one frame before the blow landed, measured 1 - IoU = 0.009 — and that
+   * residue is the idle clip's interpolation, not the hit. A blow from the front
+   * and the same blow from behind produced silhouettes that differed by exactly
+   * 0.000. The body that has just been hit is bit-identical to the body that has
+   * not, and it holds that for a third of a second on a launcher. The reaction
+   * then runs to a 0.50 divergence — after the frame everyone was looking at.
+   *
+   * So the stamp is a PRESENTATION-only pose delta: `hitReaction` evaluates the
+   * layer one tick early into a scratch pose, banks the per-bone deltas, and
+   * `applyTo` multiplies them onto the interpolated pose for exactly as long as
+   * the sim stays frozen. `simulate()` clears it on its way past, so the layer
+   * itself is untouched, the inertialization sources are untouched, and nothing
+   * the stamp does can feed back into the deterministic tick.
+   */
+  #armContactStamp() {
+    const H = this.hitLayer;
+    H.live.fill(0);
+    H.on = 0;
+    const p = this._stampPose;
+    p.reset();
+    const t = H.t;
+    this.#applyHitReaction(p);   // advances t to `rise` and writes at full amplitude
+    H.t = t;                     // ...and the real tick will land on `rise` too
+    for (let i = 0; i < this.count; i++) {
+      const q = p.rot[this.names[i]];
+      // 0.99999 on |w| is about 0.5 milliradians — below what a bone can show.
+      if (q.w < 0.99999 && q.w > -0.99999) { H.q[i].copy(q); H.live[i] = 1; H.on = 2; }
+    }
   }
 
   /**
@@ -1209,6 +1267,7 @@ export class Animator {
   clearImpacts() {
     this.hitLayer.t = -1;
     this.hitLayer.force = 0;
+    this.hitLayer.on = 0;
     this._ripple.length = 0;
     for (const b in this.springs) this.springs[b].reset();
   }
@@ -1248,6 +1307,8 @@ export class Animator {
   simulate(tick = this.tick + 1) {
     this.tick = tick;
     this._rippleTick++;
+    // The sim is running again, so the frozen-frame stamp is one tick from done.
+    if (this.hitLayer.on) this.hitLayer.on--;
 
     // 1 — swap snapshots and build into `cur`.
     const prev = this.cur;
@@ -2019,6 +2080,9 @@ export class Animator {
     const a = THREE.MathUtils.clamp(alpha, 0, 1);
     const prev = this.prev, cur = this.cur;
     const rootName = this.names[this.rootIndex];
+    const H = this.hitLayer;
+    const stamp = H.on;
+    const stampW = stamp === 2 ? 1 : 1 - a;
 
     for (let i = 0; i < list.length; i++) {
       const entry = list[i];
@@ -2027,6 +2091,13 @@ export class Animator {
       const name = entry.name;
       const bi = entry.index;
       _q0.copy(prev.rot[name]).slerp(cur.rot[name], a);
+      // The contact stamp goes on the RIGHT of the pose delta, which is where
+      // the layer itself composes: `#applyHitReaction` post-multiplies onto
+      // `pose.rot[bone]`, so this is the same rotation in the same frame.
+      if (stamp && H.live[bi] && stampW > 1e-3) {
+        _q2.set(0, 0, 0, 1).slerp(H.q[bi], stampW);
+        _q0.multiply(_q2);
+      }
       bone.quaternion.copy(this.restQuat[bi]).multiply(_q0);
 
       if (name === rootName) {
@@ -2095,6 +2166,7 @@ export class Animator {
     this._ripple.length = 0;
     this.hitLayer.t = -1;
     this.hitLayer.force = 0;
+    this.hitLayer.on = 0;
     for (const b in this.springs) this.springs[b].reset();
     for (const q of this._prevParentQuat) q.identity();
     for (const q of this._energyPrev) q.identity();
