@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.12.0",
-    "commits": "72",
-    "modules": 67,
-    "lines": "52k",
+    "rev": "0.13.0",
+    "commits": "76",
+    "modules": 64,
+    "lines": "53k",
     "clips": 91,
     "moves": 191,
     "characters": 10
@@ -11,27 +11,29 @@
   "verdicts": [
     {
       "axis": "Stage detail",
-      "score": 78
+      "score": 80,
+      "pass": true
     },
     {
       "axis": "Interface craft",
-      "score": 78
+      "score": 80,
+      "pass": true
     },
     {
       "axis": "Lighting & atmosphere",
-      "score": 73
+      "score": 75
     },
     {
       "axis": "Impact & effects",
-      "score": 70
+      "score": 69
     },
     {
       "axis": "Character rendering",
-      "score": 65
+      "score": 63
     },
     {
       "axis": "Animation quality",
-      "score": 62
+      "score": 64
     }
   ],
   "log": [
@@ -77,9 +79,9 @@
       "rev": "rev 0.2.0",
       "title": "Twelve workstreams, disjoint files",
       "paras": [
-        "Fanned out the whole engine at once against the pinned charter. Twelve agents, zero errors, and the contracts held: two animation workstreams that never communicated produced 89 clips matching the manifest exactly \u2014 no missing ids, no extras, none invalid.",
+        "Fanned out the whole engine at once against the pinned charter. Twelve agents, zero errors, and the contracts held: two animation workstreams that never communicated produced 89 clips matching the manifest exactly — no missing ids, no extras, none invalid.",
         "Every one of the 43 attack clips drives the hips or spine. Arm-isolated strikes are the classic tell of amateur animation and there are none in the set.",
-        "Notable engineering: r185 deprecated PCFSoftShadowMap, so the render agent replaced three's shadow shader chunk with a real PCSS implementation \u2014 blocker search, penumbra estimate, variable-radius PCF \u2014 guarded by a signature check that falls back to stock if upstream changes."
+        "Notable engineering: r185 deprecated PCFSoftShadowMap, so the render agent replaced three's shadow shader chunk with a real PCSS implementation — blocker search, penumbra estimate, variable-radius PCF — guarded by a signature check that falls back to stock if upstream changes."
       ],
       "tags": [
         {
@@ -110,9 +112,9 @@
       "rev": "rev 0.2.1",
       "title": "It renders, and it is wrong",
       "paras": [
-        "The first capture showed a live round with combat resolving \u2014 but a milky veil buried the lower half of the frame and everything was uniformly soft. Disabling bloom, SSR, depth of field and motion blur left the veil untouched, which proved it was stage geometry rather than post.",
+        "The first capture showed a live round with combat resolving — but a milky veil buried the lower half of the frame and everything was uniformly soft. Disabling bloom, SSR, depth of field and motion blur left the veil untouched, which proved it was stage geometry rather than post.",
         "Two root causes, both found by measurement rather than guesswork. Four additive stage emitters were each unbounded and their sum was the veil: light pools were covering 4.2x the shaft footprint at 5.5x intensity, and 1000 dust motes had no size cap, so a 6cm mote a metre from the lens covered 200 pixels.",
-        "The blanket softness was not depth of field at all. Adaptive resolution had a 0.75 floor and captures were rendering at 0.79 scale then upscaling. The DOF circle-of-confusion was separately wrong \u2014 linear in metres, so a fighter half a metre off the focus plane picked up 40% blur immediately."
+        "The blanket softness was not depth of field at all. Adaptive resolution had a 0.75 floor and captures were rendering at 0.79 scale then upscaling. The DOF circle-of-confusion was separately wrong — linear in metres, so a fighter half a metre off the focus plane picked up 40% blur immediately."
       ],
       "tags": [
         {
@@ -128,7 +130,7 @@
           "state": "done"
         },
         {
-          "label": "247\u2192176 calls",
+          "label": "247→176 calls",
           "state": "done"
         }
       ]
@@ -140,7 +142,7 @@
       "title": "Five blind comparisons, five losses",
       "paras": [
         "Ten official Tekken 8 press screenshots were put on disk as the benchmark, and critics ran the blind protocol: describe both images without labelling them, pick the one that reads as shipped AAA, only then reveal which was which.",
-        "Every axis lost. Character rendering 43, lighting 45, impact 42, stage 58, interface 58. The verdicts were specific rather than vague \u2014 the character critic's finding was that the shapes are fine but the surfaces are empty: \"every facet is a single smooth value ramp, no machining marks, no paint fade, no grime in the recesses.\" The lighting critic could not tell from the pixels where the light source was.",
+        "Every axis lost. Character rendering 43, lighting 45, impact 42, stage 58, interface 58. The verdicts were specific rather than vague — the character critic's finding was that the shapes are fine but the surfaces are empty: \"every facet is a single smooth value ramp, no machining marks, no paint fade, no grime in the recesses.\" The lighting critic could not tell from the pixels where the light source was.",
         "Two defects the critics missed and I caught by eye: Vulkan reads as headless because the head is recessed between the shoulder masses, and Kestrel's idle stance splays rather than braces. Both are in round 2."
       ],
       "tags": [
@@ -167,7 +169,7 @@
         "Character rendering 43 to 57, lighting 45 to 58, stage 58 to 64, interface 58 to 60. Impact went 42 to 41 and animation reached 28 from an unscored start.",
         "The most valuable finding was a root cause nobody had asked for. The materials agent traced the flat surfaces not to the texture bake but to the projection: RobotBuilder computed UVs from each plate's own origin at a fixed tile rate, so all forty plates sampled nearly the same small window. No amount of detail in the bake could fix that. The fix samples an object-space triplanar field instead, so where a plate sits on the body now decides how it has aged.",
         "A second latent bug surfaced the same way: Environment.update() was never called by anything, so the light flicker, hue drift and mood cross-fades had never once run since they were written.",
-        "One critic verdict had to be discarded. The impact critic concluded the effects system was byte-identical by checking git log \u2014 but agents do not commit, so their work sits uncommitted in the working tree. Seven files under src/fx/ had in fact changed. Later critics were explicitly instructed to judge the images and never the git history."
+        "One critic verdict had to be discarded. The impact critic concluded the effects system was byte-identical by checking git log — but agents do not commit, so their work sits uncommitted in the working tree. Seven files under src/fx/ had in fact changed. Later critics were explicitly instructed to judge the images and never the git history."
       ],
       "tags": [
         {
@@ -202,7 +204,7 @@
       "rev": "rev 0.4.1",
       "title": "Making motion judgeable",
       "paras": [
-        "The animation critic scored 28 and every fix it named pointed at the capture tool rather than the animation \u2014 which was fair. A contact sheet that samples on wall-clock drifts against a 60Hz tick, and a 36-tick move finishes in 600ms, far quicker than a screenshot round trip.",
+        "The animation critic scored 28 and every fix it named pointed at the capture tool rather than the animation — which was fair. A contact sheet that samples on wall-clock drifts against a 60Hz tick, and a 36-tick move finishes in 600ms, far quicker than a screenshot round trip.",
         "The tool now slows the simulation for capture, polls the engine's own tick counter, and chooses which frames to sample from the move's real frame data so the wind-up extreme, the contact frame and the settle are always present. The interface is hidden and each frame is cropped to the fighter's projected bone bounds, because the camera re-solves its framing every tick and will not hold a requested cinematic distance.",
         "One earlier alarm turned out to be a false positive worth recording. When the first sheet showed a frozen pose I suspected 89 clips were not playing at all. A direct probe of the posed bones showed the hip rotating through 72 degrees across a kick. The animation was fine; the tool was stepping the animator behind the state machine's back."
       ],
@@ -228,7 +230,7 @@
       "title": "Over-tuning, then repair",
       "paras": [
         "Round 3 gained on impact and animation but cost character 5 points, lighting 2 and interface 2. Two of those three regressions traced to instructions I had written: an opaque announcement plate the critic called a placeholder, and a per-object velocity motion blur that ghosted.",
-        "Instrumenting the velocity buffer found two faults rather than one. The gather filter's centre weight was in UV units instead of pixels, giving the centre sample a weight of about 50 against 30 for all twelve taps together \u2014 60 percent sharp image over 40 percent smear, which is a hard double image and not a blur at all. And the skinned velocities were swinging an order of magnitude between consecutive frames on a fighter that was merely idling, so the blur was faithfully reporting a real animation pop. The feature was removed rather than shipped with its correctness depending on the animation layer never popping.",
+        "Instrumenting the velocity buffer found two faults rather than one. The gather filter's centre weight was in UV units instead of pixels, giving the centre sample a weight of about 50 against 30 for all twelve taps together — 60 percent sharp image over 40 percent smear, which is a hard double image and not a blur at all. And the skinned velocities were swinging an order of magnitude between consecutive frames on a fighter that was merely idling, so the blur was faithfully reporting a real animation pop. The feature was removed rather than shipped with its correctness depending on the animation layer never popping.",
         "The lighting regression was the opposite of what it looked like. Nothing had weakened the key; round 3 had tripled everything around it, until the rim was delivering 4.2 times the key's irradiance at the subject. Round 4 restored the ratio and every axis but animation improved."
       ],
       "tags": [
@@ -260,9 +262,9 @@
       "rev": "rev 0.6.0",
       "title": "A different model, and two harness bugs",
       "paras": [
-        "Every critic so far had been the same model family, so the scores could have been miscalibrated in a way that was invisible from inside. A second model was brought in as an independent blind judge, after first verifying it could genuinely assess images rather than confabulate \u2014 it was given a synthetic image containing a random four-digit number and described it exactly, including two spatial relationships never explicitly encoded.",
+        "Every critic so far had been the same model family, so the scores could have been miscalibrated in a way that was invisible from inside. A second model was brought in as an independent blind judge, after first verifying it could genuinely assess images rather than confabulate — it was given a synthetic image containing a random four-digit number and described it exactly, including two spatial relationships never explicitly encoded.",
         "It scored the same frame ten to twenty-five points harsher than our own critics, stably across repeats and without position bias. It also read the capture harness instead of the pictures, and found that the impact shot was photographed 700 milliseconds after contact while impact sparks live 160 to 300. Every impact score to that point had been measured after the effects had died.",
-        "Fixing that surfaced a second, subtler bug in the same harness. Pausing the simulation does not pause the effects: the render call is unconditional and takes raw wall-clock time, so a frozen frame kept ageing until the shutter \u2014 and slowing time made it worse, because the time scale applies only to the simulation accumulator. An eight-tick offset was costing 2.7 seconds of effect time. Pinning the frame clock to a fixed 1/60 fixed both.",
+        "Fixing that surfaced a second, subtler bug in the same harness. Pausing the simulation does not pause the effects: the render call is unconditional and takes raw wall-clock time, so a frozen frame kept ageing until the shutter — and slowing time made it worse, because the time scale applies only to the simulation accumulator. An eight-tick offset was costing 2.7 seconds of effect time. Pinning the frame clock to a fixed 1/60 fixed both.",
         "Twice now a capture bug has invalidated a score, both in code written here. The lesson is recorded in the critic protocol: a visual score is only as trustworthy as the capture that produced it."
       ],
       "tags": [
@@ -290,8 +292,8 @@
       "rev": "rev 0.6.0",
       "title": "The fighter was skating the whole time",
       "paras": [
-        "A supplied Three.js animation cookbook was mined against the actual engine rather than applied as recipes \u2014 our system uses none of the mixer, clip or glTF machinery those recipes assume. The translation found something larger than anything on the existing fix list.",
-        "The walk clip is authored for a stride of 0.46 metres per second. The simulation drives the body at 2.75. That is a six-fold mismatch, so the fighter skates in every neutral-game frame. The run clip, authored correctly at 2.69 metres per second, is played by nothing at all \u2014 it is referenced only by its own export map. The right foot never plants in the walk cycle.",
+        "A supplied Three.js animation cookbook was mined against the actual engine rather than applied as recipes — our system uses none of the mixer, clip or glTF machinery those recipes assume. The translation found something larger than anything on the existing fix list.",
+        "The walk clip is authored for a stride of 0.46 metres per second. The simulation drives the body at 2.75. That is a six-fold mismatch, so the fighter skates in every neutral-game frame. The run clip, authored correctly at 2.69 metres per second, is played by nothing at all — it is referenced only by its own export map. The right foot never plants in the walk cycle.",
         "The critic had called this axis authoring debt. It is about a fifth authoring debt: under one percent of six thousand authored easing declarations use the fast-release curves that make a strike read, and eight impact clips have no follow-through whatsoever. But the largest single defect is a runtime constant, and no amount of keyframe polish registers while the fighter hovers."
       ],
       "tags": [
@@ -316,8 +318,8 @@
       "title": "The clip that was never played",
       "paras": [
         "Interface 63 to 69, animation 43 to 48, impact 58 to 61, character 55 to 58, stage 70 to 72, lighting 63 to 62. The average crossed 60 for the first time.",
-        "The animation workstream retired the global time-warp entirely. Its probe had been guessing badly \u2014 for one 66-tick clip it placed contact at frame 52 when the punch lands on 26 \u2014 and only 12 of 125 move-clip pairs were playing within five percent of correct, with eight pinned at the clamp. Authored contact metadata plus a two-segment anchored retime now stretches wind-up and recovery independently, so hand-authored easing survives; 181 of 191 moves retime exactly. 829 dead-hold plateaus became moving holds.",
-        "It also found that the foot planter had never fired once. It tested the ankle against a threshold five centimetres above the floor, but the ankle rests at twenty-six centimetres with the sole hanging below it \u2014 so no footstep event had ever been emitted in the history of the project. And when it tested the X/Z lock it had been asked to add, penetration got four times worse, so it shipped the measurement and not the feature.",
+        "The animation workstream retired the global time-warp entirely. Its probe had been guessing badly — for one 66-tick clip it placed contact at frame 52 when the punch lands on 26 — and only 12 of 125 move-clip pairs were playing within five percent of correct, with eight pinned at the clamp. Authored contact metadata plus a two-segment anchored retime now stretches wind-up and recovery independently, so hand-authored easing survives; 181 of 191 moves retime exactly. 829 dead-hold plateaus became moving holds.",
+        "It also found that the foot planter had never fired once. It tested the ankle against a threshold five centimetres above the floor, but the ankle rests at twenty-six centimetres with the sole hanging below it — so no footstep event had ever been emitted in the history of the project. And when it tested the X/Z lock it had been asked to add, penetration got four times worse, so it shipped the measurement and not the feature.",
         "The skating had a simpler cause than any of that. The walk clip is authored for a stride of 0.46 metres per second and the body was driven at 2.75. The run clip, authored at 2.69, was referenced only by its own export map. Forward movement now plays the run."
       ],
       "tags": [
@@ -350,9 +352,9 @@
       "title": "Smoothing the seams, and two ceilings",
       "paras": [
         "Every axis moved: animation 48 to 53, lighting 62 to 66, impact 61 to 64, interface 69 to 72, character 58 to 60, stage 72 to 74. The average reached 65.",
-        "The transition pop is gone. Replacing the crossfade with a quintic inertialization cut transition jerk by 87 percent at the peak and 70 percent on average, and it did so without moving a single contact frame \u2014 measured pose deviation at contact is 0.00 degrees across all 24 attack clips. The agent also declined to inertialize hit reactions, having worked out that at one tick past contact a six-tick decay would leave the victim 94 percent in its pre-hit pose and quietly gut the impact axis.",
+        "The transition pop is gone. Replacing the crossfade with a quintic inertialization cut transition jerk by 87 percent at the peak and 70 percent on average, and it did so without moving a single contact frame — measured pose deviation at contact is 0.00 degrees across all 24 attack clips. The agent also declined to inertialize hit reactions, having worked out that at one tick past contact a six-tick decay would leave the victim 94 percent in its pre-hit pose and quietly gut the impact axis.",
         "A rig-header comment written on the first day turned out to say the wrong thing about which way the fighter faces. It caused a reactor pack to be mounted on a fighter's chest instead of its back. The data settles it: the forward-dash root track ends at positive Z and the toes sit forward of the ankle. Two foundation files claimed otherwise and one of them has been carrying that error into every agent that read it.",
-        "Two axes returned honest plateau calls. Character rendering and stage detail are now judged to be near their ceilings without asset-authoring work \u2014 clothed crowd meshes, a fabrication-detail prop kit, per-character hero geometry \u2014 rather than anything further that can be tuned."
+        "Two axes returned honest plateau calls. Character rendering and stage detail are now judged to be near their ceilings without asset-authoring work — clothed crowd meshes, a fabrication-detail prop kit, per-character hero geometry — rather than anything further that can be tuned."
       ],
       "tags": [
         {
@@ -388,12 +390,12 @@
       "title": "The freeze, named",
       "paras": [
         "The user played the deployed build and reported the interface stalling for seconds at a time. That single sentence was worth more than any critic score, and it pointed somewhere nobody had been looking.",
-        "The cause was a synchronous GPU readback disguised as interface work. Drawing the two fighter portraits into the HUD called readRenderTargetPixels, which flushes the entire graphics queue and blocks the main thread \u2014 measured at 316, 390, 164, 151 and 1382 milliseconds per call, two of them back to back on the first frame of a match. The rendering those portraits needed was under a millisecond. Worst interface frame went from 1382ms to 0.1ms.",
+        "The cause was a synchronous GPU readback disguised as interface work. Drawing the two fighter portraits into the HUD called readRenderTargetPixels, which flushes the entire graphics queue and blocks the main thread — measured at 316, 390, 164, 151 and 1382 milliseconds per call, two of them back to back on the first frame of a match. The rendering those portraits needed was under a millisecond. Worst interface frame went from 1382ms to 0.1ms.",
         "Two of the fixes proposed for that round were measured and rejected rather than shipped. The animation-restart technique suggested would have silently broken the effects it was meant to preserve, because the API it relies on reports no animations on those elements at all. And the typeface, flagged as a suspect, was proven innocent by an interleaved test and deliberately left untouched."
       ],
       "tags": [
         {
-          "label": "1382ms \u2192 0.1ms",
+          "label": "1382ms → 0.1ms",
           "state": "done"
         },
         {
@@ -412,18 +414,18 @@
       "rev": "rev 0.9.0",
       "title": "Where the frame actually went",
       "paras": [
-        "Framerate had been quoted for several rounds from unpaired measurements taken while a dozen headless browsers competed for the GPU. On an unchanged configuration the frame time wandered from 28.6ms to 84.8ms \u2014 a 2.8-fold spread with nothing changed \u2014 so every conclusion drawn from those numbers was inside the noise, and they were withdrawn.",
+        "Framerate had been quoted for several rounds from unpaired measurements taken while a dozen headless browsers competed for the GPU. On an unchanged configuration the frame time wandered from 28.6ms to 84.8ms — a 2.8-fold spread with nothing changed — so every conclusion drawn from those numbers was inside the noise, and they were withdrawn.",
         "Measured properly, the answer was lighting, not geometry. Eight rectangular area lights cost roughly three milliseconds each and accounted for twenty-four of a forty-millisecond frame. Cutting them to three nearly doubled the framerate, and the closeup confirms the trade landed where it was aimed: the long specular bars still run down the plates, because the light that draws them is the one that was kept.",
-        "The last multi-second hitch was a subtler version of the same thing. Three impact lights were switched on and off per hit, and the renderer counts only visible lights when it builds a shader \u2014 so every flash recompiled every material in the scene, at 437, 494 and 831 milliseconds a time. Notably, the comment above that code already warned about exactly this hazard and then used the one mechanism that triggers it. Thirty seconds of combat now runs with no stall over 100ms and no shader compiles at all.",
+        "The last multi-second hitch was a subtler version of the same thing. Three impact lights were switched on and off per hit, and the renderer counts only visible lights when it builds a shader — so every flash recompiled every material in the scene, at 437, 494 and 831 milliseconds a time. Notably, the comment above that code already warned about exactly this hazard and then used the one mechanism that triggers it. Thirty seconds of combat now runs with no stall over 100ms and no shader compiles at all.",
         "The select screen's reported unresponsiveness turned out not to be layout either. The touch pad's invisible catchment was sitting over it, so on a landscape phone eight of the ten machines and the back button could not be tapped."
       ],
       "tags": [
         {
-          "label": "26 \u2192 48 fps",
+          "label": "26 → 48 fps",
           "state": "done"
         },
         {
-          "label": "832ms \u2192 0 stalls",
+          "label": "832ms → 0 stalls",
           "state": "done"
         },
         {
@@ -442,9 +444,9 @@
       "rev": "rev 0.9.0",
       "title": "Real machines on the tiles",
       "paras": [
-        "The roster drew ten hand-authored flat mannequins \u2014 near-identical grey humanoids differing only by an accent colour \u2014 while the game rendered ten genuinely distinct robots. None of that reached the screen.",
+        "The roster drew ten hand-authored flat mannequins — near-identical grey humanoids differing only by an accent colour — while the game rendered ten genuinely distinct robots. None of that reached the screen.",
         "The tiles now show rendered busts of the actual machines, and the expensive part was already being paid for: the menu builds every robot once in idle time to warm its material caches and then throws it away, so each one is photographed on the way to the bin. Nine of ten captured in fourteen seconds, worst frame 3.9 milliseconds, no stall at all.",
-        "The preview beside them had been presenting every machine from behind. The camera offset is a sine on one axis and a cosine on the other, and because fighters face along X rather than Z it is the sine that decides whether the front is visible. Two of my own probes measured the wrong axis and reported 'in front' for a frame that plainly showed a back \u2014 the measurement was answering a question nobody had asked, and only comparing it against the pixels caught it."
+        "The preview beside them had been presenting every machine from behind. The camera offset is a sine on one axis and a cosine on the other, and because fighters face along X rather than Z it is the sine that decides whether the front is visible. Two of my own probes measured the wrong axis and reported 'in front' for a frame that plainly showed a back — the measurement was answering a question nobody had asked, and only comparing it against the pixels caught it."
       ],
       "tags": [
         {
@@ -471,14 +473,14 @@
       "rev": "rev 0.9.1",
       "title": "Four facts I had been repeating turned out to be wrong",
       "paras": [
-        "This round produced less new art than any before it and more corrections, most of them to things I had been telling every agent as settled. A draw call costs about 1.2 microseconds here, measured by injecting sub-pixel triangles and alternating them \u2014 so the hundred-and-twenty draw call budget is a compliance metric, not a performance one, and cutting the fifty-one we were over by returns six hundredths of a millisecond. Two separate briefs this round aimed effort at that number, including mine.",
-        "The screen-space ambient occlusion pass was recorded as free. It is the single most expensive item in the post chain at 2.27 milliseconds, measured twice with a tight interval. And the figure that started the round \u2014 four hundred and seventy-five draw calls against a budget of a hundred and twenty \u2014 came from a capture still holding the character-select preview robots, which its own manifest would have revealed had anyone compared the geometry count.",
+        "This round produced less new art than any before it and more corrections, most of them to things I had been telling every agent as settled. A draw call costs about 1.2 microseconds here, measured by injecting sub-pixel triangles and alternating them — so the hundred-and-twenty draw call budget is a compliance metric, not a performance one, and cutting the fifty-one we were over by returns six hundredths of a millisecond. Two separate briefs this round aimed effort at that number, including mine.",
+        "The screen-space ambient occlusion pass was recorded as free. It is the single most expensive item in the post chain at 2.27 milliseconds, measured twice with a tight interval. And the figure that started the round — four hundred and seventy-five draw calls against a budget of a hundred and twenty — came from a capture still holding the character-select preview robots, which its own manifest would have revealed had anyone compared the geometry count.",
         "An overdraw probe in the shared scratchpad was reporting a ninety-seven percent ceiling for a depth prepass. It was summing the procedural sky, because the override material that was supposed to replace every surface does not apply to the scene background. The agent that caught it did so by adding a calibration the original lacked: render one flat quad, which must read exactly one fragment per covered pixel. The old probe read thirty-two. The true ceiling is fifty-nine percent, and the prepass built against the corrected figure returned three and a half milliseconds.",
-        "Two subsystems turned out to have quality settings that were never called. Choosing Low changed the renderer and left the full lighting rig running \u2014 sixteen visible lights instead of eleven \u2014 on exactly the machines the setting exists for."
+        "Two subsystems turned out to have quality settings that were never called. Choosing Low changed the renderer and left the full lighting rig running — sixteen visible lights instead of eleven — on exactly the machines the setting exists for."
       ],
       "tags": [
         {
-          "label": "draw calls \u22481.2\u00b5s",
+          "label": "draw calls ≈1.2µs",
           "state": "done"
         },
         {
@@ -506,9 +508,9 @@
       "title": "Ten fighters with no boots",
       "paras": [
         "Every axis moved: lighting 66 to 72, interface 72 to 76, animation 53 to 57, stage 74 to 76, impact 64 to 66, character 60 to 62. The average crossed 68.",
-        "The round's find was a console warning nobody had chased. Merging geometry rejects an entire batch when its members disagree about which attributes exist, and the code that called it silently skipped the failure. Soft parts \u2014 cables, boots, grips \u2014 declared one attribute set while rigid parts of the same material declared another, so for the whole life of the project every one of the ten fighters had shipped with no boot soles, no joint boots and no grips at all. One failed batch per character, and the only symptom was a line in the console. The batch key now includes the attribute signature, so the same disagreement costs one extra draw call instead of deleting the geometry.",
-        "A second piece of dead wiring turned up beside it. The builder had been emitting a per-plate panel plan and nothing was reading it, so panel detail ran at a single pitch across the entire roster regardless of what a plate was. It is now driven per plate, and a pitch of zero means the part is not made of panels at all \u2014 so hydraulic rods, rubber boots and frame members stop being divided up as though they were chest decking.",
-        "Silhouette separation was measured rather than judged: each fighter rendered flat black at a fixed pixel height and compared by overlap. The worst pair improved from 0.134 to 0.184 while the median stayed still, which was the intent \u2014 the work was all in the tail, and a median that moves would have meant effort spent on characters that already read."
+        "The round's find was a console warning nobody had chased. Merging geometry rejects an entire batch when its members disagree about which attributes exist, and the code that called it silently skipped the failure. Soft parts — cables, boots, grips — declared one attribute set while rigid parts of the same material declared another, so for the whole life of the project every one of the ten fighters had shipped with no boot soles, no joint boots and no grips at all. One failed batch per character, and the only symptom was a line in the console. The batch key now includes the attribute signature, so the same disagreement costs one extra draw call instead of deleting the geometry.",
+        "A second piece of dead wiring turned up beside it. The builder had been emitting a per-plate panel plan and nothing was reading it, so panel detail ran at a single pitch across the entire roster regardless of what a plate was. It is now driven per plate, and a pitch of zero means the part is not made of panels at all — so hydraulic rods, rubber boots and frame members stop being divided up as though they were chest decking.",
+        "Silhouette separation was measured rather than judged: each fighter rendered flat black at a fixed pixel height and compared by overlap. The worst pair improved from 0.134 to 0.184 while the median stayed still, which was the intent — the work was all in the tail, and a median that moves would have meant effort spent on characters that already read."
       ],
       "tags": [
         {
@@ -543,9 +545,9 @@
       "rev": "rev 0.11.0",
       "title": "The brief was wrong, and the agent proved it",
       "paras": [
-        "Stage rose to 78, impact to 68, animation to 59; character held at 62; and the two axes targeted hardest \u2014 lighting and interface \u2014 went down by one and two. The average moved from 68.2 to 68.7, which after ten rounds is a plateau rather than progress.",
-        "The cause is instructive. This round every agent was handed its own critic's ranked fix list verbatim, on the reasoning that the critic had named specific files and specific numbers and was better placed than any paraphrase of mine. The lighting agent measured the brief instead of executing it, and found it wrong in both directions: the fighter-to-deck contrast does not fall away as the camera pulls back \u2014 the wide framing is the best one \u2014 it falls away as the camera drops, because the floor's reflectivity approaches total at a grazing angle. And the target it was told to hit was not one the reference exhibits. Measured on the Tekken screenshots themselves the same ratio is 1.31 to 1.78, and this build was already above it.",
-        "It found a genuine defect while it was there. A constant naming the renderer's bright-pass threshold had been written as 1.15 while the pass itself runs at 5.5, so every lamp face in the arena was authored a factor of five too dim to bloom, and two emitters had fog applied, removing between a quarter and a third of their radiance at the wide framing. It also established that a truly clipped highlight is unreachable at any radiance, because the tone mapping compresses the logarithm asymptotically rather than clamping \u2014 the interface had been carrying the entire top of the frame's range and the set none of it.",
+        "Stage rose to 78, impact to 68, animation to 59; character held at 62; and the two axes targeted hardest — lighting and interface — went down by one and two. The average moved from 68.2 to 68.7, which after ten rounds is a plateau rather than progress.",
+        "The cause is instructive. This round every agent was handed its own critic's ranked fix list verbatim, on the reasoning that the critic had named specific files and specific numbers and was better placed than any paraphrase of mine. The lighting agent measured the brief instead of executing it, and found it wrong in both directions: the fighter-to-deck contrast does not fall away as the camera pulls back — the wide framing is the best one — it falls away as the camera drops, because the floor's reflectivity approaches total at a grazing angle. And the target it was told to hit was not one the reference exhibits. Measured on the Tekken screenshots themselves the same ratio is 1.31 to 1.78, and this build was already above it.",
+        "It found a genuine defect while it was there. A constant naming the renderer's bright-pass threshold had been written as 1.15 while the pass itself runs at 5.5, so every lamp face in the arena was authored a factor of five too dim to bloom, and two emitters had fog applied, removing between a quarter and a third of their radiance at the wide framing. It also established that a truly clipped highlight is unreachable at any radiance, because the tone mapping compresses the logarithm asymptotically rather than clamping — the interface had been carrying the entire top of the frame's range and the set none of it.",
         "The honest reading of ten rounds: the critics' fix lists are hypotheses, not facts, and treating them as instructions produced the weakest round so far."
       ],
       "tags": [
@@ -579,8 +581,8 @@
       "paras": [
         "Every axis rose or held: interface to 78, character to 65, animation to 62, lighting to 73, impact to 70, stage steady at 78. The average moved 68.7 to 71.0, the largest gain in five rounds.",
         "The change was in the instruction, not the work. After a round in which two axes fell because agents were handed a critic's fix list and told to execute it, this round told every agent the brief was a hypothesis to be measured first, and that disproving it was worth more than complying with it. Both animation agents did exactly that, and both briefs were wrong.",
-        "The first drove all twenty-seven strike clips through the real rig and measured the striking limb's speed on the frame the hitbox opens. Twenty-four of twenty-seven were decelerating into contact, at a median of a quarter of the limb's own peak speed; two were literally stationary at the moment of impact. The brief had asked for fast-release curves on the contact key \u2014 but every one of the fifteen already in those files was there, which pins the limb at the contact pose and then snatches it away. The curves existed and were on the wrong side of the blow. Afterwards, three of twenty-seven, with contact speed up from 0.30 to 0.92 of peak and the carry past contact more than doubled. It also measured three further changes, found each made things worse, and shipped none of them.",
-        "The second was told that the idle stance carried the worst ground contact in the game. Measured, idle is the best of nine groups and the fighting stance was already within six millimetres of the floor. One line below where the brief was pointing it found a blocking pose burying a boot a hundred and ninety-one millimetres into the concrete \u2014 a crouch pelvis with a standing leg set over it \u2014 and fixed that instead."
+        "The first drove all twenty-seven strike clips through the real rig and measured the striking limb's speed on the frame the hitbox opens. Twenty-four of twenty-seven were decelerating into contact, at a median of a quarter of the limb's own peak speed; two were literally stationary at the moment of impact. The brief had asked for fast-release curves on the contact key — but every one of the fifteen already in those files was there, which pins the limb at the contact pose and then snatches it away. The curves existed and were on the wrong side of the blow. Afterwards, three of twenty-seven, with contact speed up from 0.30 to 0.92 of peak and the carry past contact more than doubled. It also measured three further changes, found each made things worse, and shipped none of them.",
+        "The second was told that the idle stance carried the worst ground contact in the game. Measured, idle is the best of nine groups and the fighting stance was already within six millimetres of the floor. One line below where the brief was pointing it found a blocking pose burying a boot a hundred and ninety-one millimetres into the concrete — a crouch pelvis with a standing leg set over it — and fixed that instead."
       ],
       "tags": [
         {
@@ -596,7 +598,7 @@
           "state": "done"
         },
         {
-          "label": "contact speed 0.30\u21920.92",
+          "label": "contact speed 0.30→0.92",
           "state": "done"
         },
         {
@@ -608,11 +610,28 @@
           "state": "wait"
         }
       ]
+    },
+    {
+      "phase": "PHASE 18",
+      "when": "Round 12",
+      "rev": "rev 0.13.0",
+      "title": "Two axes clear the bar, and three agents refuse their brief",
+      "paras": [
+        "Stage detail and interface craft both reached 80 — the first axes to pass the ship bar in twelve rounds. Lighting rose to 75 and animation to 64; impact slipped a point to 69 and character fell two to 63. The average is 71.8.",
+        "The round repeated round 11’s instruction: the brief is a hypothesis, and disproving it is worth more than complying with it. Three of the four agents did exactly that, and this time one of them disproved a brief written from the previous round’s own findings.",
+        "The animation agent had been told that four fast punches commit with no readable wind-up. It built the test the industry sources actually name — black out the fighter, project the rig, score one minus the silhouette overlap against the guard pose — and found the opposite: at the commit frame p.jab and p.jabAlt rank sixth and fourth highest of thirty-four clips. The metric behind the brief was an absolute 30cm displacement applied to a punch whose entire reach is 58cm, so it demanded a chamber worth half the strike. What the silhouette test did find is six clips that erase their own wind-up: p.overhand peaks at 0.47 twelve ticks in, sinks to 0.22, then snaps to 0.74 at contact. The agent attempted the fix, measured the result worse on three of seven metrics, reverted it, and reported the measurement instead of the feature.",
+        "The character agent shipped no behavioural change at all. It ruled out four theories with numbers — the cast is not tonally capped (Kestrel peaks at 234 against the reference’s 235), brightness is not the lever (twelve lights doubled moves the peak eight per cent), the post chain is not hiding detail, and texel density is not the problem. That last one is worth keeping: raising the metal atlas from 0.41 to 1.64 texels per screen pixel changed the image by nothing, for fourteen megabytes of VRAM and four times the bake, because the material’s forty-one per cent share of surface area is interior frame hidden under armour. Size a bake off screen coverage, not area share.",
+        "Its actual finding reframes the axis. Character detail is not missing, it is all one size. Measured as pyramid band energy, the ratio of fine to mid detail is 0.40 on a character head against 0.66 on a real Tekken 8 sleeve — while the Knockbots stage wall, in the same frame through the same renderer, lands at 0.63. Panel lines, rivets, bevels and wear all occupy a single octave, and a single dominant frequency reads as pattern rather than material. That is what two critics were feeling when they called the surfaces empty while also saying the shapes were fine.",
+        "Character’s two-point drop should be read with that in mind: nothing about the characters changed this round. The closeup capture parks the camera 1.15m from the head, which on a heavy chassis is inside the pauldron sweep, so whether the head is visible at all is a lottery between runs. The harness has now produced wrong answers five times.",
+        "The stage win came from the crowd, and it came with two documented failures beside it. A long-tailed coat palette — one figure in six, warm-biased — lifted local contrast in the crowd band by 6.7 per cent and in the top fifth by 12.7, at identical triangle and draw-call counts, because it only writes values into a buffer that already existed. Doubling the tail saturated. Brightening the fence wire, which looked like the obvious cheap win, moved the number by 0.0001: at twelve metres the wire is too thin to survive to the pixel. It was reverted rather than kept, on the grounds that a change which moves the look without moving the measurement is not a change.",
+        "The interface point came from zooming in far enough to read the HUD as a player does. Fighter names were fusing with the player-identity colour bar — VULKAN rendering as IVULKAN. The glyph mask layers are absolutely positioned at inset zero, and an absolutely positioned box resolves against its ancestor’s padding box, so the gutter meant to hold the name clear of the bar was never applied to the ink at all.",
+        "Separately, an audit that drove all 191 moves through the real rig found 27 hitting with the wrong limb. Every spin kick in the game — thirteen moves across all four movesets — anchored its hit capsule and its weapon ribbon to the planted pivot foot while the other leg swung through the opponent. At the impact tick the right foot travels 1.02m and the left 0.14m. Fixed. Twenty-six single-move cases remain queued."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.12.0",
+    "rev": "0.13.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
