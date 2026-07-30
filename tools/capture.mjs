@@ -54,6 +54,24 @@ const NO_BANNER = `(() => {
   return !busy && (!q || q.length === 0) && !visible;
 })()`;
 
+/**
+ * How much of the frame the portrait subject actually fills, measured from the
+ * projected bounding box. Used by BOTH the wait and the self-check, so the two
+ * cannot drift apart -- the round-14 banner shot failed precisely because its
+ * check was derived from the same wrong assumption as its wait.
+ */
+const PORTRAIT_MEASURE = `(() => {
+  const KB = window.KB, THREE = KB.THREE, f = KB.fighters[0], cam = KB.camera;
+  const box = new THREE.Box3().setFromObject(f.robot.group);
+  const c = box.getCenter(new THREE.Vector3());
+  const top = new THREE.Vector3(c.x, box.max.y, c.z).project(cam);
+  const bot = new THREE.Vector3(c.x, box.min.y, c.z).project(cam);
+  const o = KB.fighters[1].robot.group.position.clone().project(cam);
+  return { dist: +cam.position.distanceTo(c).toFixed(2),
+           subjectHeightFrac: +(Math.abs(top.y - bot.y) / 2).toFixed(3),
+           otherFighterInFrame: Math.abs(o.x) < 1 && Math.abs(o.y) < 1 };
+})()`;
+
 const SHOTS = [
   {
     name: '01-hero-idle',
@@ -138,7 +156,20 @@ const SHOTS = [
     name: '03-full-body',
     note: 'Full-body three-quarter — silhouette and proportion read.',
     setup: `window.KB.fightCamera.cinematic('portrait', { target: window.KB.fighters[0], dist: 4.2, yaw: 0.6 });`,
-    settle: 1200,
+    reassert: `window.KB.fightCamera.cinematic('portrait', { target: window.KB.fighters[0], dist: 4.2, yaw: 0.6 });`,
+    // Wait for the rig to CONVERGE, not for a fixed delay. The camera spring
+    // starts from wherever the previous shot left it -- after the 1.3m closeup
+    // it has 3m to travel -- so a flat settle photographed the subject at 35%
+    // of frame height in one run and 82% in another, from identical code.
+    // The wait and the self-check share one measurement on purpose: round 14's
+    // banner shot failed because its check rested on the same wrong assumption
+    // as its wait, so it could not catch its own failure.
+    waitFor: `(${PORTRAIT_MEASURE}).subjectHeightFrac > 0.45`,
+    settle: 500,
+    verify: `(() => {
+      const m = ${PORTRAIT_MEASURE};
+      return { ...m, ok: m.dist < 6.5 && m.subjectHeightFrac > 0.45 };
+    })()`,
   },
   {
     name: '04-impact',
@@ -149,6 +180,7 @@ const SHOTS = [
     // past contact. See docs/CRITIC.md — earlier impact scores were measured on
     // frames taken after every spark had already died.
     setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });`,
+    verify: '__kbHit',
     freezeOnHit: true,
     impactOffset: 1,
     settle: 0,
@@ -157,6 +189,7 @@ const SHOTS = [
     name: '04b-impact-decay',
     note: 'Eight ticks past contact — spark travel, ember fall, debris arc.',
     setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });`,
+    verify: '__kbHit',
     freezeOnHit: true,
     impactOffset: 8,
     settle: 0,
@@ -165,14 +198,33 @@ const SHOTS = [
     name: '05-juggle',
     note: 'Airborne juggle — pose readability off the ground.',
     preRoll: true,
+    preRoll: true,
     setup: `window.KB.testHarness.forceJuggle({ attacker: 0, hits: 3 });`,
-    settle: 1400,
+    // Wait for the combo to actually reach the air hits, then freeze so the
+    // shutter lands on the juggle rather than on the recovery after it.
+    waitFor: 'window.__kbHitCount >= 2',
+    settle: 120,
+    verify: `(() => {
+      const KB = window.KB;
+      const airborne = KB.fighters[1].airborne || KB.fighters[1].position.y > 0.25;
+      KB.paused = true;
+      return { hits: window.__kbHitCount || 0, victimY: +KB.fighters[1].position.y.toFixed(2),
+               airborne, ok: (window.__kbHitCount || 0) >= 2 && airborne };
+    })()`,
+    teardown: 'window.KB.paused = false;',
   },
   {
     name: '06-stage-wide',
     note: 'Wide arena — environment, lighting, and depth cues.',
     setup: `window.KB.fightCamera.cinematic('wide', { dist: 14, height: 4.5 });`,
+    reassert: `window.KB.fightCamera.cinematic('wide', { dist: 14, height: 4.5 });`,
     settle: 1200,
+    verify: `(() => {
+      const KB = window.KB, cam = KB.camera, THREE = KB.THREE;
+      const mid = KB.fighters[0].position.clone().add(KB.fighters[1].position).multiplyScalar(0.5);
+      const dist = +cam.position.distanceTo(mid).toFixed(2);
+      return { dist, height: +cam.position.y.toFixed(2), ok: dist > 9 };
+    })()`,
   },
   {
     name: '07-super',
@@ -212,6 +264,7 @@ const SHOTS = [
   },
   {
     name: '10-ko',
+    wantsBanner: true,
     note: 'KO slow-motion moment — the dramatic beat.',
     // The shot named for the KO did not contain one. `forceKO` drops the loser
     // to 6 HP and arms a heavy, but nothing waited for the blow to land, so a
@@ -262,6 +315,7 @@ const SHOTS = [
   },
   {
     name: '13-announce-fight',
+    wantsBanner: true,
     note: 'Round-start announcement — a motion-design surface, in flight.',
     // One of four announcement surfaces on the interface axis, three of which
     // were never captured. The critic's words: "per CRITIC.md I cannot pass
@@ -336,6 +390,7 @@ const SHOTS = [
     // the ladder. An axis cannot be scored on a relationship nobody
     // photographed. Pair this with 04-impact (a launcher) to see the range.
     setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'jab' });`,
+    verify: '__kbHit',
     freezeOnHit: true,
     impactOffset: 1,
     settle: 0,
@@ -346,7 +401,8 @@ const SHOTS = [
     // 1.35, not the 1.02 default: measured, the heavy (a roundhouse) whiffs at
     // close spacing and connects at 1.35. A shot that silently whiffs is how
     // "no hit landed" frames got scored for several rounds.
-    setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'heavy', dist: 1.35 });`,
+    setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'heavy', dist: 1.55 });`,
+    verify: '__kbHit',
     freezeOnHit: true,
     impactOffset: 1,
     settle: 0,
@@ -411,6 +467,18 @@ async function main() {
   const manifest = [];
   /** Per-shot self-checks (see `verify` on a shot), written into the manifest. */
   const verified = {};
+  /**
+   * Per-shot defects. A warning that only reaches stdout dies with the process,
+   * and the manifest is the contract every critic reads -- so a shot that
+   * failed printed "no hit landed" on one line, "(frozen at contact)" on the
+   * next, and then recorded errors: []. Three critics caught that in one round.
+   * Everything that goes wrong now lands in the file too.
+   */
+  const defects = [];
+  const flaw = (shot, msg) => {
+    console.warn(`[capture] ${shot}: ${msg}`);
+    defects.push({ shot, problem: msg });
+  };
 
   // Every shot is taken from inside a live round with the menus dismissed.
   // Without this the camera framings composite over the title screen.
@@ -460,7 +528,15 @@ async function main() {
       //
       // Two agents found this independently in the same round, from opposite
       // directions — one measuring reaction poses, one measuring effects.
-      window.__kbHit = { tick: window.KB.tick, frames: 0 };
+      // Record what actually produced this frame. The listener fires on ANY hit,
+      // so without the move name a weight-ladder shot cannot certify the one
+      // fact the comparison rests on -- a shot that cannot name its own move
+      // cannot anchor a ladder. The bus event carries all of this already and
+      // it was being thrown away.
+      window.__kbHit = { tick: window.KB.tick, frames: 0, landed: true,
+        move: (e && e.move && (e.move.id || e.move.name)) || null,
+        weight: (e && e.move && e.move.weight) || null,
+        damage: (e && e.damage != null) ? e.damage : null };
       stop();
       const wait = () => {
         if (window.__kbHit.frames >= off) {
@@ -498,7 +574,7 @@ async function main() {
         await page.evaluate(`window.KB.startMatch(0, 1); window.KB.setPhase('fight'); window.KB.fightCamera.cinematic('fight');`);
         await page.waitForFunction('window.KB.phaseTicks > 60', null, { timeout: 15000 }).catch(() => {});
         await page.waitForFunction(NO_BANNER, null, { timeout: 15000 })
-          .catch(() => console.warn(`[capture] ${shot.name}: round-start banner never cleared`));
+          .catch(() => flaw(shot.name, 'round-start banner never cleared'));
         await page.waitForTimeout(400);
         if (shot.freezeOnHit) await page.evaluate(ARM_HIT_FREEZE(shot.impactOffset ?? 0));
       }
@@ -508,24 +584,74 @@ async function main() {
       // rounds of invalid scores on two different axes.
       await page.evaluate(`(() => {
         window.__kbShotHit = null;
-        const stop = window.KB.bus.on('hit', (e) => {
-          window.__kbShotHit = { landed: true, tick: window.KB.tick };
-          stop();
+        window.__kbHitCount = 0;
+        // Counts, not just a flag: a juggle shot has to know the combo actually
+        // reached N. 05-juggle asked forceJuggle for 3 hits, the HUD read
+        // "1 HIT", and a flat settle then opened the shutter after the
+        // attacker's recovery had finished -- the wind-up bug, inverted into
+        // photographing the recovery.
+        window.KB.bus.on('hit', (e) => {
+          window.__kbHitCount++;
+          if (!window.__kbShotHit) window.__kbShotHit = { landed: true, tick: window.KB.tick };
+          window.__kbShotHit.hits = window.__kbHitCount;
         });
       })()`);
       if (shot.prep) await page.evaluate(`(() => { try { ${shot.prep} } catch (e) { console.error('prep', e); } })()`);
       await page.evaluate(`(() => { try { ${shot.setup} } catch (e) { console.error('shot setup', e); } })()`);
       if (shot.waitFor) {
         await page.waitForFunction(shot.waitFor, null, { timeout: 15000 })
-          .catch(() => console.warn(`[capture] ${shot.name}: WAITED OUT — "${shot.waitFor}" never became true, `
-            + 'this frame is not the moment the shot is named for and must not be scored'));
+          .catch(() => flaw(shot.name, `WAITED OUT — "${shot.waitFor}" never became true; this frame `
+            + 'is not the moment the shot is named for and must not be scored'));
       }
       if (shot.freezeOnHit) {
-        await page.waitForFunction('window.__kbHit && window.__kbHit.frozen', null, { timeout: 15000 })
-          .catch(() => console.warn(`[capture] ${shot.name}: no hit landed, frame is not a contact frame`));
+        // Retry, because whether a forced blow connects depends on what the
+        // PREVIOUS shot left the fighters doing. 16-impact-heavy landed
+        // reliably after 08-hud and whiffed after 15-impact-light at the same
+        // distance, which is why tuning the spacing kept looking fixed and
+        // wasn't. Re-staging is cheap; a silently whiffed contact frame has
+        // cost this project two rounds of unscoreable impact captures.
+        let landed = false;
+        for (let attempt = 1; attempt <= 3 && !landed; attempt++) {
+          landed = await page.waitForFunction('window.__kbHit && window.__kbHit.frozen', null, { timeout: 6000 })
+            .then(() => true).catch(() => false);
+          if (landed) break;
+          if (attempt < 3) {
+            await page.evaluate(`(() => { window.KB.paused = false; ${RESTORE_CLOCK} })()`);
+            await page.evaluate(`window.KB.startMatch(0, 1); window.KB.setPhase('fight'); window.KB.fightCamera.cinematic('fight');`);
+            await page.waitForFunction('window.KB.phaseTicks > 60', null, { timeout: 15000 }).catch(() => {});
+            await page.waitForFunction(NO_BANNER, null, { timeout: 15000 }).catch(() => {});
+            await page.waitForTimeout(400);
+            await page.evaluate(ARM_HIT_FREEZE(shot.impactOffset ?? 0));
+            await page.evaluate(`(() => { try { ${shot.setup} } catch (e) { console.error('shot setup', e); } })()`);
+          }
+        }
+        if (!landed) flaw(shot.name, 'NO HIT LANDED after 3 attempts — not a contact frame, must not be scored');
       }
     } catch (e) {
       console.warn(`[capture] setup failed for ${shot.name}: ${e.message}`);
+    }
+    // Plain shots never had a banner gate, so 01-hero-idle and 12-select-screen
+    // both shipped with a full-opacity FIGHT drawn across them -- and 12
+    // exposed a real product bug in doing so: the announcement survives a phase
+    // change and paints over a menu. ENTER_MATCH queues the round-start
+    // announcement before every shot, so every shot needs the gate. preRoll and
+    // freezeOnHit shots already wait for it in their own pre-roll.
+    if (!shot.wantsBanner && !shot.freezeOnHit && !shot.preRoll && !shot.tickStrip) {
+      await page.waitForFunction(NO_BANNER, null, { timeout: 8000 })
+        .catch(() => flaw(shot.name, 'an announcement banner is still up over a shot that is not about one'));
+    }
+    // Re-assert the requested framing AFTER the banner gate.
+    //
+    // FightCamera#onPhaseChange does `case 'ready': case 'fight':
+    // this.cinematic('fight')` unconditionally, and the previous shot's
+    // teardown unpauses the sim -- so a round phase transition landing inside
+    // this shot's settle window silently discards the framing it asked for.
+    // 03-full-body asked for a portrait at 4.2m and shipped the default
+    // two-fighter fight framing for an unknown number of rounds; it measured
+    // RMSE 0.2496 against 01-hero-idle, almost all of it the banner and timer.
+    if (shot.reassert) {
+      await page.evaluate(`(() => { try { ${shot.reassert} } catch (e) { console.error('reassert', e); } })()`);
+      await page.waitForTimeout(250);
     }
     if (shot.settle) await page.waitForTimeout(shot.settle);
     const file = resolve(OUT, `${shot.name}.png`);
@@ -577,20 +703,81 @@ async function main() {
       const v = await page.evaluate(expr).catch((e) => ({ error: e.message.split('\n')[0] }));
       verified[shot.name] = v;
       if (v === null || (v && v.error)) {
-        console.warn(`[capture] ${shot.name}: SELF-CHECK DID NOT FIRE (${shot.verify}) — `
-          + 'this frame is not the moment the shot is named for and must not be scored');
+        flaw(shot.name, `SELF-CHECK DID NOT FIRE (${shot.verify}) — this frame is not the moment `
+          + 'the shot is named for and must not be scored');
       } else if (v.clear === false) {
-        console.warn(`[capture] ${shot.name}: SUBJECT OCCLUDED by ${v.blocker} (${v.gap}m in front) — do not score this frame`);
+        flaw(shot.name, `SUBJECT OCCLUDED by ${v.blocker} (${v.gap}m in front) — do not score this frame`);
       } else if (v.ok === false) {
-        console.warn(`[capture] ${shot.name}: SELF-CHECK FAILED ${JSON.stringify(v)} — do not score this frame`);
-      } else if (v.dist) {
+        flaw(shot.name, `SELF-CHECK FAILED ${JSON.stringify(v)} — do not score this frame`);
+      } else if (v.clear === true) {
         console.log(`[capture] ${shot.name}: subject clear at ${v.dist}m`);
       } else {
         console.log(`[capture] ${shot.name}: verified ${JSON.stringify(v)}`);
       }
     }
 
-    await page.screenshot({ path: file });
+    const png = await page.screenshot({ path: file });
+
+    // UNIVERSAL FRAME CHECK — every shot, whether or not it declares a `verify`.
+    //
+    // Certification used to be opt-in, and five of six critics spent round 14
+    // scoring under protest because the primary shot on their axis carried
+    // none. Worse, the shots that DID certify proved certification was not
+    // sufficient: 07-super self-certified "hit landed" while 95% of the frame
+    // was functionally black, and 08-hud's top third was 480/480 pixels of
+    // exactly (0,0,0). Asserting that the right MOMENT was captured says
+    // nothing about whether the frame is legible.
+    //
+    // So this measures the delivered pixels for every shot: exposure, dynamic
+    // range, how much of the frame is crushed to black, and whether an
+    // announcement banner is sitting over a shot that is not about one.
+    const frame = await page.evaluate(async ({ b64, wantsBanner }) => {
+      const im = await new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.src = 'data:image/png;base64,' + b64; });
+      const W = 320, H = Math.round(im.height * (W / im.width));
+      const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+      const g = cv.getContext('2d', { willReadFrequently: true });
+      g.drawImage(im, 0, 0, W, H);
+      const d = g.getImageData(0, 0, W, H).data;
+      const lum = [];
+      let black = 0, topBlack = 0, topN = 0;
+      const topRows = Math.round(H * 0.2);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          const L = (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
+          lum.push(L);
+          if (L < 0.012) black++;
+          if (y < topRows) { topN++; if (L < 0.012) topBlack++; }
+        }
+      }
+      lum.sort((a, b2) => a - b2);
+      const q = (f) => +lum[Math.min(lum.length - 1, Math.floor(lum.length * f))].toFixed(4);
+      const banner = document.querySelector('.announce-banner');
+      const bannerUp = !!banner && parseFloat(getComputedStyle(banner).opacity) > 0.05;
+      const out = {
+        p50: q(0.5), p95: q(0.95), p999: q(0.999),
+        blackFrac: +(black / lum.length).toFixed(3),
+        topBlackFrac: +(topBlack / Math.max(1, topN)).toFixed(3),
+        bannerOverFrame: bannerUp && !wantsBanner,
+      };
+      // Thresholds are deliberately loose -- this catches unscoreable frames,
+      // not dark art direction. 07-super sat at p50 0.0044; a normal fight
+      // frame is an order of magnitude above that.
+      out.ok = out.p50 >= 0.012 && out.p95 >= 0.06 && out.blackFrac < 0.55
+        && out.topBlackFrac < 0.9 && !out.bannerOverFrame;
+      return out;
+    }, { b64: png.toString('base64'), wantsBanner: !!shot.wantsBanner });
+
+    if (frame && !frame.ok) {
+      const why = [];
+      if (frame.p50 < 0.012) why.push(`median luma ${frame.p50} — the frame is functionally black`);
+      if (frame.p95 < 0.06) why.push(`p95 luma ${frame.p95} — no usable dynamic range`);
+      if (frame.blackFrac >= 0.55) why.push(`${Math.round(frame.blackFrac * 100)}% of pixels crushed to black`);
+      if (frame.topBlackFrac >= 0.9) why.push(`top fifth is ${Math.round(frame.topBlackFrac * 100)}% black — framed against a void`);
+      if (frame.bannerOverFrame) why.push('an announcement banner is drawn over a shot that is not about one');
+      flaw(shot.name, `FRAME NOT SCOREABLE: ${why.join('; ')}`);
+    }
+    verified[shot.name] = { ...(verified[shot.name] || {}), frame };
     if (shot.freezeOnHit) {
       await page.evaluate(`(() => { window.KB.paused = false; ${RESTORE_CLOCK} })()`);
     }
@@ -642,7 +829,7 @@ async function main() {
              geometries: r.info.memory.geometries };
   })()`);
 
-  writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({ shots: manifest, fps, perf, info, verified, errors: errors.slice(0, 40) }, null, 2));
+  writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({ shots: manifest, fps, perf, info, verified, defects, errors: errors.slice(0, 40) }, null, 2));
 
   if (errors.length) {
     console.warn(`[capture] ${errors.length} console error(s):`);
