@@ -13,7 +13,10 @@
  */
 
 import * as THREE from 'three';
-import { TICK_DT, MAX_TICKS_PER_FRAME, ROUNDS_TO_WIN, ROUND_TIME_SECONDS, TICK_HZ } from './Constants.js';
+import { TICK_DT, MAX_TICKS_PER_FRAME, ROUNDS_TO_WIN, ROUND_TIME_SECONDS, TICK_HZ, MAX_HEALTH } from './Constants.js';
+
+/** Health restored per tick in training, once a fighter is out of hitstun. */
+const TRAINING_REFILL = 1.4;
 import { bus } from './Bus.js';
 import { Input } from './Input.js';
 import { RenderPipeline } from '../engine/RenderPipeline.js';
@@ -67,6 +70,21 @@ export class Game {
 
     this.paused = false;
     this.debug = { hitboxes: false, stats: false, freecam: false };
+
+    /**
+     * Difficulty, 1..10, applied to the CPU's reaction delay, block rate,
+     * punish accuracy and combo length. 6 is the default arcade opponent.
+     */
+    this.difficulty = 6;
+
+    /**
+     * Training mode. The opponent stands still so movement and move properties
+     * can be learned without being interrupted, the round never times out, and
+     * both fighters are topped up rather than being allowed to die — a practice
+     * session that ends in a KO is a practice session that keeps interrupting
+     * itself.
+     */
+    this.training = false;
   }
 
   async init() {
@@ -104,7 +122,7 @@ export class Game {
 
     this.combat = new CombatSystem(this.fighters, this.stage);
     this.fightCamera = new FightCamera(this.camera, this.fighters, this.stage);
-    this.cpu = [null, new CPU(this.fighters[1], this.fighters[0], { level: 6 })];
+    this.cpu = [null, new CPU(this.fighters[1], this.fighters[0], { level: this.difficulty })];
 
     this.hud = await step('Drawing interface', 0.85, () => new HUD(this.uiRoot, this.fighters));
     this.menus = new MenuSystem(this.uiRoot, this);
@@ -134,6 +152,41 @@ export class Game {
     this.phase = phase;
     this.phaseTicks = 0;
     bus.emit('phase', { phase });
+  }
+
+  /**
+   * Set CPU difficulty. Takes effect immediately, mid-round included, so a
+   * player can dial it while fighting rather than restarting to find out.
+   * @param {number} level 1..10
+   */
+  setDifficulty(level) {
+    this.difficulty = Math.min(10, Math.max(1, Math.round(level)));
+    this.cpu[1]?.setLevel(this.difficulty);
+    bus.emit('difficulty', { level: this.difficulty });
+  }
+
+  /**
+   * Enter or leave training mode. The opponent is left standing: its CPU is
+   * detached rather than set to level 1, because even the easiest CPU still
+   * blocks and retaliates, and the point of training is an unmoving target.
+   * @param {boolean} on
+   */
+  setTraining(on) {
+    this.training = !!on;
+    if (this.training) {
+      this._cpuBeforeTraining = this.cpu[1];
+      this.cpu[1] = null;
+    } else if (this._cpuBeforeTraining) {
+      this.cpu[1] = this._cpuBeforeTraining;
+      this._cpuBeforeTraining = null;
+    }
+    bus.emit('training', { on: this.training });
+  }
+
+  /** Start a practice session against a standing opponent. */
+  startTraining(p1Index = 0, p2Index = 1) {
+    this.setTraining(true);
+    this.startMatch(p1Index, p2Index);
   }
 
   startMatch(p1Index = 0, p2Index = 1) {
@@ -211,7 +264,8 @@ export class Game {
         ];
         for (let i = 0; i < 2; i++) this.fighters[i].simulate(cmds[i]);
         this.combat.simulate(this.tick);
-        if (--this.roundTimer <= 0) this.combat.timeOut();
+        if (this.training) this.#sustainTraining();
+        else if (--this.roundTimer <= 0) this.combat.timeOut();
         break;
       }
 
@@ -231,6 +285,21 @@ export class Game {
 
     this.fightCamera.simulate(this.phase, this.phaseTicks);
     this.input.endTick();
+  }
+
+  /**
+   * Keep a practice session running: hold the clock, and refill both fighters
+   * before either can be knocked out. Health is restored only once a fighter is
+   * out of hitstun so the damage numbers and the bar drain still read normally
+   * on each hit — the feedback is the point of training, the attrition is not.
+   */
+  #sustainTraining() {
+    this.roundTimer = ROUND_TIME_SECONDS * TICK_HZ;
+    for (const f of this.fighters) {
+      if (f.health < MAX_HEALTH && f.state !== 'hitstun' && f.state !== 'launched' && f.state !== 'juggled') {
+        f.health = Math.min(MAX_HEALTH, f.health + TRAINING_REFILL);
+      }
+    }
   }
 
   #afterRound() {

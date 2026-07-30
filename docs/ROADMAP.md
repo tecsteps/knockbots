@@ -155,3 +155,30 @@ What it needs:
   auto minmax(0,1fr) auto` with 1.8em padding leaves very little for the preview.
 - Safe-area insets: the screen currently pads in `em` only, so on a notched device the rack
   column can sit under the notch in landscape.
+
+---
+
+## Training mode and difficulty — engine side done, UI outstanding
+
+`Game.setDifficulty(1..10)` and `Game.setTraining(bool)` / `Game.startTraining()` are
+implemented and verified. **The menu controls for them are not** — `MenuSystem.js` was owned by
+another workstream, so the options screen still has no difficulty selector and no training entry.
+That is the remaining work.
+
+Behaviour, as built:
+
+- **Difficulty** maps straight onto the CPU's existing ten-level curve set (reaction delay,
+  block rate, punish accuracy, combo length). It applies immediately, mid-round included, so a
+  player can dial it while fighting instead of restarting to find out whether it helped.
+- **Training detaches the CPU entirely** rather than setting it to level 1. Even the easiest CPU
+  still blocks and retaliates, and the point of training is an unmoving target.
+- The round clock is held and both fighters are refilled, but **only once out of hitstun**, so
+  damage numbers and the bar drain still read normally on each hit. The feedback is the point of
+  training; the attrition is not.
+
+Verified: opponent stays `idle` with no current move, timer holds at 3600, six forced hits leave
+the opponent at 168/180 with no KO, and difficulty 9 restores the CPU on exit.
+
+Worth adding when the UI lands: hitbox/hurtbox display, frame-data readout on the last move, and
+input history — the three things a training mode is actually for. `game.debug.hitboxes` already
+exists as a flag with nothing driving it.
