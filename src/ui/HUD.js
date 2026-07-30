@@ -620,8 +620,49 @@ export class HUD {
    *   impossible); false while the fighter is not ready and it should be
    *   retried on a later frame.
    */
+  /**
+   * Paint an already-captured portrait data URL into a side's canvas. No GL work
+   * and therefore no fence to wait on.
+   * @param {number} i fighter index
+   * @param {string} url data URL from the roster capture
+   */
+  #paintPortraitFromUrl(i, url) {
+    const side = this.sides?.[i];
+    if (!side?.portraitCtx) return;
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      try {
+        side.portraitCtx.clearRect(0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE);
+        side.portraitCtx.drawImage(img, 0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE);
+        side.portrait.classList.add('portrait-chip--ready');
+      } catch { /* a portrait is decoration; never let it break the HUD */ }
+    };
+    img.src = url;
+  }
+
   #capturePortrait(game, i) {
     const fighter = this.fighters[i];
+
+    // Prefer a portrait the menu already captured. `RosterPortraits` photographs
+    // every machine during idle time on the select screen and caches it by id,
+    // where a stall is invisible and measured at 3.9ms worst frame.
+    //
+    // This matters more than it looks. Making the readback async did NOT remove
+    // its cost — it moved it. `readRenderTargetPixelsAsync` issues a fence and
+    // then calls `getBufferSubData`, which blocks if the fence has not signalled,
+    // so the block leaves `hud.update` and reappears at the GL sync point,
+    // possibly in a later frame. Timing `hud.update` therefore showed 0.1ms while
+    // the frame still stalled: measured whole-frame, worst frame was 1433ms with
+    // the readback live, 290ms with it stubbed, and 927ms when restored.
+    // The fix is not to make the readback faster. It is not to do one during a
+    // match at all.
+    const cached = game.menus?._portraits?.get?.(fighter?.def?.id);
+    if (cached) {
+      this.#paintPortraitFromUrl(i, cached);
+      return true;
+    }
+
     const renderer = game.renderer?.renderer;
     const scene = game.scene;
     const head = fighter?.robot?.parts?.byName?.head;

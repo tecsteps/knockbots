@@ -1695,7 +1695,11 @@ export class MenuSystem {
 
   #setQuality(tier) {
     this.settings.quality = tier;
-    this.game.renderer?.setQuality?.(tier);
+    // Through Game, not straight at the renderer. Environment and Stage both
+    // implement setQuality and neither was ever called from here, so choosing
+    // Low changed the post stack and left the full lighting rig running — on
+    // exactly the machines the Low tier exists for.
+    this.game.setQuality?.(tier);
     this.#refreshQualitySeg();
     bus.emit('settingsChange', { ...this.settings });
   }

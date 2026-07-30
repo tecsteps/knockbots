@@ -206,6 +206,20 @@ configuration change at all — rounds end, the KO cinematic fires, the camera r
 the same harness holds 24.9-25.1ms. Worked through in full under *A live match is a moving
 baseline* below; it is the most expensive measurement error recorded here.
 
+**A fix that relocates work rather than removing it will still read as a success on the
+instrument that motivated it.** The HUD's portrait readback was moved to
+`readRenderTargetPixelsAsync` to stop it stalling the frame. Measured by the `hud.update` timer
+that had identified the problem, the fix worked perfectly: **0.1ms**. Measured on whole-frame
+intervals, the frame still stalled **1433ms**. Going async moved the cost out of `hud.update` and
+into the GL sync point, where that timer cannot see it — `getBufferSubData` still blocks, and it
+now blocks somewhere the instrument was not looking.
+
+The general form: **a timer scoped to a call site measures the call site, not the work.** Any fix
+that makes work asynchronous, defers it, batches it or hands it to the driver has moved it
+somewhere that timer does not cover, so the timer's approval is close to meaningless. Verify
+against whole-frame intervals — worst frame and the count of frames over a threshold, which is
+what the user actually experiences — and only then go back to the scoped timer to attribute it.
+
 ## What the frame is actually made of
 
 Measured at the hero framing, 1920x1080, headless ANGLE/Metal, adaptive resolution pinned:
