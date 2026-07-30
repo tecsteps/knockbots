@@ -180,7 +180,7 @@ The manifest carries `geometries`, `textures` and `programs` alongside `calls` a
 precisely so this is checkable. **Compare those counts against a known-good capture before
 believing a number**, and if they differ, the scene is not the one you think you measured.
 
-## Three ways a timing method lies
+## Four ways a timing method lies
 
 All found the hard way on this project. Any of them will silently invalidate a per-pass table.
 
@@ -197,6 +197,14 @@ because the camera spring integrates on render dt and converges differently each
 A/B has to happen *inside one page session*, with film grain and motion blur disabled, which
 brings the noise floor down to about **1.08/255**. A change measured at 2.0/255 against that
 floor is real; the same change measured across sessions is invisible.
+
+**Pairing does not save you if the scene is moving. Never A/B against a live match.** Pairing
+defends against a drifting *machine*, because both arms of a pair drift together. It defends
+against nothing when the thing drifting is the *content*. Six alternations with 5-second holds
+against a running fight gave baselines of `37.4 → 37.9 → 37.2 → 37.4 → 38.3 → 21.7ms` with no
+configuration change at all — rounds end, the KO cinematic fires, the camera reframes. Paused,
+the same harness holds 24.9-25.1ms. Worked through in full under *A live match is a moving
+baseline* below; it is the most expensive measurement error recorded here.
 
 ## What the frame is actually made of
 
@@ -314,17 +322,19 @@ this probe was wrong by 16x and nobody would have known.
 
 ## What a dark analytic light actually costs
 
-Two figures were produced for the arena's near-permanently-dark point lights, and they disagree
-by an order of magnitude. Both are reported here because the disagreement is the lesson.
+Three figures were produced for the arena's near-permanently-dark point lights, spanning an order
+of magnitude. All are reported here because the disagreement is the lesson.
 
     three lights removed, loaded machine (baseline 56.7ms)   -9.7 ms   (-6.1 / -7.6 / -13.9)
     one light toggled, quiet machine, 5 paired alternations  -1.10 ms  (22.6 -> 21.5)
+    1/2/3 lights, paused, 6 paired alternations each         -1.55 / -2.92 / -4.37 ms
 
-The first was taken on a box whose baseline had drifted to roughly twice its normal frame time,
-where every proportional cost is inflated by the same factor. The second is paired, alternated,
-with the simulation paused and the render scale pinned. **Use ~1.1ms per analytic light at 1080p
-on a quiet machine**, and treat the larger figure as what that cost looks like through a loaded
-baseline rather than as a contradiction.
+**Use ~1.5ms per analytic light at 1080p**, from the third row — it is the best-supported of the
+three: three points establishing linearity, ±0.1ms intervals, and the single-light figure
+reproduced in a second session. The 1.10ms row is the same experiment with one point and a
+shorter run and does not contradict it so much as under-resolve it. The 9.7ms row is retracted;
+it was taken on a loaded box *during a live match*, which inflates every proportional cost, and
+is kept only as an example of what that looks like.
 
 The point stands either way, and it is the useful part: **an analytic light is evaluated per
 pixel over the whole frame whether or not its intensity is zero.** A light that is dark for 99%
