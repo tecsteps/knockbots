@@ -256,16 +256,22 @@ export class Stage {
     this.grit.points.name = 'arena.impactGrit';
     this.root.add(this.grit.points);
 
-    // One flash light per barrier. Created here, before RenderPipeline.warmup,
-    // so the light count never changes and no material ever recompiles.
-    this.wallLights = [];
-    for (const side of [-1, 1]) {
-      const l = new THREE.PointLight(0xffe0b0, 0, 11, 2);
-      l.position.set(side * (ARENA_HALF_WIDTH - 0.4), 2.0, 2.0);
-      l.castShadow = false;
-      this.wallLights.push(l);
-      this.root.add(l);
-    }
+    // ONE flash light for both barriers, repositioned on strike.
+    //
+    // Created here, before RenderPipeline.warmup, so the light count never
+    // changes and no material ever recompiles — that is the same hazard that
+    // cost 437-831ms per stall in the effects director.
+    //
+    // It is one light rather than two because a fighter can only be driven into
+    // one barrier at a time, and an analytic light is evaluated per pixel over
+    // the whole frame whether or not its intensity is zero. Measured: removing
+    // the arena's three near-permanently-dark point lights returned ~9.7ms on a
+    // loaded baseline, which is more than the depth prepass buys. A light that
+    // is dark 99% of the match is not free; it is only invisible.
+    this.wallLight = new THREE.PointLight(0xffe0b0, 0, 11, 2);
+    this.wallLight.position.set(ARENA_HALF_WIDTH - 0.4, 2.0, 2.0);
+    this.wallLight.castShadow = false;
+    this.root.add(this.wallLight);
   }
 
   /**
@@ -332,10 +338,18 @@ export class Stage {
     this.dust.update(dt);
     this.grit.update(dt);
 
-    // Wall flash: decays with the barrier's own flicker envelope.
-    for (let i = 0; i < 2; i++) {
-      const f = this.walls.flickerAt(i);
-      this.wallLights[i].intensity = f > 0 ? f * f * 26 * (0.55 + Math.random() * 0.45) : 0;
+    // Wall flash: decays with the barrier's own flicker envelope. Whichever
+    // barrier is flickering harder owns the single light; ties cannot happen in
+    // practice because only one wall is ever struck.
+    const fL = this.walls.flickerAt(0);
+    const fR = this.walls.flickerAt(1);
+    const side = fR > fL ? 1 : 0;
+    const f = side === 1 ? fR : fL;
+    if (f > 0) {
+      this.wallLight.position.x = (side === 1 ? 1 : -1) * (ARENA_HALF_WIDTH - 0.4);
+      this.wallLight.intensity = f * f * 26 * (0.55 + Math.random() * 0.45);
+    } else {
+      this.wallLight.intensity = 0;
     }
   }
 
@@ -397,7 +411,7 @@ export class Stage {
     this.practicals.reset();
     this.dust.reset();
     this.grit.reset();
-    for (const l of this.wallLights) l.intensity = 0;
+    this.wallLight.intensity = 0;
   }
 
   /**
