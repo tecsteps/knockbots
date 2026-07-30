@@ -663,6 +663,22 @@ export class HUD {
       return true;
     }
 
+    // No cached portrait, and we are mid-match: do nothing and keep the
+    // monogram. A portrait is decoration and must never buy a stall.
+    //
+    // The readback below is not cheap and not deferrable in the way it looks:
+    // `readRenderTargetPixelsAsync` issues a fence and then blocks in
+    // `getBufferSubData` until it signals, so the cost only leaves the call site
+    // and reappears at the GL sync point. Measured whole-frame entering a match
+    // with no cache: repeated 135-261ms stalls, with zero new shader programs,
+    // which rules out compilation and leaves the readback.
+    //
+    // The normal route through character select fills the cache during idle time
+    // where a stall is invisible (measured 3.9ms worst frame). This branch exists
+    // for the routes that skip it — a direct start, a rematch, the test harness —
+    // and for those the honest answer is a monogram.
+    if (game.phase === 'fight' || game.phase === 'intro' || game.phase === 'ready') return true;
+
     const renderer = game.renderer?.renderer;
     const scene = game.scene;
     const head = fighter?.robot?.parts?.byName?.head;

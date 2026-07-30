@@ -393,3 +393,33 @@ publishing it.**
 Still loosely held, flagged by both agents who quoted it: the ~4.6ms-per-RectAreaLight figure is
 loosely measured on both sides, and two loose measurements agreeing is weaker than it looks. It
 needs redoing properly before anyone targets area lights again.
+
+## The last stall is not attributable to application code
+
+After the portrait readback was routed to the menu-time cache and the impact lights were made
+count-invariant, a stall of 200-580ms still appears a handful of times in ~15s of driven combat.
+It is worth recording that it has been chased and what was ruled out, so the next person does not
+re-derive it.
+
+Instrumented across every frame over 150ms, entering a match through character select:
+
+    new shader programs   0        (program count flat at 119)
+    geometries            131      unchanged across the stall
+    textures              118      unchanged across the stall
+    draw calls            212-217  stable
+    portraits cached      9        so the HUD readback never fires
+    phase                 fight
+
+Nothing in the application's state changes across the stall. Shader compilation, resource
+allocation, the portrait readback and a draw-call spike are all excluded by that table. Combined
+with the separately measured **0.75ms mean main-thread cost** (the whole simulation, both
+fighters, stage, effects, camera and HUD, with the render stubbed), there is no JavaScript
+candidate left.
+
+What remains is the headless environment itself — a shared machine that has run at load average
+4-9 for this entire session, through a software-backed ANGLE/Metal path with a compositor in
+front of it. The four traps above all describe ways this box lies about timing.
+
+**Do not spend another round on this without first reproducing it on a quiet machine, or better,
+in a real browser.** A stall that leaves no trace in program count, resource count or draw count
+is far more likely to be the measurement environment than the game.
