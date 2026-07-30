@@ -616,22 +616,24 @@ class ScenePass extends Pass {
      * them is a draw call added to a budget that is already over.
      *
      * The whole trade, measured in one session at the hero framing, 1920x1080,
-     * adaptive resolution off and render scale pinned to 1, four alternations
-     * per point:
+     * adaptive resolution off and render scale pinned to 1, sim paused, four
+     * alternations per point (medians 28.0 / 28.0 / 28.0 / 27.9 on the baseline,
+     * so the differences below are well clear of the drift):
      *
-     * | threshold | scene draw calls | median frame | saving |
-     * |---|---|---|---|
-     * | prepass off |  158 | 28.2ms |    — |
-     * | 0 (all)     |  207 | 24.2ms | 3.90ms |
-     * | 0.35        |  203 | 24.5ms | 3.75ms |
-     * | **1**       |  190 | 24.6ms | **3.55ms** |
-     * | 2           |  164 | 26.4ms | 1.85ms |
-     * | 4           |  155 | 26.9ms | 1.38ms |
+     * | threshold | scene draw calls | scene triangles | median | saving |
+     * |---|---|---|---|---|
+     * | prepass off |  158 | 622k | 28.0ms |    — |
+     * | **1**       |  190 | 781k | 24.4ms | **3.62ms** |
+     * | 2           |  164 | 653k | 26.2ms | 1.77ms |
+     * | 4           |  155 | 636k | 26.8ms | 1.27ms |
      *
-     * 1 is the knee: it keeps 91% of the available saving for two thirds of the
-     * added draws. Everything between 0 and 1 is the two fighters' thirty-odd
+     * There is no threshold that is free. The prepass buys frame time with draw
+     * calls, and the charter budgets both. 1 is the knee — it takes the whole
+     * available saving, and everything below it is the two fighters' thirty-odd
      * small plate meshes, which together cover a few percent of the frame and
-     * hide almost nothing behind them.
+     * hide almost nothing behind them. Move it to 2 or 4 if the draw-call
+     * budget becomes the binding constraint; the frame cost of doing so is in
+     * the table.
      */
     this.prepassMinScreenRadius = 1.0;
     this._sphere = new THREE.Sphere();
@@ -643,13 +645,21 @@ class ScenePass extends Pass {
    * early-Z before they reach a fragment shader that integrates fifteen
    * analytic lights.
    *
-   * Whether that is worth an extra geometry pass is a property of the scene,
-   * and this one looked like the case for it: at the hero framing the arena
-   * submits roughly forty fragments per covered pixel, in layers — pit floor,
-   * barrier, fence, terrace, machinery bank, shell wall, backdrop — and three's
-   * front-to-back sort cannot separate them, because the set is merged into one
-   * mesh per material and each of those meshes spans the whole hall. A merged
-   * mesh sorts once, on the distance to its own centre.
+   * Whether that is worth an extra geometry pass is a property of the scene.
+   * Here it is: at the hero framing the opaque pass still shades every screen
+   * pixel **2.45 times** after front-to-back sorting and early-Z have taken
+   * their 75% (see docs/PROFILING.md — an earlier probe of mine claimed 40x and
+   * was summing the procedural sky, because `scene.overrideMaterial` does not
+   * apply to `scene.background`; 2.45 is the calibrated figure). The residue is
+   * layered — pit floor, barrier, fence, terrace, machinery bank, shell wall —
+   * and three's sort cannot separate it, because the set is merged into one mesh
+   * per material and each of those spans the whole hall. A merged mesh sorts
+   * once, on the distance to its own centre.
+   *
+   * A perfect prepass would take 2.45 to 1.0, so the ceiling is 59% of opaque
+   * scene shading. This one returns 3.62ms of a 28.0ms frame, which is about a
+   * third of that ceiling — the rest is left on the table by the three
+   * exclusions below.
    *
    * Three exclusions, and they are why this is a whitelist rather than an
    * `overrideMaterial` over everything:
@@ -657,7 +667,12 @@ class ScenePass extends Pass {
    *   - **Transparent, non-depth-writing and alpha-tested materials.** The
    *     override carries no alpha map, so the grating and the chain-link fence
    *     would lay down solid depth across their own holes and cull the crowd
-   *     standing behind them.
+   *     standing behind them. This is the exclusion worth revisiting: the fence
+   *     spans the whole upper half of the frame and everything behind it is
+   *     shaded twice. Carrying it into the prepass needs a per-material depth
+   *     variant that keeps the alpha map and the alpha test, not one shared
+   *     override — which is a bigger change than this pass, and should be
+   *     measured on its own.
    *   - **Instanced meshes.** Every instanced population in this scene carries
    *     per-instance vertex animation grafted on through `onBeforeCompile` —
    *     the crowd's sway is the load-bearing one — and an override material
