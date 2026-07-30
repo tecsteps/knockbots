@@ -311,3 +311,27 @@ buffer.
 
 **Any probe that counts fragments needs a calibration case with a known answer.** Without one,
 this probe was wrong by 16x and nobody would have known.
+
+## What a dark analytic light actually costs
+
+Two figures were produced for the arena's near-permanently-dark point lights, and they disagree
+by an order of magnitude. Both are reported here because the disagreement is the lesson.
+
+    three lights removed, loaded machine (baseline 56.7ms)   -9.7 ms   (-6.1 / -7.6 / -13.9)
+    one light toggled, quiet machine, 5 paired alternations  -1.10 ms  (22.6 -> 21.5)
+
+The first was taken on a box whose baseline had drifted to roughly twice its normal frame time,
+where every proportional cost is inflated by the same factor. The second is paired, alternated,
+with the simulation paused and the render scale pinned. **Use ~1.1ms per analytic light at 1080p
+on a quiet machine**, and treat the larger figure as what that cost looks like through a loaded
+baseline rather than as a contradiction.
+
+The point stands either way, and it is the useful part: **an analytic light is evaluated per
+pixel over the whole frame whether or not its intensity is zero.** A light that is dark for 99%
+of a match is not free, it is only invisible. Two wall-flash lights became one repositioned light
+for exactly this reason, with no visual change, because only one barrier is ever struck at a time.
+
+**Caveat on the instrument.** Toggling `light.visible` to A/B a light changes `numPointLights`
+and recompiles every material — the first sample of the run above read **4380ms** for that
+reason. The median survives it, but `.visible` is not a free measurement instrument, and any
+probe using it must discard its first samples or measure something else.
