@@ -74,6 +74,13 @@ const DEFAULT_FWD = [
 const FIST_R = (r = 0.21) => [B('hand_R', r, [0, -0.05, 0]), B('wrist_R', r * 0.8, [0, -0.04, 0])];
 const FIST_L = (r = 0.21) => [B('hand_L', r, [0, -0.05, 0]), B('wrist_L', r * 0.8, [0, -0.04, 0])];
 const ELBOW_R = (r = 0.24) => [B('elbow_R', r, [0, -0.06, 0]), B('wrist_R', r * 0.7, [0, 0, 0])];
+// k.spinKick's consumers anchor FOOT_R, not FOOT_L, and that is deliberate.
+// Measured by driving the clip through the real rig at its impact tick: foot_R
+// travels 1.02m from stance while foot_L travels 0.14m, with hip_R fully
+// abducted at Z=-70 and knee_R straight at 2 degrees. The right leg is the
+// kicking leg; the left is the planted pivot. Every consumer previously anchored
+// the pivot foot, so the hit capsule and the weapon trail sat on the grounded leg
+// while the other swung through the opponent.
 const FOOT_R = (r = 0.24) => [B('foot_R', r, [0, -0.02, 0.04]), B('ankle_R', r * 0.85, [0, 0, 0])];
 const FOOT_L = (r = 0.24) => [B('foot_L', r, [0, -0.02, 0.04]), B('ankle_L', r * 0.85, [0, 0, 0])];
 const KNEE_R = (r = 0.25) => [B('knee_R', r, [0, -0.08, 0.05]), B('ankle_R', r * 0.7, [0, 0, 0])];
@@ -362,10 +369,10 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'midKick2', name: 'Turbine Spin', input: '3,4', clip: 'k.spinKick', tag: 'string',
-    active: [W(20, 22, [...FOOT_L(0.27), B('hand_L', 0.25, [0, -0.05, 0])])], total: 50,
+    active: [W(20, 22, [...FOOT_R(0.27), B('hand_R', 0.25, [0, -0.05, 0])])], total: 50,
     height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 23,
     adv: { block: -12, hit: 4 }, reaction: REACTION.SPIN,
-    knockback: [5.4, 1.2, 0], blockPush: [3.0, 0, 0], meterGain: 9, trail: 'foot_L',
+    knockback: [5.4, 1.2, 0], blockPush: [3.0, 0, 0], meterGain: 9, trail: 'foot_R',
     props: { wallCarry: 1.6 },
   });
   mv({
@@ -401,10 +408,10 @@ function coreMoves(mv, cfg) {
   });
   mv({
     id: 'spinKick', name: 'Gyro Sweepline', input: 'b+3', clip: 'k.spinKick', tag: 'heavy',
-    active: [W(22, 24, [...FOOT_L(0.28), B('hand_L', 0.26, [0, -0.05, 0])])], total: 52,
+    active: [W(22, 24, [...FOOT_R(0.28), B('hand_R', 0.26, [0, -0.05, 0])])], total: 52,
     height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 25,
     adv: { block: -9, hit: 3 }, reaction: REACTION.KNOCKDOWN,
-    knockback: [4.4, 1.0, 0], blockPush: [2.6, 0, 0], meterGain: 9, trail: 'foot_L',
+    knockback: [4.4, 1.0, 0], blockPush: [2.6, 0, 0], meterGain: 9, trail: 'foot_R',
     props: { homing: true },
   });
   mv({
@@ -491,10 +498,10 @@ function coreMoves(mv, cfg) {
   // --- evasion and defence -------------------------------------------------
   mv({
     id: 'evadeSpin', name: 'Phase Spiral', input: 'bb+3', clip: 'k.spinKick', tag: 'evade',
-    active: [W(20, 22, FOOT_L(0.26))], total: 48,
+    active: [W(20, 22, FOOT_R(0.26))], total: 48,
     height: HEIGHT.MID, weight: WEIGHT.MEDIUM, damage: 18,
     adv: { block: -8, hit: 4 }, reaction: REACTION.FLINCH_MID,
-    knockback: [3.0, 0, 0], blockPush: [2.0, 0, 0], meterGain: 7, trail: 'foot_L',
+    knockback: [3.0, 0, 0], blockPush: [2.0, 0, 0], meterGain: 7, trail: 'foot_R',
     props: { invulnFrom: 4, invulnTo: 18, travel: [{ from: 0, to: 10, x: -3.0, z: 0 }] },
   });
   mv({
@@ -743,7 +750,7 @@ function agileExtras(mv, cfg, set) {
   });
   mv({
     id: 'shadowRush', name: 'Shadow Rush', input: 'ff+3', clip: 'k.spinKick', tag: 'rush',
-    active: [W(16, 18, FOOT_L(0.27))], total: 46,
+    active: [W(16, 18, FOOT_R(0.27))], total: 46,
     height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 21,
     adv: { block: -11, hit: 4 }, reaction: REACTION.SPIN,
     knockback: [6.0, 1.2, 0], blockPush: [2.8, 0, 0], meterGain: 9,
