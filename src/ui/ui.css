@@ -529,8 +529,18 @@
 
 .pips { display: flex; gap: 0.28em; flex-shrink: 0; }
 .hp-block--p2 .pips { flex-direction: row-reverse; }
+/*
+ * `max(9px, ...)` here and on the small type below is a legibility *floor*, not
+ * a size: above about a 15px root every one of these resolves to the em value
+ * and the rule is inert, so the desktop composition is untouched. It exists
+ * because `.hud`'s own `clamp(11px, 1.05vw, 21px)` bottoms out at 11px on a
+ * phone, and 11px x 0.62 is a 6.8px round pip — measured on an 844x390 capture
+ * it was a smudge. A phone is held at arm's length, roughly 350mm, where 9px of
+ * a 0.174mm pixel subtends 0.26deg; below that a shape stops resolving as a
+ * shape at all.
+ */
 .pip {
-  width: 0.62em; height: 0.62em;
+  width: max(9px, 0.62em); height: max(9px, 0.62em);
   background: var(--kb-grey-dim);
   clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4);
@@ -683,7 +693,7 @@
 }
 .meter-label {
   font-family: var(--kb-font-label);
-  font-size: 0.58em;
+  font-size: max(9px, 0.58em);
   font-weight: 700;
   letter-spacing: 0.24em;
   text-transform: uppercase;
@@ -754,13 +764,38 @@
   transition: opacity 0.2s ease;
 }
 .combo.combo--show .combo-hits::before { opacity: 1; }
+/*
+ * The unit label sits *outside* the numeral's box, baseline-aligned beside it.
+ *
+ * `position: relative` put it inside — `.combo-hits` is itself the `.kb-text`
+ * element, a fixed `height: 1em` box whose glyph mask fills `inset: 0`, so an
+ * in-flow pseudo-element lands in that box's own line box and the label printed
+ * across the bottom-left of the digit it was labelling. Measured on a phone
+ * capture the "HITS" cap band overlapped the numeral's lower stem by 15px.
+ *
+ * Anchoring off `left: 100%` (mirrored to `right: 100%` on the P2 side, which is
+ * right-aligned against the screen edge and has nowhere to grow outward) puts it
+ * where the convention wants it and takes it out of the mask's way entirely.
+ */
 .combo-hits::after {
   content: ' HITS';
-  position: relative;
+  position: absolute;
+  left: 100%;
+  bottom: 0.12em;
+  /* A word space against the numeral's box, not its ink: the stencil face in
+   * Typeface.js cuts glyphs to the mask edge with no side bearing, so a digit
+   * like 7 ends flush and needs the gap put back here. */
+  margin-left: 0.22em;
+  white-space: nowrap;
   font-size: 0.32em;
   font-weight: 700;
   letter-spacing: 0.16em;
   color: var(--kb-text-dim);
+}
+.combo--p1 .combo-hits::after {
+  left: auto;
+  right: 100%;
+  margin: 0 0.22em 0 0;
 }
 /* A launcher's own first hit shows the counter too (see HUD#onHit) — "1
  * HITS" reads as broken grammar, so the singular case gets its own label. */
@@ -779,7 +814,7 @@
 }
 .combo.combo--show[data-tier='3'] { transform: scale(1.08); }
 .combo-tag {
-  font-size: 0.9em;
+  font-size: max(11px, 0.9em);
   font-weight: 900;
   letter-spacing: 0.24em;
   text-transform: uppercase;
@@ -793,7 +828,7 @@
 .combo-tag[data-tag='COUNTER'] { background: var(--kb-danger); color: #1b0002; }
 .combo-dmg {
   margin-top: 0.2em;
-  font-size: 0.88em;
+  font-size: max(11px, 0.88em);
   font-weight: 700;
   color: var(--kb-danger-soft);
   letter-spacing: 0.05em;
@@ -813,14 +848,14 @@
 }
 .callout--damage {
   font-family: var(--kb-font-mono);
-  font-size: 1.3em;
+  font-size: max(15px, 1.3em);
   color: #fff2d6;
   text-shadow: 0 0.08em 0.2em rgba(0, 0, 0, 0.7), 0 0 0.6em rgba(255, 138, 42, 0.5);
   animation: calloutDamage 0.85s cubic-bezier(0.15, 0.7, 0.3, 1) forwards;
 }
-.callout--chip { color: var(--kb-grey); font-size: 1.05em; text-shadow: 0 0.08em 0.2em rgba(0,0,0,0.7); animation: calloutDamage 0.7s ease-out forwards; }
+.callout--chip { color: var(--kb-grey); font-size: max(13px, 1.05em); text-shadow: 0 0.08em 0.2em rgba(0,0,0,0.7); animation: calloutDamage 0.7s ease-out forwards; }
 .callout--counter {
-  font-size: 1.05em;
+  font-size: max(13px, 1.05em);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--kb-danger-soft);
@@ -942,6 +977,87 @@
 .announce-banner[data-kind='great'] .announce-text {
   font-size: clamp(28px, 6vw, 92px);
   --kb-ink-a: #d4ffef; --kb-ink-b: #0c8a5e;
+}
+
+/* -- phone landscape ---------------------------------------------------- *
+ *
+ * The composition above was authored against a monitor and it does not shrink
+ * into a handset by itself, because `.hud`'s `clamp(11px, 1.05vw, 21px)` bottoms
+ * out: 1.05vw of 844px is 8.9px, so a phone gets the 11px floor, and every `em`
+ * measured off it is then a *larger* fraction of a 390px-tall frame than the
+ * same layout is of a 1080px one. Measured on an 844x390 capture the readable
+ * stack — bars, nameplates, meters, timer, round label — ran from y=10 to y=100,
+ * 26% of the screen height, against about 14% at 1080p. On the axis a fighting
+ * game can least afford to lose, the HUD was taking nearly twice its share.
+ *
+ * So this block re-proportions rather than rescales. It takes vertical back from
+ * the pieces that are glanced at (the timer housing, the meter's caption row)
+ * and spends width on the piece that is actually read continuously (the health
+ * bar, which gains 55px per side once the timer stops being 99px wide). After
+ * it, the same stack ends at y=70 — 18% — and the bars are wider than before.
+ *
+ * `max-height` rather than `max-width` is the trigger on purpose: height is what
+ * is scarce here, a 390px-tall frame is the problem whether it belongs to a
+ * handset or to a short desktop window, and a tablet in landscape has the room
+ * the desktop layout was drawn for and should keep it.
+ */
+@media (orientation: landscape) and (max-height: 460px) {
+  /* 0.75em, not 0.5em: `.portrait-chip` hangs 0.4em above the block, and the
+   * chip is where character identity lives — it should not be shaved by the
+   * screen edge to buy 3px. */
+  .hud-top { top: calc(0.75em + var(--kb-sa-t)); gap: 0.55em; }
+
+  /* Both halves of the width the timer gives up go to the bars. */
+  .hp-block { width: min(34em, 100%); }
+  .hp-frame { max-width: 34em; }
+
+  /* Shrink-wrap the nameplate. Stretched to the bar's full width it was a
+   * black slab across a quarter of the screen for the sake of six letters —
+   * affordable at 1080p, a third of the visible arena here. */
+  .nameplate { align-self: flex-start; }
+  .hp-block--p2 .nameplate { align-self: flex-end; }
+
+  /* 41px of cap height subtends 1.2deg at arm's length, four times the
+   * threshold where a numeral stops resolving, so the housing can lose a third
+   * of its footprint without the count becoming any harder to read. */
+  .timer-frame { width: 6.6em; height: 4.4em; }
+  .timer-value { font-size: 3.7em; }
+  .round-label { margin-top: 0.24em; font-size: 0.9em; letter-spacing: 0.16em; }
+
+  /*
+   * The meter loses its caption and gains height. At the phone's 11px root the
+   * label rendered at 6.4px — measured against the capture, an unreadable
+   * smudge that still charged a full 16px row for itself. What it was
+   * communicating is already carried better by two things the eye is on anyway:
+   * the bar's own full-charge glow and pulse, and the overdrive pad under the
+   * right thumb going bright. Trading 6.4px of dead type for a bar that is
+   * 11.5px tall instead of 6.8px is the whole readout getting more legible, not
+   * less.
+   */
+  .meter-label { display: none; }
+  /*
+   * The meter has to end exactly where the health bar above it ends, and at
+   * this size that is not something an `em` cap can promise. On a monitor both
+   * bars are cap-bound (29em and 27em against ~830px of track) so the 2em inset
+   * between them holds; on a phone the *track* is what binds, and the two wraps
+   * had different tracks — `1fr auto 1fr` around a 73px timer versus a plain
+   * `1fr 1fr`. Measured under a notch that put the meter 8px wider than the bar
+   * it sits under. Mirroring the top bar's own three-column grid, timer gap
+   * included, makes the two tracks identical by construction, and a cap they
+   * both share then resolves to the same number whichever one binds.
+   */
+  .meter-wrap {
+    top: calc(5.3em + var(--kb-sa-t));
+    gap: 0.55em;
+    grid-template-columns: 1fr 6.6em 1fr;
+  }
+  .meter-block--p2 { grid-column: 3; }
+  .meter-block { width: min(34em, 100%); }
+  .meter-frame { max-width: 34em; height: 1.05em; }
+
+  /* Follows the tightened stack up so the gap the counter slams into stays the
+   * same gap it was designed against. */
+  .combo { top: calc(6.8em + var(--kb-sa-t)); }
 }
 
 /* ========================================================================

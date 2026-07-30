@@ -55,6 +55,8 @@ const GHOST_RATE_PER_TICK = 3.0 / TICK_HZ;
 const CRITICAL_RATIO = 0.22;
 const COMBO_HOLD_TICKS = 66; // ~1.1s of game-time with no new hit before the combo readout dismisses
 const MAX_CALLOUTS = 24;
+/** Clearance left above a thumb box when a callout has to be moved out of one. */
+const THUMB_CLEARANCE = 16;
 
 const IN_FIGHT_PHASES = new Set(['intro', 'ready', 'fight', 'ko', 'roundEnd']);
 
@@ -123,7 +125,12 @@ export class HUD {
      * relaid out without a resize event.
      */
     this.rootRect = null;
-    window.addEventListener('resize', () => { this.rootRect = null; });
+    /** Safe-area insets in px, resolved from the `--kb-sa-*` tokens alongside
+     * `rootRect` and invalidated with it. Callouts are positioned in px by JS,
+     * so they are the one part of the HUD that cannot inherit the CSS `calc()`
+     * the rest of the layout uses to clear a notch. */
+    this.rootInsets = null;
+    window.addEventListener('resize', () => { this.rootRect = null; this.rootInsets = null; });
 
     /** Lazily-created offscreen render target + camera for `#capturePortrait`. */
     this.portraitRT = null;
@@ -321,6 +328,7 @@ export class HUD {
     banner.appendChild(inner);
     layer.appendChild(banner);
     this.uiRoot.appendChild(layer);
+    this.announceLayer = layer;
     this.announceBanner = banner;
     this.announceText = text;
     banner.addEventListener('animationend', (e) => {
@@ -500,15 +508,16 @@ export class HUD {
       this.root.classList.toggle('hud--hidden', !showHud);
       this.visible = showHud;
       this.rootRect = null;
+      this.rootInsets = null;
     }
     if (!showHud) return;
 
     this.#updateHealth();
     this.#updateNamesAndPips(game);
     this.#updateTimer(game);
-    this.#updateMeters(dt);
+    this.#updateMeters(game);
     this.#updateCombos();
-    this.#updateCallouts(dt, game.camera);
+    this.#updateCallouts(game);
     this.#servicePortraits(game);
   }
 
@@ -712,7 +721,10 @@ export class HUD {
     }
   }
 
-  #updateMeters(dt) {
+  /**
+   * @param {import('../core/Game.js').Game} game
+   */
+  #updateMeters(game) {
     for (let i = 0; i < this.fighters.length; i++) {
       const f = this.fighters[i];
       const m = this.meters[i];
@@ -724,6 +736,13 @@ export class HUD {
         m.label.classList.toggle('meter-label--full', full);
         m.label.textContent = full ? 'OVERDRIVE READY' : 'OVERDRIVE';
         m._full = full;
+        // The touch pad's overdrive button rests dimmed and lights up when the
+        // meter is spendable — the ready signal a phone gets instead of the
+        // 6.4px "OVERDRIVE READY" caption, which is hidden at that size. Nothing
+        // else in the build called `setMeterReady`, so the pad had never
+        // reflected meter state at all; this is the one place that boolean is
+        // already computed, on the edge, for the player the pad drives.
+        if (i === 0) game.touch?.setMeterReady?.(full);
       }
     }
   }
@@ -810,17 +829,91 @@ export class HUD {
     node._pending = true;
   }
 
-  #updateCallouts(dt, camera) {
+  /**
+   * Places every callout spawned since the last frame.
+   *
+   * A callout is projected from a world-space hit point, which means — unlike
+   * every other piece of the HUD — nothing constrains where it lands. Measured
+   * on an 844x390 handset with a fighter pushed to each wall, damage numbers
+   * projected to (821, 184) and (197, 141): the first inside the overdrive pad,
+   * the second inside the floating stick's footprint. Both are numbers the
+   * player is meant to read, printed under a thumb. And at x=821 of 844 the
+   * `translate(-50%, -50%)` centring hangs half the glyphs off the edge, where
+   * `.callouts-layer`'s own `overflow: hidden` clips them.
+   *
+   * So the projected point is a preference, not a position: it gets clamped
+   * inside the readable frame (safe-area insets included, since a notch eats
+   * the same corner) and lifted clear of whatever the thumbs are covering.
+   * @param {import('../core/Game.js').Game} game
+   */
+  #updateCallouts(game) {
+    // Asked for lazily: most frames have nothing pending, and `thumbZones()`
+    // measures the pad rather than caching it (see its own note), so the cost
+    // belongs on the frames a hit actually lands on.
+    let zones;
     for (const node of this.calloutPool) {
       if (!node._pending) continue;
-      const screen = this.#worldToScreen(node._point, camera);
+      if (zones === undefined) zones = game.touch?.thumbZones?.() ?? null;
+      const screen = this.#worldToScreen(node._point, game.camera);
       if (screen) {
-        const jitter = node._bias * 22;
-        node.style.left = `${screen.x + jitter}px`;
-        node.style.top = `${screen.y}px`;
+        const p = this.#placeCallout(screen.x + node._bias * 22, screen.y, zones);
+        node.style.left = `${p.x}px`;
+        node.style.top = `${p.y}px`;
       }
       node._pending = false; // project once at spawn time; the CSS animation drives motion from there
     }
+  }
+
+  /**
+   * Clamp a callout inside the readable frame and lift it out of any thumb box.
+   *
+   * Lifting is always upward. Down is the floor, the pad and the notch's own
+   * corner; up is the arena, and a callout's animation already travels up, so
+   * moving it that way agrees with the motion the player is tracking. The
+   * result is clamped again below the top HUD stack so a hit taken at the very
+   * bottom of the frame cannot throw its damage number into the health bars.
+   * @param {number} x projected, client space
+   * @param {number} y projected, client space
+   * @param {{ left: number, top: number, right: number, bottom: number }[]|null} zones
+   * @returns {{ x: number, y: number }}
+   */
+  #placeCallout(x, y, zones) {
+    const rect = this.rootRect ?? (this.rootRect = this.uiRoot.getBoundingClientRect());
+    const sa = this.rootInsets ?? (this.rootInsets = this.#readInsets());
+    const margin = 34; // half the widest callout ("COUNTER HIT") plus a little air
+    let cx = THREE.MathUtils.clamp(x, sa.l + margin, rect.width - sa.r - margin);
+    let cy = y;
+    if (zones) {
+      for (const z of zones) {
+        if (cx >= z.left && cx <= z.right && cy >= z.top && cy <= z.bottom) {
+          cy = Math.min(cy, z.top - THUMB_CLEARANCE);
+        }
+      }
+    }
+    const ceiling = sa.t + rect.height * 0.24; // clear of the bar / meter / timer stack
+    return { x: cx, y: Math.max(cy, ceiling) };
+  }
+
+  /**
+   * Resolve the safe-area insets to px, once per resize.
+   *
+   * Read off `.announce-layer`'s computed padding rather than the `--kb-sa-*`
+   * tokens themselves: a custom property's computed value is its token stream,
+   * so `getPropertyValue('--kb-sa-l')` hands back the literal text
+   * `env(safe-area-inset-left, 0px)` — `env()` is substituted at *use* time, and
+   * parsing that string yields nothing. The announce layer already pads itself
+   * by all four tokens (see ui.css, where the reason is keeping "K.O." off the
+   * notch), and a computed `padding-left` is a used value in px, so it is the
+   * resolved number the rest of the layout is working from.
+   * @returns {{ t: number, r: number, b: number, l: number }}
+   */
+  #readInsets() {
+    if (!this.announceLayer) return { t: 0, r: 0, b: 0, l: 0 };
+    const cs = getComputedStyle(this.announceLayer);
+    return {
+      t: parseFloat(cs.paddingTop) || 0, r: parseFloat(cs.paddingRight) || 0,
+      b: parseFloat(cs.paddingBottom) || 0, l: parseFloat(cs.paddingLeft) || 0,
+    };
   }
 
   // -------------------------------------------------------------------------

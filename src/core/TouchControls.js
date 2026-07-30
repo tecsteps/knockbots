@@ -27,11 +27,12 @@
  * ---------------------------------------------------------------------------
  * Geometry, and why these numbers
  *
- * All of it is measured on an iPhone 13 in landscape (844x390 CSS px, where a
- * CSS px is a point, so 1px = 0.183mm). The first cut of this pad placed the
- * limbs on a diagonal parallelogram sized as percentages of the cluster box,
- * and an automated tap sweep over the cluster found two defects that the eye
- * had not:
+ * All of it is measured on an iPhone 13 in landscape: 844x390 CSS px over a
+ * 139.8x64.6mm display, so 1 CSS px = 0.166mm (460ppi at a device pixel ratio
+ * of 3, not the 0.183mm a "CSS px is a point" shorthand gives). The first cut of
+ * this pad placed the limbs on a diagonal parallelogram sized as percentages of
+ * the cluster box, and an automated tap sweep over the cluster found two defects
+ * that the eye had not:
  *
  *   - The rows were 40px apart while the buttons were 66px across, so 1 and 3
  *     (and 2 and 4) overlapped by 26px of diameter and their hit circles by
@@ -48,16 +49,52 @@
  * has an unambiguous nearest button. That turns the 12px gutter from dead
  * space into slop that resolves the way the thumb intended.
  *
- * Reach, from a right-thumb pivot just off the bottom-right corner: the near
- * kick is 12mm away, the far punch 33mm, and the overdrive pad 37mm. A
- * comfortable thumb sweep is about 35mm, so every limb sits inside it and
- * overdrive sits deliberately at the edge of it — it spends the whole meter and
- * should cost a small reach, not a brush. Its old position was 50mm out, over
- * the middle of the arena, and could not be hit without moving the hand.
+ * Reach, from a right-thumb pivot just off the bottom-right corner, at that
+ * 0.166mm/px: the near kick is 13.6mm away, the two middle limbs 24.5mm, the far
+ * punch 31.9mm and the overdrive pad 34.8mm. A comfortable thumb sweep is about
+ * 35mm, so all four limbs sit inside it and overdrive sits exactly on the line —
+ * and there is nowhere better to put it. Four 10.9mm buttons plus their gutters
+ * consume the whole bottom-right quadrant of a 64.6mm-tall display; the obvious
+ * alternative, docking it left of the cluster along the floor, measures 37.8mm,
+ * further out than where it already is. So overdrive keeps the two-finger
+ * gesture as the way it is actually thrown from a settled hand, and the pad is
+ * the affordance that teaches the mechanic exists.
+ *
+ * What the pad should not do is sit at full contrast over the middle of the
+ * arena — which on a 390px-tall screen is exactly where it is — for the whole
+ * of a round in which it does nothing. It is inert until the meter fills, so it
+ * rests dimmed and going bright is the ready signal.
+ *
+ * A 9x9 tap sweep over the cluster and a 24-step angular swipe sweep both pass
+ * as authored: no dead cells, every cell resolves to its nearest button, and
+ * the four motions own the sectors the constants below claim (qcf/qcb 105deg,
+ * dp/dd 75deg). The numbers are therefore left alone.
  */
 
+import { bus } from './Bus.js';
+
+/**
+ * Phases the pad belongs on screen for — the same set `HUD.js` shows itself
+ * for, so the two appear and leave together. Everything else (`boot`, `menu`,
+ * `select`, `matchEnd`, `replay`) is a front-end screen whose own controls the
+ * pad must not be sitting on top of.
+ */
+const IN_PLAY_PHASES = new Set(['intro', 'ready', 'fight', 'ko', 'roundEnd']);
+
 const DEAD_ZONE = 12;      // px of radial travel before the stick reads at all
-const FULL_TILT = 44;      // px for a fully deflected axis
+/**
+ * How far the nub is drawn from the ring's centre at full deflection.
+ *
+ * Purely visual: `#placeStick` clamps the deflection to this before snapping it,
+ * and clamping preserves direction, so the eight-way result is identical either
+ * way. It is 30 because that is what keeps the nub inside its own ring — the
+ * ring is 118px across with a 2px border (57px of inner radius) and the nub is
+ * 52px across (26px of radius), so 31px is the furthest the nub's edge can travel
+ * before it breaks the ring's inner edge. At the previous 44 it visibly spilled
+ * out of the ring on any full deflection, which reads as a broken widget rather
+ * than a stick at its limit.
+ */
+const FULL_TILT = 30;
 const CARDINAL_ARC = 56;   // deg each cardinal owns; the four diagonals split the rest
 const SWIPE_MIN = 44;      // px from touchdown to lift to count as a motion
 const SWIPE_ARC = 105;     // deg each of forward/back owns; up/down split the rest
@@ -122,15 +159,26 @@ const CSS = `
   --kbt-edge: 16px;
   --kbt-floor: 14px;
 }
+/* Inert, not merely invisible. Hiding the pad with opacity alone left the stick
+   catchment hit-testable across the whole lower-left of the screen, including
+   over the menus — on a landscape phone that swallowed the taps for eight of the
+   ten character tiles and the BACK button, which is what was reported as the
+   select screen "not being responsive". Opacity hides it; pointer-events is what
+   stops it stealing input. */
 .kbt-root.kbt-off { opacity: 0; }
+.kbt-root.kbt-off > * { pointer-events: none !important; }
 
 /* The whole lower-left quadrant is the stick's catchment, so the thumb never
    has to find a target. The ring only becomes visible once it is holding one.
-   Capped in px as well as percent: on a tall screen a 70% band would reach
-   halfway up the arena for no gain, since no thumb travels that far. */
+   Capped in px as well as percent, because a percentage of a tall viewport
+   reaches far past anything a thumb can do: the drawn stick's own worst case is
+   the 118px ring plus a full 44px deflection either way, 206px, so 60%/300px is
+   the envelope with slack rather than an arbitrary band. The previous 70% put
+   the catchment's top edge at y=117 on an 844x390 phone, 13px inside the combo
+   counter's box — measured, the one place the pad and the HUD still met. */
 .kbt-stickzone {
   position: absolute; left: var(--kbt-sa-l); bottom: var(--kbt-sa-b);
-  width: min(46%, 330px); height: min(70%, 300px); pointer-events: auto;
+  width: min(46%, 330px); height: min(60%, 300px); pointer-events: auto;
 }
 .kbt-ring, .kbt-nub {
   position: absolute; border-radius: 50%; opacity: 0; transition: opacity .12s ease;
@@ -167,10 +215,14 @@ const CSS = `
   border-color: rgba(255,206,142,.9);
 }
 
-/* Overdrive sits one row above the limbs, hard against the screen edge: far
-   enough that a stray thumb cannot spend the meter, close enough to reach
-   without lifting the palm, and out of the arena rather than floating over the
-   middle of it. Two fingers anywhere on the cluster still does the same job. */
+/* Overdrive sits one row above the limbs, hard against the screen edge — the
+   furthest-out control on the pad, right on the 35mm line, and no alternative
+   placement measures nearer (see the reach note in the header). So two fingers
+   anywhere on the cluster remains the way it is actually thrown and this pad is
+   the affordance that teaches the mechanic exists. It rests at low opacity
+   because it is inert until the meter fills: at full contrast it was a lit pill
+   hanging over the fighters at mid-screen for most of a round, and going bright
+   is worth more as the ready signal than as a permanent obstruction. */
 .kbt-od {
   position: absolute;
   right: calc(var(--kbt-edge) + var(--kbt-sa-r));
@@ -178,16 +230,23 @@ const CSS = `
   width: 84px; height: 38px; border-radius: 19px; pointer-events: auto;
   display: grid; place-items: center; letter-spacing: .18em; font-size: 10px;
   color: #9fe3ff; background: rgba(12,26,40,.85); border: 1px solid rgba(80,200,255,.45);
+  opacity: .4; transition: opacity .2s ease, transform .06s ease;
 }
-.kbt-od.kbt-ready { color: #062330; background: linear-gradient(180deg, #8fe6ff, #34b6e6); border-color: #bff2ff; }
+.kbt-od.kbt-ready {
+  opacity: 1;
+  color: #062330; background: linear-gradient(180deg, #8fe6ff, #34b6e6); border-color: #bff2ff;
+}
 .kbt-od.kbt-down { transform: scale(.92); }
 
-/* Fires on a successful swipe so the player learns the gesture landed. Sits
-   beside the overdrive pad, not on top of it, and clear of the combo readout
-   the HUD puts in this corner. */
+/* Fires on a successful swipe so the player learns the gesture landed. Offset by
+   the cluster's own width rather than a tuned constant, which puts it entirely
+   to the left of both the limbs and the overdrive pad: at the old 96px its right
+   third sat in the gap the thumb crosses travelling between the two, so the one
+   piece of feedback confirming a motion landed was printed under the hand that
+   had just drawn it. */
 .kbt-flash {
   position: absolute;
-  right: calc(var(--kbt-edge) + var(--kbt-sa-r) + 96px);
+  right: calc(var(--kbt-edge) + var(--kbt-sa-r) + var(--kbt-btn) + var(--kbt-pitch) + 12px);
   bottom: calc(var(--kbt-floor) + var(--kbt-sa-b) + var(--kbt-btn) + var(--kbt-pitch) + 16px);
   padding: 6px 12px; white-space: nowrap;
   border-radius: 4px; font-size: 10px; letter-spacing: .2em; color: #08131f;
@@ -238,7 +297,10 @@ export class TouchControls {
    * @param {{ enabled?: boolean }} [opts]
    */
   constructor(host, opts = {}) {
-    this.active = false;              // true once a real touch has happened
+    // Whether the pad is live. `Input` reads touch only while this is true, and
+    // it is derived from match state rather than from the first touch — see
+    // `#applyLiveness`.
+    this.active = false;
     this.axis = { x: 0, y: 0 };
     this.held = new Set();
     this.pressed = new Set();
@@ -247,6 +309,8 @@ export class TouchControls {
 
     this._stickId = null;
     this._stickOrigin = { x: 0, y: 0 };
+    /** Top-left of `.kbt-stickzone`, sampled per gesture — see `#placeStick`. */
+    this._zoneOrigin = { x: 0, y: 0 };
     /** Live cluster touches, keyed by touch identifier — a swipe has to survive
      * a second finger landing for overdrive, which a single slot could not. */
     this._drags = new Map();
@@ -264,6 +328,32 @@ export class TouchControls {
     if (!this.supported || opts.enabled === false) return;
 
     this.#mount(host);
+
+    /** Latest phase seen on the bus. Unset until the first match, so the pad
+     * starts inert and the title screen is never under it. */
+    this._phase = null;
+    this._portrait = false;
+    /**
+     * Whether a pad is wanted on this device at all.
+     *
+     * A coarse pointer is a handset: the answer is yes before anything is
+     * touched. Anything that merely *reports* touch support — a laptop with a
+     * touchscreen, whose owner is on the keyboard — has to prove a finger is in
+     * use, and it cannot prove it through the pad, because an inert pad receives
+     * no events. That is the same paradox the `display: none` version had, so
+     * the proof comes from a one-shot listener on the window instead, which
+     * fires whether the pad is hit-testable or not.
+     */
+    this._touchProven = coarse;
+    if (!coarse) {
+      this._onFirstTouch = () => {
+        this._touchProven = true;
+        window.removeEventListener('touchstart', this._onFirstTouch, true);
+        this.#applyLiveness();
+      };
+      window.addEventListener('touchstart', this._onFirstTouch, { capture: true, passive: true });
+    }
+
     // The rotate prompt is for real handsets only. A desktop window dragged
     // narrow is not a device that can be turned, and telling its owner to
     // rotate it would be nonsense.
@@ -273,10 +363,31 @@ export class TouchControls {
       this._orient.addEventListener('change', this._onOrient);
       this.#applyOrientation();
     }
-    // Show immediately on a genuine touch device; on a touch-capable laptop
-    // stay dimmed until a finger actually lands, so a mouse user is not given
-    // a pad they never asked for.
-    if (coarse) this.#wake();
+
+    this._unsub = bus.on('phase', ({ phase }) => {
+      this._phase = phase;
+      this.#applyLiveness();
+    });
+    this.#applyLiveness();
+  }
+
+  /**
+   * Decide whether the pad should be live, from match state rather than from
+   * whoever touched the screen first.
+   *
+   * Revealing on first touch could not work once `kbt-off` started killing
+   * `pointer-events` — which it has to, since an invisible-but-hit-testable
+   * stick catchment covers the lower-left of every front-end screen and was
+   * swallowing the taps for most of the character-select grid. So liveness is
+   * derived instead: in play, on a device that wants a pad.
+   *
+   * Portrait overrides all of it, because the rotate prompt is the one thing
+   * that must appear on a screen the game cannot be played on at all — the
+   * select grid's own layout does not survive a 390px-wide frame either, so
+   * asking for the rotation on the front end is right rather than premature.
+   */
+  #applyLiveness() {
+    this.setLive(this._portrait || (this._touchProven && IN_PLAY_PHASES.has(this._phase)));
   }
 
   #mount(host) {
@@ -332,10 +443,14 @@ export class TouchControls {
     const opt = { passive: false };
 
     this.zone.addEventListener('touchstart', (e) => {
-      this.#wake();
       const t = e.changedTouches[0];
       this._stickId = t.identifier;
       this._stickOrigin = { x: t.clientX, y: t.clientY };
+      // Measured once per gesture, not per move: the catchment cannot be
+      // relaid out while a finger is down on it, and `touchmove` fires often
+      // enough that a rect read there is a forced layout per frame.
+      const z = this.zone.getBoundingClientRect();
+      this._zoneOrigin = { x: z.left, y: z.top };
       this.#placeStick(t.clientX, t.clientY, t.clientX, t.clientY);
       this.zone.classList.add('kbt-live');
       e.preventDefault();
@@ -365,7 +480,6 @@ export class TouchControls {
     // each button: a swipe has to be tracked across button boundaries, and a
     // thumb that starts on 1 and ends on 2 is a gesture, not two presses.
     this.cluster.addEventListener('touchstart', (e) => {
-      this.#wake();
       for (const t of e.changedTouches) {
         const id = this.#limbAt(t.clientX, t.clientY);
         this._drags.set(t.identifier, { x0: t.clientX, y0: t.clientY, limb: id });
@@ -404,44 +518,85 @@ export class TouchControls {
     this.cluster.addEventListener('touchcancel', endCluster, opt);
 
     this.odEl.addEventListener('touchstart', (e) => {
-      this.#wake(); this.#down(5); this.odEl.classList.add('kbt-down'); e.preventDefault();
+      this.#down(5); this.odEl.classList.add('kbt-down'); e.preventDefault();
     }, opt);
     const endOd = (e) => { this.#up(5); this.odEl.classList.remove('kbt-down'); e.preventDefault(); };
     this.odEl.addEventListener('touchend', endOd, opt);
     this.odEl.addEventListener('touchcancel', endOd, opt);
   }
 
-  /** Reveal the pad the first time a finger touches the screen. */
-  #wake() {
-    if (this.active) return;
-    this.active = true;
-    this.root.classList.remove('kbt-off');
+  /**
+   * Show and enable the pad, or hide and disable it. `active` gates whether
+   * `Input` reads touch at all, so releasing it also drops any held button —
+   * otherwise a limb held when a round ended would stay held into the menu.
+   * @param {boolean} live
+   */
+  setLive(live) {
+    const on = !!live;
+    if (on === this.active) return;
+    this.active = on;
+    this.root.classList.toggle('kbt-off', !on);
+    if (!on) {
+      this.held.clear();
+      this.pressed.clear();
+      this.motion = null;
+      this.axis.x = 0;
+      this.axis.y = 0;
+      this._stickId = null;
+      // `_drags`, not a `_swipe` slot: cluster touches have been tracked per
+      // identifier since two fingers had to coexist for overdrive, and leaving
+      // that map populated meant a finger still down when the pad went inert
+      // resolved into a press or a motion the moment it lifted.
+      this._drags.clear();
+      this.zone.classList.remove('kbt-live');
+      for (const [, el] of this.btnEls) el.classList.remove('kbt-down');
+    }
   }
 
-  /** Swap the pad for the rotate prompt while the handset is held upright. */
+  /**
+   * Swap the pad for the rotate prompt while the handset is held upright.
+   * Clearing the inputs is `setLive`'s job on the way out; on the way *in* it
+   * still has to happen here, because nothing can be held through a rotation
+   * the player is being asked to make and a direction left stuck down would
+   * keep driving the fighter behind the prompt.
+   */
   #applyOrientation() {
-    const portrait = this._orient.matches;
-    this.root.classList.toggle('kbt-portrait', portrait);
-    if (portrait) {
-      this.#wake();
-      // Nothing can be held through a rotation the player is being asked to
-      // make, and a direction left stuck down would still be driving the
-      // fighter behind the prompt.
+    this._portrait = this._orient.matches;
+    this.root.classList.toggle('kbt-portrait', this._portrait);
+    if (this._portrait) {
       this.axis.x = 0;
       this.axis.y = 0;
       this.held.clear();
       this._drags.clear();
       this._stickId = null;
     }
+    this.#applyLiveness();
   }
 
+  /**
+   * Draw the floating stick at the thumb.
+   *
+   * The offset is taken against `.kbt-stickzone`, which is what the ring and
+   * nub are actually positioned inside — they are `position: absolute` children
+   * of the catchment, and the catchment is itself positioned, so it is their
+   * containing block. Measuring against `.kbt-root` instead put the ring
+   * exactly `stickzone.top` px *below* the finger: 117px on an 844x390 phone,
+   * and 780px — entirely off the bottom of the screen — in a 1080p window,
+   * where the catchment is capped at 300px tall against a much taller viewport.
+   * The axis was always correct, so this never broke movement; it meant the
+   * primary movement control had no visible feedback anywhere it was drawn.
+   * @param {number} ox touchdown, client space
+   * @param {number} oy touchdown, client space
+   * @param {number} x current position, client space
+   * @param {number} y current position, client space
+   */
   #placeStick(ox, oy, x, y) {
-    const r = this.root.getBoundingClientRect();
-    this.ring.style.transform = `translate(${ox - r.left}px, ${oy - r.top}px) translate(-50%, -50%)`;
+    const o = this._zoneOrigin ?? { x: 0, y: 0 };
+    this.ring.style.transform = `translate(${ox - o.x}px, ${oy - o.y}px) translate(-50%, -50%)`;
     let dx = x - ox, dy = y - oy;
     const len = Math.hypot(dx, dy);
     if (len > FULL_TILT) { dx = (dx / len) * FULL_TILT; dy = (dy / len) * FULL_TILT; }
-    this.nub.style.transform = `translate(${ox - r.left + dx}px, ${oy - r.top + dy}px) translate(-50%, -50%)`;
+    this.nub.style.transform = `translate(${ox - o.x + dx}px, ${oy - o.y + dy}px) translate(-50%, -50%)`;
 
     // Snap to eight directions. A fighting game reads discrete directions, and
     // an analog value here would only be quantised downstream anyway.
@@ -525,6 +680,54 @@ export class TouchControls {
   }
 
   /**
+   * The screen boxes a playing pair of thumbs covers, so anything the player
+   * has to *read* can be kept out of them.
+   *
+   * Two boxes, both derived from geometry rather than guessed. On the right it
+   * is the limb cluster unioned with the overdrive pad — real opaque controls,
+   * so their own rects are the answer. On the left the catchment is 330x273 and
+   * deliberately huge (the point of a floating stick is that there is no target
+   * to find), but a thumb does not cover 330x273; it rests at the corner and
+   * draws a ring there. So the left box is the drawn stick's own worst case —
+   * the ring plus a full deflection of nub travel in each direction — anchored
+   * at the corner the hand comes in from.
+   *
+   * Measured need for this: with a fighter pushed to either wall, damage
+   * callouts project to (821, 184) and (197, 141) on an 844x390 screen, which
+   * are inside the overdrive pad and inside the stick's footprint respectively.
+   *
+   * Measured fresh rather than memoised. A cache here has to be invalidated on
+   * everything that can move the pad — resize, orientation, a safe-area inset
+   * arriving late — and one taken on the first frame of a match, before the
+   * stylesheet that positions the pad has applied, is wrong for the rest of the
+   * round with nothing to correct it. The caller only asks when it actually has
+   * a callout to place, which is a few times a combo rather than every frame, so
+   * three rect reads is the cheaper of the two options as well as the safer one.
+   * @returns {{ left: number, top: number, right: number, bottom: number }[]}
+   *   client-space boxes, empty while the pad is not driving anything
+   */
+  thumbZones() {
+    if (!this.active || !this.root || this.root.classList.contains('kbt-portrait')) return [];
+    const zones = [];
+    const z = this.zone?.getBoundingClientRect();
+    if (z) {
+      const span = (this.ring?.offsetWidth || 118) + FULL_TILT * 2;
+      zones.push({
+        left: z.left, top: Math.max(z.top, z.bottom - span),
+        right: Math.min(z.right, z.left + span), bottom: z.bottom,
+      });
+    }
+    const boxes = [this.cluster, this.odEl].filter(Boolean).map((el) => el.getBoundingClientRect());
+    if (boxes.length) {
+      zones.push({
+        left: Math.min(...boxes.map((b) => b.left)), top: Math.min(...boxes.map((b) => b.top)),
+        right: Math.max(...boxes.map((b) => b.right)), bottom: Math.max(...boxes.map((b) => b.bottom)),
+      });
+    }
+    return zones;
+  }
+
+  /**
    * Called once per tick by `Input`. Clears the edge-triggered sets after they
    * have been read, exactly as the keyboard path does.
    */
@@ -534,6 +737,7 @@ export class TouchControls {
   }
 
   dispose() {
+    this._unsub?.();
     clearTimeout(this._flashT);
     this._orient?.removeEventListener('change', this._onOrient);
     this.root?.remove();
