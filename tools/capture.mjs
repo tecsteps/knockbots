@@ -267,25 +267,35 @@ const SHOTS = [
     // were never captured. The critic's words: "per CRITIC.md I cannot pass
     // what I have not seen rendered, so coverage loss translates directly into
     // a lower score." Every other shot waits for this banner to CLEAR; this one
-    // waits for it to be up. Deliberately the inverse of NO_BANNER.
+    // waits for it to be up.
+    //
+    // Do NOT gate on `.announce-text` textContent. It is always ''. Typeface's
+    // applyKbText renders each word as three mask-image layers over an SVG
+    // glyph path, so the element has no text nodes at any point in the banner's
+    // life — the same mask-layer construction behind the round-12 "IVULKAN"
+    // bug. A first version of this shot gated on textContent, waited out
+    // silently every time, and shuttered wherever the 1.5s animation happened
+    // to be. Caught by a teammate reading the frame rather than the log.
+    // `announce--run` and `data-kind` are set by HUD#advanceAnnounceQueue when
+    // the banner actually starts, so they are honest.
     preRoll: true,
     setup: `window.KB.startMatch(0, 1); window.KB.setPhase('fight');`,
     waitFor: `(() => {
-      const el = document.querySelector('.announce-text');
-      if (!el || !el.textContent.trim()) return false;
-      const layer = el.closest('.announce-layer');
-      return !layer || parseFloat(getComputedStyle(layer).opacity) > 0.6;
+      const b = document.querySelector('.announce-banner');
+      return !!b && b.classList.contains('announce--run') && b.dataset.kind === 'fight';
     })()`,
-    settle: 60,
-    verify: '__kbBanner',
-    prep: `window.__kbBanner = null;
-      (() => {
-        const t = setInterval(() => {
-          const el = document.querySelector('.announce-text');
-          if (el && el.textContent.trim()) { window.__kbBanner = { text: el.textContent.trim() }; clearInterval(t); }
-        }, 16);
-        setTimeout(() => clearInterval(t), 12000);
-      })();`,
+    // announceCycle holds legibly from roughly 26% to 78% of its 1.5s run.
+    settle: 600,
+    // Measure the pixels, not the state that was supposed to produce them.
+    verify: `(() => {
+      const b = document.querySelector('.announce-banner');
+      const inner = document.querySelector('.announce-inner');
+      if (!b || !inner) return null;
+      const r = inner.getBoundingClientRect();
+      const opacity = +parseFloat(getComputedStyle(b).opacity).toFixed(2);
+      return { kind: b.dataset.kind, opacity, ink: [Math.round(r.width), Math.round(r.height)],
+               ok: opacity >= 0.5 && r.width >= 40 };
+    })()`,
   },
   {
     name: '14-victory',
@@ -510,23 +520,6 @@ async function main() {
           .catch(() => console.warn(`[capture] ${shot.name}: WAITED OUT — "${shot.waitFor}" never became true, `
             + 'this frame is not the moment the shot is named for and must not be scored'));
       }
-      if (shot.verify) {
-        // A shot that can report whether it framed its subject must be made to
-        // say so out loud, and the answer rides into the manifest so a score
-        // can never again be defended with a frame nobody checked.
-        const v = await page.evaluate(`window.${shot.verify} ?? null`);
-        verified[shot.name] = v;
-        if (v === null) {
-          console.warn(`[capture] ${shot.name}: SELF-CHECK DID NOT FIRE (${shot.verify}) — `
-            + 'this frame is not the moment the shot is named for and must not be scored');
-        } else if (v.clear === false) {
-          console.warn(`[capture] ${shot.name}: SUBJECT OCCLUDED by ${v.blocker} (${v.gap}m in front) — do not score this frame`);
-        } else if (v.dist) {
-          console.log(`[capture] ${shot.name}: subject clear at ${v.dist}m`);
-        } else {
-          console.log(`[capture] ${shot.name}: verified ${JSON.stringify(v)}`);
-        }
-      }
       if (shot.freezeOnHit) {
         await page.waitForFunction('window.__kbHit && window.__kbHit.frozen', null, { timeout: 15000 })
           .catch(() => console.warn(`[capture] ${shot.name}: no hit landed, frame is not a contact frame`));
@@ -571,6 +564,30 @@ async function main() {
       manifest.push({ name: shot.name, note: shot.note, file: file.replace(/\.png$/, '.jpg') });
       console.log(`[capture] ${shot.name} (tick strip)`);
       continue;
+    }
+
+    // Self-checks run at SHUTTER TIME, not at setup time. A shot that certifies
+    // itself before its settle window has elapsed is certifying a frame nobody
+    // photographed -- which is the same class of mistake this whole block
+    // exists to catch. `verify` is either a window property name or, if it
+    // starts with "(", a live expression evaluated against the frame about to
+    // be taken.
+    if (shot.verify) {
+      const expr = shot.verify.startsWith('(') ? shot.verify : `window.${shot.verify} ?? null`;
+      const v = await page.evaluate(expr).catch((e) => ({ error: e.message.split('\n')[0] }));
+      verified[shot.name] = v;
+      if (v === null || (v && v.error)) {
+        console.warn(`[capture] ${shot.name}: SELF-CHECK DID NOT FIRE (${shot.verify}) — `
+          + 'this frame is not the moment the shot is named for and must not be scored');
+      } else if (v.clear === false) {
+        console.warn(`[capture] ${shot.name}: SUBJECT OCCLUDED by ${v.blocker} (${v.gap}m in front) — do not score this frame`);
+      } else if (v.ok === false) {
+        console.warn(`[capture] ${shot.name}: SELF-CHECK FAILED ${JSON.stringify(v)} — do not score this frame`);
+      } else if (v.dist) {
+        console.log(`[capture] ${shot.name}: subject clear at ${v.dist}m`);
+      } else {
+        console.log(`[capture] ${shot.name}: verified ${JSON.stringify(v)}`);
+      }
     }
 
     await page.screenshot({ path: file });
