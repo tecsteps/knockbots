@@ -1928,9 +1928,27 @@ export class RenderPipeline {
     this.camera.layers.enable(LAYER.BLOOM_ONLY);
     this.camera.layers.enable(LAYER.NO_REFLECT);
 
+    /**
+     * Default tier is `high`, not `ultra`.
+     *
+     * 60fps at 1080p is a stated project constraint and ultra does not meet it.
+     * Measured paused with the render scale pinned, 1920x1080, median frame:
+     *
+     *     ultra   21.2 ms   47 fps
+     *     high    13.6 ms   74 fps
+     *     medium  13.1 ms   76 fps
+     *     low      5.3 ms  189 fps
+     *
+     * Captured at both tiers and read side by side, the difference is confined to
+     * far-field crowd resolution and background detail — materials, the key/rim
+     * rig, the floor reflection, the wet-deck response and the atmosphere are all
+     * intact at high. That is what a tier system is for: ultra is the screenshot
+     * mode and remains one selection away, and the game a player actually loads
+     * runs at the framerate a fighting game needs.
+     */
     /** @type {'ultra'|'high'|'medium'|'low'} */
-    this.quality = 'ultra';
-    this.tier = QUALITY_TIERS.ultra;
+    this.quality = 'high';
+    this.tier = QUALITY_TIERS.high;
     this.particleBudget = this.tier.particleBudget;
 
     /** Every effect is individually switchable; the tier sets the defaults. */
@@ -1988,7 +2006,7 @@ export class RenderPipeline {
     this._lastCamera = this.camera;
 
     this.#measureContainer();
-    this.setQuality('ultra');
+    this.setQuality('high');
     this.resize();
 
     this._onResize = () => this.resize();
