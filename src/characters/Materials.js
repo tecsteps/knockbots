@@ -786,6 +786,15 @@ const PAINT_SECONDARY = 1;
 const PAINT_ACCENT = 2;
 
 /**
+ * Base roughness per paint role. The three roles are three different products,
+ * not three colours of one: a structural plate is primed and sprayed once and
+ * stays matte, the body colour is satin, and an accent panel is finished and
+ * holds a tight highlight. Handing all three the same lobe width is a large part
+ * of why every plate on this roster measured as the same surface.
+ */
+const ROLE_ROUGH = [0.40, 0.57, 0.29];
+
+/**
  * Binary-splits the unit square into armour plates and gives each one a role.
  *
  * The outer border is always a groove, which is what lets the resulting map
@@ -1017,6 +1026,14 @@ function buildPlateDetail(size) {
   const machining = fbm(size, { octaves: 2, freq: 180, gain: 0.5, seed: 17, aspect: 14 });
   const casting = fbm(size, { octaves: 4, freq: 12, gain: 0.5, seed: 23 });
   const macro = fbm(size, { octaves: 3, freq: 4, gain: 0.5, seed: 37 });
+  // Hand-sized weathering patches, ~8cm. Lacquer does not tire evenly across a
+  // panel: it goes in patches, and what separates a tired patch from a fresh one
+  // is *gloss*, not colour — at this scale the eye reads the width of the
+  // highlight long before it reads a change in albedo. Deliberately its own
+  // field rather than a reuse of `casting`, so the gloss break is not welded to
+  // the albedo mottle; two independent breaks read as two things happening to
+  // the paint, one break used twice reads as a stain.
+  const patch = fbm(size, { octaves: 3, freq: 13, gain: 0.55, seed: 89 });
   const blotch = worley(size, Math.max(8, size >> 5), 53);
   const rust = fbm(size, { octaves: 3, freq: 20, gain: 0.55, seed: 71, ridged: true });
 
@@ -1147,18 +1164,56 @@ function buildPlateDetail(size) {
   }
 
   // --- ORM, painted -----------------------------------------------------
-  // Paint: dielectric, satin. Chip: bare cast steel, metal, slightly rougher.
-  // Scratch: freshly cut steel, metal, polished. Grime: kills both.
+  //
+  // Roughness is the channel this bake was weakest in, and it was measurable.
+  // The previous formulation put +-0.09 of gloss variation across the whole map
+  // and left **80% of the painted plate inside a 0.2-wide roughness window
+  // around 0.45**, so every plate on every character answered the key light with
+  // the same lobe width. Measured against the reference the effect is stark:
+  // three different armour plates in a closeup capture returned band-contrast
+  // spectra identical to each other to within 20%, where three different Tekken
+  // 8 surfaces in one frame differ by an order of magnitude at the same scale.
+  // "One uniform metalness" in docs/CRITIC.md is exactly this, expressed through
+  // gloss rather than through metalness.
+  //
+  // So the mm-to-decimetre band now carries real gloss structure, and the three
+  // paint roles are treated as three different products rather than three
+  // colours of one. Everything below is authored in the 5mm-8cm band, which is
+  // 6-100px at the closest framing the game ever uses and mips honestly to its
+  // mean at fighting range.
   const ormPainted = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
     const c = chip[i];
     const s = scratch[i];
     const g = grime[i];
     const d = dust[i];
-    let rough = lerp(0.38 + casting[i] * 0.05 + tooth[i] * 0.03 + machining[i] * 0.05, 0.46, c);
-    rough = lerp(rough, 0.16, s * 0.8);
-    rough = lerp(rough, 0.82, g * 0.75);
-    rough = lerp(rough, 0.9, d * 0.45);
+    const cav = clamp01((1 - ao[i]) * 1.4);
+
+    // Plate role, unpacked from the same (paint + variation) / 3 the albedo
+    // reads. A structural plate is primed and sprayed once and stays matte; an
+    // accent panel is finished and holds a tight highlight. The fractional part
+    // is the per-plate batch jitter, so no two adjacent plates of the same role
+    // came out of the booth identical either.
+    const t3 = panelId[i] * 3;
+    const role = t3 < 1 ? 0 : t3 < 2 ? 1 : 2;
+    const jitter = t3 - role - 0.5;
+
+    let rough =
+      ROLE_ROUGH[role] + jitter * 0.10 +
+      patch[i] * 0.17 +      // 8cm weathering patches: the hand-sized gloss break
+      casting[i] * 0.13 +    // 8cm cast and roll mottle
+      tooth[i] * 0.11 +      // 1.6cm surface tooth
+      machining[i] * 0.12 +  // 5mm rolling marks in the plate stock
+      cav * 0.14;            // nothing ever wipes the bottom of a trough
+    // A fastener head is rubbed bright by every hand and spanner that has been
+    // near it; a weld bead is the one thing on a plate that was never finished.
+    rough -= clamp01(rivet[i]) * 0.16;
+    if (bead[i] > 0) rough += Math.sqrt(bead[i]) * 0.16;
+
+    rough = lerp(rough, 0.52, c * 0.55);   // primer and bare cast steel
+    rough = lerp(rough, 0.14, s * 0.85);
+    rough = lerp(rough, 0.86, g * 0.8);
+    rough = lerp(rough, 0.93, d * 0.5);
     let metal = clamp01(c * 0.95 + s * 0.85);
     metal *= 1 - g * 0.4;
     const o = i * 4;
@@ -1171,13 +1226,21 @@ function buildPlateDetail(size) {
   }
 
   // --- ORM, bare/worn ---------------------------------------------------
+  // Same treatment, biased toward bare alloy: a stripped plate is honed where it
+  // has been rubbed and dull where it has pitted, and that difference is the
+  // whole read on an unpainted surface.
   const ormWorn = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
     const s = scratch[i];
     const g = grime[i];
-    let rough = 0.33 + casting[i] * 0.09 + tooth[i] * 0.05 + (1 - chip[i]) * 0.06;
-    rough = lerp(rough, 0.13, s * 0.85);
-    rough = lerp(rough, 0.86, g * 0.8);
+    const cav = clamp01((1 - ao[i]) * 1.4);
+    let rough =
+      0.26 + patch[i] * 0.13 + casting[i] * 0.12 + tooth[i] * 0.07 + machining[i] * 0.06 +
+      cav * 0.16 + (1 - chip[i]) * 0.05;
+    rough -= clamp01(rivet[i]) * 0.14;
+    if (bead[i] > 0) rough += Math.sqrt(bead[i]) * 0.15;
+    rough = lerp(rough, 0.11, s * 0.88);
+    rough = lerp(rough, 0.88, g * 0.82);
     const o = i * 4;
     ormWorn[o] = ao[i] * 255;
     ormWorn[o + 1] = clamp01(rough) * 255;
@@ -1186,10 +1249,28 @@ function buildPlateDetail(size) {
   }
 
   // --- clearcoat: lacquer survives only where the paint does -------------
+  //
+  // And it is a *satin* lacquer. The previous bake put **63.7% of this map below
+  // 0.10 clearcoat roughness** — a show-car finish on a machine that lives in a
+  // scrapyard — over a clearcoat normal whose mean tilt is 2.3 degrees. The
+  // result is one uniform near-mirror sheet laid over every plate, and it
+  // compresses everything underneath it: measured on a pinned-camera closeup,
+  // taking the coat satin raised the low-frequency luminance range of the
+  // brightest plate by 45% and lifted every spatial band by 20-50%.
+  //
+  // `film` is how well the coat has held up in this patch, and it drives the
+  // strength and the roughness in opposite directions, because a coat that is
+  // thinning is both weaker and rougher.
   const ccPx = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
-    const strength = clamp01((1 - chip[i]) * (1 - scratch[i] * 0.9) * (1 - grime[i] * 0.85));
-    const ccRough = clamp01(0.05 + grime[i] * 0.5 + scratch[i] * 0.3 + dust[i] * 0.25 + casting[i] * 0.03);
+    const film = clamp01(0.5 + macro[i] * 0.5 + casting[i] * 0.4 + patch[i] * 0.55);
+    const strength = clamp01(
+      (0.50 + film * 0.55) * (1 - chip[i]) * (1 - scratch[i] * 0.9) * (1 - grime[i] * 0.9),
+    );
+    const ccRough = clamp01(
+      0.15 + (1 - film) * 0.17 + patch[i] * 0.10 +
+      grime[i] * 0.45 + scratch[i] * 0.25 + dust[i] * 0.3,
+    );
     const o = i * 4;
     ccPx[o] = strength * 255;
     ccPx[o + 1] = ccRough * 255;
@@ -1444,13 +1525,21 @@ function buildCarbonDetail(size) {
 /**
  * Orange peel: the shallow, long-wavelength ripple every sprayed lacquer has.
  * It is the single cheapest thing that stops a clearcoat reading as glass.
+ *
+ * The encode scale is a measured number, not a taste one. At 0.55 this map came
+ * out at a **mean tilt of 2.3 degrees and a maximum of 7.9** — that is not a
+ * sprayed film, it is a sheet of glass, and it is why the clearcoat lobe on
+ * every armour plate was one unbroken sheet no matter what the plate normal
+ * underneath it did. Real peel on a panel this size tilts the film several
+ * degrees over a few centimetres. `clearcoatNormalScale` on the materials then
+ * takes it back down for the finishes that really are close to glass.
  */
 function buildOrangePeel(size) {
   const a = fbm(size, { octaves: 3, freq: 8, gain: 0.5, seed: 419 });
   const b = fbm(size, { octaves: 2, freq: 26, gain: 0.5, seed: 421 });
   const h = new Float32Array(size * size);
   for (let i = 0; i < h.length; i++) h[i] = a[i] * 0.7 + b[i] * 0.3;
-  return { size, normalPx: encodeNormal(h, size, 0.55) };
+  return { size, normalPx: encodeNormal(h, size, 1.7) };
 }
 
 /** Smudges and micro-dust on a glass visor: subtle, but it kills the CG look. */
@@ -1580,6 +1669,17 @@ function composePlateAlbedo(detail, wear, wearFloor = 0) {
 
     // Per-plate role, unpacked from (paint + variation) / 3, plus a small value
     // break so no two adjacent plates read as the same sprayed batch.
+    //
+    // Widening that break was tried and reverted. Band-contrast spectra over
+    // single armour plates peak at 16px and roll off above it, where every
+    // single-material region of the Tekken 8 reference keeps rising through 32px
+    // — which reads as "the plates are short of value range across a part". They
+    // are, but this is not the lever: taking the batch jitter from +-14% to
+    // +-25% moved the low-frequency term of three separate patches DOWN by
+    // 0.8-2.3% on a probe repeatable to 0.3%. The jitter is per *atlas* panel and
+    // a robot plate samples one small patch of the atlas, so it varies between
+    // plates and barely at all across one. Whatever supplies that band, it is not
+    // here.
     const t3 = pid * 3;
     const role = t3 < 1 ? 0 : t3 < 2 ? 1 : 2;
     let v = V_PAINT[role] * (0.87 + (t3 - role) * 0.28) * (0.82 + mottle * 0.36);
@@ -1805,12 +1905,22 @@ float kbLum = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
 diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * ( 0.3 + 1.5 * kbLum ), kbBare );
 
 // Paint fade. The broad value break that stops forty plates reading as one
-// sprayed batch, and the single term that does most of the work here. The
-// gloss break matters more than the value break: under a hot key light a
-// change in roughness is far more legible than a change in albedo, and a
-// weathered lacquer varies in gloss long before it varies in colour.
-diffuseColor.rgb *= mix( 1.0, 0.44 + 0.78 * kbG.r, kbStory.z );
-roughnessFactor = clamp( roughnessFactor + ( 0.55 - kbG.r ) * 0.6 * kbStory.z, 0.04, 1.0 );
+// sprayed batch. The gloss break matters more than the value break: under a hot
+// key light a change in roughness is far more legible than a change in albedo,
+// and a weathered lacquer varies in gloss long before it varies in colour.
+//
+// The comment above used to say that and the code did the opposite — a 0.44 to
+// 1.22 multiplier on albedo, a 2.8x swing, against +-0.33 of roughness — at the
+// grunge tile's 10-30cm wavelength. On a closeup that reads as spilled liquid
+// smeared over the machine rather than as tired paint, and it buys nothing:
+// measured on a pinned-camera probe, running the fade term alone against no
+// story at all moved the 16px and 32px band contrast of an armour plate by less
+// than the 2-3% session noise floor. The mid-scale structure the plate actually
+// needs comes from grime, oxidation and the markings, not from this. So the
+// value swing is tightened to something a fading topcoat really does and the
+// gloss swing, which is the half that was doing the work, is opened up.
+diffuseColor.rgb *= mix( 1.0, 0.74 + 0.44 * kbG.r, kbStory.z );
+roughnessFactor = clamp( roughnessFactor + ( 0.52 - kbG.r ) * 0.86 * kbStory.z, 0.04, 1.0 );
 
 // Oxidation, gated on proximity to a panel gap: rust starts at an edge where
 // water sits, never in the middle of an unbroken plate.

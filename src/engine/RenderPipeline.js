@@ -145,6 +145,108 @@ import { bus } from '../core/Bus.js';
 import { ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, LAYER } from '../core/Constants.js';
 
 // ---------------------------------------------------------------------------
+// Split lighting layers
+//
+// The frame is fill-bound and the dominant term is analytic lights evaluated per
+// fragment over an arena that covers ~85% of the screen. Measured at 1080p,
+// paused, render scale pinned, 2.5s holds, four alternations each:
+//
+//     four per-fighter rim spots removed    -5.04 ms   (23.49 -> 18.46)
+//     two per-fighter key boxes removed     -3.29 ms   (18.45 -> 15.35)
+//     the stage practical removed           -1.23 ms   (15.56 -> 14.28)
+//     all six per-fighter lights removed    -7.34 ms   (21.93 -> 14.51)
+//
+// Those six lights exist to shape two robots that occupy about an eighth of the
+// frame, and seven eighths of their cost is spent lighting a set they were never
+// aimed at. Three filters lights per **camera** — `object.layers.test(
+// camera.layers )` in `WebGLRenderer.projectObject` — so the beauty pass is split
+// in two, with the same camera and two different layer masks:
+//
+//   pass B  arena, background, the planar mirror, lit by the global rig only
+//   pass A  the fighters and every transparent effect, lit by the full rig
+//
+// Arena first so `scene.background` is drawn once, before anything else, and so
+// the floor's `onBeforeRender` builds the mirror while the whole scene is still
+// reachable through its own `enableAll` camera. Fighters and transparents last so
+// they depth-test against the arena and blend over it in their existing
+// `renderOrder`, which is the order they already had when everything was one
+// pass.
+//
+// The layers below have to be *exclusive* — `Layers.test` is a mask overlap, so
+// an object that keeps layer 0 would draw in both passes. Anything moved onto
+// `SPLIT_GEOMETRY_LAYER` therefore loses layer 0, and every light that is not a
+// per-fighter light gains `GLOBAL_LIGHT_LAYER` so pass A can see it without also
+// seeing the arena.
+// ---------------------------------------------------------------------------
+
+/** Geometry drawn in the second (full-rig) half of the beauty pass. */
+export const SPLIT_GEOMETRY_LAYER = 8;
+/** Lights that only ever shine on `SPLIT_GEOMETRY_LAYER`. Set by `Environment`. */
+export const SPLIT_LIGHT_LAYER = 9;
+/** Every other light. Visible to both halves. */
+export const GLOBAL_LIGHT_LAYER = 10;
+/**
+ * Lights the arena half sees and the fighter half does not — the mirror image of
+ * `SPLIT_LIGHT_LAYER`. The set loses the per-fighter rig's spill when the split
+ * turns on, and measured on the hero framing that loss is almost entirely on the
+ * deck: mean floor value 0.67x, crowd 0.97x, wall band 0.95x. A light on this
+ * layer puts the deck back without touching the robots or being paid for twice.
+ */
+export const ARENA_LIGHT_LAYER = 11;
+
+const SPLIT_GEOMETRY_BIT = 1 << SPLIT_GEOMETRY_LAYER;
+const SPLIT_LIGHT_BIT = 1 << SPLIT_LIGHT_LAYER;
+const GLOBAL_LIGHT_BIT = 1 << GLOBAL_LIGHT_LAYER;
+const ARENA_LIGHT_BIT = 1 << ARENA_LIGHT_LAYER;
+
+/**
+ * Name prefixes of the top-level groups whose whole subtree belongs in the
+ * full-rig pass: `Fighter` names its root `fighter<index>`, `EffectsDirector`
+ * names its root `fx`, and `TestHarness.rosterLineup` names each of its ten
+ * `lineup_<id>`.
+ *
+ * A name is a weak contract, so `ScenePass` falls back to a single pass when it
+ * matches none of them — a renamed group costs frames, never correctness. But it
+ * is a *prefix* list rather than an exact one because of what the exact one did:
+ * `lineup_*` was not on it, so the roster shot drew all ten robots in the arena
+ * half and photographed them without the per-fighter rig. They were visibly
+ * flatter, and nothing in the frame time said so. Anything that is a robot, or
+ * is emitted by one, goes here.
+ */
+export const SPLIT_GROUPS = ['fighter', 'lineup', 'fx'];
+
+/**
+ * Puts every object the split moved back on layer 0.
+ *
+ * This is not a tidy-up, it is a correctness requirement, and it is why the
+ * function is module-level rather than a method on the pass that does the
+ * moving. Split geometry is moved *off* layer 0 so the arena half cannot see it,
+ * so any code path that stops rendering through `ScenePass` — dropping to a tier
+ * with no depth buffer replaces it with a stock `RenderPass`, whose camera mask
+ * is the plain one — renders an arena with no fighters and no effects in it.
+ * Losing three milliseconds because a flag went off is a regression; losing both
+ * robots is a black screen with a HUD on it.
+ *
+ * @param {THREE.Scene} scene
+ */
+function restoreSplitLayers(scene) {
+  if (!scene) return;
+  scene.traverse((o) => {
+    if (o.layers.mask & (SPLIT_GEOMETRY_BIT | GLOBAL_LIGHT_BIT)) {
+      o.layers.enable(LAYER.DEFAULT);
+      o.layers.disable(SPLIT_GEOMETRY_LAYER);
+      o.layers.disable(GLOBAL_LIGHT_LAYER);
+    } else if (o.isLight && (o.layers.mask & SPLIT_LIGHT_BIT)) {
+      // The per-fighter lights are the one layer `Environment` owns. Unsplit
+      // they have to light everything again, or the robots go dark.
+      o.layers.enable(LAYER.DEFAULT);
+    } else if (o.isLight && (o.layers.mask & ARENA_LIGHT_BIT)) {
+      o.layers.disable(LAYER.DEFAULT);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // PCSS shadows
 //
 // three r185 offers hardware PCF (5 Vogel taps, fixed radius) or VSM (soft but
@@ -440,6 +542,32 @@ function installPcssShadows() {
  * so it renders at native resolution and degrades by dropping to `high`, which
  * keeps a real 0.78 floor and every effect except the sample counts.
  *
+ * **`high` is the tier that holds 60fps at 1080p, and it is `renderScale` that
+ * moved.** Measured at 1920x1080, simulation paused, adaptive resolution off,
+ * split lighting on, four alternations of 2.5s holds, medians:
+ *
+ *     ultra                       20.98 ms   47.7 fps
+ *     high (renderScale 0.85)     14.92 ms   67.0 fps    IQR of the pair [6.17, 6.25]
+ *
+ * The scale ladder that picked 0.85, taken on ultra against a pinned 1.0 arm:
+ *
+ *     renderScale 1.00   20.4 ms   49.0 fps
+ *     renderScale 0.90   17.9 ms   55.9 fps
+ *     renderScale 0.85   16.7 ms   60.0 fps
+ *     renderScale 0.80   15.4 ms   64.9 fps
+ *
+ * That is a frame of **4.2ms fixed plus 16.2ms proportional to shaded pixels**.
+ * 0.85 crosses 16.7ms on ultra's sample counts alone; on `high`'s it lands at
+ * 14.9, and the ~1.8ms of slack is deliberate — every number on this page is
+ * measured with the simulation **paused**, and a live round costs more than a
+ * paused one. `minScale` 0.72 is what spends that slack when a round does.
+ *
+ * It used to be 0.95, which measures 19.0ms. Nothing in this table would reach
+ * 60 without the split beauty pass: before it, 0.85 was a 54fps setting. Every
+ * effect stays on at ultra's sample counts minus a few taps, so the whole
+ * difference a player sees is 1632x918 resampled to 1920x1080 with SMAA on the
+ * far side of it.
+ *
  * @type {Record<string, QualityTier>}
  */
 export const QUALITY_TIERS = {
@@ -450,7 +578,7 @@ export const QUALITY_TIERS = {
     grade: true, smaa: true, particleBudget: 1.0,
   },
   high: {
-    renderScale: 0.95, minScale: 0.78, shadowMapSize: 2560, pcss: true,
+    renderScale: 0.85, minScale: 0.72, shadowMapSize: 2560, pcss: true,
     depth: true, ao: true, aoSamples: 11,
     bloom: true, dof: true, dofTaps: 14, motionBlur: true, mbTaps: 8,
     grade: true, smaa: true, particleBudget: 0.8,
@@ -637,6 +765,126 @@ class ScenePass extends Pass {
      */
     this.prepassMinScreenRadius = 1.0;
     this._sphere = new THREE.Sphere();
+
+    /**
+     * Split the beauty pass so the arena is not lit by the per-fighter rig.
+     * See the note on `SPLIT_GEOMETRY_LAYER`. Gated on `depthPrepass` by
+     * `RenderPipeline`, because the prepass is also what puts the fighters into
+     * the shadow map before either half of the split runs.
+     * @type {boolean}
+     */
+    this.splitLighting = false;
+    this.splitGroups = SPLIT_GROUPS;
+    /**
+     * Image-based lighting multiplier for the arena half only.
+     *
+     * The set loses more than diffuse when the per-fighter rig stops reaching
+     * it. Measured on the hero framing, the deck fell to **0.67x** while the
+     * crowd held 0.98x and the barrier 0.96x — the loss is concentrated on the
+     * one surface in the arena that is polished, because what those two
+     * `RectAreaLight` key boxes were really doing to the floor was *reflecting*
+     * in it. A hemisphere light cannot put that back: swept from 0 to 100x the
+     * mood's fill it takes the deck only from 0.67x to 0.85x and overshoots the
+     * crowd to 1.09x and the barrier to 1.13x on the way, because a diffuse
+     * irradiance term barely registers on a metal deck and lands squarely on
+     * matte crowd cards. That measurement is why there is no hemisphere here.
+     *
+     * `scene.environmentIntensity` is the right knob and it is free: three
+     * folds it into `envMapIntensity` when it refreshes a material's uniforms,
+     * so raising it between the two halves of the pass costs one property write
+     * per frame and changes no shader — measured at **0.03ms, IQR [0.00, 0.06]**.
+     * It lifts the deck's reflection of the light banks, which is the same cue by
+     * a different route. Swept against the unsplit frame:
+     *
+     *     boost   deck    crowd   barrier
+     *     1.0     0.67x   0.99x   0.97x
+     *     1.3     0.72x   1.02x   0.99x
+     *     1.6     0.76x   1.01x   0.99x
+     *     1.9     0.80x   1.02x   1.01x
+     *     2.0     0.81x   1.02x   1.01x
+     *
+     * 1.9 is where the rest of the set is back inside the ~2% run-to-run drift
+     * and the deck has taken back two fifths of what it lost. It does not go
+     * further: what is left is not a level, it is the *shape* of the pool the
+     * two key boxes threw around each fighter, and image-based lighting from a
+     * static cube cannot follow a robot around the pit. `shots/r11-split/
+     * 06-stage-wide.png` against `shots/06-stage-wide.png` is what that costs,
+     * and it is the one thing the split visibly takes. The cheap way to put it
+     * back is an unlit gradient decal on the deck under each fighter, which
+     * belongs to `Stage`, not here.
+     */
+    this.arenaEnvBoost = 1.9;
+    this._splitReady = false;
+    this._classified = false;
+  }
+
+  /** @see restoreSplitLayers */
+  #unclassify() {
+    restoreSplitLayers(this.scene);
+    this._classified = false;
+  }
+
+  /**
+   * Sorts the scene onto the two layer sets, once per frame. Idempotent and
+   * cheap — a mask test rejects anything already classified — and repeated every
+   * frame rather than once at build time because the arena, the effects director
+   * and the fighters all add meshes after `init`.
+   *
+   * Three rules, in order:
+   *
+   *   - **Lights.** Anything `Environment` has already put on
+   *     `SPLIT_LIGHT_LAYER` is left alone. Every other light — including the
+   *     impact and wall-flash points that `EffectsDirector` owns — gains
+   *     `GLOBAL_LIGHT_LAYER` and loses layer 0, so the fighter half of the pass
+   *     can ask for "all the global lights" without also asking for "all the
+   *     arena".
+   *   - **The named subtrees.** `fighter0`, `fighter1` and `fx` in full.
+   *     Effects have to travel with the fighters rather than with the set: they
+   *     are transparent, they are emitted at contact, and drawing them in the
+   *     arena half would put every spark *behind* the robot that threw it.
+   *   - **Transparent meshes anywhere else.** The light shafts, the deck haze
+   *     and the floor pools blend over the fighters today because three sorts
+   *     all transparency after all opacity. Leaving them in the arena half would
+   *     silently move them behind the fighters, so they move too.
+   *
+   * A mesh that is not on layer 0 is never reclassified. That is what keeps the
+   * apron and the floor decals — which live on `LAYER.NO_REFLECT` alone so the
+   * mirror can exclude them — out of a layer the mirror does not exclude.
+   */
+  #classify() {
+    let found = 0;
+    for (const root of this.scene.children) {
+      const name = root.name;
+      if (!name || !this.splitGroups.some((p) => name.startsWith(p))) continue;
+      found++;
+      root.traverse((o) => {
+        if (o.layers.mask & SPLIT_GEOMETRY_BIT) return;
+        if (!(o.layers.mask & 1)) return;
+        o.layers.enable(SPLIT_GEOMETRY_LAYER);
+        o.layers.disable(LAYER.DEFAULT);
+      });
+    }
+    this._splitReady = found > 0;
+    if (!found) return;
+    this._classified = true;
+
+    this.scene.traverse((o) => {
+      if (o.isLight) {
+        if (!(o.layers.mask & (SPLIT_LIGHT_BIT | ARENA_LIGHT_BIT))) o.layers.enable(GLOBAL_LIGHT_LAYER);
+        o.layers.disable(LAYER.DEFAULT);
+        return;
+      }
+      if (!o.isMesh && !o.isPoints && !o.isLine) return;
+      if (o.layers.mask & SPLIT_GEOMETRY_BIT) return;
+      if (!(o.layers.mask & 1)) return;
+      const m = o.material;
+      const transparent = Array.isArray(m)
+        ? m.some((x) => x && x.transparent === true)
+        : !!(m && m.transparent === true);
+      if (!transparent) return;
+      o.layers.enable(SPLIT_GEOMETRY_LAYER);
+      o.layers.disable(LAYER.DEFAULT);
+    });
   }
 
   /**
@@ -685,11 +933,19 @@ class ScenePass extends Pass {
    * object rather than from the material, so the fighters deform identically
    * under the override.
    */
-  #prepass(renderer) {
+  #prepass(renderer, split) {
     const hidden = this._prepassHidden;
     hidden.length = 0;
     const cam = this.camera;
     const minR = this.prepassMinScreenRadius;
+    // The prepass is the frame's first `renderer.render`, which is the one that
+    // rebuilds the shadow map, and with the split active the fighters and the
+    // whole light rig have moved off layer 0. Widen the mask for the duration or
+    // the map is drawn from an arena with no robots in it and no light to draw
+    // it from. It also has to see the fighters to lay their depth: they are now
+    // drawn last, so without it the arena behind them is shaded and thrown away.
+    const originalMask = cam.layers.mask;
+    if (split) cam.layers.mask = originalMask | SPLIT_GEOMETRY_BIT | SPLIT_LIGHT_BIT | GLOBAL_LIGHT_BIT;
     // Screen radius of a bounding sphere, as a fraction of half the viewport
     // height: r / (distance * tan(fov/2)). Cheap, and conservative for a sphere
     // straddling the near plane, which is the case we want to keep anyway.
@@ -711,6 +967,11 @@ class ScenePass extends Pass {
         // it, so it is the cheapest possible thing to leave out.
         || o.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender;
       if (skip) { o.visible = false; hidden.push(o); return; }
+      // Split geometry is drawn after the arena, so its depth is worth having
+      // however small the plate is — that is the whole reason the second half of
+      // the pass is cheap. The screen-radius knee below was measured with the
+      // fighters interleaved with the set, where it was correct.
+      if (split && (o.layers.mask & SPLIT_GEOMETRY_BIT)) return;
       if (minR > 0 && o.geometry) {
         if (o.geometry.boundingSphere === null) o.geometry.computeBoundingSphere();
         const bs = o.geometry.boundingSphere;
@@ -728,8 +989,47 @@ class ScenePass extends Pass {
     this.scene.overrideMaterial = this._depthOnly;
     renderer.render(this.scene, this.camera);
     this.scene.overrideMaterial = prevOverride;
+    cam.layers.mask = originalMask;
     for (const o of hidden) o.visible = true;
     hidden.length = 0;
+  }
+
+  /**
+   * The beauty pass, in two halves against one depth buffer.
+   *
+   * The camera's own `layers` mask is swapped rather than a pair of cloned
+   * cameras being kept in sync: `Layers.test` is read at project time, and a
+   * clone would need its projection, its world matrix, its near/far and its
+   * `matrixWorldInverse` copied every frame for nothing. It is restored before
+   * returning, so `FightCamera` and the reflector never see the swap.
+   *
+   * `scene.background` is nulled for the second half. Three renders the
+   * background as a box with `depthTest: false` unshifted to the front of the
+   * opaque list, so leaving it set would repaint the frame over the arena that
+   * had just been drawn.
+   */
+  #renderSplit(renderer) {
+    const cam = this.camera;
+    const original = cam.layers.mask;
+    const arenaMask =
+      (original & ~(SPLIT_GEOMETRY_BIT | SPLIT_LIGHT_BIT)) | GLOBAL_LIGHT_BIT | ARENA_LIGHT_BIT;
+    const fighterMask = SPLIT_GEOMETRY_BIT | SPLIT_LIGHT_BIT | GLOBAL_LIGHT_BIT;
+    const background = this.scene.background;
+    const env = this.scene.environmentIntensity;
+    try {
+      cam.layers.mask = arenaMask;
+      if (this.arenaEnvBoost !== 1) this.scene.environmentIntensity = env * this.arenaEnvBoost;
+      renderer.render(this.scene, this.camera);
+      renderer.autoClear = false;
+      this.scene.background = null;
+      this.scene.environmentIntensity = env;
+      cam.layers.mask = fighterMask;
+      renderer.render(this.scene, this.camera);
+    } finally {
+      this.scene.background = background;
+      this.scene.environmentIntensity = env;
+      cam.layers.mask = original;
+    }
   }
 
   /** Previous-frame depth copy, safe to sample from materials in the scene. */
@@ -750,6 +1050,16 @@ class ScenePass extends Pass {
     // EffectComposer turns autoClear off for the whole chain; the beauty pass
     // is the one draw in it that genuinely needs a cleared colour and depth.
     const prevAutoClear = renderer.autoClear;
+    // Unconditional, not guarded on "did *this* pass split the scene". A quality
+    // change builds a fresh `ScenePass`, and a fresh pass remembers nothing —
+    // guarded on its own `_classified` it left both fighters and every effect
+    // stranded on a layer its camera could not see, and the frame lost 69 draws
+    // and 191k triangles while measuring 6.5ms faster. A per-frame traverse of
+    // ~130 objects that finds nothing to do costs microseconds; getting this
+    // wrong costs the robots.
+    if (this.splitLighting) this.#classify();
+    else this.#unclassify();
+    const split = this.splitLighting && this._splitReady;
     renderer.autoClear = true;
     renderer.setRenderTarget(this.target);
     if (this.depthPrepass) {
@@ -761,11 +1071,12 @@ class ScenePass extends Pass {
       // global flags. Leaving `autoClearDepth` false let the reflection target
       // accumulate depth across frames, which put wrong occlusion into the one
       // surface the whole pass exists to serve.
-      this.#prepass(renderer);
+      this.#prepass(renderer, split);
       renderer.autoClear = false;
       renderer.clearColor();
     }
-    renderer.render(this.scene, this.camera);
+    if (split) this.#renderSplit(renderer);
+    else renderer.render(this.scene, this.camera);
     renderer.autoClear = prevAutoClear;
 
     // Snapshot here, before any post pass has run: these are the counters the
@@ -1626,7 +1937,7 @@ export class RenderPipeline {
     this.effects = {
       shadows: true, ao: true, bloom: true, dof: true,
       motionBlur: true, grade: true, smaa: true, adaptiveResolution: true,
-      depthPrepass: true,
+      depthPrepass: true, splitLighting: true,
     };
 
     /**
@@ -1838,6 +2149,11 @@ export class RenderPipeline {
     passes.output = new OutputPass();
     composer.addPass(passes.output);
 
+    // A chain without a `ScenePass` has nobody to undo the split's layer moves,
+    // and its `RenderPass` draws through the plain camera mask. Undo them here,
+    // before the first frame through the new chain can photograph an empty pit.
+    if (!passes.scene) restoreSplitLayers(this.scene);
+
     this.composer = composer;
     this._passes = passes;
 
@@ -1897,7 +2213,7 @@ export class RenderPipeline {
     // Neither of these owns a pass, so neither needs the chain rebuilding —
     // and rebuilding it reallocates two full-resolution half-float targets and
     // recompiles every post shader, which is not something a toggle should do.
-    if (name === 'adaptiveResolution' || name === 'depthPrepass') return;
+    if (name === 'adaptiveResolution' || name === 'depthPrepass' || name === 'splitLighting') return;
     this.#buildComposer();
   }
 
@@ -2127,6 +2443,9 @@ export class RenderPipeline {
       p.scene.scene = scene;
       p.scene.camera = camera;
       p.scene.depthPrepass = this.effects.depthPrepass;
+      // Gated on the prepass, which is the render that puts the fighters and the
+      // light rig into the shadow map before either half of the split runs.
+      p.scene.splitLighting = this.effects.splitLighting && this.effects.depthPrepass;
     }
     if (p.ao) { p.ao.scene = scene; p.ao.camera = camera; }
     if (p.dof) {

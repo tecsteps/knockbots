@@ -144,16 +144,16 @@ export const CROUCH = {
   hand_R: [-16, 0, 0],
 
   hip_L: [-72, 0, 18],
-  knee_L: [103, 0, 0],
-  ankle_L: [-31, -4, 0],
+  knee_L: [113, 0, 0],
+  ankle_L: [-41, -4, 0],
 
   hip_R: [-40, 0, -28],
-  knee_R: [110, 0, 0],
-  ankle_R: [-60, 17, 0],
+  knee_R: [112, 0, 0],
+  ankle_R: [-62, 17, 0],
 };
 
 /** Pelvis height offset that goes with CROUCH. */
-export const CROUCH_Y = -0.36;
+export const CROUCH_Y = -0.356;
 
 const ZERO = [0, 0, 0];
 

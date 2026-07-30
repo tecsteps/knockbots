@@ -72,6 +72,7 @@
 
 import * as THREE from 'three';
 import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+import { SPLIT_LIGHT_LAYER } from './RenderPipeline.js';
 import { ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, LAYER } from '../core/Constants.js';
 
 /** Height the environment probes are baked from — a robot's chest. */
@@ -1342,6 +1343,25 @@ export class Environment {
     this.fillLight = new THREE.HemisphereLight(0xffffff, 0x202020, 0.7);
     this._rig.add(this.fillLight);
 
+    // There is deliberately no arena-only fill light here, and the reason is a
+    // measurement rather than an omission.
+    //
+    // `RenderPipeline`'s split beauty pass stops the per-fighter rig reaching
+    // the set, and on the hero framing that costs the deck 0.67x of its mean
+    // value while the crowd holds 0.98x and the barrier 0.96x. An arena-only
+    // `HemisphereLight` on `ARENA_LIGHT_LAYER` looked like the obvious repair —
+    // nearly free, and weighted toward up-facing surfaces, which is where the
+    // loss is. Swept from 0 to 100x the mood's own fill it moved the deck from
+    // 0.67x to only **0.85x**, and by then it had pushed the crowd to 1.09x and
+    // the barrier to 1.13x. It was removed rather than tuned.
+    //
+    // The reason it fails is the reason the deck lost the light in the first
+    // place: what the two `RectAreaLight` key boxes were doing to a polished
+    // metal plate was *reflecting* in it. That is a specular term, and a
+    // hemisphere has no specular lobe. The repair that works is
+    // `RenderPipeline.arenaEnvBoost`, which raises image-based lighting for the
+    // arena half only — same cue, no light, no cost.
+
     for (let i = 0; i < PRACTICAL_COUNT; i++) {
       const p = this.params.practicals[i];
       const light = new THREE.RectAreaLight(0xffffff, 1, p.size.x, p.size.y);
@@ -1367,6 +1387,14 @@ export class Environment {
         const l = new THREE.SpotLight(0xffffff, 0, RIM.range, RIM.angle, RIM.penumbra, RIM.decay);
         l.name = `fighterRim${i}${k === 0 ? 'A' : 'B'}`;
         l.castShadow = false;
+        // Exclusively on the split layer: this light exists to shape one robot,
+        // and evaluating it over the 85% of the frame that is arena costs 1.26ms
+        // at 1080p for nothing anyone looks at. `RenderPipeline` draws the
+        // fighters in a second half of the beauty pass that can see this layer;
+        // the arena half cannot. See `SPLIT_GEOMETRY_LAYER` there for the
+        // measurements and for what the arena gives up (the spill, and only the
+        // spill).
+        l.layers.set(SPLIT_LIGHT_LAYER);
         l.visible = k < tier.rims;
         l.target.position.set(0, RIM.aimHeight, 0);
         this._rig.add(l, l.target);
@@ -1375,6 +1403,7 @@ export class Environment {
 
       const box = new THREE.RectAreaLight(0xffffff, 0, KEY_BOX.width, KEY_BOX.height);
       box.name = `fighterKeyBox${i}`;
+      box.layers.set(SPLIT_LIGHT_LAYER);
       box.visible = tier.boxes > 0;
       this._rig.add(box);
 
