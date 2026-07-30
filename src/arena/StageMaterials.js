@@ -790,6 +790,20 @@ export function makeArenaMaterials(opts = {}) {
       roughness: 1, metalness: 1, envMapIntensity: 0.8, dithering: true,
     }),
 
+    // Left where it is on a measurement. The crowd band is the region furthest
+    // below the Tekken 8 reference on local contrast, and this fence covers the
+    // whole width of it, so brightening the wire looked like the cheapest way to
+    // put high-frequency detail across all of it: colour 0x2a2d31 -> 0x3a4048,
+    // roughness 0.55 -> 0.34, envMapIntensity 0.9 -> 1.7. Three captures at the
+    // wide framing against three of the unchanged build, mean 8x8 luma standard
+    // deviation over the background band:
+    //
+    //     unchanged  0.0287        brightened wire  0.0286
+    //
+    // No effect at all, against a run-to-run spread of 0.0013 — the wire is too
+    // thin at twelve metres for its shading to survive to the pixel, so all the
+    // change does is veil the crowd behind it slightly more. Reverted rather
+    // than kept, because it moves the look without moving the number.
     chainLink: new THREE.MeshStandardMaterial({
       name: 'arena.chainLink',
       color: 0x2a2d31, alphaMap: textures.chainAlpha, alphaTest: 0.45,

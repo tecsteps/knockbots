@@ -1010,8 +1010,15 @@ export class Animator {
   /**
    * Drain the root-motion delta accumulated since the last call.
    * The vector is in the fighter's LOCAL space using the clip convention from
-   * AnimationFormat: -Z is forward, +X is the fighter's left, +Y is up. Fighter
+   * AnimationFormat: +Z is forward, +X is the fighter's left, +Y is up. Fighter
    * rotates it by `facing` before adding it to the physical position.
+   *
+   * This comment said -Z until round 12. The CODE was always right and needs no
+   * change: `Fighter` applies the vector with `yawForFacing(facing)`, which is
+   * `facing * FORWARD_SIGN * PI/2`, so for fighter 0 (at x = -1.9, facing +X)
+   * local +Z maps to world +X — toward the opponent. Verified against the clip
+   * data too: `loco.dashFwd`'s root track ends at z = +0.94 and `dashBack` at
+   * z = -1.08. Only the prose dissented.
    * @returns {{x:number, y:number, z:number, yaw:number}}
    */
   consumeRootMotion() {
@@ -1120,7 +1127,10 @@ export class Animator {
     // perpendicular to it and to up, which is what makes a hook spin the torso
     // and an uppercut throw the head back.
     _v0.copy(dir);
-    if (_v0.lengthSq() < 1e-8) _v0.set(0, 0, -1);
+    // Forward is +Z, not -Z. See the note on `hitReaction` below: this branch
+    // is unreachable from the only caller, so correcting it changes nothing on
+    // screen — it is corrected so that it stays right if a second caller appears.
+    if (_v0.lengthSq() < 1e-8) _v0.set(0, 0, 1);
     _v0.normalize();
     _v1.crossVectors(_AXIS_Y, _v0);
     if (_v1.lengthSq() < 1e-6) _v1.copy(_AXIS_X); else _v1.normalize();
@@ -1150,6 +1160,19 @@ export class Animator {
    * second hit lands on a body that has not finished absorbing the first, and the
    * envelope should reflect the newer blow, not average the two.
    *
+   * On the degenerate-direction fallback below, which two rounds of notes have
+   * flagged as a live defect: **it never fires, and it cannot.** Both this method
+   * and `impact()` above have exactly one caller in the codebase,
+   * `Fighter.#reactToBlow`, and that caller already guarantees a unit vector —
+   * it copies `p.velocity`, and where the swept speed is under 1e-4 it
+   * substitutes `(attacker.facing, 0, 0)`, whose components are +1 or -1 and
+   * never 0. `applyAxisAngle` then preserves the length. So `dir.lengthSq()` is
+   * 1 on every hit in the game, blocked or not, and the constant is dead code.
+   * It has been corrected from -Z to +Z anyway, because the rig faces +Z and a
+   * future caller passing a raw vector should not inherit the old error — but
+   * the correction is provably invisible, and the "hits react backwards" theory
+   * it was supposed to explain has to be looked for somewhere else.
+   *
    * @param {Object} o
    * @param {THREE.Vector3} o.dir  direction the blow travels, model space
    * @param {number} [o.force]     0..1 for a jab, up to ~1.6 for a launcher
@@ -1159,7 +1182,7 @@ export class Animator {
     const H = this.hitLayer;
     if (!H.enabled || !(force > 0)) return;
     _v0.copy(dir);
-    if (_v0.lengthSq() < 1e-8) _v0.set(0, 0, -1);
+    if (_v0.lengthSq() < 1e-8) _v0.set(0, 0, 1);   // unreachable; see above
     _v0.normalize();
     // Torque about the horizontal axis perpendicular to the blow, plus a twist
     // about up so a hook spins the trunk instead of only tipping it. Kept as one

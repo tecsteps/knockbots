@@ -105,6 +105,11 @@
   --kb-shadow-panel: 0 0.6em 2.2em rgba(0, 0, 0, 0.55), inset 0 0 0 1px var(--kb-line);
   --kb-glow-accent: 0 0 1.4em rgba(255, 138, 42, 0.55);
   --kb-glow-cyan: 0 0 1.4em rgba(63, 224, 255, 0.5);
+  /* Hard 8-direction silhouette stroke — see the callout rules for why a
+   * soft drop-shadow alone isn't enough contrast insurance. */
+  --kb-callout-stroke:
+    0.05em 0 0 #000, -0.05em 0 0 #000, 0 0.05em 0 #000, 0 -0.05em 0 #000,
+    0.05em 0.05em 0 #000, -0.05em -0.05em 0 #000, 0.05em -0.05em 0 #000, -0.05em 0.05em 0 #000;
 }
 
 @media (prefers-color-scheme: light) {
@@ -527,13 +532,44 @@
 }
 .hp-block--p2 .nameplate { flex-direction: row-reverse; }
 
+/*
+ * `box-sizing: content-box`, against the `#ui *` reset, is load-bearing here
+ * and nowhere else `.kb-text` is used. `applyKbText` sets `el.style.width`
+ * to the glyph mask's own undistorted aspect ratio with no notion that this
+ * one instance also carries a border + padding; under the inherited
+ * border-box sizing that width *includes* them, so the glyph itself was
+ * being squeezed narrower by the exact width of the gutter meant to hold it
+ * clear of the identity-colour bar. Content-box restores the glyph to its
+ * true width and lets border/padding add outside it instead of eating into
+ * it — the fix the sibling rule below depends on.
+ */
 .nameplate-name.kb-text {
   min-width: 0;
   max-width: 100%;
   height: 1.05em;
+  box-sizing: content-box;
 }
 .hp-block--p1 .nameplate-name { border-left: 0.18em solid var(--kb-p1); padding-left: 0.4em; }
 .hp-block--p2 .nameplate-name { border-right: 0.18em solid var(--kb-p2); padding-right: 0.4em; }
+/*
+ * The three mask layers are `position: absolute; inset: 0`, and an
+ * absolutely-positioned box's containing block is its ancestor's *padding*
+ * box — which already includes the padding area. `inset: 0` therefore fills
+ * padding and all, so the 0.4em gutter above rendered as zero pixels: the
+ * glyph's own ink ran flush against the identity bar, and on a letter whose
+ * first stroke is a tall vertical/near-vertical (I, N, K, V's own left leg,
+ * ...) the bar and the stroke fused into what read as an extra glyph — a
+ * name like VULKAN misread as "IVULKAN" at a glance, not a one-off cosmetic
+ * nit but a legibility bug in the one piece of text a player reads every
+ * frame of a match. Re-inset the mask layers by the padding themselves so
+ * they stop at the same edge an ordinary padded child would.
+ */
+.hp-block--p1 .nameplate-name .kb-text__shadow,
+.hp-block--p1 .nameplate-name .kb-text__body,
+.hp-block--p1 .nameplate-name .kb-text__gloss { left: 0.4em; }
+.hp-block--p2 .nameplate-name .kb-text__shadow,
+.hp-block--p2 .nameplate-name .kb-text__body,
+.hp-block--p2 .nameplate-name .kb-text__gloss { right: 0.4em; }
 
 /*
  * Head-and-shoulders portrait, rendered once per match by `HUD#capturePortrait`
@@ -920,20 +956,32 @@
   white-space: nowrap;
   will-change: transform, opacity;
 }
+/*
+ * `.callout`s are photographed over whatever the fight happens to be doing at
+ * the moment they spawn — very often a hit spark or an emissive flash, which
+ * is the brightest thing the renderer draws all match. A single soft
+ * drop-shadow (the old recipe) only darkens the few pixels directly under
+ * the glyph; against a near-white spark it loses almost all contrast right
+ * where the number most needs to read. `--kb-callout-stroke` is a full hard
+ * outline — eight 0-blur offsets, the same silhouette-tracing idea
+ * `.announce-inner` uses for "FIGHT"/"K.O." — so the numeral stays legible
+ * against a light background and a dark one alike, not just the dark one it
+ * happened to be tuned against.
+ */
 .callout--damage {
   font-family: var(--kb-font-mono);
   font-size: max(15px, 1.3em);
   color: #fff2d6;
-  text-shadow: 0 0.08em 0.2em rgba(0, 0, 0, 0.7), 0 0 0.6em rgba(255, 138, 42, 0.5);
+  text-shadow: var(--kb-callout-stroke), 0 0.1em 0.22em rgba(0, 0, 0, 0.85), 0 0 0.6em rgba(255, 138, 42, 0.5);
   animation: calloutDamage 0.85s cubic-bezier(0.15, 0.7, 0.3, 1) forwards;
 }
-.callout--chip { color: var(--kb-grey); font-size: max(13px, 1.05em); text-shadow: 0 0.08em 0.2em rgba(0,0,0,0.7); animation: calloutDamage 0.7s ease-out forwards; }
+.callout--chip { color: var(--kb-grey); font-size: max(13px, 1.05em); text-shadow: var(--kb-callout-stroke), 0 0.08em 0.2em rgba(0,0,0,0.7); animation: calloutDamage 0.7s ease-out forwards; }
 .callout--counter {
   font-size: max(13px, 1.05em);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--kb-danger-soft);
-  text-shadow: 0 0 0.6em rgba(255, 59, 78, 0.8);
+  text-shadow: var(--kb-callout-stroke), 0 0 0.6em rgba(255, 59, 78, 0.8);
   animation: calloutCounter 0.9s cubic-bezier(0.2, 0.9, 0.25, 1) forwards;
 }
 @keyframes calloutDamage {

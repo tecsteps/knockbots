@@ -1065,6 +1065,34 @@ export const KICK_CLIPS = {
 
   // i22. Full 360 spinning back kick. The head snaps around on tick 9 and
   // stays locked on the target while the body catches up.
+  //
+  // THIS CLIP KICKS WITH THE RIGHT LEG AND EVERYTHING THAT USES IT SAYS LEFT.
+  // Measured through the rig at the declared impact tick: foot_R travels 1.02m
+  // from stance, foot_L travels 0.14m. hip_R reaches Z = -70 deg (fully abducted)
+  // with knee_R straight at 2 deg, while the left leg stays under the body. The
+  // right leg is unambiguously the kicking leg.
+  //
+  // Against that, four independent declarations all name the LEFT foot: this
+  // clip's own `impact.bone` (foot_L), the hitbox anchor of all thirteen moves
+  // that play it (foot_L + ankle_L, across all four archetypes), the `trail`
+  // bone on ten of them (foot_L), and the input convention on nine (b+3 / bb+3,
+  // where 3 is the left kick). So on every spin kick in the game the hit capsule
+  // and the weapon ribbon sit on the planted pivot foot while the other leg
+  // swings through the opponent. It is the single most-used mismatch found by a
+  // limb audit of all 191 moves; the other 26 are one-off overrides.
+  //
+  // Not fixed here, and deliberately. The clip is internally CORRECT: the root
+  // yaws -360, which turns the fighter toward its own right, and the leg that
+  // trails a right-hand turn and comes around last is the right leg. Swapping
+  // the leg tracks alone would make the kick fight the spin, and a full mirror
+  // is barred because tick 0 and tick 45 are the shared STANCE, which is not
+  // symmetric (hips -27.8 Y, shoulder_L -35/0/-36 against shoulder_R -22/0/+36),
+  // so mirroring would pop every entry from and exit to idle. The correct repair
+  // is one line per consumer in Moves.js — FOOT_L -> FOOT_R and trail 'foot_L'
+  // -> 'foot_R' — which is not this directory's file. `impact.bone` is left at
+  // foot_L to match those consumers; nothing reads it at runtime (only
+  // `impact.tick` reaches `Fighter.retimeFor`), so it is documentation, and
+  // changing it here would only hide the disagreement.
   'k.spinKick': {
     name: 'Spin Kick',
     duration: 45, blendIn: 4, blendOut: 10,

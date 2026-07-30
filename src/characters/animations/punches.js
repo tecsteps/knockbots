@@ -173,6 +173,83 @@
  * measured WORSE when restructured (0.32 -> 0.11) and keeps its authored
  * release. `k.stomp` and `k.diveKick` are gravity-driven: their contact speed is
  * set by the pelvis-height track, which the two root rules above forbid moving.
+ *
+ * Re-measured in round 12, that list is five, not three, and the worst entry is
+ * not on it: `sp.overdriveStart` lands at 0.29 of peak, below `k.sweep`'s 0.32.
+ * Its striking hand travels 11.5cm on the contact tick and 22.9cm on the one
+ * after, and its along-axis reach still climbs from 0.434m to 0.455m past
+ * contact — the declared `impact.tick` of 9 sits one tick before the blow
+ * actually arrives. `k.spinKick` is the fifth at 0.50. The mean across all 34
+ * clips that declare an impact is 0.863.
+ *
+ * ---------------------------------------------------------------------------
+ * The four fast punches DO have a readable wind-up. The metric was wrong.
+ * ---------------------------------------------------------------------------
+ * Round 11 closed by naming "p.jab, p.jabAlt, p.straight and p.elbow have zero
+ * wind-up frames displacing a hurtbox bone 30cm or more from stance" as the
+ * strongest remaining lever on this axis. Tested two ways, it does not hold.
+ *
+ * Literally, it is false: at a 30cm threshold p.jab has 2 such frames, p.jabAlt
+ * 2, p.straight 2 and p.elbow 1. But the threshold is the real problem. It is an
+ * absolute distance applied to moves whose ENTIRE reach is 0.58m (p.jab) and
+ * 0.46m (p.elbow), so it demands a chamber worth half the strike; the clips it
+ * passes are the ones that are simply long. It also cannot tell anticipation
+ * from the strike already travelling — both of p.jab's qualifying frames are
+ * t8 and t9 of an i10, which is the fist on its way out, not a tell.
+ *
+ * The industry's own test says the opposite. Rendering each pose as a flat
+ * silhouette in the camera's plane — the rig projected on local (Z, Y), every
+ * hurtbox bone a capsule, 6mm/px — and scoring 1 - IoU against the guard at
+ * tick 0 gives, at impact-4 (the last frame a defender can act on), an ARM-only
+ * divergence of 0.696 for p.jab and 0.710 for p.jabAlt. Those are the 6th and
+ * 4th HIGHEST of the 34 clips. p.straight is 0.531 and p.elbow 0.550, both above
+ * the median. The clips that actually read worst at the commit frame are
+ * `k.launcherKick` 0.315, `p.uppercut` 0.355, `sp.risingFang` 0.394 and
+ * `t.grabAttempt` 0.395 — none of them a fast punch.
+ *
+ * On gameplay grounds the target was wrong too. An i10 jab is not reactable by
+ * anyone; it is blocked on prediction and frame knowledge. The moves whose tell
+ * has to carry information are the slow committal ones, and those are the ones
+ * that fail — see below. So the guard silhouette was NOT re-posed, and the
+ * whole-file risk of touching the pose every clip blends out of was not taken.
+ *
+ * ---------------------------------------------------------------------------
+ * What the silhouette test did find: six clips erase their own wind-up
+ * ---------------------------------------------------------------------------
+ * Divergence from the guard should climb monotonically into the release. On 28
+ * of 34 clips it does. On six it peaks early and then falls back TOWARD the
+ * guard before contact, so the pose a defender commits against is closer to
+ * idle than the pose several frames earlier:
+ *
+ *   p.overhand     0.47 @ t12 -> 0.22 @ t19, contact t22   (retreat 0.257)
+ *   sp.plasmaBurst 0.59 @ t20 -> 0.38 @ t22, contact t24   (0.211)
+ *   sp.rocketPunch 0.50 @ t10 -> 0.30 @ t14, contact t19   (0.203)
+ *   p.uppercut     0.43 @ t9  -> 0.25 @ t13, contact t16   (0.181)
+ *   p.launcherPunch 0.61 @ t12 -> 0.47 @ t15, contact t17  (0.140)
+ *   p.hammerFist   0.47 @ t14 -> 0.36 @ t16, contact t19   (0.113)
+ *
+ * These are the slow, reactable, heavily committal moves — exactly where a tell
+ * is supposed to pay. `p.overhand` is an i18-i22 heavy mid that spends its last
+ * seven startup frames returning to a guard-shaped outline and then explodes to
+ * 0.74 on the contact tick.
+ *
+ * ONE ATTEMPTED FIX, MEASURED WORSE, REVERTED. The hypothesis was that the right
+ * humerus twist unwinds too early on `p.overhand` — shoulder_R X runs -120.1 at
+ * t12.22 to -44.5 at t18.33 and then sits still — so holding the twist and
+ * unwinding it across t20-t22 should keep the coil alive. It did not: retreat
+ * moved 0.257 -> 0.258, divergence at the commit frame got WORSE (0.280 ->
+ * 0.263), and the worst single-tick travel of any hurtbox bone rose from 0.60m
+ * to 0.76m, breaking this file's own 60cm rule. Reverted, and re-verified
+ * identical to baseline on all 34 clips across 7 metrics.
+ *
+ * The likely reason it resists a per-key fix is that the trough is real 3D
+ * geometry rather than an authoring slip: an overhand's fist genuinely passes
+ * down across the chest between the high cock and the extension, and from a
+ * side camera the arm is occluded by the torso for those frames. Fixing it
+ * means changing the ARC — routing the cock wider of the body so the fist never
+ * crosses the trunk in the camera plane — not re-easing the keys on it. That is
+ * a bigger pose change than a round should take on unverified, and it should be
+ * done against a rendered strip, not against this metric alone.
  */
 
 import { validateClip } from '../AnimationFormat.js';

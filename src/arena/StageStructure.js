@@ -62,6 +62,119 @@ const CROWD_PALETTE = [
 ];
 
 /**
+ * The light garments, dealt to roughly one figure in six on top of
+ * {@link CROWD_PALETTE}.
+ *
+ * This palette exists because the crowd was measurably flat in a way the five
+ * albedo bands could not fix. Every entry in the three garment palettes above
+ * lands between linear luminance 0.005 and 0.066 — the brightest coat in the
+ * set is darker than a photographic grey card — so the bands, the hues and the
+ * per-instance jitter were all modulating *within* the bottom fourteenth of the
+ * range, and the eye resolves that as one value however many hues are in it.
+ *
+ * Measured against `ref/tekken8/tekken8_08.jpg`, the closest-framed reference
+ * (a cage arena, crowd behind a chain fence, same shot category), mean 8x8 luma
+ * standard deviation over the background band:
+ *
+ *     Knockbots  0.0275        Tekken 8  0.0699
+ *     background mean luma      0.244              0.202
+ *
+ * The reference crowd is *darker on average and two and a half times as
+ * contrasty*, which is the combination a uniformly-dark palette cannot produce.
+ * It gets there by being long-tailed rather than wide: most of the stand is
+ * darker than ours, and one person in six is wearing a pale work shirt, a cream
+ * jacket or hi-vis. Those few are what the eye uses to read the mass as people.
+ *
+ * So this is a tail, not a widening — held to a sixth so the stand's mean stays
+ * where the previous pass put it, and deliberately warm-biased, since 90% of
+ * the frame's saturated pixels are cyan.
+ *
+ * Measured five captures on against five off, at the wide framing, same shot
+ * list both sides (the list matters: capturing `06-stage-wide` without
+ * `01-hero-idle` ahead of it leaves the camera in a different state and shifts
+ * every number in this block):
+ *
+ *                        off                 on
+ *     detail, band       0.0269 +- 0.0013    0.0287 +- 0.0006     +6.7%
+ *     detail, top fifth  0.0219              0.0247              +12.7%
+ *     mean luma, band    0.2453              0.2450                flat
+ *
+ * So: a real but modest +6.7% over the band and +12.7% over the top fifth,
+ * which is where the deficit is worst, bought at no cost in the background's
+ * mean luminance — and no triangles, no draw call and no light. It closes a few
+ * per cent of a 2.6x gap. It is not on its own a point, and the honest read of
+ * the remaining gap is in {@link CROWD_HIGHLIGHT_RATE} and in the note on the
+ * frame edges below.
+ *
+ * One caution for whoever measures here next: a single capture cannot see an
+ * effect this size. Run-to-run spread on this metric is about 6% at the wide
+ * framing and about 9% at the fight framing, and the fight framing occasionally
+ * returns a black frame outright. The first pass at this change was read off one
+ * capture each way and appeared to *lower* the background mean by 5%; five
+ * captures each way showed that was noise and the mean is simply flat.
+ */
+const CROWD_HIGHLIGHT = [
+  0x8e9298, 0x7f8a94, 0x9a6a3c, 0x6f7d88, 0xa8a49c, 0xc06a2a,
+  0xb0b8bd, 0x8a7f6a, 0x6e7a86, 0xa2906f,
+];
+
+/**
+ * Fraction of the stand dealt a {@link CROWD_HIGHLIGHT} coat.
+ *
+ * A sixth, and a sixth is where it saturates. Doubling this to 0.34 and adding
+ * a matching light tail to the trousers and the shoes/hats was measured at the
+ * wide framing and bought nothing: background local contrast went 0.0295 to
+ * 0.0290 — inside run-to-run noise — while the background's mean luminance rose
+ * 0.232 to 0.261, which is the one number this palette is not allowed to spend.
+ * The stand is about a quarter of the band, so past a sixth of it the tail is
+ * repainting pixels that are already carrying contrast and lifting the mass
+ * everywhere else. Reverted to the measurement.
+ */
+const CROWD_HIGHLIGHT_RATE = 0.17;
+
+/**
+ * Where the rest of the stage-detail gap actually is, measured, for whoever
+ * picks this up next.
+ *
+ * The frame was divided into a 6x5 grid and each cell scored on mean 8x8 luma
+ * standard deviation, against `ref/tekken8/tekken8_08.jpg` — a cage arena with
+ * a crowd behind a chain fence, which is the closest-framed reference in the
+ * set. Top row of the grid, left to right:
+ *
+ *     Knockbots  0.015  0.017  0.027  0.024  0.025  0.016
+ *     Tekken 8   0.052  0.066  0.104  0.108  0.076  0.062
+ *
+ * Two things fall out of that, and neither is the one the crowd fixes.
+ *
+ * **The floor is already there.** Bottom two rows measure 0.021-0.033 against
+ * the reference's 0.021-0.029. The deck, its reflection and its wear are at
+ * parity and do not want more work; every remaining point on this axis is above
+ * the barrier line.
+ *
+ * **The deficit is worst at the left and right edges, and it is a set problem
+ * rather than a shading one.** The two edge cells are 3.5x below reference,
+ * further below than anything in the middle. The reason is visible the moment
+ * the two frames are put side by side: in the reference the crowd wraps the full
+ * width of the shot, so the frame edges are full of people, banners and cage
+ * posts. Here the terrace spans x -11.9..11.9 and the big riveted wall occludes
+ * everything outboard of it, so the left quarter of the frame is one flat plane
+ * with two recessed panels on it and the right is mostly dark truss. Both are
+ * competently made and both are empty. Whatever is put there wants to be
+ * instanced and traded against existing triangles — the set is at 919k against
+ * a 900k budget — and a fixture or a sign carries hue as well as contrast, which
+ * is the other measured gap: this frame holds 2 major hue bins against the
+ * reference's 4, with 90% of its saturated pixels cyan.
+ *
+ * Two things that look like the gap and are not. The highlight population is
+ * fixed: the wide framing now sits at a 99.9th percentile of 0.944 against a
+ * reference band of 0.90-0.999, so `LAMP_ANCHOR` in `StagePracticals` did its
+ * job and there is nothing left there. And the frame holds no pixel above 0.95
+ * at all, which looks alarming and is not actionable from this file — it is the
+ * AgX shoulder in `RenderPipeline` compressing asymptotically, and the same
+ * pipeline clips to white fine on `04-impact` and `07-super`.
+ */
+
+/**
  * Trousers. Not the coat colour dropped toward a common dark — that was the
  * previous scheme and it is why a populated terrace still read as a row of
  * shapes: every figure came out as one hue at two brightnesses, which the eye
@@ -1640,8 +1753,15 @@ export class StageStructure {
         // Garment colours, not a grey ramp. They are dark — this is a night
         // hangar — but they hold hue, so the cyan practicals behind the fence
         // separate a blue coat from a rust one instead of flattening both.
-        _c.setHex(CROWD_PALETTE[rng.int(CROWD_PALETTE.length)], THREE.SRGBColorSpace)
-          .multiplyScalar(rng.range(0.72, 1.28));
+        // One figure in six wears the light tail. See CROWD_HIGHLIGHT: the
+        // stand's problem was never hue or banding, it was that every band sat
+        // inside the bottom fourteenth of the range.
+        const lit = rng.next() < CROWD_HIGHLIGHT_RATE;
+        const coat = lit
+          ? CROWD_HIGHLIGHT[rng.int(CROWD_HIGHLIGHT.length)]
+          : CROWD_PALETTE[rng.int(CROWD_PALETTE.length)];
+        _c.setHex(coat, THREE.SRGBColorSpace)
+          .multiplyScalar(lit ? rng.range(0.62, 1.06) : rng.range(0.72, 1.28));
         _c.toArray(tints, i * 3);
         const coatY = (_c.r + _c.g + _c.b) / 3;
         // Trousers, dealt independently and then *forced apart* in value from

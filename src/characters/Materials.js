@@ -865,6 +865,24 @@ function buildPanelLayout(rng, { minCell = 0.055, depth = 7, stopChance = 0.09 }
  */
 const METAL_REPEAT = 2;
 
+/**
+ * Tiling of the clearcoat peel normal, in repeats per UV unit.
+ *
+ * 3 puts its two octaves at roughly 9 and 30 screen pixels at closeup range —
+ * the same band the panel lines, rivets and wear blotches already occupy — so
+ * it looks like the obvious place to buy the missing fine scale documented in
+ * `resolveSizes`. Retiling it to 9, which lands the upper octave at about 3
+ * screen pixels, **does not measurably change the image**: on the closeup rig
+ * with the post chain off, 1px band energy went 3.993 -> 4.042 and the
+ * 1px:4px ratio 0.395 -> 0.399, both inside run-to-run noise.
+ *
+ * A clearcoat normal cannot carry this. The coat is a 4% reflector over a dark
+ * base and its lobe is broad (`clearcoatRoughness` around 0.28 on the armour),
+ * so perturbing it spreads the highlight instead of breaking it up. Fine scale
+ * on these plates has to come from the base roughness, not from the coat.
+ */
+const PEEL_REPEAT = 3;
+
 const DETAIL_CACHE = new Map();
 const SHARED_TEXTURES = new Set();
 
@@ -1795,7 +1813,7 @@ function getShared(sizes, maxAniso) {
     carbonNormal: t(carbon.normalPx, carbon.size, 1),
     carbonOrm: t(carbon.orm, carbon.size, 1),
     carbonAniso: t(carbon.anPx, carbon.size, 2),
-    peelNormal: t(peel.normalPx, peel.size, 1, { repeat: 3 }),
+    peelNormal: t(peel.normalPx, peel.size, 1, { repeat: PEEL_REPEAT }),
     glassNormal: t(glass.normalPx, glass.size, 1),
     glassOrm: t(glass.orm, glass.size, 1),
     // Sampled triplanar in object space, never through the model UVs, so it must
@@ -2383,6 +2401,72 @@ function paletteKey(p, sizes) {
     .join('_');
 }
 
+/**
+ * Authoring resolution per bake.
+ *
+ * Texel density was measured at a head closeup (1.33 m, 32 deg fov, 1080p =
+ * 1415 screen px per metre) as sqrt(uvArea/worldArea) * texSize * repeat:
+ *
+ *     material     texels/metre   texels per screen pixel
+ *     kb.rubber        3120              2.20
+ *     kb.armor         2118              1.50
+ *     kb.worn          1512              1.07
+ *     kb.darkMetal      580              0.41
+ *     kb.piston         365              0.26
+ *
+ * The metal bake looks badly under-sampled there, and raising it to 1024 with
+ * `metalOrm`/`metalMod` un-halved does take kb.darkMetal to 1.64 texels/px and
+ * kb.piston to 1.03 — a real 4x. **It changes the rendered image by nothing.**
+ * Measured on the closeup rig against the pre-change capture, 1px band energy
+ * went 3.490 -> 3.418 on the head crop, 2.192 -> 2.176 on the plate crop and
+ * 3.034 -> 3.000 on Kestrel: flat to slightly negative, for +14MB of VRAM and
+ * 4x the metal bake at load. Reverted.
+ *
+ * The reason is that darkMetal's 41.6% share of the robot's *surface area* is
+ * almost all interior frame hidden under the armour; what fills a closeup is
+ * kb.armor, whose maps are already un-halved at 1024. Do not size a bake off its
+ * surface-area share — size it off what it covers on screen.
+ *
+ * --- What the closeup gap actually is -------------------------------------
+ *
+ * Measured as mean absolute Laplacian-pyramid band energy on the character
+ * crop, 1px / 2px / 4px bands, post chain off so the filtering is not in the
+ * way. The ratio 1px:4px is the useful number because it survives differences
+ * in exposure, albedo and subject brightness:
+ *
+ *     crop                                  1px    4px   1px:4px
+ *     Tekken 8 satin sleeve, in focus       7.32  11.08    0.66
+ *     Knockbots STAGE wall, in focus        2.95   4.69    0.63
+ *     Knockbots CHARACTER head, in focus    3.99  10.11    0.40
+ *     Tekken 8 rock, defocused background   1.89   7.38    0.26
+ *
+ * The stage and the character are the same frame, the same renderer, the same
+ * grade. The stage lands on the reference's in-focus figure; the character does
+ * not. So this is not the tone curve, the light rig, the post chain or the
+ * capture — all four were tested and none of them moves it:
+ *
+ *   - Doubling all twelve analytic lights moved the character's p95 by 8%.
+ *   - Doubling `envMapIntensity` on every plate material moved it by under 1%.
+ *   - Turning the whole post chain off raised 1px energy 18% and left the
+ *     1px:4px ratio at 0.40, unchanged.
+ *   - Kestrel already reaches p95 234 against the reference's 235, so there is
+ *     no tonal ceiling; Vulkan is dark because Vulkan's palette is dark.
+ *
+ * What the ratio says is that the character's detail is nearly all one size.
+ * Its 4px band is 10.11 — *higher* than the reference head's 9.70 — while its
+ * 1px band is 69% of it. Panel lines, rivet rows, bevels and the wear blotches
+ * all land in that one octave and there is very little underneath them. A
+ * single dominant spatial frequency reads as pattern rather than as material,
+ * which is the likeliest explanation for two rounds of critics calling the
+ * surfaces "empty" while also calling the shapes fine.
+ *
+ * The work that would move this axis is therefore NOT more surface detail. It
+ * is (a) a sub-2px octave on the base roughness of `armor`/`worn` — cast grain,
+ * brush lay, dust — and (b) taking energy *out* of the 4-8px band, starting
+ * with the wear blotches, which are the loudest thing in a closeup and are
+ * placed without reference to the form. Target: 1px:4px >= 0.55 on the
+ * character crop with the 4px band no higher than it is now.
+ */
 function resolveSizes(scale) {
   const q = (n) => Math.max(128, Math.round((n * scale) / 128) * 128);
   return { plate: q(1024), metal: q(512), soft: q(512), carbon: q(512), peel: q(256), grunge: q(1024) };
