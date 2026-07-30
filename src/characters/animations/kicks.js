@@ -1012,8 +1012,16 @@ export const KICK_CLIPS = {
       wrist_L: [{ t: 0, r: [-8, 0, 0] }],
       hand_L: [{ t: 0, r: [-14, 0, 0] }],
       clavicle_R: [{ t: 0, r: [0, 8, 4] }],
+      // The counter-swing used to sit still from t8 to t16 and then cover 165
+      // degrees in the two ticks to contact — 86 deg/tick authored, and Falcon
+      // Dive compresses this clip's wind-up 2.57x, which made it 240 deg/tick
+      // and the arm visibly teleported. t14 and t16 now sit on the arc so the
+      // swing builds out of the chamber at an even 25-31 deg/tick. The chamber
+      // itself (t12) and the contact pose (t18) are untouched: the hold was dead
+      // time, not anticipation.
       shoulder_R: [{ t: 0, r: [-22, 0, 36], ease: 'quart' }, { t: 8, r: [-5.3, 8.8, 22.3], ease: 'quart' },
-        { t: 12, r: [-31, -13.3, 22.2], ease: 'quad' }, { t: 16, r: [-23.2, -21.9, 27.9], ease: 'quart' },
+        { t: 12, r: [-31, -13.3, 22.2], ease: 'quad' }, { t: 14, r: [-58.1, 14.6, 54.1], ease: 'quad' },
+        { t: 16, r: [-101.1, 18.9, 100.9], ease: 'quart' },
         { t: 18, r: [-138.4, -13, 143.9], ease: 'sine' }, { t: 22, r: [-141.9, -12.02, 147.4], ease: 'quad' },
         { t: 30, r: [-40.8, -26.1, 13], ease: 'quad' }, { t: 36, r: [-35.6, -11.9, 23], ease: 'sine' },
         { t: 46, r: [-22, 0, 36], ease: 'linear' }],
