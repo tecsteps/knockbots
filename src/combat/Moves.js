@@ -641,7 +641,7 @@ function standardExtras(mv, cfg, set) {
 
 function heavyExtras(mv, cfg, set) {
   mv({
-    id: 'siegeSlam', name: 'Siege Slam', input: 'dd+2', clip: 'p.hammerFist', tag: 'unblockable',
+    id: 'siegeSlam', name: 'Siege Slam', input: 'dd+2', clip: 'p.siegeSlam', tag: 'unblockable',
     active: [W(46, 50, [B('hand_R', 0.34, [0, -0.08, 0]), B('hand_L', 0.34, [0, -0.08, 0])])], total: 86,
     height: HEIGHT.UNBLOCKABLE, weight: WEIGHT.ULTRA, damage: 44,
     adv: { block: 0, hit: 8 }, reaction: REACTION.CRUMPLE,
@@ -710,7 +710,7 @@ function agileExtras(mv, cfg, set) {
   });
   set.jab.cancels = ['flurry', 'jab2', 'jabLow'];
   mv({
-    id: 'diveKick', name: 'Falcon Dive', input: 'd+4', clip: 'k.jumpKick', tag: 'air',
+    id: 'diveKick', name: 'Falcon Dive', input: 'd+4', clip: 'k.diveKick', tag: 'air',
     active: [W(8, 16, FOOT_R(0.26))], total: 36,
     height: HEIGHT.MID, weight: WEIGHT.MEDIUM, damage: 18,
     adv: { block: -5, hit: 4 }, reaction: REACTION.KNOCKDOWN,

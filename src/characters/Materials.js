@@ -1731,10 +1731,12 @@ function getShared(sizes, maxAniso) {
 const STORY_PARS_VERTEX = /* glsl */`
 attribute vec4 plateFrame;
 attribute vec4 plateSeed;
+attribute vec4 plateLayout;
 varying vec3 vKbObjPos;
 varying vec3 vKbObjNrm;
 varying vec4 vKbFrame;
 varying vec4 vKbSeed;
+varying vec4 vKbLayout;
 `;
 
 const STORY_PARS_FRAGMENT = /* glsl */`
@@ -1755,6 +1757,7 @@ varying vec3 vKbObjPos;
 varying vec3 vKbObjNrm;
 varying vec4 vKbFrame;
 varying vec4 vKbSeed;
+varying vec4 vKbLayout;
 
 // The three projections are flipped to face outward, or every stencil on the
 // far half of the body would come out mirrored — the one artefact that gives a
@@ -1934,8 +1937,44 @@ if ( vKbFrame.z > 0.0 && vKbFrame.w > 0.0 ) {
 }
 kbSeam *= kbSurface.w;
 kbSeamH *= kbSurface.w;
-diffuseColor.rgb *= 1.0 - 0.30 * kbSeam - 0.11 * kbSeamH;
-roughnessFactor = clamp( roughnessFactor + 0.16 * kbSeam + 0.06 * kbSeamH, 0.06, 1.0 );
+
+// The plate's own panel plan, written per-vertex by RobotBuilder.
+//
+//   .x  panel pitch in centimetres; 0 means this part is not made of panels
+//   .y  panel gap in tenths of a millimetre
+//   .z  fraction of the perimeter that is a free ground edge, not a butted joint
+//   .w  flags; bit 0 asks for a fastener row
+//
+// This is the half of the surfacing problem the shader cannot solve on its own.
+// `plateFrame` tells it where the plate ends; only the builder knows what the
+// plate IS. A hydraulic rod, a rubber boot and a structural frame member are
+// turned, moulded and welded respectively and none of them has a panel gap on
+// it — and until this attribute was read, all three were divided at the same
+// roster-wide pitch as a chest deck, which is precisely the "patterned sheet
+// metal, not designed machinery" the critic named. A part with no plan reads
+// the generic attribute, which is zero pitch: no panels, which is the right
+// answer for anything the builder never described.
+float kbPitch = vKbLayout.x * 0.01;
+float kbGapW = max( vKbLayout.y * 0.0001, 0.0008 );
+float kbRim = vKbLayout.z * ( 1.0 / 255.0 );
+
+// Perimeter, split by what is on the other side of it.
+//
+// A butted joint holds shadow: two plates approach, nothing gets in between,
+// and the line is the darkest thing on the part. A free ground edge does the
+// opposite — it is bare rolled alloy that every passing surface polishes, and
+// it is the brightest line on the part. Shading both the same way is what makes
+// a stack of pauldron lames read as one quilted lump instead of as five
+// pressings laid over each other, and the geometry cannot tell them apart: the
+// shader can see where a plate ends, not whether something is sitting there.
+float kbLip = kbSeam * kbRim;
+float kbJoint = kbSeam * ( 1.0 - kbRim );
+float kbHaloJ = kbSeamH * ( 1.0 - kbRim );
+diffuseColor.rgb *= 1.0 - 0.34 * kbJoint - 0.13 * kbHaloJ;
+float kbLipLum = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
+diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * ( 0.34 + 1.25 * kbLipLum ), kbLip * 0.62 * ( 1.0 - kbGrime * 0.6 ) );
+roughnessFactor = clamp( roughnessFactor + 0.18 * kbJoint + 0.06 * kbHaloJ - 0.28 * kbLip, 0.06, 1.0 );
+metalnessFactor = mix( metalnessFactor, 1.0, kbLip * 0.55 );
 
 // Panel lattice.
 //
@@ -1944,20 +1983,20 @@ roughnessFactor = clamp( roughnessFactor + 0.16 * kbSeam + 0.06 * kbSeamH, 0.06,
 // the same cell at the same pitch, and forty of them read as patterned sheet
 // rather than as parts somebody laid out. This divides the plate's OWN face —
 // the bounds RobotBuilder measured and handed down in plateFrame — into a
-// handful of panels, so a groove falls where a panel edge would really be on
-// this part and scales with it.
+// handful of panels at the pitch the builder chose FOR THIS PART, so a groove
+// falls where a panel edge would really be on it and scales with it.
 //
 // An axis is only divided if it is long enough to carry a panel, and the count
 // is capped: a 1.4m back plate cut at a fixed pitch is a brick wall again. The
 // phase comes off the plate hash so the division is not symmetric about the
-// centre, which is the giveaway of a generated grid. Greebles are excluded — a
-// 4cm bracket is one machined part and has no panels on it.
+// centre, which is the giveaway of a generated grid.
 float kbLat = 0.0;
 float kbLatH = 0.0;
 float kbLatL = 0.0;
-if ( kbLattice.x > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 && vKbSeed.w < 0.75 ) {
+float kbBolt = 0.0;
+if ( kbLattice.x > 0.0 && kbPitch > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 ) {
 	vec2 kbSpan = vKbFrame.zw * 2.0;
-	vec2 kbCells = min( floor( kbSpan / kbLattice.w ), vec2( 4.0 ) );
+	vec2 kbCells = min( floor( kbSpan / ( kbPitch * kbLattice.w ) ), vec2( 4.0 ) );
 	vec2 kbT = vKbFrame.xy / vKbFrame.zw * 0.5 + 0.5;
 	vec2 kbF = fract( kbT * kbCells + vKbSeed.xy * 0.5 );
 	vec2 kbD = ( 0.5 - abs( kbF - 0.5 ) ) * kbSpan / max( kbCells, vec2( 1.0 ) );
@@ -1965,10 +2004,10 @@ if ( kbLattice.x > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 && vKbSeed.w < 0.
 	// clamped to one division, or every narrow lame gets a line down its middle.
 	kbD = mix( vec2( 1e3 ), kbD, step( 1.0, kbCells ) );
 	float kbDm = min( kbD.x, kbD.y );
-	float kbGw = kbLattice.y;
+	float kbGw = kbGapW;
 	float kbFe = max( kbGw * 0.6, kbPx * 0.8 );
 	kbLat = 1.0 - smoothstep( kbGw - kbFe, kbGw + kbFe, kbDm );
-	kbLatH = ( 1.0 - smoothstep( kbGw, kbLattice.z, kbDm ) ) * ( 1.0 - kbLat );
+	kbLatH = ( 1.0 - smoothstep( kbGw, kbGw * ( kbLattice.z / max( kbLattice.y, 1e-4 ) ), kbDm ) ) * ( 1.0 - kbLat );
 	// The rolled lip either side of the gap. A panel edge is broken by the press
 	// and then rubbed by everything that passes it, so it holds a tighter
 	// highlight than the field does — and it is that pair of bright lines either
@@ -1980,6 +2019,30 @@ if ( kbLattice.x > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 && vKbSeed.w < 0.
 	diffuseColor.rgb *= 1.0 - 0.58 * kbLat - 0.17 * kbLatH;
 	roughnessFactor = clamp( roughnessFactor + 0.30 * kbLat + 0.09 * kbLatH - 0.13 * kbLatL, 0.06, 1.0 );
 	metalnessFactor *= 1.0 - 0.35 * kbLat;
+
+	// Fastener row, when the builder asked for one. Real panels are held at
+	// their edges, so the studs march around the plate's own perimeter at the
+	// panel pitch rather than down the middle of the field. They are shading and
+	// not geometry on purpose: at fighting range a bolt head is under a pixel,
+	// and modelling one costs a dozen triangles apiece across forty plates for
+	// something the normal never resolves. A butted edge gets none — you cannot
+	// reach a fastener that another plate is sitting on.
+	if ( mod( vKbLayout.w, 2.0 ) >= 1.0 ) {
+		vec2 kbEdge = vKbFrame.zw - abs( vKbFrame.xy );
+		float kbAlong = kbEdge.x < kbEdge.y ? vKbFrame.y : vKbFrame.x;
+		float kbInset = min( kbEdge.x, kbEdge.y );
+		float kbStep = max( kbPitch * 0.5, 0.03 );
+		float kbS = ( fract( kbAlong / kbStep + 0.5 ) - 0.5 ) * kbStep;
+		float kbR = max( kbGw * 1.7, kbPx * 0.7 );
+		float kbDist = length( vec2( kbS, kbInset - kbR * 2.1 ) );
+		kbBolt = ( 1.0 - smoothstep( kbR * 0.65, kbR, kbDist ) ) * kbLattice.x * ( 1.0 - kbRim * 0.85 );
+		// Crown polished, base ringed with the shadow the head casts into the plate.
+		float kbBoltRing = ( 1.0 - smoothstep( kbR, kbR * 1.5, kbDist ) ) * ( 1.0 - kbBolt );
+		roughnessFactor = clamp( roughnessFactor - 0.22 * kbBolt + 0.10 * kbBoltRing, 0.06, 1.0 );
+		metalnessFactor = mix( metalnessFactor, 1.0, kbBolt * 0.7 );
+		diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * 0.75, kbBolt * 0.55 );
+		diffuseColor.rgb *= 1.0 - 0.20 * kbBoltRing;
+	}
 }
 `;
 
@@ -1995,7 +2058,11 @@ if ( kbLattice.x > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 && vKbSeed.w < 0.
  * each other and nothing gets in between them.
  */
 const STORY_OCCLUSION_FRAGMENT = /* glsl */`
-float kbSeamOcc = clamp( 1.0 - kbSeam * 0.48 - kbSeamH * 0.17 - kbLat * 0.70 - kbLatH * 0.30, 0.0, 1.0 );
+// Only the butted half of the perimeter occludes. A free ground edge has open
+// air on the other side of it and shadowing it is what made a stack of lames
+// read as one lump — the recess term was being applied to plates that are not
+// in a recess.
+float kbSeamOcc = clamp( 1.0 - kbJoint * 0.52 - kbHaloJ * 0.19 - kbLat * 0.70 - kbLatH * 0.30, 0.0, 1.0 );
 float kbOcc = kbSeamOcc;
 #ifdef USE_AOMAP
 	kbOcc *= mix( 1.0, pow( clamp( ambientOcclusion, 0.0, 1.0 ), kbSurfaceB.z ), kbSurfaceB.y );
@@ -2018,8 +2085,10 @@ const STORY_CLEARCOAT_FRAGMENT = /* glsl */`
 	// rolled edge gets polished and a panel gap never gets waxed. Keeping the two
 	// lobes in agreement is what stops the chamfer highlight reading as two
 	// unrelated specular events stacked on one another.
-	material.clearcoatRoughness = clamp( material.clearcoatRoughness * ( 1.0 - 0.55 * kbPolish - 0.3 * kbLatL ) + 0.3 * kbHol + 0.22 * kbSeam + 0.3 * kbLat + 0.1 * kbLatH, 0.0525, 1.0 );
-	material.clearcoat = saturate( material.clearcoat * ( 1.0 - 0.5 * kbSeam - 0.8 * kbLat ) );
+	material.clearcoatRoughness = clamp( material.clearcoatRoughness * ( 1.0 - 0.55 * kbPolish - 0.3 * kbLatL - 0.35 * kbLip ) + 0.3 * kbHol + 0.24 * kbJoint + 0.3 * kbLat + 0.1 * kbLatH, 0.0525, 1.0 );
+	// Paint does not survive a ground edge or a fastener head: both are bare
+	// metal by the time the machine has been used, so the lacquer stops there.
+	material.clearcoat = saturate( material.clearcoat * ( 1.0 - 0.55 * kbSeam - 0.8 * kbLat - 0.6 * kbBolt ) );
 #endif
 `;
 
@@ -2056,18 +2125,23 @@ const STORY_DEFAULTS = {
   occlusion: 0.75,
   occlusionPower: 1.7,
   polish: 1,
-  // Panel lattice, driven off the plate's own bounds. `latticePanel` is the
-  // shortest span an axis needs before it is divided at all, and therefore also
-  // the panel pitch: at 18cm a chest plate carries two or three panels and a
-  // forearm cuff carries none, which is how the part would really be made. The
-  // window is narrow in both directions — at 24cm a big plate still reads as one
-  // unbroken sheet, and below about 14cm the grid comes back and the plate reads
-  // as tiling again. The gap is 4.5mm, which is what a panel gap on a machine
-  // this size is, and the occlusion out of it reaches six times that.
+  // Panel lattice. The pitch and the gap are no longer set here — they come off
+  // `plateLayout`, per plate, from RobotBuilder, because a pauldron lame and a
+  // chest deck are not made the same way and one number for the whole roster is
+  // what made forty plates read as one patterned sheet. What is left global is:
+  //
+  //   lattice           master strength, 0 disables the whole term
+  //   latticeGap        the reference gap the occlusion reach is quoted against
+  //   latticeOcclusion  how far the shading out of a gap reaches, at that gap
+  //   latticePanel      pitch multiplier over the whole roster, for A/B only
+  //
+  // 4.5mm is what a panel gap on a machine this size is, and the occlusion out
+  // of it reaches about six times that; the shader keeps the ratio and scales it
+  // by whatever gap the plate itself asked for.
   lattice: 1,
   latticeGap: 0.0045,
   latticeOcclusion: 0.026,
-  latticePanel: 0.18,
+  latticePanel: 1.0,
 };
 
 /**
@@ -2130,14 +2204,15 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
 
     // Object space, captured before skinning, so the weathering is welded to
     // the model the way a baked texture would be and never swims under motion.
-    // `plateFrame` and `plateSeed` are passed straight through: a geometry that
-    // carries neither reads the generic attribute, which is (0,0,0,1), so the
-    // frame's zero Z reads as "this part has no face to bound" and the seed's
-    // unit W reads as "greeble". Both terms then skip it, which is the right
-    // answer for a part RobotBuilder never described.
+    // The three plate attributes are passed straight through: a geometry that
+    // carries none of them reads the generic attribute, which is (0,0,0,1), so
+    // the frame's zero Z reads as "this part has no face to bound" and the
+    // layout's zero X as "this part is not made of panels". Every term then
+    // skips it, which is the right answer for a part RobotBuilder never
+    // described — the floor, a projectile, anything sharing this material.
     shader.vertexShader = STORY_PARS_VERTEX + shader.vertexShader
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n\tvKbObjNrm = objectNormal;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvKbObjPos = position;\n\tvKbFrame = plateFrame;\n\tvKbSeed = plateSeed;');
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvKbObjPos = position;\n\tvKbFrame = plateFrame;\n\tvKbSeed = plateSeed;\n\tvKbLayout = plateLayout;');
 
     // The whole layer moves down to `normal_fragment_maps`, because the form
     // response needs both normals: the geometric one for the chamfers and the

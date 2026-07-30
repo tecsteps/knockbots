@@ -160,3 +160,22 @@ what the game does in a real browser on an idle machine, which has no headless
 compositor in the path and quantises to vsync. Quote it as a ratio or a ranking;
 be careful quoting it as an absolute frame rate, and never quote it without
 saying which machine and which method produced it.
+
+## A capture is not a measurement until you know what it captured
+
+Three separate numbers on this project were wrong in the same way: taken from a capture without
+checking what the capture was of.
+
+1. Impact scores for four rounds were read off frames photographed 700ms after contact, while
+   the effects they were judging lived 160-300ms.
+2. Framerate was quoted from unpaired A/B runs while a dozen headless browsers competed for the
+   GPU. An unchanged configuration measured 28.6ms to 84.8ms — a 2.8x spread.
+3. "475 draw calls / 1.12M triangles" was briefed to an agent as the shipping frame and used to
+   scope a round of work. The manifest for that run reports **geometries: 259** against **131**
+   in every other capture of the same build — it had photographed a scene still holding the
+   character-select preview robots. The real figure is 198 calls / 635k triangles, which puts
+   triangles *inside* budget and leaves draw calls as the only overage.
+
+The manifest carries `geometries`, `textures` and `programs` alongside `calls` and `triangles`
+precisely so this is checkable. **Compare those counts against a known-good capture before
+believing a number**, and if they differ, the scene is not the one you think you measured.

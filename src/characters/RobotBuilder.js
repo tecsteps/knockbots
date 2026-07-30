@@ -1423,8 +1423,11 @@ class Rig {
     if (g !== geo) geo.dispose();
     // A cable is a tube, not a plate: it has no face to bound and no border to
     // bed into anything, so it opts out of the seam rather than growing one
-    // around an arbitrary projection of itself.
+    // around an arbitrary projection of itself. It still has to carry the layout
+    // attribute — see `tagPlateLayout` — because it shares a merge batch with
+    // rigid parts of the same material.
     tagNoFrame(g);
+    tagPlateLayout(g, null);
     tagPlate(g, this.plateCount++, WEAR_BY_MAT[mat] ?? 0.6, tier);
     this.parts.push({ geo: g, mat, tier });
     return this;
@@ -1727,21 +1730,23 @@ function tagPlateSurface(geo, index, scale, retile) {
  *     .z  exposed-rim fraction * 255; 0 = butted joint, 255 = free ground edge
  *     .w  flags; bit 0 = march a fastener row along the panel gaps
  *
- * The generic attribute a geometry without this one reads is `(0, 0, 0, 1)`,
- * which decodes as "no panels, butted, no fasteners" — the right answer for
- * anything the builder never described, and identical to the behaviour before
- * this existed.
+ * A null plan writes `(0, 0, 0, 0)` — "no panels, butted, no fasteners" — rather
+ * than skipping the attribute. Skipping it is not free: `mergeGeometries` refuses
+ * any batch whose members disagree about which attributes exist, and it refuses
+ * the *whole* batch, so one untagged cable in the rubber batch deleted every
+ * rubber part on every fighter in the roster. Uniform attribute sets are a
+ * correctness requirement here, not a tidiness one.
  *
  * @param {THREE.BufferGeometry} geo
  * @param {?{pitch:number, gap:number, rim:number, bolts:boolean}} plan
  */
 function tagPlateLayout(geo, plan) {
   const n = geo.getAttribute('position')?.count ?? 0;
-  if (!n || !plan) return;
-  const px = Math.min(255, Math.round(plan.pitch * 100));
-  const gp = Math.min(255, Math.round(plan.gap * 10000));
-  const rm = Math.round(clamp(plan.rim, 0, 1) * 255);
-  const fl = plan.bolts ? 1 : 0;
+  if (!n) return;
+  const px = plan ? Math.min(255, Math.round(plan.pitch * 100)) : 0;
+  const gp = plan ? Math.min(255, Math.round(plan.gap * 10000)) : 0;
+  const rm = plan ? Math.round(clamp(plan.rim, 0, 1) * 255) : 0;
+  const fl = plan && plan.bolts ? 1 : 0;
   const a = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
     a[i * 4] = px; a[i * 4 + 1] = gp; a[i * 4 + 2] = rm; a[i * 4 + 3] = fl;
@@ -1899,11 +1904,16 @@ const TORSO_PLANS = {
     round: 0.48, rake: -3, hunch: 0, gap: 0.024,
     pauldron: { w: 0.86, h: 0.90, d: 0.94, layers: 2 },
   },
+  // A keel is a bird's breastbone: narrow across, very deep front-to-back, and
+  // carried high. Measured: at [0.86, 1.28] the chest was only a sixth deeper
+  // than it was wide and KESTREL's profile was a rectangle the same as ANVIL's
+  // — the one view the fight camera actually frames. Taking the width down and
+  // the depth up turns it into a wedge pointing where the fighter is going.
   keel: {
-    pelvis: [0.90, 0.94], waistLo: [0.80, 0.94], waistHi: [0.84, 1.04],
-    ribs: [0.86, 1.20], chest: [0.86, 1.28], yoke: [0.84, 1.06],
-    round: 0.34, rake: -6, hunch: 0.006, gap: 0.014,
-    pauldron: { w: 0.78, h: 0.84, d: 0.86, layers: 2 },
+    pelvis: [0.86, 0.98], waistLo: [0.72, 1.02], waistHi: [0.74, 1.18],
+    ribs: [0.76, 1.42], chest: [0.74, 1.56], yoke: [0.78, 1.20],
+    round: 0.34, rake: -11, hunch: 0.004, gap: 0.014,
+    pauldron: { w: 0.74, h: 0.80, d: 0.90, layers: 2 },
   },
   hump: {
     pelvis: [1.00, 1.02], waistLo: [0.98, 1.06], waistHi: [1.06, 1.16],
@@ -1917,23 +1927,34 @@ const TORSO_PLANS = {
     round: 0.40, rake: -2, hunch: 0.014, gap: 0.012,
     pauldron: { w: 0.90, h: 1.34, d: 0.74, layers: 3, taper: 0.26 },
   },
+  // Lacquered plate armour: a broad flat breast over a cinched waist, leaning
+  // very slightly back so the chest is presented. The negative rake is what
+  // separates RONIN from MANTIS, whose thorax is thrown as far the other way.
   cuirass: {
-    pelvis: [1.02, 1.00], waistLo: [0.86, 0.92], waistHi: [0.92, 0.98],
-    ribs: [1.00, 0.96], chest: [1.02, 0.94], yoke: [1.10, 0.94],
-    round: 0.24, rake: 0, hunch: 0.020, gap: 0.010,
-    pauldron: { w: 1.18, h: 1.02, d: 1.18, layers: 2, taper: 0.72 },
+    pelvis: [1.04, 0.98], waistLo: [0.76, 0.86], waistHi: [0.84, 0.92],
+    ribs: [1.02, 0.92], chest: [1.10, 0.90], yoke: [1.26, 0.92],
+    round: 0.22, rake: -7, hunch: 0.020, gap: 0.010,
+    pauldron: { w: 1.24, h: 1.06, d: 1.20, layers: 2, taper: 0.72 },
   },
+  // The only fighter whose thorax is not roughly vertical. A 19-degree rake was
+  // still legible as "standing up straight" at 100 pixels and MANTIS measured
+  // 0.095 against KESTREL on its most-alike view; at 36 the chest is genuinely
+  // out over the toes and the profile is a horizontal mass, which is the one
+  // shape no other body plan in the cast can make.
   carapace: {
-    pelvis: [0.92, 1.12], waistLo: [0.84, 1.16], waistHi: [0.86, 1.24],
-    ribs: [0.92, 1.34], chest: [0.94, 1.38], yoke: [0.88, 1.20],
-    round: 0.52, rake: 19, hunch: 0.030, gap: 0.018,
-    pauldron: { w: 0.58, h: 0.66, d: 0.70, layers: 1 },
+    pelvis: [0.94, 1.18], waistLo: [0.82, 1.26], waistHi: [0.84, 1.40],
+    ribs: [0.90, 1.52], chest: [0.92, 1.58], yoke: [0.84, 1.30],
+    round: 0.56, rake: 36, hunch: 0.088, gap: 0.018,
+    pauldron: { w: 0.56, h: 0.62, d: 0.72, layers: 1 },
   },
+  // Skeletal means the frame shows. The waist is the narrowest in the cast by a
+  // wide margin, which is what lets NYX's oversized lantern head read as a head
+  // on a stalk rather than as one more helmet.
   skeletal: {
-    pelvis: [0.88, 0.92], waistLo: [0.70, 0.80], waistHi: [0.74, 0.86],
-    ribs: [0.86, 0.94], chest: [0.90, 0.98], yoke: [1.00, 0.96],
-    round: 0.38, rake: 2, hunch: 0.010, gap: 0.020,
-    pauldron: { w: 0.86, h: 0.92, d: 0.84, layers: 1 },
+    pelvis: [0.86, 0.90], waistLo: [0.54, 0.62], waistHi: [0.58, 0.68],
+    ribs: [0.84, 0.92], chest: [0.92, 1.00], yoke: [1.04, 0.98],
+    round: 0.38, rake: 2, hunch: 0.006, gap: 0.020,
+    pauldron: { w: 0.84, h: 0.90, d: 0.82, layers: 1 },
   },
   wall: {
     pelvis: [1.16, 1.00], waistLo: [1.22, 1.02], waistHi: [1.28, 1.04],
@@ -1941,11 +1962,16 @@ const TORSO_PLANS = {
     round: 0.10, rake: 0, hunch: 0.008, gap: 0.022,
     pauldron: { w: 1.22, h: 1.14, d: 1.12, layers: 1, slab: true },
   },
+  // AXIOM is the only fighter with nothing bolted to it, so its read has to be
+  // the shape itself: one continuous ovoid from hip to collar, the highest
+  // corner radius on any armoured plan in the cast, and no shoulder deck step.
+  // Left at literal unity it was simply the smallest generic humanoid and it
+  // measured 0.085 against RONIN — the closest pair on the sheet.
   reference: {
-    pelvis: [1.00, 1.00], waistLo: [1.00, 1.00], waistHi: [1.00, 1.00],
-    ribs: [1.00, 1.00], chest: [1.00, 1.00], yoke: [1.00, 1.00],
-    round: 0.32, rake: 0, hunch: 0.014, gap: 0.009,
-    pauldron: { w: 1.00, h: 1.00, d: 1.00, layers: 2 },
+    pelvis: [0.98, 0.98], waistLo: [0.90, 0.92], waistHi: [1.02, 1.04],
+    ribs: [1.08, 1.08], chest: [1.04, 1.04], yoke: [0.82, 0.84],
+    round: 0.74, rake: 0, hunch: 0.002, gap: 0.009,
+    pauldron: { w: 0.94, h: 0.92, d: 1.00, layers: 2 },
   },
   // VOLTA's can carries its mass at the RIBS, where VULKAN's barrel carries it
   // at the waist. Measured: with both peaking at the waist the two silhouettes
@@ -3560,17 +3586,34 @@ function headKabuto(rig) {
   }
   addVisor(rig, { w: 0.116, h: 0.022, y: 0.052, z: FRONT * 0.092, tilt: -6 * DEG, brow: 0.030, posts: false });
 
-  // maedate: the crescent. Two horns springing from one boss, curving up and
+  // maedate: the crescent. Two blades springing from one boss, curving up and
   // forward, on the whip leaves so they keep ringing after a head turn.
+  //
+  // A real maedate is a broad flat pressing, and that is not decoration — it is
+  // the reason the crest survives being small on screen. At 24mm across, these
+  // were horns: a hairline at fighting range, and RONIN measured 0.134 against
+  // AXIOM in profile, the closest pair on the sheet. Broad and thin, they read
+  // as one crescent from the front and as a long curved blade from the side,
+  // which is the only view the fight camera gives.
   for (const { s: side, sign, mirror } of SIDES) {
     const whip = `antenna_${side}`;
     rig.add('head', loftHull([
-      { y: 0, w: 0.024, d: 0.038, round: 0.34 },
-      { y: 0.096, w: 0.019, d: 0.030, z: FRONT * 0.040, round: 0.34, smooth: true },
-      { y: 0.178, w: 0.009, d: 0.014, z: FRONT * 0.116, round: 0.44 },
+      { y: 0, w: 0.052, d: 0.030, round: 0.30 },
+      { y: 0.118, w: 0.104, d: 0.020, z: FRONT * 0.052, round: 0.16, smooth: true },
+      { y: 0.216, w: 0.086, d: 0.013, z: FRONT * 0.140, round: 0.18, smooth: true },
+      { y: 0.276, w: 0.030, d: 0.009, z: FRONT * 0.206, round: 0.34 },
     ]), 'trim', {
-      p: [sign * 0.028, 0.104, FRONT * 0.026],
-      r: [-16 * DEG, 0, sign * 26 * DEG], mirror, tier: TIER.PRIMARY, sprung: whip,
+      p: [sign * 0.024, 0.102, FRONT * 0.026],
+      r: [-14 * DEG, 0, sign * 21 * DEG], mirror, tier: TIER.PRIMARY, sprung: whip,
+    });
+    // A crimson cord line down the blade's spine, the character's accent colour
+    // on the one part of it that is never in shadow.
+    rig.add('head', loftHull([
+      { y: 0.010, w: 0.014, d: 0.008, round: 0.5 },
+      { y: 0.230, w: 0.010, d: 0.006, z: FRONT * 0.150, round: 0.5 },
+    ]), 'armorAccent', {
+      p: [sign * 0.024, 0.102, FRONT * 0.036],
+      r: [-14 * DEG, 0, sign * 21 * DEG], mirror, tier: TIER.SECONDARY, sprung: whip,
     });
   }
   rig.add('head', latheProfile([
@@ -4190,12 +4233,20 @@ function ballOffset(rig, side) {
     - (rig.restPos[`clavicle_${side}`]?.x ?? 0)) * 0.58;
 }
 
-/** VULKAN — twin flue stacks off one shoulder, and a pour lip on the other arm. */
+/**
+ * VULKAN — twin flue stacks off one shoulder, and a pour lip on the other arm.
+ *
+ * Height is the whole point of a flue. At 0.40m the taller stack topped out
+ * level with the helmet and disappeared into the head's own outline; the
+ * fighter whose identity is a lit furnace read as a plain rectangle. They now
+ * clear the crown, which also puts the exhaust glow above the shoulder line
+ * where the bloom pass can separate it from the body.
+ */
 function markStacks(rig, spec) {
   const pd = scaledPauldron(spec, rig.dim);
   const bx = ballOffset(rig, 'R');
   for (let i = 0; i < 2; i++) {
-    const h = 0.40 - i * 0.10;
+    const h = 0.66 - i * 0.17;
     const x = -(bx + pd.w * (0.30 + i * 0.42));
     rig.add('clavicle_R', latheProfile([
       { r: 0.046, y: 0 }, { r: 0.046, y: h * 0.80 }, { r: 0.058, y: h * 0.86, smooth: true },
@@ -4231,37 +4282,50 @@ function markStacks(rig, spec) {
     { p: [fore * 0.30, -rig.dim.fore * 0.92, FRONT * fore * 1.30] });
 }
 
-/** KESTREL — long swept canards trailing off both shoulders. */
+/**
+ * KESTREL — long canards swept up and back off both shoulders.
+ *
+ * They used to lie almost flat, which put a horizontal bar across the shoulder
+ * line — the same shape MANTIS's raptorial elbows make, and the two measured
+ * 0.095 against each other. Raked up they close into a V above the shoulders
+ * instead, which nothing else in the cast does, and the swept-back half gives
+ * the profile a tail the fight camera can actually see.
+ */
 function markCanards(rig, spec) {
   const pd = scaledPauldron(spec, rig.dim);
+  // Roll (Z) lifts the blade above the shoulder; yaw (Y) sweeps it aft. Both
+  // are shared by every piece of the fin so the assembly stays one object.
+  const roll = -46 * DEG;
+  const yaw = 30 * DEG;
   for (const { s, sign, mirror } of SIDES) {
     const bx = ballOffset(rig, s);
-    const at = [sign * (bx + pd.w * 0.52), pd.up + pd.h * 0.16, -FRONT * 0.010];
+    const at = [sign * (bx + pd.w * 0.46), pd.up + pd.h * 0.20, -FRONT * 0.010];
+    const rot = [0, sign * yaw, sign * roll];
     rig.add(`clavicle_${s}`, loftHull([
-      { y: 0, w: 0.034, d: 0.086, round: 0.30 },
-      { y: -0.040, w: 0.026, d: 0.290, z: -FRONT * 0.150, round: 0.20, smooth: true },
-      { y: -0.078, w: 0.014, d: 0.230, z: -FRONT * 0.360, round: 0.24 },
+      { y: 0, w: 0.036, d: 0.094, round: 0.30 },
+      { y: 0.150, w: 0.026, d: 0.300, z: -FRONT * 0.120, round: 0.20, smooth: true },
+      { y: 0.330, w: 0.013, d: 0.215, z: -FRONT * 0.300, round: 0.24 },
     ]), 'armorPrimary', {
-      p: at, r: [0, sign * 24 * DEG, sign * -14 * DEG], order: 'YXZ',
-      mirror, tier: TIER.PRIMARY, sprung: `pack_${s}`,
+      p: at, r: rot, order: 'YXZ', mirror, tier: TIER.PRIMARY, sprung: `pack_${s}`,
     });
-    // winglet at the tip, turned up: it stops the blade reading as a flat fin
+    // Winglet at the tip, cranked the other way: it breaks the fin's own line so
+    // the pair does not read as two plain triangles.
     rig.add(`clavicle_${s}`, loftHull([
-      { y: 0, w: 0.018, d: 0.096, round: 0.28 },
-      { y: 0.072, w: 0.010, d: 0.052, z: -FRONT * 0.030, round: 0.38 },
+      { y: 0, w: 0.020, d: 0.110, round: 0.28 },
+      { y: 0.100, w: 0.011, d: 0.056, z: FRONT * 0.044, round: 0.38 },
     ]), 'armorAccent', {
-      p: [sign * (bx + pd.w * 0.52 + 0.150), pd.up - 0.070, -FRONT * 0.330],
-      r: [0, sign * 24 * DEG, sign * -14 * DEG], order: 'YXZ',
+      p: [at[0] + sign * 0.230, at[1] + 0.220, at[2] - FRONT * 0.250],
+      r: [0, sign * yaw, sign * (roll + 30 * DEG)], order: 'YXZ',
       mirror, tier: TIER.PRIMARY, sprung: `pack_${s}`,
     });
     rig.glow(`clavicle_${s}`, loftHull([
-      { y: 0, w: 0.008, d: 0.190, round: 0.5 },
-      { y: -0.052, w: 0.006, d: 0.140, z: -FRONT * 0.170, round: 0.5 },
+      { y: 0.030, w: 0.008, d: 0.200, round: 0.5 },
+      { y: 0.290, w: 0.006, d: 0.130, z: -FRONT * 0.150, round: 0.5 },
     ]), 'spine', {
-      p: [sign * (bx + pd.w * 0.52 + 0.020), pd.up + pd.h * 0.10, -FRONT * 0.120],
-      r: [0, sign * 24 * DEG, sign * -14 * DEG], order: 'YXZ', mirror, sprung: `pack_${s}`,
+      p: [at[0], at[1], at[2] - FRONT * 0.014], r: rot, order: 'YXZ', mirror, sprung: `pack_${s}`,
     });
-    rig.emitter('thruster', `clavicle_${s}`, [sign * (bx + pd.w * 0.52 + 0.12), pd.up - 0.08, -FRONT * 0.36], [0, -0.2, -FRONT], 0.035);
+    rig.emitter('thruster', `clavicle_${s}`,
+      [at[0] + sign * 0.200, at[1] + 0.200, at[2] - FRONT * 0.260], [0, 0.3, -FRONT], 0.035);
   }
 }
 
@@ -4505,38 +4569,58 @@ function markTowerShield(rig, spec) {
     { p: [at[0], at[1], at[2] - FRONT * 0.030], r: [-90 * DEG * FRONT, 0, 0], tier: TIER.GREEBLE });
 }
 
-/** AXIOM — one straight calibration yoke spanning past both shoulders. */
+/**
+ * AXIOM — a calibration hoop standing clear of the shoulders.
+ *
+ * It was a straight bar across the shoulders, and a bar has no depth: edge-on
+ * it is two centimetres of nothing, so in the one view the fight camera
+ * actually frames, the reference chassis had no landmark at all and measured
+ * 0.085 against RONIN, the closest pair in the cast. A ring of the same span
+ * subtends the same width from *every* horizontal direction, which is exactly
+ * the property a landmark on this fighter needs — and a true circle floating
+ * off a smooth ovoid body is also the one silhouette in the roster that no
+ * amount of bolted-on hardware can imitate.
+ */
 function markYoke(rig, spec) {
   const m = rig.dim;
   const pd = scaledPauldron(spec, m);
-  const half = pd.out + pd.w * 1.35;
-  const y = pd.up + pd.h * 0.52;
-  // The bar is authored on the chest so it stays level when the arms swing —
-  // a spirit level that tips with a shoulder is not a spirit level.
-  const local = (rig.restPos.clavicle_L?.y ?? 0.13) - (rig.restPos.chest?.y ?? 0);
-  rig.add('chest', loftHull([
-    { y: -0.019, w: half * 2, d: 0.042, round: 0.22 },
-    { y: 0.019, w: half * 2, d: 0.046, round: 0.20 },
-  ]), 'armorSecondary', { p: [0, local + y, -FRONT * 0.008], tier: TIER.PRIMARY });
-  for (const { sign, mirror } of SIDES) {
-    // end caps, turned down: they close the bar and stop it reading as a plank
+  // Wide enough to clear the pauldrons by a clear margin at every bearing —
+  // a hoop that grazes the shoulder line merges into it and is not a landmark.
+  const shoulder = Math.abs(rig.restPos.shoulder_L?.x ?? 0.155);
+  const R = Math.max(shoulder + pd.w * 0.95, pd.out + pd.w * 1.9);
+  // Carried at head height, so the ring encircles the skull rather than sitting
+  // on the collar where the pauldrons are already competing for the outline.
+  const y = m.collar + m.nape + m.skull * 0.42;
+  const at = [0, y, -FRONT * 0.010];
+  rig.add('chest', segmentRing(R, 0.034, 0.052, 30, 0.007), 'armorSecondary',
+    { p: at, r: [90 * DEG, 0, 0], tier: TIER.PRIMARY });
+  // Three struts down to the shoulder deck. Without them the hoop reads as a
+  // halo hovering unattached, which belongs to the arcane chassis, not this one.
+  const drop = y - (m.collar * 0.86);
+  for (const a of [0, 2.094, -2.094]) {
     rig.add('chest', loftHull([
-      { y: 0.024, w: 0.040, d: 0.048, round: 0.26 },
-      { y: -0.058, w: 0.034, d: 0.040, round: 0.30 },
-    ]), 'trim', {
-      p: [sign * half, local + y, -FRONT * 0.008], r: [0, 0, sign * -6 * DEG], mirror, tier: TIER.PRIMARY,
+      { y: 0, w: 0.034, d: 0.034, round: 0.34 },
+      { y: -drop, w: 0.052, d: 0.046, round: 0.30 },
+    ]), 'darkMetal', {
+      p: [Math.sin(a) * R * 0.93, at[1], at[2] + Math.cos(a) * R * 0.93],
+      r: [Math.cos(a) * 7 * DEG, 0, -Math.sin(a) * 7 * DEG], tier: TIER.PRIMARY,
     });
-    rig.glow('chest', bevelBox(0.014, 0.014, 0.010, 0.003), 'joints',
-      { p: [sign * half, local + y + 0.014, -FRONT * 0.030], mirror });
-    // graduation ticks, the only marking on the cleanest chassis in the cast
-    for (let i = 1; i <= 4; i++) {
-      rig.add('chest', bevelBox(0.005, 0.020, 0.008, 0.0015), 'trim', {
-        p: [sign * half * (i / 5), local + y + 0.020, -FRONT * 0.024], mirror, tier: TIER.GREEBLE,
-      });
-    }
   }
-  rig.glow('chest', bevelBox(half * 0.44, 0.010, 0.010, 0.003), 'spine',
-    { p: [0, local + y + 0.021, -FRONT * 0.026] });
+  // Graduation ticks around the rim, the only marking on the cleanest chassis
+  // in the cast, and the reason it reads as an instrument rather than a crown.
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    rig.add('chest', bevelBox(0.007, 0.030, 0.011, 0.0015), 'trim', {
+      p: [Math.sin(a) * R, at[1] + 0.028, at[2] + Math.cos(a) * R],
+      r: [0, a, 0], tier: TIER.GREEBLE,
+    });
+  }
+  for (const { sign, mirror } of SIDES) {
+    rig.glow('chest', bevelBox(0.018, 0.016, 0.014, 0.003), 'joints',
+      { p: [sign * R, at[1] + 0.018, at[2]], mirror });
+  }
+  rig.glow('chest', segmentRing(R * 0.995, 0.009, 0.011, 26, 0.002), 'spine',
+    { p: [at[0], at[1] + 0.024, at[2]], r: [90 * DEG, 0, 0] });
 }
 
 /** VOLTA — copper windings around both upper arms. */
@@ -5268,13 +5352,24 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
     for (const part of rig.parts) {
       if (part.tier > tierCap) continue;
       const shadowed = part.tier < TIER.GREEBLE && part.mat !== 'decal' && !part.mat.startsWith('glow_');
-      const key = shadowed ? part.mat : `${part.mat} flat`;
+      // The attribute signature is part of the key because `mergeGeometries`
+      // rejects a batch whose members disagree about which attributes exist —
+      // and it rejects the whole batch, returning null. One untagged cable in
+      // the rubber batch silently deleted every rubber part on every fighter in
+      // the roster for as long as that was possible. Splitting on the signature
+      // degrades that failure to one extra draw call. It is zero extra calls
+      // while the tagging is uniform, which it now is.
+      const sig = Object.keys(part.geo.attributes).sort().join('+');
+      const key = `${shadowed ? part.mat : `${part.mat}|flat`}#${sig}`;
       let entry = batches.get(key);
-      if (!entry) batches.set(key, (entry = { mat: part.mat, shadowed, list: [] }));
+      if (!entry) {
+        const label = shadowed ? part.mat : `${part.mat}|flat`;
+        batches.set(key, (entry = { mat: part.mat, shadowed, label, list: [] }));
+      }
       entry.list.push(part.geo);
     }
     let tris = 0;
-    for (const [key, batch] of batches) {
+    for (const batch of batches.values()) {
       const matName = batch.mat;
       const mat = mats[matName];
       if (!mat) continue;
@@ -5284,7 +5379,7 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
       if (merged.boundingSphere) merged.boundingSphere.radius *= 1.9;
       merged.computeBoundingBox();
       const mesh = new THREE.SkinnedMesh(merged, mat);
-      mesh.name = `${suffix}:${key.replace(' ', ':')}`;
+      mesh.name = `${suffix}:${batch.label.replace('|', ':')}`;
       mesh.castShadow = batch.shadowed;
       mesh.receiveShadow = !matName.startsWith('glow_') && matName !== 'decal';
       mesh.bind(skeleton, new THREE.Matrix4());

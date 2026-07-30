@@ -64,6 +64,7 @@
 import { bus } from '../core/Bus.js';
 import { ROSTER, ARCHETYPES, chassisOf, massOf } from '../characters/roster.js';
 import { QUALITY_TIERS } from '../engine/RenderPipeline.js';
+import { CPU } from '../ai/CPU.js';
 import { createSkeleton } from '../characters/Skeleton.js';
 import { buildRobot } from '../characters/RobotBuilder.js';
 import { RosterPortraits } from './RosterPortraits.js';
@@ -165,6 +166,77 @@ const KEYBINDS = {
 /** Glyph pool the name readout scrambles through before it settles. */
 const SCRAMBLE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
+// ---------------------------------------------------------------------------
+// Difficulty
+// ---------------------------------------------------------------------------
+
+/**
+ * The ten CPU levels, presented as five named bands.
+ *
+ * Ten is a number, not a choice. A player picking an opponent before their
+ * first match wants to know what kind of fight they are asking for, and "7"
+ * does not say — so the band is what the control shows large and the level is
+ * the fine adjustment underneath it.
+ *
+ * Every note here describes behaviour the CPU's own curves actually produce
+ * across that pair of levels (`CPU#setLevel`, and the prose at the head of
+ * `CPU.js` which states the level 1 and level 10 ends outright). Nothing in
+ * this table is aspirational.
+ */
+const DIFFICULTY_BANDS = [
+  { name: 'ROOKIE', from: 1, to: 2, ink: 'var(--kb-cyan)', note: 'Sees a strike late, guards on a guess, drops the juggle after one hit.' },
+  { name: 'CONTENDER', from: 3, to: 4, ink: 'var(--kb-good)', note: 'Blocks what it has time to read and takes the obvious punish.' },
+  { name: 'PROFESSIONAL', from: 5, to: 6, ink: 'var(--kb-gold)', note: 'Punishes whiffs, techs some throws, carries a short combo route.' },
+  { name: 'VETERAN', from: 7, to: 8, ink: 'var(--kb-accent)', note: 'Guards high and low on read, anti-airs, presses its advantage.' },
+  { name: 'APEX', from: 9, to: 10, ink: 'var(--kb-danger)', note: 'Reacts inside a jab, punishes every unsafe string, runs the full route.' },
+];
+
+const DIFFICULTY_MIN = 1;
+const DIFFICULTY_MAX = 10;
+
+function bandFor(level) {
+  for (const b of DIFFICULTY_BANDS) if (level <= b.to) return b;
+  return DIFFICULTY_BANDS[DIFFICULTY_BANDS.length - 1];
+}
+
+/**
+ * The four numbers the difficulty readout quotes, taken from `CPU#setLevel`
+ * itself rather than restated here.
+ *
+ * `setLevel` writes thirteen tuned scalars onto `this` and reads nothing else
+ * off the instance, so calling it against a scratch object yields exactly the
+ * values the live bot would run at that level. Copying the curve table into
+ * this file would agree with the AI today and be a lie the first time that
+ * workstream retunes it — and a difficulty selector that misreports what it
+ * selects is worse than no selector.
+ */
+const PROFILE_SCRATCH = {};
+function difficultyProfile(level) {
+  CPU.prototype.setLevel.call(PROFILE_SCRATCH, level);
+  return {
+    reaction: PROFILE_SCRATCH.reactionTicks,
+    block: PROFILE_SCRATCH.blockRate,
+    punish: PROFILE_SCRATCH.punishAccuracy,
+    combo: PROFILE_SCRATCH.comboLength,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Training
+// ---------------------------------------------------------------------------
+
+/** Numpad direction -> arrow, matching `Input.js`'s `DIR_NUMPAD` exactly. */
+const DIR_GLYPH = { 1: '↙', 2: '↓', 3: '↘', 4: '←', 5: '·', 6: '→', 7: '↖', 8: '↑', 9: '↗' };
+/** Attack buttons, in the Tekken limb order `Input.js` produces. */
+const BUTTON_LABEL = { 1: 'LP', 2: 'RP', 3: 'LK', 4: 'RK', 5: 'OD' };
+/** Rows kept in the input history readout. */
+const HISTORY_ROWS = 12;
+/** Frame-data cells, in the order a frame display lists them. */
+const FRAME_CELLS = [
+  ['startup', 'STARTUP'], ['active', 'ACTIVE'], ['recovery', 'RECOVERY'],
+  ['onBlock', 'ON BLOCK'], ['onHit', 'ON HIT'], ['damage', 'DAMAGE'],
+];
+
 /** Mean of each stat across the cast, computed once, for the reference ticks. */
 function castAverages() {
   const out = {};
@@ -197,6 +269,13 @@ const el = (tag, cls, text) => {
   if (text != null) n.textContent = text;
   return n;
 };
+
+/** One `LABEL value` cell of a stepper's consequence line. */
+function metaCell(label, value) {
+  const cell = el('span', 'kbg-meta-cell');
+  cell.append(el('i', null, label), el('b', null, value));
+  return cell;
+}
 
 // ---------------------------------------------------------------------------
 // Chassis silhouettes
@@ -406,9 +485,29 @@ export class MenuSystem {
     this.cpuIndex = ROSTER.length > 1 ? 1 : 0;
     this._lastWinner = -1;
 
+    /**
+     * What the next commit on character select means: 'arcade' starts a match
+     * against the CPU, 'training' calls `startTraining`. The screen is shared
+     * because picking a machine is the same act either way — only the footer's
+     * opponent control and the commit differ.
+     */
+    this._selectIntent = 'arcade';
+    /** Which machine the practice dummy is, chosen in the select footer. */
+    this._dummyIndex = ROSTER.length > 1 ? 1 : 0;
+
     this.settings = {
       quality: game.renderer?.quality || 'ultra',
       master: 80, music: 72, sfx: 88,
+    };
+
+    /** Every difficulty control on screen, re-synced together on the bus event. */
+    this._diffViews = [];
+
+    this.training = {
+      boxes: false, frames: true, inputs: true,
+      // Latched off the fighter each frame; see `#trainingSample`.
+      move: null, moveInstance: -1, result: '', resultInstance: -1,
+      history: [], lastTick: -1, raf: 0, viewW: 0, viewH: 0,
     };
 
     /** @type {{items:Array, index:number, cols:number, gridCount:number}} */
@@ -420,12 +519,21 @@ export class MenuSystem {
     this.#buildOptions();
     this.#buildPause();
     this.#buildResults();
+    this.#buildTrainingOverlay();
 
     this._onKeyDown = (e) => this.#onKeyDown(e);
     window.addEventListener('keydown', this._onKeyDown);
 
     bus.on('phase', (e) => this.#onPhase(e));
     bus.on('matchEnd', (e) => { this._lastWinner = e.winner; });
+    bus.on('difficulty', () => this.#syncDifficulty());
+    bus.on('training', () => { this.#syncTrainingOverlay(); this.#syncPauseMode(); });
+    // The frame-data readout says what the last move was worth, so it has to
+    // know whether it landed. `whiff` fires on the move that missed, the other
+    // two on the blow that connected.
+    bus.on('hit', (e) => this.#noteMoveResult(e.attacker, e.counter ? 'COUNTER HIT' : 'HIT'));
+    bus.on('block', (e) => this.#noteMoveResult(e.attacker, 'BLOCKED'));
+    bus.on('whiff', (e) => this.#noteMoveResult(e.fighter, 'WHIFF'));
   }
 
   // -------------------------------------------------------------------------
@@ -442,11 +550,12 @@ export class MenuSystem {
     }
     this.current = screen;
     this.root.classList.toggle('menu-root--active', !!screen);
-    if (!screen) { this.nav = { items: [], index: 0, cols: 1, gridCount: 0 }; return; }
+    if (!screen) { this.nav = { items: [], index: 0, cols: 1, gridCount: 0 }; this.#syncTrainingOverlay(); return; }
     const s = this.screens[screen];
     s.el.classList.add('menu-screen--visible');
     s.onShow?.();
     this.#setNav(s.nav, s.cols || 1, s.gridCount ?? (s.nav.length || 0), s.startIndex?.() ?? 0);
+    this.#syncTrainingOverlay();
   }
 
   // -------------------------------------------------------------------------
@@ -554,10 +663,19 @@ export class MenuSystem {
     bus.emit('uiHover', {});
   }
 
-  /** Left/Right: adjust the focused control if it has one, else pan the grid. */
+  /**
+   * Left/Right: adjust the focused control if it has one, else pan the grid.
+   *
+   * An `onAdjust` that returns `false` has declined the input — it is already
+   * at the end of its own range — and the key falls through to the walk. That
+   * is what keeps the difficulty stepper in the select footer from being a trap
+   * on a keyboard: the row it sits in is walked with left/right, so a control
+   * that swallowed both directions unconditionally could never be left. The
+   * volume sliders return nothing and so keep their old behaviour exactly.
+   */
   #left(dir) {
     const it = this.nav.items[this.nav.index];
-    if (it?.onAdjust) { it.onAdjust(dir); return; }
+    if (it?.onAdjust && it.onAdjust(dir) !== false) return;
     if (this.current === 'select') this.#moveGrid(dir, 0);
   }
 
@@ -568,14 +686,28 @@ export class MenuSystem {
     it.action();
   }
 
+  /**
+   * Moves focus onto the nav item that owns `el`.
+   *
+   * Looked up rather than captured at build time: the pause screen publishes
+   * two different nav arrays depending on whether a training session is running,
+   * so a button's index is not a property of the button.
+   */
+  #focusEl(el) {
+    const i = this.nav.items.findIndex((it) => it.el === el);
+    if (i < 0 || i === this.nav.index) return false;
+    this.nav.index = i;
+    this.#applyFocus();
+    return true;
+  }
+
   /** Builds a standard angular menu button and registers it as a nav item. */
   #addNavButton(items, label, action, extraClass = '') {
     const btn = document.createElement('button');
     btn.className = `mbtn ${extraClass}`.trim();
     btn.textContent = label;
-    const idx = items.length;
-    btn.addEventListener('click', () => { this.nav.index = idx; this.#applyFocus(); bus.emit('uiConfirm', {}); action(); });
-    btn.addEventListener('mouseenter', () => { this.nav.index = idx; this.#applyFocus(); bus.emit('uiHover', {}); });
+    btn.addEventListener('click', () => { this.#focusEl(btn); bus.emit('uiConfirm', {}); action(); });
+    btn.addEventListener('mouseenter', () => { if (this.#focusEl(btn)) bus.emit('uiHover', {}); });
     items.push({ el: btn, action });
     return btn;
   }
@@ -595,7 +727,15 @@ export class MenuSystem {
     const nav = el('div', 'title-nav');
 
     const items = [];
-    nav.appendChild(this.#addNavButton(items, 'ARCADE', () => this.game.setPhase('select')));
+    nav.appendChild(this.#addNavButton(items, 'ARCADE', () => this.#enterSelect('arcade')));
+    // Training is a first-class mode, not an options checkbox: it is where a
+    // player learns a machine's frame data, and it is one row from the title.
+    // `.mbtn` is a single flex row, so the note rides along inside it on
+    // `margin-left: auto` rather than being positioned under it — an absolutely
+    // placed caption disappeared entirely under `.title-nav`'s own box.
+    const trainBtn = this.#addNavButton(items, 'TRAINING', () => this.#enterSelect('training'));
+    trainBtn.appendChild(el('span', 'title-nav-note', 'STANDING DUMMY · NO CLOCK'));
+    nav.appendChild(trainBtn);
     nav.appendChild(this.#addNavButton(items, 'OPTIONS', () => this.#openOptions('title')));
 
     const hint = el('div', 'title-hint', 'ENTER TO SELECT · ARROW KEYS TO NAVIGATE');
@@ -688,8 +828,9 @@ export class MenuSystem {
     const title = el('div', 'kbs-title');
     title.append(el('span', 'kbs-title-a', 'SELECT YOUR '), el('span', 'kbs-title-b', 'MACHINE'));
     const headMeta = el('div', 'kbs-head-meta');
+    const modeChip = el('span', 'kbs-chip kbs-chip--p1', 'PLAYER 1');
     headMeta.append(
-      el('span', 'kbs-chip kbs-chip--p1', 'PLAYER 1'),
+      modeChip,
       el('span', 'kbs-head-count', `${String(ROSTER.length).padStart(2, '0')} UNITS ONLINE`),
     );
     head.append(title, headMeta);
@@ -863,8 +1004,13 @@ export class MenuSystem {
     // script: the keyboard legend is meaningless on a phone, and the two-tap
     // rule is meaningless with a mouse.
     const touchHint = el('div', 'kbs-touch-hint', 'TAP TO INSPECT · TAP AGAIN TO LOCK IN');
-    const opponent = el('div', 'kbs-opponent');
-    opponent.append(document.createTextNode('OPPONENT '), el('b', null, 'CPU · RANDOM'));
+    // The footer used to print "OPPONENT CPU · RANDOM" and mean it literally —
+    // an inert label in the one place a player is guaranteed to look before
+    // their first match. It is the opponent control now: how hard the CPU
+    // fights in arcade, which machine stands there in training. Registered
+    // before the two buttons so the footer's left-to-right order and the tail's
+    // walk order are the same thing.
+    const opponent = this.#buildOpponentControl(items);
     // A visible commit control. The two-tap rule works without it, but a
     // touch player has no ENTER key and nothing on screen said so.
     const lockBtn = this.#addNavButton(items, 'LOCK IN', () => this.#confirmSelect(this._select.focus), 'kbs-lock');
@@ -889,7 +1035,7 @@ export class MenuSystem {
 
     this._select = {
       root: screen, grid, rackGrid, tiles, carriage, stage, sweep, fallback,
-      dName, dSub, dArchTag, dArchNote, dBio, dNote, dossCard,
+      dName, dSub, dArchTag, dArchNote, dBio, dNote, dossCard, modeChip,
       statFills, statNums, specVals, swatches,
       focus: -1, scrambleTimer: 0, swapTimer: 0, lockTimer: 0, locked: false,
     };
@@ -908,11 +1054,26 @@ export class MenuSystem {
 
   // -- screen lifecycle -------------------------------------------------------
 
+  /** Title -> character select, remembering what the commit at the end means. */
+  #enterSelect(intent) {
+    this._selectIntent = intent;
+    this.game.setPhase('select');
+  }
+
   #selectShow() {
     const r = this._select;
     r.locked = false;
     r.focus = -1;
     r.root.classList.remove('kbs-screen--lock');
+    const training = this._selectIntent === 'training';
+    r.root.classList.toggle('kbs-screen--training', training);
+    r.modeChip.textContent = training ? 'TRAINING' : 'PLAYER 1';
+    // A dummy that is the machine you are practising with teaches nothing about
+    // spacing, so the default steps off P1 rather than sitting on slot two.
+    if (training && this._dummyIndex === this.p1Index && ROSTER.length > 1) {
+      this._dummyIndex = (this.p1Index + 1) % ROSTER.length;
+    }
+    this.#syncOpponentControl();
     for (const t of r.tiles) t.classList.remove('kbs-tile--picked');
     r.tiles[this.p1Index]?.classList.add('kbs-tile--picked');
     // Runs before `show()` reads `screens.select.cols`, so the first grid walk
@@ -1154,9 +1315,12 @@ export class MenuSystem {
     r.tiles[this.p1Index]?.classList.remove('kbs-tile--picked');
     this.p1Index = i;
     r.tiles[i]?.classList.add('kbs-tile--picked');
-    this.cpuIndex = ROSTER.length > 1
-      ? (i + 1 + Math.floor(Math.random() * (ROSTER.length - 1))) % ROSTER.length
-      : i;
+    const training = this._selectIntent === 'training';
+    this.cpuIndex = training
+      ? this._dummyIndex
+      : (ROSTER.length > 1
+        ? (i + 1 + Math.floor(Math.random() * (ROSTER.length - 1))) % ROSTER.length
+        : i);
 
     // The commit beat: brackets slam, the frame flashes, then the match starts.
     // A quarter of a second, deliberately spent — not a stall.
@@ -1164,8 +1328,188 @@ export class MenuSystem {
     this._swing = SWAP_SWING * 1.6;
     r.lockTimer = setTimeout(() => {
       r.locked = false;
-      this.game.startMatch(this.p1Index, this.cpuIndex);
+      if (training) {
+        this.game.startTraining(this.p1Index, this.cpuIndex);
+      } else {
+        // `startMatch` does not clear the training flag, and a session left on
+        // would hold the clock and refill both fighters through a whole arcade
+        // match. Leaving training is this screen's job because this screen is
+        // the only way back into a real one.
+        if (this.game.training) this.game.setTraining(false);
+        this.game.startMatch(this.p1Index, this.cpuIndex);
+      }
     }, LOCK_TICKS);
+  }
+
+  // -------------------------------------------------------------------------
+  // Difficulty and the opponent control
+  // -------------------------------------------------------------------------
+
+  /**
+   * A labelled value with a decrement and an increment either side of it, a
+   * ten-notch gauge under the value and two lines of consequence beneath that.
+   *
+   * One nav item, not three: arrow keys adjust it in place, which is the idiom
+   * the options sliders already established, and the two buttons exist for the
+   * pointer and the finger — both pinned to 44px in the touch block, because a
+   * stepper whose targets are 24px is a stepper a phone player cannot use.
+   *
+   * `onStep` returns false when it is already at the end of its own range; see
+   * `#left` for what that buys.
+   */
+  #buildStepper(items, { klass = '', ladder = 0, onStep, onActivate }) {
+    const root = el('div', `kbg-step ${klass}`.trim());
+    const top = el('div', 'kbg-step-top');
+    const label = el('span', 'kbg-step-label');
+    const tag = el('span', 'kbg-step-tag');
+    top.append(label, tag);
+
+    const row = el('div', 'kbg-step-row');
+    // Drawn, not typeset. Both faces in the stack render U+2212 as a short bar
+    // low in the em box — it photographed as an underscore next to a correctly
+    // centred plus — and two CSS rules are cheaper than trusting a glyph.
+    const mk = (dir, aria) => {
+      const b = el('button', `kbg-step-btn kbg-step-btn--${dir > 0 ? 'plus' : 'minus'}`);
+      b.type = 'button';
+      b.setAttribute('aria-label', aria);
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.#focusEl(root);
+        if (onStep(dir) !== false) bus.emit('uiConfirm', {});
+      });
+      return b;
+    };
+    const mid = el('div', 'kbg-step-mid');
+    const value = el('div', 'kbg-step-value');
+    const gauge = el('div', 'kbg-step-gauge');
+    const notches = [];
+    for (let i = 0; i < ladder; i++) {
+      const n = el('i', 'kbg-notch');
+      gauge.appendChild(n);
+      notches.push(n);
+    }
+    mid.append(value, gauge);
+    row.append(mk(-1, 'lower'), mid, mk(1, 'raise'));
+
+    // Note and consequence line share a wrapper so the footer variant can put
+    // them in a second column instead of a third and fourth row — five stacked
+    // lines turned the select footer into a 110px band and took that height
+    // straight out of the live preview, which is the screen's whole point.
+    const text = el('div', 'kbg-step-text');
+    const note = el('div', 'kbg-step-note');
+    const meta = el('div', 'kbg-step-meta');
+    text.append(note, meta);
+    root.append(top, row, text);
+    root.addEventListener('mouseenter', () => { if (this.#focusEl(root)) bus.emit('uiHover', {}); });
+
+    items.push({ el: root, onAdjust: onStep, action: onActivate, focusClass: 'kbg-step--focus' });
+    return { root, label, tag, value, note, meta, notches };
+  }
+
+  /** Nudge the CPU level. Applies immediately — mid-round included. */
+  #stepDifficulty(dir) {
+    const next = clamp(this.game.difficulty + dir, DIFFICULTY_MIN, DIFFICULTY_MAX);
+    if (next === this.game.difficulty) return false;
+    this.game.setDifficulty(next);
+    bus.emit('uiHover', {});
+    return true;
+  }
+
+  /** Writes `game.difficulty` into one stepper. */
+  #paintDifficulty(st) {
+    const lv = this.game.difficulty;
+    const band = bandFor(lv);
+    const p = difficultyProfile(lv);
+    st.label.textContent = 'CPU DIFFICULTY';
+    st.tag.textContent = `LV ${String(lv).padStart(2, '0')}`;
+    st.value.textContent = band.name;
+    st.note.textContent = band.note;
+    // Discrete per band, not interpolated: a single `color-mix` from cyan to
+    // red passes through grey at the middle of its own range, and the middle of
+    // this range is the default opponent. Five steps up the existing token
+    // ramp read as an escalation; a two-stop mix read as a fault.
+    st.root.style.setProperty('--kbg-hot', band.ink);
+    for (let i = 0; i < st.notches.length; i++) st.notches[i].classList.toggle('kbg-notch--on', i < lv);
+    st.meta.replaceChildren(
+      metaCell('REACTION', `${p.reaction}f`),
+      metaCell('GUARD', `${Math.round(p.block * 100)}%`),
+      metaCell('PUNISH', `${Math.round(p.punish * 100)}%`),
+      metaCell('COMBO', `${p.combo} hit${p.combo === 1 ? '' : 's'}`),
+    );
+  }
+
+  /** Builds a difficulty stepper and enrols it in the shared re-sync. */
+  #buildDifficultyStepper(items, klass) {
+    const st = this.#buildStepper(items, {
+      klass,
+      ladder: DIFFICULTY_MAX,
+      onStep: (dir) => this.#stepDifficulty(dir),
+      // Enter on a stepper cycles rather than doing nothing: at the ceiling it
+      // wraps to the floor, so the control is still usable from a pad or a
+      // keyboard that never leaves the confirm button.
+      onActivate: () => { if (!this.#stepDifficulty(1)) this.game.setDifficulty(DIFFICULTY_MIN); },
+    });
+    this._diffViews.push(() => this.#paintDifficulty(st));
+    this.#paintDifficulty(st);
+    return st;
+  }
+
+  #syncDifficulty() {
+    for (const paint of this._diffViews) paint();
+  }
+
+  /**
+   * The select footer's one contextual control: difficulty in arcade, which
+   * machine the dummy is in training. Same slot, same nav index, because in
+   * both modes the question it answers is "who am I about to fight".
+   */
+  #buildOpponentControl(items) {
+    const st = this.#buildStepper(items, {
+      klass: 'kbg-step--foot',
+      ladder: DIFFICULTY_MAX,
+      onStep: (dir) => this.#stepOpponent(dir),
+      onActivate: () => this.#stepOpponent(1) || this.#stepOpponentWrap(),
+    });
+    this._oppStep = st;
+    this._diffViews.push(() => { if (this._selectIntent !== 'training') this.#syncOpponentControl(); });
+    return st.root;
+  }
+
+  #stepOpponent(dir) {
+    if (this._selectIntent !== 'training') return this.#stepDifficulty(dir);
+    const next = this._dummyIndex + dir;
+    if (next < 0 || next >= ROSTER.length) return false;
+    this._dummyIndex = next;
+    this.#syncOpponentControl();
+    bus.emit('uiHover', {});
+    return true;
+  }
+
+  #stepOpponentWrap() {
+    if (this._selectIntent === 'training') { this._dummyIndex = 0; this.#syncOpponentControl(); }
+    else this.game.setDifficulty(DIFFICULTY_MIN);
+  }
+
+  #syncOpponentControl() {
+    const st = this._oppStep;
+    if (!st) return;
+    if (this._selectIntent !== 'training') { this.#paintDifficulty(st); return; }
+    const def = ROSTER[this._dummyIndex] || ROSTER[0];
+    const n = ROSTER.length;
+    st.label.textContent = 'PRACTICE DUMMY';
+    st.tag.textContent = `${String(this._dummyIndex + 1).padStart(2, '0')} / ${String(n).padStart(2, '0')}`;
+    st.value.textContent = def.name;
+    st.note.textContent = `${def.archetype.toUpperCase()} · ${chassisOf(def).label} · ${massOf(def)} KG`;
+    st.root.style.setProperty('--kbg-hot', 'var(--kb-cyan)');
+    for (let i = 0; i < st.notches.length; i++) {
+      st.notches[i].classList.toggle('kbg-notch--on', i === Math.round((this._dummyIndex / Math.max(1, n - 1)) * (st.notches.length - 1)));
+    }
+    st.meta.replaceChildren(
+      metaCell('REACH', String(def.stats?.reach ?? '—')),
+      metaCell('WEIGHT', String(def.stats?.weight ?? '—')),
+      metaCell('DEFENSE', String(def.stats?.defense ?? '—')),
+      metaCell('MODE', 'STANDING'),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1180,6 +1524,12 @@ export class MenuSystem {
     const title = el('div', 'options-title', 'OPTIONS');
 
     const items = [];
+
+    // -- gameplay --
+    // First section, above Display: the one setting here that changes how the
+    // game plays rather than how it looks.
+    const gameSection = el('div', 'options-section');
+    gameSection.append(el('h3', null, 'Gameplay'), this.#buildDifficultyStepper(items, 'kbg-step--panel').root);
 
     // -- display --
     const dispSection = el('div', 'options-section');
@@ -1231,7 +1581,7 @@ export class MenuSystem {
     const actions = el('div', 'options-actions');
     actions.appendChild(this.#addNavButton(items, 'BACK', () => this.show(this.pendingReturn)));
 
-    panel.append(title, dispSection, audioSection, ctrlSection, actions);
+    panel.append(title, gameSection, dispSection, audioSection, ctrlSection, actions);
     wrap.appendChild(panel);
     screen.append(bg, wrap);
     this.root.appendChild(screen);
@@ -1310,26 +1660,110 @@ export class MenuSystem {
   // Pause
   // -------------------------------------------------------------------------
 
+  /**
+   * Pause carries one contextual block between RESUME and OPTIONS: the CPU
+   * difficulty stepper in an arcade match, the practice display toggles in a
+   * training session. They are mutually exclusive by construction — training
+   * has no CPU to tune and a match has nothing to draw boxes for — so the
+   * screen publishes two nav arrays and `#syncPauseMode` picks one before
+   * `show()` reads it. A hidden control left in the array would still take
+   * keyboard focus, which is the whole reason this is not one array with a
+   * `display: none` in it.
+   */
   #buildPause() {
     const screen = el('div', 'menu-screen');
     const bg = el('div', 'menu-bg menu-bg--dim');
     const wrap = el('div', 'pause-wrap');
     const panel = el('div', 'pause-panel');
     const title = el('div', 'pause-title', 'PAUSED');
+    const eyebrow = el('div', 'pause-mode', 'TRAINING');
 
-    const items = [];
-    const resumeBtn = this.#addNavButton(items, 'RESUME', () => this.#resume());
-    const optionsBtn = this.#addNavButton(items, 'OPTIONS', () => this.#openOptions('pause'));
-    const quitBtn = this.#addNavButton(items, 'QUIT TO TITLE', () => {
-      this.game.paused = false;
-      this.game.setPhase('menu');
-    });
+    const shared = { resume: null, options: null, quit: null };
+    const build = (mode) => {
+      const items = [];
+      shared.resume = this.#addNavButton(items, 'RESUME', () => this.#resume());
+      const block = mode === 'training'
+        ? this.#buildTrainingToggles(items)
+        : this.#buildDifficultyStepper(items, 'kbg-step--panel').root;
+      shared.options = this.#addNavButton(items, 'OPTIONS', () => this.#openOptions('pause'));
+      shared.quit = this.#addNavButton(items, mode === 'training' ? 'END TRAINING' : 'QUIT TO TITLE', () => {
+        this.game.paused = false;
+        if (this.game.training) this.game.setTraining(false);
+        this.game.setPhase('menu');
+      });
+      const body = el('div', 'pause-body');
+      body.append(shared.resume, block, shared.options, shared.quit);
+      return { items, body };
+    };
 
-    panel.append(title, resumeBtn, optionsBtn, quitBtn);
+    const arcade = build('arcade');
+    const training = build('training');
+    training.body.classList.add('pause-body--hidden');
+
+    panel.append(title, eyebrow, arcade.body, training.body);
     wrap.appendChild(panel);
     screen.append(bg, wrap);
     this.root.appendChild(screen);
-    this.screens.pause = { el: screen, nav: items, cols: 1 };
+
+    this._pause = { eyebrow, arcade, training };
+    this.screens.pause = {
+      el: screen, nav: arcade.items, cols: 1,
+      onShow: () => this.#syncPauseMode(),
+    };
+  }
+
+  /** Points the pause screen at the block that matches the session. */
+  #syncPauseMode() {
+    const p = this._pause;
+    if (!p) return;
+    const training = !!this.game.training;
+    p.arcade.body.classList.toggle('pause-body--hidden', training);
+    p.training.body.classList.toggle('pause-body--hidden', !training);
+    p.eyebrow.classList.toggle('pause-mode--on', training);
+    this.screens.pause.nav = training ? p.training.items : p.arcade.items;
+    if (this.current === 'pause') this.#setNav(this.screens.pause.nav, 1, this.screens.pause.nav.length, 0);
+  }
+
+  /** The three practice readouts, as nav items. */
+  #buildTrainingToggles(items) {
+    const block = el('div', 'kbg-toggles');
+    for (const [key, label, note] of [
+      ['boxes', 'HITBOXES', 'hit and hurt volumes'],
+      ['frames', 'FRAME DATA', 'last move, startup and advantage'],
+      ['inputs', 'INPUT HISTORY', 'rolling command log'],
+    ]) {
+      const row = el('button', 'kbg-toggle');
+      row.type = 'button';
+      const text = el('span', 'kbg-toggle-text');
+      text.append(el('b', null, label), el('i', null, note));
+      const sw = el('span', 'kbg-toggle-sw');
+      row.append(text, sw);
+      const flip = () => this.#setTrainingOption(key, !this.training[key]);
+      row.addEventListener('click', () => { this.#focusEl(row); bus.emit('uiConfirm', {}); flip(); });
+      row.addEventListener('mouseenter', () => { if (this.#focusEl(row)) bus.emit('uiHover', {}); });
+      items.push({ el: row, action: flip, onAdjust: (dir) => this.#setTrainingOption(key, dir > 0), focusClass: 'kbg-toggle--focus' });
+      block.appendChild(row);
+      (this._trainToggleEls ||= {})[key] = row;
+    }
+    this.#syncTrainingToggles();
+    return block;
+  }
+
+  #setTrainingOption(key, on) {
+    if (this.training[key] === on) return;
+    this.training[key] = on;
+    // `debug.hitboxes` is the game's own flag and stays the source of truth, so
+    // flipping it from the console draws the overlay too.
+    if (key === 'boxes') this.game.debug.hitboxes = on;
+    this.#syncTrainingToggles();
+    this.#syncTrainingOverlay();
+  }
+
+  #syncTrainingToggles() {
+    for (const key in this._trainToggleEls || {}) {
+      this._trainToggleEls[key].classList.toggle('kbg-toggle--on', !!this.training[key]);
+      this._trainToggleEls[key].setAttribute('aria-pressed', String(!!this.training[key]));
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1376,6 +1810,305 @@ export class MenuSystem {
   }
 
   // -------------------------------------------------------------------------
+  // Training overlay
+  // -------------------------------------------------------------------------
+
+  /**
+   * The practice HUD, and the one thing that tells a player they are in a
+   * practice session at all.
+   *
+   * It is a sibling of the menu tree rather than a screen inside it: a screen
+   * is shown *instead of* the fight, and this is shown *during* it. It sits at
+   * z-index 39 — above the HUD, below the touch pad at 40 and below the menu
+   * layer at 41 — so pausing covers it and the thumb stick is never fighting a
+   * readout for a tap. Nothing in it is interactive; the toggles live in the
+   * pause menu, which is where a fighting game has always put them and which
+   * keeps this layer at `pointer-events: none` entire.
+   *
+   * The banner exists because `HUD.js` belongs to another workstream and still
+   * draws a round timer and round pips through a training session, where the
+   * clock is held at 60 and the pips can never advance. Naming that outright is
+   * cheaper and more honest than reaching into someone else's DOM to hide it.
+   */
+  #buildTrainingOverlay() {
+    const root = el('div', 'kbg-root');
+    root.setAttribute('aria-hidden', 'true');
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'kbg-boxes');
+    svg.setAttribute('preserveAspectRatio', 'none');
+    root.appendChild(svg);
+
+    const banner = el('div', 'kbg-banner');
+    banner.append(el('b', null, 'TRAINING'), el('span', null, 'CLOCK HELD · ROUNDS OFF · HEALTH RESTORES'));
+
+    const panel = el('div', 'kbg-panel');
+
+    const frames = el('div', 'kbg-card kbg-card--frames');
+    const fHead = el('div', 'kbg-card-h');
+    const fResult = el('span', 'kbg-result');
+    fHead.append(el('span', null, 'LAST MOVE'), fResult);
+    const fName = el('div', 'kbg-mv-name', '—');
+    const fInput = el('div', 'kbg-mv-input', 'throw a move');
+    const fGrid = el('div', 'kbg-fd');
+    const fCells = {};
+    for (const [key, label] of FRAME_CELLS) {
+      const cell = el('div', 'kbg-fd-cell');
+      const v = el('b', null, '—');
+      cell.append(el('i', null, label), v);
+      fGrid.appendChild(cell);
+      fCells[key] = { cell, v };
+    }
+    frames.append(fHead, fName, fInput, fGrid);
+
+    const inputs = el('div', 'kbg-card kbg-card--inputs');
+    inputs.append(el('div', 'kbg-card-h', 'INPUTS'));
+    const hist = el('div', 'kbg-hist');
+    const histRows = [];
+    for (let i = 0; i < HISTORY_ROWS; i++) {
+      const row = el('div', 'kbg-hist-row');
+      const dir = el('span', 'kbg-hist-dir', '');
+      const btns = el('span', 'kbg-hist-btns');
+      const gap = el('span', 'kbg-hist-gap', '');
+      row.append(dir, btns, gap);
+      hist.appendChild(row);
+      histRows.push({ row, dir, btns, gap });
+    }
+    inputs.appendChild(hist);
+
+    panel.append(frames, inputs);
+    root.append(banner, panel);
+    this.uiRoot.appendChild(root);
+
+    this._train = { root, svg, banner, panel, frames, inputs, fResult, fName, fInput, fCells, histRows, lines: [] };
+    this.#syncTrainingOverlay();
+  }
+
+  /** Visible only during a live practice session with no full screen over it. */
+  #syncTrainingOverlay() {
+    const t = this._train;
+    if (!t) return;
+    const modal = this.current && this.current !== 'pause';
+    const on = !!this.game.training && !modal;
+    t.root.classList.toggle('kbg-root--on', on);
+    t.frames.classList.toggle('kbg-card--off', !this.training.frames);
+    t.inputs.classList.toggle('kbg-card--off', !this.training.inputs);
+    t.svg.classList.toggle('kbg-boxes--on', !!this.game.debug.hitboxes);
+    if (on) this.#trainingStart();
+    else this.#trainingStop();
+  }
+
+  #trainingStart() {
+    if (this.training.raf) return;
+    const step = () => {
+      this.training.raf = requestAnimationFrame(step);
+      this.#trainingSample();
+    };
+    this.training.raf = requestAnimationFrame(step);
+  }
+
+  #trainingStop() {
+    if (this.training.raf) cancelAnimationFrame(this.training.raf);
+    this.training.raf = 0;
+  }
+
+  /** Records what the player's last move did, for the frame-data readout. */
+  #noteMoveResult(fighter, result) {
+    if (!this.game.training || fighter !== this.game.fighters?.[0]) return;
+    this.training.result = result;
+    this.training.resultInstance = fighter.moveInstance;
+  }
+
+  #trainingSample() {
+    const f = this.game.fighters?.[0];
+    if (!f) return;
+    if (this.training.frames) this.#sampleFrameData(f);
+    if (this.training.inputs) this.#sampleInputs();
+    if (this.game.debug.hitboxes) this.#drawBoxes();
+    else if (this._train.lines.length) this.#clearBoxes();
+  }
+
+  /**
+   * `currentMove` is cleared the moment the move ends, so the readout latches
+   * it: what a frame display is for is reading the numbers *after* the move,
+   * with the recovery already spent.
+   */
+  #sampleFrameData(f) {
+    const t = this._train;
+    const mv = f.currentMove;
+    if (mv && f.moveInstance !== this.training.moveInstance) {
+      this.training.moveInstance = f.moveInstance;
+      this.training.move = mv;
+      this.training.result = '';
+      this.#paintFrameData(mv);
+    } else if (mv && mv !== this.training.move) {
+      // A cancel keeps the instance and swaps the move underneath it.
+      this.training.move = mv;
+      this.#paintFrameData(mv);
+    }
+    const shown = this.training.resultInstance === this.training.moveInstance ? this.training.result : '';
+    if (t.fResult.textContent !== shown) {
+      t.fResult.textContent = shown;
+      t.fResult.dataset.kind = shown.startsWith('COUNTER') ? 'counter'
+        : shown === 'HIT' ? 'hit' : shown === 'BLOCKED' ? 'block' : shown ? 'whiff' : '';
+    }
+  }
+
+  #paintFrameData(mv) {
+    const t = this._train;
+    t.fName.textContent = mv.name || mv.id;
+    const props = [];
+    if (mv.props?.armor) props.push('ARMOR');
+    if (mv.props?.throw) props.push('THROW');
+    if (mv.props?.crushLow) props.push('LOW CRUSH');
+    if (mv.props?.crushHigh) props.push('HIGH CRUSH');
+    if (mv.juggleHeight) props.push('LAUNCHER');
+    t.fInput.textContent = [mv.input, mv.height?.toUpperCase(), ...props].filter(Boolean).join(' · ');
+    // The active span is the whole authored window set, first frame to last —
+    // a multi-hit string is one move with two windows and reporting only the
+    // first would understate it.
+    const first = Math.min(...mv.active.map((a) => a.from));
+    const last = Math.max(...mv.active.map((a) => a.to));
+    const values = {
+      startup: `${mv.startup}f`,
+      active: `${last - first + 1}f`,
+      recovery: `${mv.recovery}f`,
+      onBlock: signed(mv.onBlock),
+      onHit: signed(mv.onHit),
+      damage: String(mv.damage),
+    };
+    for (const [key] of FRAME_CELLS) {
+      const c = t.fCells[key];
+      c.v.textContent = values[key];
+      if (key === 'onBlock' || key === 'onHit') {
+        const adv = mv[key];
+        c.cell.dataset.sign = adv > 0 ? 'plus' : adv < -9 ? 'bad' : adv < 0 ? 'minus' : 'even';
+      }
+    }
+  }
+
+  /**
+   * `Input#history` is a 20-tick *buffer*, not a log — it is trimmed to the
+   * motion-recognition window and holds a third of a second. So this keeps its
+   * own list and merges in every entry newer than the last one it saw, which
+   * also means a dropped frame costs nothing until the drop exceeds the buffer.
+   */
+  #sampleInputs() {
+    const src = this.game.input?.history?.[0];
+    if (!src) return;
+    const list = this.training.history;
+    let added = false;
+    for (const h of src) {
+      if (h.tick <= this.training.lastTick) continue;
+      this.training.lastTick = h.tick;
+      list.push({ tick: h.tick, dir: h.dir, buttons: h.buttons.slice() });
+      added = true;
+    }
+    if (!added) return;
+    while (list.length > HISTORY_ROWS) list.shift();
+    const rows = this._train.histRows;
+    for (let i = 0; i < rows.length; i++) {
+      // Newest at the bottom, the way a command log reads.
+      const entry = list[list.length - rows.length + i];
+      const r = rows[i];
+      if (!entry) { r.row.classList.add('kbg-hist-row--empty'); r.dir.textContent = ''; r.btns.replaceChildren(); r.gap.textContent = ''; continue; }
+      r.row.classList.remove('kbg-hist-row--empty');
+      r.dir.textContent = DIR_GLYPH[entry.dir] || '·';
+      r.dir.classList.toggle('kbg-hist-dir--idle', entry.dir === 5);
+      r.btns.replaceChildren(...entry.buttons.map((b) => el('i', `kbg-btn kbg-btn--${b}`, BUTTON_LABEL[b] || String(b))));
+      const prev = list[list.length - rows.length + i - 1];
+      r.gap.textContent = prev ? String(Math.min(99, entry.tick - prev.tick)) : '';
+    }
+  }
+
+  // -- hit/hurt volume overlay ------------------------------------------------
+
+  /**
+   * Draws every live capsule as a round-capped SVG stroke.
+   *
+   * A capsule *is* a segment swept by a sphere, and a round-capped stroke is
+   * exactly that in two dimensions, so this is the projection of the volume
+   * rather than a box approximating it. Width comes off the clip-space `w` of
+   * the segment's midpoint, which for a perspective camera is the view depth —
+   * the same divide the vertex stage does.
+   *
+   * No three.js import: this file has never had one, and the two matrices are
+   * plain 16-element column-major arrays. `matrixWorldInverse` is refreshed by
+   * `WebGLRenderer` on every render, so reading it from a rAF that runs after
+   * the frame is reading this frame's camera.
+   *
+   * Boxes come off the simulation, which advanced on the last 60Hz tick, while
+   * the visible pose is interpolated by `alpha` — so on a frame between ticks
+   * the volume leads or trails the limb by under one frame. That is what the
+   * collision test actually used and it is the honest thing to draw.
+   */
+  #drawBoxes() {
+    const t = this._train;
+    const cam = this.game.camera;
+    const fighters = this.game.fighters;
+    if (!cam || !fighters) return;
+
+    const w = t.root.clientWidth;
+    const h = t.root.clientHeight;
+    if (!w || !h) return;
+    if (w !== this.training.viewW || h !== this.training.viewH) {
+      this.training.viewW = w; this.training.viewH = h;
+      t.svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    }
+
+    const vp = mulMat4(cam.projectionMatrix.elements, cam.matrixWorldInverse.elements, VP);
+    const fy = cam.projectionMatrix.elements[5];
+    let used = 0;
+
+    const draw = (p0, p1, radius, kind) => {
+      const a = projectPoint(vp, p0.x, p0.y, p0.z, w, h, PT_A);
+      const b = projectPoint(vp, p1.x, p1.y, p1.z, w, h, PT_B);
+      if (!a || !b) return;
+      const depth = (a.w + b.w) * 0.5;
+      const px = (radius * fy * 0.5 * h) / depth;
+      if (px < 0.4) return;
+      const line = this.#boxLine(used++);
+      line.setAttribute('x1', a.x.toFixed(1));
+      line.setAttribute('y1', a.y.toFixed(1));
+      line.setAttribute('x2', b.x.toFixed(1));
+      line.setAttribute('y2', b.y.toFixed(1));
+      line.setAttribute('stroke-width', (px * 2).toFixed(1));
+      if (line.dataset.kind !== kind) { line.dataset.kind = kind; line.setAttribute('class', `kbg-box kbg-box--${kind}`); }
+    };
+
+    for (const f of fighters) {
+      if (!f?.hurtboxes) continue;
+      for (const hb of f.hurtboxes) draw(hb.p0, hb.p1, hb.radius, f.index === 0 ? 'hurt1' : 'hurt2');
+      for (const hb of f.hitboxes) draw(hb.p0, hb.p1, hb.radius, 'hit');
+    }
+    this.#trimBoxes(used);
+  }
+
+  #boxLine(i) {
+    const t = this._train;
+    let line = t.lines[i];
+    if (!line) {
+      line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('class', 'kbg-box');
+      t.svg.appendChild(line);
+      t.lines[i] = line;
+    } else if (line.style.display) {
+      line.style.display = '';
+    }
+    return line;
+  }
+
+  /** Pooled: the strokes are hidden, never removed, so a frame never allocates. */
+  #trimBoxes(used) {
+    const lines = this._train.lines;
+    for (let i = used; i < lines.length; i++) {
+      if (!lines[i].style.display) lines[i].style.display = 'none';
+    }
+  }
+
+  #clearBoxes() { this.#trimBoxes(0); }
+
+  // -------------------------------------------------------------------------
   // Stylesheet
   // -------------------------------------------------------------------------
 
@@ -1384,13 +2117,50 @@ export class MenuSystem {
     if (document.getElementById('kbs-style')) return;
     const style = document.createElement('style');
     style.id = 'kbs-style';
-    style.textContent = KBS_CSS;
+    style.textContent = KBS_CSS + KBG_CSS;
     document.head.appendChild(style);
   }
 }
 
 /** Local clamp so this file has no dependency on three.js for one number op. */
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+/** Frame advantage reads as a sign, always — "+4" and "-13", never "4". */
+function signed(n) { return `${n > 0 ? '+' : ''}${n}`; }
+
+// --- the four lines of linear algebra the box overlay needs ------------------
+// three.js is not imported here and is not going to be: these are two plain
+// column-major Float32/number arrays off the camera, and reusing three scratch
+// buffers keeps the overlay allocation-free per frame.
+
+const VP = new Array(16).fill(0);
+const PT_A = { x: 0, y: 0, w: 0 };
+const PT_B = { x: 0, y: 0, w: 0 };
+
+/** out = a * b, both column-major 4x4. */
+function mulMat4(a, b, out) {
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      out[c * 4 + r] = a[r] * b[c * 4]
+        + a[4 + r] * b[c * 4 + 1]
+        + a[8 + r] * b[c * 4 + 2]
+        + a[12 + r] * b[c * 4 + 3];
+    }
+  }
+  return out;
+}
+
+/** World point -> viewport pixels, or null if it is behind the lens. */
+function projectPoint(m, x, y, z, w, h, out) {
+  const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+  if (cw <= 0.02) return null;
+  const cx = m[0] * x + m[4] * y + m[8] * z + m[12];
+  const cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+  out.x = (cx / cw * 0.5 + 0.5) * w;
+  out.y = (0.5 - cy / cw * 0.5) * h;
+  out.w = cw;
+  return out;
+}
 
 /**
  * Character-select stylesheet.
@@ -1844,13 +2614,18 @@ const KBS_CSS = `
 }
 
 /* -- footer ------------------------------------------------------------------ */
+/* The footer carries the opponent control now, which is a block rather than a
+   line of text, so it wraps rather than crushing the two buttons off the edge.
+   The hints take the whole of the first line's slack so the control and the
+   buttons stay grouped on the right. */
 .kbs-foot {
   grid-area: foot;
-  display: flex; align-items: center; justify-content: space-between; gap: 1.4em;
+  display: flex; align-items: center; justify-content: flex-end;
+  flex-wrap: wrap; gap: 0.6em 1.2em;
   border-top: 1px solid var(--kb-line);
   padding-top: 0.7em;
 }
-.kbs-hints { display: flex; gap: 1.3em; }
+.kbs-hints { display: flex; gap: 1.3em; margin-right: auto; }
 .kbs-hint {
   display: inline-flex; align-items: center; gap: 0.5em;
   font-size: 0.52em; letter-spacing: 0.18em; color: var(--kb-text-faint);
@@ -1861,16 +2636,20 @@ const KBS_CSS = `
   padding: 0.2em 0.45em;
   box-shadow: inset 0 0 0 1px var(--kb-line-strong);
 }
-.kbs-opponent {
-  font-size: 0.54em; letter-spacing: 0.18em; color: var(--kb-text-faint);
-  text-transform: uppercase;
-}
-.kbs-opponent b { color: var(--kb-text-dim); }
 .kbs-back.mbtn, .kbs-lock.mbtn { width: auto; padding: 0 1.8em; }
 /* Both only exist for a hover-less device; the pointer legend above is the
    desktop equivalent and they would only compete with it. */
 .kbs-touch-hint, .kbs-lock.mbtn { display: none; }
+.kbs-touch-hint { margin-right: auto; }
 .kbs-lock.mbtn { color: var(--kb-text); box-shadow: inset 0 0 0 1px rgba(255,138,42,0.55); }
+
+/* Training reuses this whole screen, so the one thing that has to change is the
+   badge that says which commit the LOCK IN button is about to make. */
+.kbs-screen--training .kbs-chip--p1 {
+  background: rgba(51,255,180,0.14); color: var(--kb-good);
+  box-shadow: inset 0 0 0 1px rgba(51,255,180,0.42);
+}
+.kbs-screen--training .kbs-title-b { color: var(--kb-good); }
 
 /* -- the commit beat --------------------------------------------------------- */
 .kbs-flash {
@@ -2066,8 +2845,7 @@ const KBS_CSS = `
      the screen edge. Inset them instead of losing them. */
   .kbs-bracket { width: 1.2em; height: 1.2em; }
   .kbs-stage-tag { top: 0.4em; left: 0.2em; }
-  .kbs-foot { padding-top: 0.5em; gap: 0.7em; }
-  .kbs-opponent { display: none; }
+  .kbs-foot { padding-top: 0.5em; gap: 0.4em 0.7em; }
 }
 
 /* -- narrow and short: the stacked layout's tightest case ---------------------- */
@@ -2109,6 +2887,392 @@ const KBS_CSS = `
 
 @media (prefers-reduced-motion: reduce) {
   .kbs-screen *, .kbs-screen *::before, .kbs-screen *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+`;
+
+/**
+ * Difficulty stepper, training toggles and the practice overlay.
+ *
+ * Same rules as the sheet above: `kbg-` prefixed so it cannot collide with
+ * `ui.css` or with `kbt-` (TouchControls); reads the shared `--kb-*` tokens and
+ * defines no globals; every transition on `transform`/`opacity` only, and no
+ * `mix-blend-mode` anywhere — the compositing cost of one full-screen blended
+ * layer was measured at ~25 ms/frame on the old select screen and none of this
+ * is worth a fraction of that.
+ */
+const KBG_CSS = `
+/* =========================================================================
+   Stepper — the difficulty / dummy control
+   ========================================================================= */
+.kbg-step {
+  position: relative;
+  display: flex; flex-direction: column; gap: 0.4em;
+  padding: 0.6em 0.75em 0.65em;
+  background: linear-gradient(150deg, rgba(19,24,34,0.92), rgba(9,12,18,0.88));
+  box-shadow: inset 0 0 0 1px var(--kb-line);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 0.6em), calc(100% - 0.6em) 100%, 0 100%);
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+/* Set per band from #paintDifficulty; this is the floor if nothing has. */
+.kbg-step { --kbg-hot: var(--kb-accent); }
+.kbg-step::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 0.16em;
+  background: var(--kbg-hot);
+  transform: scaleY(0.35); transform-origin: top center;
+  transition: transform 0.18s ease;
+}
+.kbg-step--focus, .kbg-step:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--kbg-hot) 55%, transparent), 0 0 1.3em rgba(0,0,0,0.5); }
+.kbg-step--focus::before { transform: scaleY(1); }
+
+.kbg-step-top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.8em; }
+.kbg-step-label {
+  font-size: 0.5em; font-weight: 800; letter-spacing: 0.28em;
+  color: var(--kb-text-faint); text-transform: uppercase;
+}
+.kbg-step-tag {
+  font-family: var(--kb-font-mono); font-size: 0.5em; letter-spacing: 0.14em;
+  color: var(--kb-text-dim);
+}
+
+.kbg-step-row { display: flex; align-items: center; gap: 0.5em; }
+/* The two signs are drawn, not typeset — see #buildStepper. `currentColor` on
+   the bars means the hover and focus states are still one colour change. */
+.kbg-step-btn {
+  position: relative;
+  flex: 0 0 auto;
+  width: 1.7em; height: 1.7em;
+  color: var(--kb-text-dim);
+  background: rgba(255,255,255,0.045);
+  box-shadow: inset 0 0 0 1px var(--kb-line-strong);
+  clip-path: polygon(0.35em 0, 100% 0, calc(100% - 0.35em) 100%, 0 100%);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.kbg-step-btn::before, .kbg-step-btn::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+.kbg-step-btn::before { width: 0.72em; height: 0.11em; }
+.kbg-step-btn--minus::after { display: none; }
+.kbg-step-btn--plus::after { width: 0.11em; height: 0.72em; }
+.kbg-step-btn:hover { color: var(--kb-text); background: rgba(255,138,42,0.18); }
+.kbg-step-btn:active { transform: scale(0.94); }
+.kbg-step-btn:focus-visible { outline: 2px solid var(--kb-cyan); outline-offset: 2px; }
+
+.kbg-step-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.3em; }
+.kbg-step-value {
+  font-family: var(--kb-font-display);
+  font-size: 0.92em; font-weight: 900; letter-spacing: 0.1em;
+  color: var(--kb-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kbg-step-gauge { display: flex; gap: 0.16em; height: 0.36em; }
+.kbg-notch {
+  flex: 1; display: block;
+  background: #0a0e15;
+  box-shadow: inset 0 0 0 1px var(--kb-line);
+  transition: background 0.14s ease;
+}
+.kbg-notch--on { background: var(--kbg-hot); box-shadow: none; }
+
+.kbg-step-text { display: flex; flex-direction: column; gap: 0.3em; min-width: 0; }
+.kbg-step-note {
+  font-size: 0.54em; line-height: 1.45; color: var(--kb-text-dim);
+}
+.kbg-step-meta { display: flex; flex-wrap: wrap; gap: 0.25em 0.9em; }
+.kbg-meta-cell {
+  display: inline-flex; align-items: baseline; gap: 0.4em;
+  font-size: 0.46em; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--kb-text-faint);
+}
+.kbg-meta-cell b { font-family: var(--kb-font-mono); letter-spacing: 0.04em; color: var(--kb-text); }
+
+/* In the select footer the control sits between the hints and the two buttons
+   and every pixel of its height comes out of the live preview above it, so the
+   two consequence lines move into a second column and the block is three lines
+   tall instead of five. In the options and pause panels there is no such
+   pressure and it stacks. */
+.kbg-step--foot {
+  flex: 0 1 34em; min-width: 17em; font-size: 1em;
+  display: grid;
+  grid-template-columns: minmax(9em, 1fr) minmax(0, 1.15fr);
+  grid-template-areas: "top text" "row text";
+  align-items: center;
+  column-gap: 1.1em; row-gap: 0.25em;
+}
+.kbg-step--foot .kbg-step-top { grid-area: top; }
+.kbg-step--foot .kbg-step-row { grid-area: row; }
+.kbg-step--foot .kbg-step-text { grid-area: text; }
+.kbg-step--panel { width: 100%; font-size: 0.95em; }
+
+/* =========================================================================
+   Training toggles — pause menu
+   ========================================================================= */
+.kbg-toggles { display: flex; flex-direction: column; gap: 0.35em; width: 100%; }
+.kbg-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 1em;
+  width: 100%; min-height: 2.4em;
+  padding: 0.4em 0.8em;
+  text-align: left;
+  background: rgba(255,255,255,0.028);
+  box-shadow: inset 0 0 0 1px var(--kb-line);
+  clip-path: polygon(0.7em 0, 100% 0, calc(100% - 0.7em) 100%, 0 100%);
+  transition: background 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+.kbg-toggle-text { display: flex; flex-direction: column; gap: 0.1em; min-width: 0; }
+.kbg-toggle-text b {
+  font-size: 0.6em; font-weight: 800; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--kb-text-dim);
+}
+.kbg-toggle-text i {
+  font-style: normal; font-size: 0.48em; letter-spacing: 0.1em;
+  color: var(--kb-text-faint);
+}
+.kbg-toggle-sw {
+  position: relative; flex: 0 0 auto;
+  width: 2.4em; height: 1.1em;
+  background: #080b12;
+  box-shadow: inset 0 0 0 1px var(--kb-line-strong);
+  clip-path: polygon(0.3em 0, 100% 0, calc(100% - 0.3em) 100%, 0 100%);
+}
+.kbg-toggle-sw::after {
+  content: ''; position: absolute; left: 0.14em; top: 0.14em;
+  width: 0.95em; height: calc(100% - 0.28em);
+  background: var(--kb-grey-dim);
+  transition: transform 0.16s cubic-bezier(.2,1.3,.4,1), background 0.16s ease;
+}
+.kbg-toggle--on { background: rgba(51,255,180,0.08); box-shadow: inset 0 0 0 1px rgba(51,255,180,0.34); }
+.kbg-toggle--on .kbg-toggle-text b { color: var(--kb-text); }
+.kbg-toggle--on .kbg-toggle-sw::after { transform: translateX(1.2em); background: var(--kb-good); }
+.kbg-toggle--focus, .kbg-toggle:hover { transform: translateX(0.2em); box-shadow: inset 0 0 0 1px rgba(255,138,42,0.5); }
+.kbg-toggle:focus-visible { outline: 2px solid var(--kb-cyan); outline-offset: 2px; }
+
+.pause-body { display: flex; flex-direction: column; gap: 0.6em; width: 100%; }
+.pause-body--hidden { display: none; }
+.pause-mode {
+  font-size: 0.55em; font-weight: 800; letter-spacing: 0.3em;
+  color: var(--kb-good);
+  text-align: center;
+  display: none;
+}
+.pause-mode--on { display: block; }
+
+/* Rides the right edge of the TRAINING row, inside the button's own flex line. */
+.title-nav-note {
+  margin-left: auto; padding-left: 2em;
+  font-size: 0.6em; font-weight: 600; letter-spacing: 0.16em;
+  color: var(--kb-text-faint);
+  pointer-events: none;
+}
+.mbtn--focus .title-nav-note, .mbtn:hover .title-nav-note { color: var(--kb-text-dim); }
+
+/* =========================================================================
+   Practice overlay
+   -------------------------------------------------------------------------
+   z-index 39: above .hud, below .kbt-root (40) and below .kbs-layer (41), so
+   pausing covers it and the thumb stick always wins a tap. The whole layer is
+   pointer-events: none — every control it has lives in the pause menu.
+
+   Its font-size deliberately matches \`.hud\`'s clamp rather than \`.menu-root\`'s,
+   because the banner is placed in em under the timer frame and the two have to
+   agree on what an em is.
+   ========================================================================= */
+.kbg-root {
+  position: absolute; inset: 0;
+  z-index: 39;
+  pointer-events: none;
+  font-size: clamp(11px, 1.05vw, 21px);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease;
+}
+.kbg-root--on { opacity: 1; visibility: visible; }
+
+.kbg-boxes { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+.kbg-boxes--on { display: block; }
+.kbg-box { stroke-linecap: round; fill: none; }
+/* Hurt volumes read as the body's own outline and must not fight the machine
+   for attention; the hit volume is the thing being studied, so it is the only
+   opaque colour on screen. */
+.kbg-box--hurt1 { stroke: rgba(79,210,255,0.30); }
+.kbg-box--hurt2 { stroke: rgba(255,95,109,0.30); }
+.kbg-box--hit { stroke: rgba(255,72,60,0.62); }
+
+/* Bottom centre, not under the timer.
+   -------------------------------------------------------------------------
+   Measured on a 1920x1080 capture: at 7.5em the badge landed exactly on the
+   HUD's own "ROUND 1" caption and both were unreadable. The top of the screen
+   belongs to \`HUD.js\`, top to bottom, and the bottom centre is the only strip
+   nothing else claims — the touch pad puts its stick bottom-left and its
+   buttons bottom-right, and this layer takes no input anyway. */
+.kbg-banner {
+  position: absolute; bottom: calc(1.1em + var(--kb-sa-b)); left: 50%;
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 0.25em;
+  text-align: center;
+  white-space: nowrap;
+}
+.kbg-banner b {
+  font-family: var(--kb-font-display);
+  font-size: 0.72em; font-weight: 900; letter-spacing: 0.42em;
+  color: var(--kb-good);
+  padding: 0.28em 0.6em 0.22em 1em;
+  background: rgba(51,255,180,0.1);
+  box-shadow: inset 0 0 0 1px rgba(51,255,180,0.34);
+  clip-path: polygon(0.7em 0, 100% 0, calc(100% - 0.7em) 100%, 0 100%);
+}
+.kbg-banner span {
+  font-family: var(--kb-font-mono);
+  font-size: 0.46em; letter-spacing: 0.24em;
+  color: var(--kb-text-faint);
+}
+
+/* Left flank, not right.
+   -------------------------------------------------------------------------
+   The dummy stands on the right and the box overlay is drawn on it, so a panel
+   over that half hides the one thing the player opened the mode to look at —
+   the first capture had the stack across the dummy's head and chest. P1 is on
+   the left and is the machine you are driving rather than reading.
+
+   15em down clears \`.combo--p0\`, which is \`top: 8.6em\` and about four em tall
+   at its largest tier; a juggle counter fired straight into the frame readout
+   would be the same mistake one layer down. */
+.kbg-panel {
+  position: absolute;
+  left: calc(1.1em + var(--kb-sa-l));
+  top: calc(15em + var(--kb-sa-t));
+  width: 14.5em;
+  display: flex; flex-direction: column; gap: 0.5em;
+}
+.kbg-card {
+  padding: 0.55em 0.7em 0.6em;
+  background: linear-gradient(160deg, rgba(12,16,24,0.86), rgba(7,10,16,0.82));
+  box-shadow: inset 0 0 0 1px var(--kb-line);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0.7em 100%, 0 calc(100% - 0.7em));
+}
+.kbg-card--off { display: none; }
+.kbg-card-h {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.6em;
+  font-size: 0.46em; font-weight: 800; letter-spacing: 0.3em;
+  color: var(--kb-text-faint); text-transform: uppercase;
+  padding-bottom: 0.5em; margin-bottom: 0.6em;
+  border-bottom: 1px solid var(--kb-line);
+}
+.kbg-result { letter-spacing: 0.18em; color: var(--kb-text-dim); }
+.kbg-result[data-kind='hit'] { color: var(--kb-good); }
+.kbg-result[data-kind='counter'] { color: var(--kb-gold); }
+.kbg-result[data-kind='block'] { color: var(--kb-cyan); }
+.kbg-result[data-kind='whiff'] { color: var(--kb-danger); }
+
+.kbg-mv-name {
+  font-family: var(--kb-font-display);
+  font-size: 0.7em; font-weight: 900; letter-spacing: 0.06em;
+  color: var(--kb-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kbg-mv-input {
+  font-family: var(--kb-font-mono);
+  font-size: 0.46em; letter-spacing: 0.12em;
+  color: var(--kb-accent);
+  margin: 0.15em 0 0.55em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kbg-fd { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.3em 0.4em; }
+.kbg-fd-cell { display: flex; flex-direction: column; gap: 0.1em; min-width: 0; }
+.kbg-fd-cell i {
+  font-style: normal; font-size: 0.4em; letter-spacing: 0.14em;
+  color: var(--kb-text-faint); text-transform: uppercase;
+  white-space: nowrap;
+}
+.kbg-fd-cell b {
+  font-family: var(--kb-font-mono); font-size: 0.58em; font-weight: 700;
+  color: var(--kb-text);
+}
+/* The two advantage cells are the reason a frame display exists: plus means
+   you keep your turn, and past -10 the whole cast can launch you. */
+.kbg-fd-cell[data-sign='plus'] b { color: var(--kb-good); }
+.kbg-fd-cell[data-sign='even'] b { color: var(--kb-text-dim); }
+.kbg-fd-cell[data-sign='minus'] b { color: var(--kb-gold); }
+.kbg-fd-cell[data-sign='bad'] b { color: var(--kb-danger); }
+
+.kbg-hist { display: flex; flex-direction: column; gap: 0.06em; }
+.kbg-hist-row {
+  display: grid; grid-template-columns: 1em minmax(0, 1fr) auto;
+  align-items: center; gap: 0.35em;
+  height: 0.78em;
+}
+.kbg-hist-row--empty { opacity: 0; }
+/* Oldest at the top, faded out — the log reads as scrolling away without
+   animating anything. */
+.kbg-hist-row:nth-child(1) { opacity: 0.3; }
+.kbg-hist-row:nth-child(2) { opacity: 0.45; }
+.kbg-hist-row:nth-child(3) { opacity: 0.6; }
+.kbg-hist-row:nth-child(4) { opacity: 0.75; }
+.kbg-hist-row--empty:nth-child(-n+4) { opacity: 0; }
+.kbg-hist-dir {
+  font-size: 0.62em; line-height: 1; text-align: center;
+  color: var(--kb-cyan);
+}
+.kbg-hist-dir--idle { color: var(--kb-grey-dim); }
+.kbg-hist-btns { display: flex; gap: 0.18em; min-width: 0; }
+.kbg-btn {
+  font-style: normal; font-family: var(--kb-font-mono);
+  font-size: 0.38em; font-weight: 700; letter-spacing: 0.06em;
+  padding: 0.16em 0.34em 0.1em;
+  color: #05070c;
+}
+.kbg-btn--1, .kbg-btn--2 { background: var(--kb-cyan); }
+.kbg-btn--3, .kbg-btn--4 { background: var(--kb-accent); }
+.kbg-btn--5 { background: var(--kb-gold); }
+.kbg-hist-gap {
+  font-family: var(--kb-font-mono); font-size: 0.4em;
+  color: var(--kb-text-faint);
+}
+
+/* -- compact: landscape phones and short windows ---------------------------- */
+/* 390px of height is the whole budget and the frame readout is the thing that
+   cannot be got any other way, so the input log — which a player can at least
+   feel through their own thumbs — is what goes. The stack still starts below
+   the combo counter's footprint. */
+@media (max-height: 560px) {
+  .kbg-panel { top: calc(14em + var(--kb-sa-t)); width: 12.5em; }
+  .kbg-banner b { font-size: 0.58em; letter-spacing: 0.28em; }
+  .kbg-banner span { font-size: 0.42em; letter-spacing: 0.18em; }
+  .kbg-card--inputs { display: none; }
+  .kbg-mv-name { font-size: 0.62em; }
+  /* Two lines of consequence text will not fit next to a stepper on a 844px
+     row that also carries the hints and two buttons; the band name and the
+     ladder are what the control is for, and the note goes. */
+  .kbg-step--foot {
+    flex: 0 1 19em; min-width: 13em; font-size: 0.92em;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "top" "row" "text";
+    row-gap: 0.2em;
+  }
+  .kbg-step { padding: 0.4em 0.55em 0.45em; gap: 0.25em; }
+  .kbg-step-note { display: none; }
+  .kbg-step-meta { gap: 0.15em 0.6em; }
+}
+
+/* -- narrow: portrait phones ------------------------------------------------ */
+@media (max-width: 760px) and (min-height: 561px) {
+  .kbg-panel { top: calc(15em + var(--kb-sa-t)); width: min(13.5em, 48vw); }
+  /* The footer is a wrapping row on a phone; the control takes its own line,
+     which also gives the two consequence lines their column back. */
+  .kbg-step--foot { flex: 1 1 100%; min-width: 0; font-size: 0.95em; }
+}
+
+/* -- touch: 44px is the floor for anything a finger lands on ---------------- */
+@media (hover: none) {
+  .kbg-step-btn { min-width: 44px; min-height: 44px; }
+  .kbg-toggle { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kbg-root *, .kbg-step, .kbg-step *, .kbg-toggle, .kbg-toggle * {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
