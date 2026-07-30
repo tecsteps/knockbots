@@ -323,13 +323,20 @@ export class EffectsDirector {
       this.flashes.mesh,
     );
 
-    // Impact lights. Allocated once and never added or removed, because a
-    // changing light count recompiles every material in the scene.
+    // Impact lights. Allocated once and never added, removed, OR HIDDEN.
+    //
+    // The original comment here had the right instinct and the wrong mechanism:
+    // it avoided add/remove but used `visible`, and three.js counts only visible
+    // lights when it builds a material's shader key. So toggling one on impact
+    // walked numPointLights 4 -> 5 -> 6, recompiling 12-20 programs per step and
+    // stalling a single frame by 437ms, 494ms and 831ms — the multi-second hitch
+    // players hit mid-combat. They now stay visible for the life of the scene and
+    // are silenced with `intensity = 0`, which touches no shader key.
     this.impactLights = [];
     for (let i = 0; i < 3; i++) {
       const l = new THREE.PointLight(0xffd9a8, 0, 9, 2);
       l.castShadow = false;
-      l.visible = false;
+      l.visible = true;   // never toggled; see above
       l.userData.decay = 0;
       this.group.add(l);
       this.impactLights.push(l);
@@ -1035,7 +1042,6 @@ export class EffectsDirector {
     l.color.setHex(hex);
     l.intensity = intensity * (this.lightScale ?? 1);
     l.distance = 6.5;
-    l.visible = true;
     l.userData.decay = 1;
   }
 
@@ -1182,10 +1188,10 @@ export class EffectsDirector {
     for (const l of this.impactLights) {
       if (!l.visible) continue;
       const d = l.userData.decay - dt * 9.0;
-      if (d <= 0) { l.visible = false; l.intensity = 0; l.userData.decay = 0; continue; }
+      if (d <= 0) { l.intensity = 0; l.userData.decay = 0; continue; }
       l.userData.decay = d;
       l.intensity *= Math.exp(-dt * 11.0);
-      if (l.intensity < 0.05) { l.visible = false; l.intensity = 0; l.userData.decay = 0; }
+      if (l.intensity < 0.05) { l.intensity = 0; l.userData.decay = 0; }
     }
   }
 
@@ -1321,7 +1327,7 @@ export class EffectsDirector {
 
     this.lightsEnabled = high;
     if (!high && this.impactLights) {
-      for (const l of this.impactLights) { l.visible = false; l.intensity = 0; }
+      for (const l of this.impactLights) { l.intensity = 0; }
     }
     this.debris.setShadows(ultra);
     this.trails.setIntensity(high ? 1.6 : 1.3);
@@ -1357,7 +1363,7 @@ export class EffectsDirector {
       }
     }
     if (this.impactLights) {
-      for (const l of this.impactLights) { l.visible = false; l.intensity = 0; l.userData.decay = 0; }
+      for (const l of this.impactLights) { l.intensity = 0; l.userData.decay = 0; }
     }
 
     this.impact.level = 0; this.impact.lines = 0; this.impact.invert = 0;
