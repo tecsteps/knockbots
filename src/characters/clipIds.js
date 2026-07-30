@@ -26,6 +26,10 @@ export const CLIP_IDS = {
     'p.jab', 'p.jabAlt', 'p.straight', 'p.hook', 'p.uppercut', 'p.overhand',
     'p.elbow', 'p.backfist', 'p.hammerFist', 'p.pistonRush', 'p.launcherPunch',
     'p.lowJab', 'p.duckingStraight',
+    // Same reason in the other direction: siegeSlam wanted 0.40x out of
+    // p.hammerFist, which stretches a 22-tick wind-up over 55 and holds one dead
+    // pose for most of it.
+    'p.siegeSlam',
   ],
 
   // kicks.js — 3 and 4 (left/right kick) strings
@@ -33,6 +37,10 @@ export const CLIP_IDS = {
     'k.lowKick', 'k.midKick', 'k.highKick', 'k.roundhouse', 'k.axeKick',
     'k.sweep', 'k.kneeStrike', 'k.sideKick', 'k.spinKick', 'k.jumpKick',
     'k.launcherKick', 'k.stomp',
+    // Authored later, to retire a retime clamp rather than to add a move: Falcon
+    // Dive wanted 2.57x playback out of k.jumpKick, and past roughly 1.8x the
+    // honest fix is a different clip rather than a faster one.
+    'k.diveKick',
   ],
 
   // specials.js — motion-input moves and overdrive
