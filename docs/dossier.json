@@ -1,10 +1,10 @@
 {
   "status": {
-    "rev": "0.9.0",
-    "commits": "50",
-    "modules": 66,
-    "lines": "47k",
-    "clips": 89,
+    "rev": "0.9.1",
+    "commits": "58",
+    "modules": 67,
+    "lines": "46k",
+    "clips": 91,
     "moves": 191,
     "characters": 10
   },
@@ -464,11 +464,45 @@
           "state": "run"
         }
       ]
+    },
+    {
+      "phase": "PHASE 14",
+      "when": "Round 9",
+      "rev": "rev 0.9.1",
+      "title": "Four facts I had been repeating turned out to be wrong",
+      "paras": [
+        "This round produced less new art than any before it and more corrections, most of them to things I had been telling every agent as settled. A draw call costs about 1.2 microseconds here, measured by injecting sub-pixel triangles and alternating them \u2014 so the hundred-and-twenty draw call budget is a compliance metric, not a performance one, and cutting the fifty-one we were over by returns six hundredths of a millisecond. Two separate briefs this round aimed effort at that number, including mine.",
+        "The screen-space ambient occlusion pass was recorded as free. It is the single most expensive item in the post chain at 2.27 milliseconds, measured twice with a tight interval. And the figure that started the round \u2014 four hundred and seventy-five draw calls against a budget of a hundred and twenty \u2014 came from a capture still holding the character-select preview robots, which its own manifest would have revealed had anyone compared the geometry count.",
+        "An overdraw probe in the shared scratchpad was reporting a ninety-seven percent ceiling for a depth prepass. It was summing the procedural sky, because the override material that was supposed to replace every surface does not apply to the scene background. The agent that caught it did so by adding a calibration the original lacked: render one flat quad, which must read exactly one fragment per covered pixel. The old probe read thirty-two. The true ceiling is fifty-nine percent, and the prepass built against the corrected figure returned three and a half milliseconds.",
+        "Two subsystems turned out to have quality settings that were never called. Choosing Low changed the renderer and left the full lighting rig running \u2014 sixteen visible lights instead of eleven \u2014 on exactly the machines the setting exists for."
+      ],
+      "tags": [
+        {
+          "label": "draw calls \u22481.2\u00b5s",
+          "state": "done"
+        },
+        {
+          "label": "GTAO not free",
+          "state": "done"
+        },
+        {
+          "label": "depth prepass",
+          "state": "done"
+        },
+        {
+          "label": "quality tiers wired",
+          "state": "done"
+        },
+        {
+          "label": "critics running",
+          "state": "run"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.9.0",
+    "rev": "0.9.1",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
