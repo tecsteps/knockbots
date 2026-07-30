@@ -66,6 +66,7 @@ import { ROSTER, ARCHETYPES, chassisOf, massOf } from '../characters/roster.js';
 import { QUALITY_TIERS } from '../engine/RenderPipeline.js';
 import { createSkeleton } from '../characters/Skeleton.js';
 import { buildRobot } from '../characters/RobotBuilder.js';
+import { RosterPortraits } from './RosterPortraits.js';
 import { applyKbText } from './Typeface.js';
 
 /** Game#phase -> the screen that phase implies. `null` means "hide the menu". */
@@ -102,8 +103,14 @@ const STAT_KEYS = ['power', 'speed', 'reach', 'weight', 'defense'];
 // audience axis toward the subject's front, and only past ~-1.5 rad does the
 // camera come round to where the chest and visor read. -1.72 lands a front
 // three-quarter against the plain wall of the arena rather than the crowd.
-const PREVIEW_YAW = -1.88;
-const PREVIEW_DIST = 5.05;
+// The camera offset is `(facing * sin(yaw), 0, cos(yaw))`, and a fighter faces
+// along +/-X toward its opponent — so it is SIN, not cos, that decides whether we
+// see the machine's front. The previous -1.88 put sin at -0.95, i.e. squarely
+// behind it, and every machine in the roster was presented from the back. A
+// positive yaw under pi/2 shows a front three-quarter, which is what a select
+// screen is for.
+const PREVIEW_YAW = 1.26;
+const PREVIEW_DIST = 5.96;
 const PREVIEW_HEIGHT = 1.12;
 /** Centre mark the previewed machine stands on. Plain object: `Fighter#reset`
  *  only reads x/y/z and this module deliberately does not import three.js. */
@@ -632,11 +639,39 @@ export class MenuSystem {
       const def = queue.shift();
       try {
         const robot = buildRobot(def, createSkeleton(def.proportions), this.game.environment);
-        robot.dispose();
+        // The build is already being paid for; photograph it on the way to the
+        // bin so the roster tiles can show the real machine instead of a
+        // pictogram. Disposal waits for the readback, which is async.
+        this.#portraits().capture(def.id, robot)
+          .then((url) => { if (url) this.#applyPortrait(def.id, url); })
+          .catch(() => {})
+          .finally(() => { try { robot.dispose(); } catch { /* already gone */ } });
       } catch { /* a warm-up is an optimisation; it never gets to be a failure */ }
       idle(step);
     };
     idle(step);
+  }
+
+  /** Lazily built so a session that never opens the front end pays nothing. */
+  #portraits() {
+    if (!this._portraits) {
+      this._portraits = new RosterPortraits(this.game.renderer.renderer, this.game.environment);
+    }
+    return this._portraits;
+  }
+
+  /**
+   * Swap a tile's monogram for its rendered portrait. Fades rather than cuts,
+   * because ten tiles resolving at idle-callback intervals would otherwise pop
+   * one by one while the player is reading them.
+   */
+  #applyPortrait(id, url) {
+    for (const el of document.querySelectorAll(`.kbs-por[data-id="${id}"]`)) {
+      const img = el.querySelector('img');
+      if (!img || img.src === url) continue;
+      img.src = url;
+      img.addEventListener('load', () => el.classList.add('kbs-por--on'), { once: true });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -679,11 +714,19 @@ export class MenuSystem {
       tile.style.setProperty('--kbs-e', def.palette.emissive);
       tile.style.setProperty('--kbs-glow', hexToRgba(def.palette.emissive, 0.42));
 
-      const sil = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      sil.setAttribute('class', 'kbs-sil');
-      sil.setAttribute('viewBox', '0 0 64 100');
+      // A rendered bust of the actual machine, or its initial until the render
+      // arrives. The old hand-drawn silhouettes were ten near-identical grey
+      // humanoids and were the reason the cast was unreadable from the tiles.
+      const sil = el('div', 'kbs-por');
+      sil.dataset.id = def.id;
       sil.setAttribute('aria-hidden', 'true');
-      sil.innerHTML = silhouetteMarkup(def);
+      const mono = el('span', 'kbs-por-mono', def.name.slice(0, 1));
+      const img = document.createElement('img');
+      img.alt = '';
+      img.decoding = 'async';
+      sil.append(mono, img);
+      const cached = this._portraits?.get(def.id);
+      if (cached) { img.src = cached; sil.classList.add('kbs-por--on'); }
 
       const text = el('div', 'kbs-tile-text');
       text.append(
@@ -1556,6 +1599,32 @@ const KBS_CSS = `
   width: 100%; height: 100%; max-height: 4.6em;
   overflow: visible;
 }
+/* Portrait frame. Sized from the same variable the old silhouette used so the
+   rack's row height is unchanged. The monogram sits underneath and is simply
+   covered once the render lands, which means no layout shift and no empty box
+   during the idle-time capture. */
+.kbs-por {
+  position: relative; display: grid; place-items: center;
+  height: var(--kbs-sil-h, 2.4em); aspect-ratio: 3 / 4;
+  border-radius: 3px; overflow: hidden;
+  background:
+    radial-gradient(115% 90% at 50% 18%, color-mix(in srgb, var(--kbs-c) 22%, transparent), transparent 68%),
+    linear-gradient(180deg, rgba(18,26,40,.92), rgba(8,12,20,.96));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--kbs-c) 30%, transparent);
+}
+.kbs-por-mono {
+  font: 700 1.35em/1 var(--kb-font-display, inherit);
+  color: color-mix(in srgb, var(--kbs-c) 70%, #dbeaff);
+  opacity: .55; letter-spacing: .02em; transition: opacity .28s ease;
+}
+.kbs-por img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; object-position: 50% 22%;
+  opacity: 0; transition: opacity .32s ease;
+}
+.kbs-por--on img { opacity: 1; }
+.kbs-por--on .kbs-por-mono { opacity: 0; }
+
 .kbs-sil-back { fill: var(--kbs-c); opacity: 0.35; }
 .kbs-sil-body { fill: #cfd8e6; opacity: 0.62; }
 .kbs-sil-accent { fill: var(--kbs-e); opacity: 0.95; }
