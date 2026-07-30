@@ -47,8 +47,75 @@ const SHOTS = [
   {
     name: '02-closeup-face',
     note: 'Head/chest closeup — material, panel, and emissive detail.',
-    setup: `window.KB.fightCamera.cinematic('closeup', { target: window.KB.fighters[0], bone: 'head', dist: 1.15 });`,
-    settle: 1200,
+    // This shot used to hand the framing to `fightCamera.cinematic('closeup')`
+    // at 1.15 m, and it could not be trusted to photograph its own subject.
+    // 1.15 m from the head bone is *inside* the pauldron sweep on a heavy
+    // chassis, so whether the head was visible at all depended on where the
+    // idle happened to be in its cycle — one run photographed a shoulder with
+    // the head fully hidden while the previous round's run had it in clear
+    // view. It also left the depth-of-field plane wherever the fight rig had
+    // last put it, so the subject was intermittently the out-of-focus object
+    // in its own closeup. Character has been partly scored on that noise.
+    //
+    // So: park the camera outright rather than asking the rig for a framing,
+    // pull back to 1.35 m to clear the pauldron, republish `cameraFocus` on
+    // the head so the bokeh plane lands on the subject, pause the sim so TAA
+    // has a still frame to converge on, and then *verify* — raycast from the
+    // camera to the head and report what the lens can actually see. The
+    // assertion is the point: a harness that silently photographs the wrong
+    // thing is worse than one that fails.
+    setup: `(() => {
+      const KB = window.KB, THREE = KB.THREE, f = KB.fighters[0], cam = KB.camera;
+      let head = null;
+      f.robot.group.traverse((o) => { if (o.isBone && /head/i.test(o.name) && !head) head = o; });
+      if (!head) throw new Error('no head bone');
+      const t = head.getWorldPosition(new THREE.Vector3());
+      const D = 1.35, face = f.facing || 1;
+      // Slightly above eye line and looking down: the fight stance holds both
+      // fists up near the chin, and from a level three-quarter they eat the
+      // bottom half of a shot that is supposed to be about the head.
+      const pos = new THREE.Vector3(t.x + face * D * 0.70, t.y + D * 0.30, t.z + D * 0.55);
+      const dist = pos.distanceTo(t);
+      KB.paused = true;
+      // The HUD is not the subject here, and at this crop it covers the head.
+      const hud = document.getElementById('ui');
+      if (hud) { window.__kbCloseupHud = hud.style.visibility; hud.style.visibility = 'hidden'; }
+      const park = () => {
+        cam.position.copy(pos);
+        cam.up.set(0, 1, 0);
+        cam.lookAt(t.x, t.y - D * 0.04, t.z);
+        // Long lens rather than a closer camera: it fills the frame with the
+        // head without pushing the near plane back inside the shoulder armour.
+        cam.fov = 24; cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
+        KB.bus.emit('cameraFocus', { center: t.clone(), radius: 0.45, distance: dist,
+          nearRange: Math.max(0.2, dist * 0.5), farRange: dist * 2.2 });
+      };
+      // Keep the parked framing across the settle window: the rig integrates
+      // off the render loop, which \`KB.paused\` does not stop.
+      window.__kbCloseupRestore = { render: KB.fightCamera.render, simulate: KB.fightCamera.simulate };
+      KB.fightCamera.render = park;
+      KB.fightCamera.simulate = () => {};
+      park();
+
+      // Occlusion check: what does the camera hit first on the way to the head?
+      const ray = new THREE.Raycaster(pos, t.clone().sub(pos).normalize(), 0.01, dist * 1.4);
+      const hits = ray.intersectObject(f.robot.group, true).filter((h) => h.object.visible);
+      const first = hits[0];
+      const clear = !first || first.distance > dist - 0.22;
+      window.__kbCloseup = { clear, blocker: first ? first.object.name || '(unnamed)' : null,
+        gap: first ? +(dist - first.distance).toFixed(3) : null, dist: +dist.toFixed(3) };
+      return window.__kbCloseup;
+    })()`,
+    // Pausing the sim means the settle window is pure TAA convergence.
+    settle: 3200,
+    teardown: `(() => {
+      const r = window.__kbCloseupRestore;
+      if (r) { window.KB.fightCamera.render = r.render; window.KB.fightCamera.simulate = r.simulate; }
+      const hud = document.getElementById('ui');
+      if (hud) hud.style.visibility = window.__kbCloseupHud || '';
+      window.KB.paused = false;
+    })()`,
+    verify: '__kbCloseup',
   },
   {
     name: '03-full-body',
@@ -182,6 +249,8 @@ async function main() {
 
   const list = ONLY.length ? SHOTS.filter((s) => ONLY.some((o) => s.name.includes(o))) : SHOTS;
   const manifest = [];
+  /** Per-shot self-checks (see `verify` on a shot), written into the manifest. */
+  const verified = {};
 
   // Every shot is taken from inside a live round with the menus dismissed.
   // Without this the camera framings composite over the title screen.
@@ -256,6 +325,18 @@ async function main() {
         await page.evaluate(ARM_HIT_FREEZE(shot.impactOffset ?? 0));
       }
       await page.evaluate(`(() => { try { ${shot.setup} } catch (e) { console.error('shot setup', e); } })()`);
+      if (shot.verify) {
+        // A shot that can report whether it framed its subject must be made to
+        // say so out loud, and the answer rides into the manifest so a score
+        // can never again be defended with a frame nobody checked.
+        const v = await page.evaluate(`window.${shot.verify} ?? null`);
+        verified[shot.name] = v;
+        if (v && v.clear === false) {
+          console.warn(`[capture] ${shot.name}: SUBJECT OCCLUDED by ${v.blocker} (${v.gap}m in front) — do not score this frame`);
+        } else if (v) {
+          console.log(`[capture] ${shot.name}: subject clear at ${v.dist}m`);
+        }
+      }
       if (shot.freezeOnHit) {
         await page.waitForFunction('window.__kbHit && window.__kbHit.frozen', null, { timeout: 15000 })
           .catch(() => console.warn(`[capture] ${shot.name}: no hit landed, frame is not a contact frame`));
@@ -306,6 +387,12 @@ async function main() {
     if (shot.freezeOnHit) {
       await page.evaluate(`(() => { window.KB.paused = false; ${RESTORE_CLOCK} })()`);
     }
+    // A shot that overrode the camera rig has to hand it back, or every shot
+    // after it inherits the override and quietly photographs the wrong framing.
+    if (shot.teardown) {
+      await page.evaluate(`(() => { try { ${shot.teardown} } catch (e) { console.error('teardown', e); } })()`)
+        .catch((e) => console.warn(`[capture] teardown failed for ${shot.name}: ${e.message}`));
+    }
     manifest.push({ name: shot.name, note: shot.note, file });
     console.log(`[capture] ${shot.name}${shot.freezeOnHit ? ' (frozen at contact)' : ''}`);
   }
@@ -318,7 +405,7 @@ async function main() {
              geometries: r.info.memory.geometries };
   })()`);
 
-  writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({ shots: manifest, fps, info, errors: errors.slice(0, 40) }, null, 2));
+  writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({ shots: manifest, fps, info, verified, errors: errors.slice(0, 40) }, null, 2));
 
   if (errors.length) {
     console.warn(`[capture] ${errors.length} console error(s):`);

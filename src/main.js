@@ -41,6 +41,11 @@ async function main() {
   // The capture harness has to freeze on the exact contact frame: impact sparks
   // live 160-300ms, so a fixed settle delay photographs an empty floor.
   window.KB.bus = (await import('./core/Bus.js')).bus;
+  // Also for the harness: the closeup shot has to prove the head is actually
+  // visible before it photographs it, and an occlusion test needs a Raycaster.
+  // Character was scored for several rounds on frames where a pauldron had
+  // swung in front of the subject. See tools/capture.mjs, 02-closeup-face.
+  window.KB.THREE = await import('three');
   window.dispatchEvent(new CustomEvent('knockbots:ready'));
 
   // Hold the boot screen long enough for the control legend to actually be
