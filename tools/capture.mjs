@@ -260,6 +260,87 @@ const SHOTS = [
     setup: `window.KB.setPhase('select'); window.KB.menus.show('select');`,
     settle: 1400,
   },
+  {
+    name: '13-announce-fight',
+    note: 'Round-start announcement — a motion-design surface, in flight.',
+    // One of four announcement surfaces on the interface axis, three of which
+    // were never captured. The critic's words: "per CRITIC.md I cannot pass
+    // what I have not seen rendered, so coverage loss translates directly into
+    // a lower score." Every other shot waits for this banner to CLEAR; this one
+    // waits for it to be up. Deliberately the inverse of NO_BANNER.
+    preRoll: true,
+    setup: `window.KB.startMatch(0, 1); window.KB.setPhase('fight');`,
+    waitFor: `(() => {
+      const el = document.querySelector('.announce-text');
+      if (!el || !el.textContent.trim()) return false;
+      const layer = el.closest('.announce-layer');
+      return !layer || parseFloat(getComputedStyle(layer).opacity) > 0.6;
+    })()`,
+    settle: 60,
+    verify: '__kbBanner',
+    prep: `window.__kbBanner = null;
+      (() => {
+        const t = setInterval(() => {
+          const el = document.querySelector('.announce-text');
+          if (el && el.textContent.trim()) { window.__kbBanner = { text: el.textContent.trim() }; clearInterval(t); }
+        }, 16);
+        setTimeout(() => clearInterval(t), 12000);
+      })();`,
+  },
+  {
+    name: '14-victory',
+    note: 'Match-end victory pose — the fourth announcement surface.',
+    // Win the deciding round: put the winner one round up, then keep arming a
+    // killing blow until the match ends. Same reasoning as 10-ko — one forced
+    // KO is not reliable, because whether it connects depends on what state the
+    // previous shot left the fighters in.
+    preRoll: true,
+    setup: `(() => {
+      window.KB.wins[0] = 1; window.KB.wins[1] = 0;
+      let tries = 0;
+      const arm = () => {
+        // Stop the moment the round ends, not just the match: forceKO calls
+        // stage(), which re-enters the fight phase, so a retry fired after the
+        // KO lands cancels the very sequence being waited for.
+        const p = window.KB.phase;
+        if (p === 'matchEnd' || p === 'ko' || p === 'roundEnd' || tries >= 8) return;
+        tries++;
+        window.KB.testHarness.forceKO({ loser: 1 });
+        setTimeout(arm, 700);
+      };
+      arm();
+    })()`,
+    waitFor: "window.KB.phase === 'matchEnd'",
+    settle: 1600,
+    verify: '__kbWin',
+    prep: `window.__kbWin = null;
+      (() => { const s = window.KB.bus.on('matchEnd', (e) => { window.__kbWin = { winner: e.winner }; s(); }); })();`,
+  },
+  {
+    name: '15-impact-light',
+    note: 'A LIGHT hit at contact — the bottom of the weight ladder.',
+    // The critic's complaint "no relationship between hit weight and effect
+    // scale" was UNFALSIFIABLE from the captures, because every impact shot
+    // used move:'launcher'. The shot list contained exactly one weight, while
+    // HIT_FX spans 190 to 1150 sparks and 2.1 to 17.0 light intensity across
+    // the ladder. An axis cannot be scored on a relationship nobody
+    // photographed. Pair this with 04-impact (a launcher) to see the range.
+    setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'jab' });`,
+    freezeOnHit: true,
+    impactOffset: 1,
+    settle: 0,
+  },
+  {
+    name: '16-impact-heavy',
+    note: 'A HEAVY hit at contact — the top of the weight ladder.',
+    // 1.35, not the 1.02 default: measured, the heavy (a roundhouse) whiffs at
+    // close spacing and connects at 1.35. A shot that silently whiffs is how
+    // "no hit landed" frames got scored for several rounds.
+    setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'heavy', dist: 1.35 });`,
+    freezeOnHit: true,
+    impactOffset: 1,
+    settle: 0,
+  },
 ];
 
 async function main() {
