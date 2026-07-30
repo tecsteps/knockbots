@@ -609,6 +609,32 @@ class ScenePass extends Pass {
      */
     this._depthOnly = new THREE.MeshBasicMaterial({ name: 'ScenePassDepthOnly', colorWrite: false });
     this._prepassHidden = [];
+    /**
+     * Smallest screen-space radius, as a fraction of half the viewport height,
+     * that earns a place in the prepass. A prepass draw only pays if the thing
+     * it draws hides enough shading to cover its own cost, and every one of
+     * them is a draw call added to a budget that is already over.
+     *
+     * The whole trade, measured in one session at the hero framing, 1920x1080,
+     * adaptive resolution off and render scale pinned to 1, four alternations
+     * per point:
+     *
+     * | threshold | scene draw calls | median frame | saving |
+     * |---|---|---|---|
+     * | prepass off |  158 | 28.2ms |    — |
+     * | 0 (all)     |  207 | 24.2ms | 3.90ms |
+     * | 0.35        |  203 | 24.5ms | 3.75ms |
+     * | **1**       |  190 | 24.6ms | **3.55ms** |
+     * | 2           |  164 | 26.4ms | 1.85ms |
+     * | 4           |  155 | 26.9ms | 1.38ms |
+     *
+     * 1 is the knee: it keeps 91% of the available saving for two thirds of the
+     * added draws. Everything between 0 and 1 is the two fighters' thirty-odd
+     * small plate meshes, which together cover a few percent of the frame and
+     * hide almost nothing behind them.
+     */
+    this.prepassMinScreenRadius = 1.0;
+    this._sphere = new THREE.Sphere();
   }
 
   /**
@@ -647,6 +673,15 @@ class ScenePass extends Pass {
   #prepass(renderer) {
     const hidden = this._prepassHidden;
     hidden.length = 0;
+    const cam = this.camera;
+    const minR = this.prepassMinScreenRadius;
+    // Screen radius of a bounding sphere, as a fraction of half the viewport
+    // height: r / (distance * tan(fov/2)). Cheap, and conservative for a sphere
+    // straddling the near plane, which is the case we want to keep anyway.
+    const tanHalf = cam.isPerspectiveCamera
+      ? Math.tan(THREE.MathUtils.degToRad(cam.fov) * 0.5) : 1;
+    const eye = cam.matrixWorld;
+    const ex = eye.elements[12], ey = eye.elements[13], ez = eye.elements[14];
     this.scene.traverse((o) => {
       if (!o.visible || !o.isMesh) return;
       const m = o.material;
@@ -660,7 +695,19 @@ class ScenePass extends Pass {
         // The floor is also the one surface in this scene with nothing behind
         // it, so it is the cheapest possible thing to leave out.
         || o.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender;
-      if (skip) { o.visible = false; hidden.push(o); }
+      if (skip) { o.visible = false; hidden.push(o); return; }
+      if (minR > 0 && o.geometry) {
+        if (o.geometry.boundingSphere === null) o.geometry.computeBoundingSphere();
+        const bs = o.geometry.boundingSphere;
+        if (bs) {
+          this._sphere.copy(bs).applyMatrix4(o.matrixWorld);
+          const c = this._sphere.center;
+          const d = Math.hypot(c.x - ex, c.y - ey, c.z - ez);
+          if (this._sphere.radius / Math.max(1e-3, d * tanHalf) < minR) {
+            o.visible = false; hidden.push(o);
+          }
+        }
+      }
     });
     const prevOverride = this.scene.overrideMaterial;
     this.scene.overrideMaterial = this._depthOnly;
@@ -668,9 +715,6 @@ class ScenePass extends Pass {
     this.scene.overrideMaterial = prevOverride;
     for (const o of hidden) o.visible = true;
     hidden.length = 0;
-    // The beauty pass has to keep the depth this just wrote and clear only
-    // colour. `autoClear` is true around the call, so the sub-flag carries it.
-    renderer.autoClearDepth = false;
   }
 
   /** Previous-frame depth copy, safe to sample from materials in the scene. */
@@ -693,10 +737,21 @@ class ScenePass extends Pass {
     const prevAutoClear = renderer.autoClear;
     renderer.autoClear = true;
     renderer.setRenderTarget(this.target);
-    if (this.depthPrepass) this.#prepass(renderer);
+    if (this.depthPrepass) {
+      // The prepass clears; the beauty pass must then keep that depth and start
+      // from a clean colour buffer. It has to be done with `autoClear` and an
+      // explicit colour clear rather than by turning `autoClearDepth` off,
+      // because the arena's mirror renders from inside the beauty pass through
+      // the floor's `onBeforeRender` and clears its own buffer through the same
+      // global flags. Leaving `autoClearDepth` false let the reflection target
+      // accumulate depth across frames, which put wrong occlusion into the one
+      // surface the whole pass exists to serve.
+      this.#prepass(renderer);
+      renderer.autoClear = false;
+      renderer.clearColor();
+    }
     renderer.render(this.scene, this.camera);
     renderer.autoClear = prevAutoClear;
-    renderer.autoClearDepth = true;
 
     // Snapshot here, before any post pass has run: these are the counters the
     // charter's draw-call and triangle budgets are written against.
@@ -1556,6 +1611,7 @@ export class RenderPipeline {
     this.effects = {
       shadows: true, ao: true, bloom: true, dof: true,
       motionBlur: true, grade: true, smaa: true, adaptiveResolution: true,
+      depthPrepass: true,
     };
 
     /**
@@ -1823,7 +1879,10 @@ export class RenderPipeline {
       this.renderer.shadowMap.enabled = this.effects.shadows;
       return;
     }
-    if (name === 'adaptiveResolution') return;
+    // Neither of these owns a pass, so neither needs the chain rebuilding —
+    // and rebuilding it reallocates two full-resolution half-float targets and
+    // recompiles every post shader, which is not something a toggle should do.
+    if (name === 'adaptiveResolution' || name === 'depthPrepass') return;
     this.#buildComposer();
   }
 
@@ -2049,7 +2108,11 @@ export class RenderPipeline {
   #syncPasses(scene, camera) {
     const p = this._passes;
     if (p.render) { p.render.scene = scene; p.render.camera = camera; }
-    if (p.scene) { p.scene.scene = scene; p.scene.camera = camera; }
+    if (p.scene) {
+      p.scene.scene = scene;
+      p.scene.camera = camera;
+      p.scene.depthPrepass = this.effects.depthPrepass;
+    }
     if (p.ao) { p.ao.scene = scene; p.ao.camera = camera; }
     if (p.dof) {
       p.dof.camera = camera;
