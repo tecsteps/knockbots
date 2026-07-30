@@ -70,6 +70,15 @@
   --kb-cut: 0.9em;
   --kb-cut-sm: 0.45em;
   --kb-radius: 2px;
+  /*
+   * The one shared left inset every piece of a player's HUD cluster —
+   * portrait chip, hp-frame, nameplate, overdrive label, overdrive track —
+   * snaps to, so the cluster reads as one designed column instead of five
+   * independently-placed widgets. Sized to the portrait chip's own
+   * footprint (3.15em wide, hung 0.4em past the block's edge, so its true
+   * right edge sits at 2.75em) plus a hairline reveal.
+   */
+  --kb-col-clear: 2.9em;
 
   /*
    * Safe-area insets, hoisted to tokens rather than called inline.
@@ -211,7 +220,7 @@
 }
 
 /*
- * `width: min(29em, 100%)` is the load-bearing rule here, not a cosmetic
+ * `width: min(44em, 100%)` is the load-bearing rule here, not a cosmetic
  * cap: it stops a long name (`nameplate`, an unconstrained-width flex row)
  * from growing the block past the bar's own footprint and off the edge of
  * the screen. It must be a real `width`, not `max-width` + `margin-left:
@@ -222,6 +231,18 @@
  * block (bar included) silently shrinks to the width of the *nameplate*
  * text alone. `justify-self: end` positions the now-definite-width p2
  * block flush right without that trap.
+ *
+ * 44em, not the 29em this used to read: `.hud-top`'s outer two columns are
+ * `1fr`, sized around whatever `.timer-wrap` doesn't use, and at 29em the
+ * block filled only a fraction of that column — the health bar stopped
+ * with well over 200px of empty column still between it and the timer, a
+ * gap the timer housing then had no chance of binding to no matter what
+ * its own edge looked like. 44em is chosen to exceed that column's width
+ * at the resolutions this HUD is captured and judged against (1920x1080
+ * and the 844x390 phone check), so `min()` resolves to `100%` there and
+ * the block genuinely fills its column — which is what makes the fixed-
+ * width bridge in `.hp-block::before` below a reliable close of the
+ * remaining `.hud-top` grid `gap`, rather than a guess at it.
  */
 .hp-block {
   position: relative;
@@ -229,9 +250,22 @@
   flex-direction: column;
   gap: 0.32em;
   min-width: 0;
-  width: min(29em, 100%);
+  width: min(44em, 100%);
 }
-.hp-block--p2 { align-items: flex-end; justify-self: end; }
+/*
+ * `padding-left`/`-right` (mirrored per side), not a left offset on the bar
+ * itself: this is the gutter the portrait chip hangs in. Every flow child
+ * of `.hp-block` (`.hp-frame`, `.nameplate`) is a `width: 100%` box, so
+ * padding on the parent moves all of their left edges together, by
+ * construction, to the one column defined by `--kb-col-clear` — see that
+ * token for why this exact value. The portrait chip and the corner flag
+ * are `position: absolute`, whose containing block is the padding *edge*
+ * of this box, not affected by how much padding is inside it, so they stay
+ * anchored to the block's true outer corner while the padding opens a lane
+ * for them that the bar and nameplate no longer paint into.
+ */
+.hp-block--p1 { padding-left: var(--kb-col-clear); }
+.hp-block--p2 { align-items: flex-end; justify-self: end; padding-right: var(--kb-col-clear); }
 
 /* Small angled flags at the outer tip of each bar in the player's identity
  * colour — an anchor for the eye where a portrait icon would sit, filling
@@ -258,19 +292,42 @@
   box-shadow: 0 0 0.8em rgba(255, 95, 109, 0.55);
 }
 
-/* A thin fading trace running from the bar's inner edge toward the timer —
- * ties the three top-bar pieces (bar / timer / bar) into one composition
- * instead of three widgets floating in empty space. */
+/*
+ * The backing spine. A plain dark-metal plate sitting *behind* `.hp-frame`
+ * (a generated `::before` is that element's first child, so — with no
+ * z-index in play anywhere in this stack — it paints before, i.e. beneath,
+ * every real child that follows it in the DOM: portrait, bar, nameplate all
+ * land on top of it for free) and extending past the bar's own right edge
+ * to butt against `.timer-wrap`.
+ *
+ * Two things this one plate buys, both driven by the same shape:
+ *  1. `.hp-frame`'s own chamfer cuts its top-left and bottom-right corners
+ *     away entirely — that's the parallelogram silhouette, but it means
+ *     those corners have never painted *anything*; they show whatever is
+ *     behind the bar, which used to be the raw arena. With this spine
+ *     behind it, the cut corners now show continuous dark metal instead of
+ *     a hole into the scene, so the chamfer reads as a bevelled edge of one
+ *     object rather than a notch cut out of it.
+ *  2. Sized past the bar's own right edge by exactly `.hud-top`'s own grid
+ *     `gap` (0.7em), it fills the dead space between the bar and the timer
+ *     housing that used to read as three floating widgets — this is only a
+ *     reliable fixed width because `.hp-block`'s own cap (see above) is
+ *     wide enough that the block fills its whole grid column at the
+ *     resolutions this HUD is built and verified against, so that 0.7em
+ *     really is the entire remaining gap, not an estimate.
+ */
 .hp-block--p1::before,
 .hp-block--p2::before {
   content: '';
   position: absolute;
-  top: 1.32em;
-  width: 2.4em;
-  height: 2px;
+  top: 0;
+  height: 2.72em;
+  background: linear-gradient(180deg,
+    #6b7488 0%, #3a4152 9%, #232936 26%, #1a1f29 55%, #141922 100%);
+  box-shadow: inset 0 0.06em 0 rgba(255, 255, 255, 0.3);
 }
-.hp-block--p1::before { left: 100%; background: linear-gradient(90deg, var(--kb-line-strong), transparent); }
-.hp-block--p2::before { right: 100%; background: linear-gradient(270deg, var(--kb-line-strong), transparent); }
+.hp-block--p1::before { left: var(--kb-col-clear); width: calc(100% - var(--kb-col-clear) + 0.7em); }
+.hp-block--p2::before { right: var(--kb-col-clear); width: calc(100% - var(--kb-col-clear) + 0.7em); }
 
 /*
  * The bar is a constructed assembly of three physically distinct planes,
@@ -293,10 +350,20 @@
   position: relative;
   height: 2.72em;
   width: 100%;
-  max-width: 29em;
+  max-width: 44em;
   padding: 0.26em;
+  /*
+   * Raised tonal floor. The previous recipe bottomed out at #0a0c11/#000 for
+   * the lower 80% of the bar's height — against a dark arena that reads as
+   * flat black merging into flat black, so the chamfer this gradient exists
+   * to sell had nothing to separate from. The lit top 7% is untouched (that
+   * highlight already reads); everything below it now settles on a floor
+   * (#171c26) closer to the panel tokens than to void black, so the bevel
+   * stays a visible dark-metal edge the full height of the bar instead of
+   * disappearing into the background for its bottom four-fifths.
+   */
   background: linear-gradient(180deg,
-    #8891a4 0%, #4b5468 7%, #1c212c 20%, #0a0c11 52%, #050609 82%, #000 100%);
+    #8891a4 0%, #4b5468 7%, #262c38 22%, #1c212b 50%, #171c26 100%);
   clip-path: polygon(var(--kb-cut) 0, 100% 0, calc(100% - var(--kb-cut)) 100%, 0 100%);
   box-shadow:
     inset 0 0.07em 0 rgba(255, 255, 255, 0.65),
@@ -459,9 +526,6 @@
   filter: drop-shadow(0 0.22em 0.4em rgba(0, 0, 0, 0.45));
 }
 .hp-block--p2 .nameplate { flex-direction: row-reverse; }
-/* Room for `.portrait-chip`, which overlaps this corner of the block. */
-.hp-block--p1 .nameplate { padding-left: 3.05em; }
-.hp-block--p2 .nameplate { padding-right: 3.05em; }
 
 .nameplate-name.kb-text {
   min-width: 0;
@@ -642,7 +706,17 @@
   grid-template-rows: [label] auto [bar] auto;
   justify-items: start;
   row-gap: 0.2em;
-  width: min(27em, 100%);
+  width: min(30em, 100%);
+  /*
+   * The same `--kb-col-clear` the health-bar cluster snaps to, so the
+   * caption and the track below it start at the identical x the bar and
+   * nameplate above them do, rather than at the raw safe-area inset — one
+   * shared column for the whole player cluster, not just the top two
+   * pieces of it. Belongs on the un-mirrored `padding-left` for the same
+   * reason the rest of this rule stays player-agnostic: `.meter-block--p2`'s
+   * `scaleX(-1)` turns a left inset into a right one for free.
+   */
+  padding-left: var(--kb-col-clear);
 }
 .meter-block--p1 { justify-self: start; }
 .meter-block--p2 { justify-self: end; transform: scaleX(-1); }
@@ -655,7 +729,7 @@
   position: relative;
   height: 0.62em;
   width: 100%;
-  max-width: 27em;
+  max-width: 30em;
   background: #090c13;
   clip-path: polygon(var(--kb-cut-sm) 0, 100% 0, calc(100% - var(--kb-cut-sm)) 100%, 0 100%);
   box-shadow: var(--kb-shadow-panel);
@@ -1007,9 +1081,12 @@
    * screen edge to buy 3px. */
   .hud-top { top: calc(0.75em + var(--kb-sa-t)); gap: 0.55em; }
 
-  /* Both halves of the width the timer gives up go to the bars. */
-  .hp-block { width: min(34em, 100%); }
-  .hp-frame { max-width: 34em; }
+  /* Both halves of the width the timer gives up go to the bars. (37em, not
+   * 34em: +`--kb-col-clear` so the portrait's gutter — needed here too, for
+   * the same one-column reason as the desktop rule — doesn't eat into the
+   * width this row was budgeted.) */
+  .hp-block { width: min(37em, 100%); }
+  .hp-frame { max-width: 37em; }
 
   /* Shrink-wrap the nameplate. Stretched to the bar's full width it was a
    * black slab across a quarter of the screen for the sake of six letters —
@@ -1036,15 +1113,20 @@
    */
   .meter-label { display: none; }
   /*
-   * The meter has to end exactly where the health bar above it ends, and at
-   * this size that is not something an `em` cap can promise. On a monitor both
-   * bars are cap-bound (29em and 27em against ~830px of track) so the 2em inset
-   * between them holds; on a phone the *track* is what binds, and the two wraps
-   * had different tracks — `1fr auto 1fr` around a 73px timer versus a plain
-   * `1fr 1fr`. Measured under a notch that put the meter 8px wider than the bar
-   * it sits under. Mirroring the top bar's own three-column grid, timer gap
-   * included, makes the two tracks identical by construction, and a cap they
-   * both share then resolves to the same number whichever one binds.
+   * On a monitor the bar is wide enough now to reach the timer housing
+   * (see the width note above `.hp-block`) — it's track-bound there, while
+   * the meter stays comfortably inside its own smaller cap. That the meter
+   * ends well short of the bar's own far edge is deliberate on a monitor:
+   * secondary readout, shorter bar. But shrink the track enough and *both*
+   * blocks go track-bound regardless of their caps, and then "ends well
+   * short" stops being a choice — it becomes whatever the two wraps'
+   * tracks happen to leave, and they had different tracks — `1fr auto 1fr`
+   * around a 73px timer versus a plain `1fr 1fr`. Measured under a notch
+   * that put the meter 8px wider than the bar it sits under. Mirroring the
+   * top bar's own three-column grid, timer gap included, makes the two
+   * tracks identical by construction, which is what lets the two caps
+   * below match the top bar's own (see `.hp-block`/`.hp-frame` above) and
+   * still land the meter exactly under the bar rather than past it.
    */
   .meter-wrap {
     top: calc(5.3em + var(--kb-sa-t));
@@ -1052,8 +1134,8 @@
     grid-template-columns: 1fr 6.6em 1fr;
   }
   .meter-block--p2 { grid-column: 3; }
-  .meter-block { width: min(34em, 100%); }
-  .meter-frame { max-width: 34em; height: 1.05em; }
+  .meter-block { width: min(37em, 100%); }
+  .meter-frame { max-width: 37em; height: 1.05em; }
 
   /* Follows the tightened stack up so the gap the counter slams into stays the
    * same gap it was designed against. */

@@ -45,6 +45,8 @@ uniform float uSuper;
 uniform vec2  uSuperCenter;
 uniform vec3  uSuperColor;
 uniform float uSuperFlash;
+uniform float uSuperRadius;
+uniform float uSuperBar;
 
 uniform vec3  uFlashColor;
 uniform float uFlashAmount;
@@ -160,9 +162,18 @@ void main() {
     float luma = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );
     vec2 sc = aspected( uSuperCenter * 0.5 + 0.5 );
     float rad = length( p - sc );
-    // Colour survives near the fighter, the world drains to monochrome outside.
-    float keep = 1.0 - smoothstep( 0.12, 0.62, rad );
-    float desat = clamp( uDesat * ( 1.0 - keep * 0.75 ), 0.0, 1.0 );
+    // Every radius below is in units of the pair's own projected size rather
+    // than in fractions of the frame. The super cinematic dollies from ten
+    // metres to under four over its first eighty ticks, so the fighters go from
+    // a quarter of the frame height to three quarters inside one shot — and a
+    // treatment keyed to fixed screen radii is a halo round two small figures at
+    // the start of it and a stain across both bodies at the end. One uniform
+    // carrying the projected radius of the pair makes the whole takeover hold
+    // its relationship to the subject through the move.
+    float rn = rad / max( uSuperRadius, 0.06 );
+    // Colour survives on the fighters, the world drains to monochrome outside.
+    float keep = 1.0 - smoothstep( 0.62, 1.55, rn );
+    float desat = clamp( uDesat * ( 1.0 - keep * 0.82 ), 0.0, 1.0 );
     col = mix( col, vec3( luma ), desat );
 
     if ( uSuper > 0.002 ) {
@@ -173,28 +184,42 @@ void main() {
       // scrolled outward, gives each shaft the flickering internal detail that
       // makes it read as light travelling through dust rather than as a wedge.
       float polarU = ang / 6.2831853;
-      float striateA = texture2D( uBeam, vec2( polarU * 6.0, rad * 1.3 - uTime * 0.55 ) ).r;
-      float striateB = texture2D( uBeam, vec2( polarU * 9.0 + 0.37, rad * 0.8 + uTime * 0.31 ) ).b;
+      float striateA = texture2D( uBeam, vec2( polarU * 6.0, rn * 0.42 - uTime * 0.55 ) ).r;
+      float striateB = texture2D( uBeam, vec2( polarU * 9.0 + 0.37, rn * 0.26 + uTime * 0.31 ) ).b;
       float b1 = pow( abs( sin( ang * 7.0 + uTime * 1.9 ) ), 14.0 ) * ( 0.45 + striateA * 1.3 );
       float b2 = pow( abs( sin( ang * 11.0 - uTime * 1.2 + 0.7 ) ), 22.0 ) * ( 0.45 + striateB * 1.3 );
       // Everything here stays *local*. Tinting the whole frame with the
       // character colour reads as a broken gel, not as a character powering up;
       // the drama comes from the desaturated surroundings, not from more paint.
-      float falloff = exp( -rad * 2.4 ) * smoothstep( 0.02, 0.14, rad );
+      float falloff = exp( -rn * 0.78 ) * smoothstep( 0.06, 0.44, rn );
       float beams = ( b1 * 0.6 + b2 * 0.4 ) * falloff * uSuper;
       // A hot core and a tight bloom halo centred on the fighter.
-      float core = exp( -rad * rad * 60.0 ) * uSuper;
-      float halo = exp( -rad * 4.2 ) * 0.14 * uSuper;
-      // Nothing the takeover adds survives past a third of the frame. Every
-      // element here already has its own falloff, but they stack, and the sum of
-      // several gentle falloffs is a frame-wide lift — which is exactly what a
-      // blown-out super looks like from the outside.
-      float reach = exp( -rad * rad * 6.5 );
+      float core = exp( -rn * rn * 6.4 ) * uSuper;
+      float halo = exp( -rn * 1.36 ) * 0.14 * uSuper;
+      // Nothing the takeover adds survives far past the subject. Every element
+      // here already has its own falloff, but they stack, and the sum of several
+      // gentle falloffs is a frame-wide lift — which is exactly what a blown-out
+      // super looks like from the outside.
+      float reach = exp( -rn * rn * 0.7 );
       col += ( uSuperColor * ( beams * 0.5 + halo ) + vec3( 1.0 ) * core * 0.35 ) * reach;
       // Charge ripple travelling outward through the drained world.
-      float ripple = sin( rad * 26.0 - uTime * 7.0 ) * 0.5 + 0.5;
+      float ripple = sin( rn * 8.4 - uTime * 7.0 ) * 0.5 + 0.5;
       col += uSuperColor * pow( ripple, 8.0 ) * falloff * uSuper * 0.14 * reach;
-      col *= 1.0 - smoothstep( 0.3, 0.95, rad ) * uSuper * 0.34;
+      // The stage goes, and it has to go properly. At a third of a stop the
+      // arena stayed legible right through the move: the crowd, the fence and
+      // the gantry all went on competing for the frame with the one thing the
+      // camera had been pushed in to look at. Two thirds down leaves the
+      // fighters lit against a dark surround instead of standing in front of a
+      // slightly dimmer factory.
+      //
+      // Elliptical, and much wider than it is tall. The two fighters stand side
+      // by side, so a circular falloff sized to clear the defender horizontally
+      // also clears the entire stage vertically and darkens nothing. Stretching
+      // the horizontal axis to two and a half subject-heights keeps the
+      // opponent inside the lit region while the floor, the crowd and the
+      // gantry directly above the pair all fall outside it.
+      vec2 vq = vec2( rel.x / max( uSuperRadius * 1.5, 0.1 ), rel.y / max( uSuperRadius * 1.05, 0.06 ) );
+      col *= 1.0 - smoothstep( 0.72, 1.5, length( vq ) ) * uSuper * 0.8;
     }
 
     // The connect flash is a blow-out at the contact, not a gel over the frame.
@@ -211,10 +236,38 @@ void main() {
   // The impact tint is heat spilling off the contact, so it falls off from the
   // contact. Added flat it is a coloured gel over the whole frame, and on an
   // ULTRA that is a third of the display range on every pixel at once.
+  //
+  // Falling off from the contact was not enough on its own. Measured by
+  // retiring one FX system at a time on the frozen contact frame, this single
+  // line accounted for 1.75 of the 1.78 percent of the frame above 96% luma —
+  // more than the flare, the sparks, the shockwave and the impact light put
+  // together, all of which measured at or under a twentieth of it. A gaussian
+  // with a coefficient of 4 is still at half strength a quarter of the way
+  // across the picture, so a launcher added a fifth of the display range to
+  // most of the frame at once and everything already near the top of the range
+  // clipped together: the struck robot lost its panel lines, and so did the
+  // crowd, the fence and the floor behind it. A third of the amplitude over a
+  // gaussian nearly four times tighter keeps the spill on the blow and off the
+  // background — half strength now falls at a fifth of the frame height.
   float ir = length( p - aspected( uImpactCenter * 0.5 + 0.5 ) );
-  col += uImpactTint * uImpact * 0.34 * exp( -ir * ir * 4.0 );
+  col += uImpactTint * uImpact * 0.085 * exp( -ir * ir * 21.0 );
   col = mix( col, vec3( 1.0 ) - col, uInvert );
   col = mix( col, uFlashColor, uFlashAmount );
+
+  // --- overdrive scope crop -------------------------------------------------
+  // The super is the one moment the game stops being played and starts being
+  // watched, and cropping to 2.39:1 is the oldest and most legible way to say
+  // so. It is also the only element of the takeover that removes stage rather
+  // than dimming it: the gantry, the scoreboard and the top of the crowd all
+  // live in the upper eighth of the frame, and the bars delete them outright.
+  // Driven off its own uniform rather than off uSuper so the crop can lead the
+  // treatment in and lag it out — bars that snap are a glitch, bars that slide
+  // are a cut to a cinematic.
+  if ( uSuperBar > 0.001 ) {
+    float bar = 0.128 * uSuperBar;
+    float edge = min( vUv.y - bar, 1.0 - bar - vUv.y );
+    col *= smoothstep( 0.0, 0.0016, edge );
+  }
 
   gl_FragColor = vec4( col, 1.0 );
 }`;
@@ -251,6 +304,10 @@ export class OverlayPass extends Pass {
       uSuperCenter: { value: new THREE.Vector2(0, 0) },
       uSuperColor: { value: new THREE.Color(0.4, 0.75, 1) },
       uSuperFlash: { value: 0 },
+      // Projected radius of the pair, in aspect-corrected half-heights. Every
+      // radius in the takeover is expressed as a multiple of this.
+      uSuperRadius: { value: 0.2 },
+      uSuperBar: { value: 0 },
       uFlashColor: { value: new THREE.Color(1, 1, 1) },
       uFlashAmount: { value: 0 },
       uBeam: { value: null },
@@ -280,7 +337,8 @@ export class OverlayPass extends Pass {
   refreshActive() {
     const u = this.uniforms;
     let a = u.uImpact.value + u.uInvert.value + u.uSpeedLines.value +
-      u.uDesat.value + u.uSuper.value + u.uSuperFlash.value + u.uFlashAmount.value;
+      u.uDesat.value + u.uSuper.value + u.uSuperFlash.value + u.uFlashAmount.value +
+      u.uSuperBar.value;
     for (const r of u.uRings.value) a += r.w;
     u.uActive.value = a;
   }

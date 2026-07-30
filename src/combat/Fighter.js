@@ -186,6 +186,51 @@ const PLANT_STATES = new Set([
 const PLANT_CEILING = 0.10;
 const PLANT_CEILING_BAND = 0.12;
 
+// ---------------------------------------------------------------------------
+// Taking a hit
+//
+// Impact is judged as much on the receiver as on the striker, and until now
+// nothing on the receiver moved: `applyHit` picked a reaction clip and that was
+// the whole of it. One clip cannot carry a blow, because the clip does not know
+// which direction the blow came from — `r.flinchMid` plays identically for a
+// hook from the left and a straight from the front.
+//
+// The bus event does know. `velocity` is the striking bone's swept world
+// velocity over the contact tick and `region` is the hurtbox it landed on, so
+// the receiving animator can be driven from the real impact vector and the clip
+// left to do what it is good at: the recovery and the footwork.
+// ---------------------------------------------------------------------------
+
+/**
+ * Swept bone speed, in m/s, that counts as a full-force blow.
+ *
+ * MEASURED, not assumed, and the first guess was wrong by 3.6x. Over 23 hits of
+ * a real CPU-vs-CPU match the striking bone's swept speed ran min 1.75, p25
+ * 2.67, median 3.20, max 8.00 m/s — not the 9-24 a limb tip intuitively suggests,
+ * because `CombatSystem.#strikeVelocity` measures one tick of DISPLACEMENT and a
+ * fist at the end of its travel has already begun decelerating into the contact.
+ * A reference of 18 put every single blow on the lower clamp, which would have
+ * shipped the whole layer at a flat third of its authored strength.
+ *
+ * 5.0 spreads the real distribution across the usable range: a glancing 1.75
+ * lands on the floor, a median 3.2 gives 0.64, and the 8.00 ceiling gives 1.6.
+ *
+ * Note what 8.00 is: `#strikeVelocity` falls back to `facing * 8` whenever the
+ * measured delta is under 1 m/s, and roughly a third of hits take that path. It
+ * is a stand-in for "a strike landed", so the move's own weight class is folded
+ * in as well — otherwise every capped hit would shake the body identically
+ * whether it was a jab or a launcher.
+ */
+const HIT_REF_SPEED = 5.0;
+const HIT_FORCE_MIN = 0.35;
+const HIT_FORCE_MAX = 1.6;
+/** Reaction multiplier by the move's declared weight class. */
+const HIT_WEIGHT_SCALE = { light: 0.78, medium: 1, heavy: 1.22, launcher: 1.3, ultra: 1.45 };
+/** A blocked blow still moves the guard, at roughly a third of the reaction. */
+const BLOCK_FORCE_SCALE = 0.34;
+/** Share of the reaction that also rings the chassis springs. */
+const HIT_RIPPLE_SCALE = 0.8;
+
 /** +1 when the rig's local +Z is its front. See the file header. */
 export const FORWARD_SIGN = 1;
 /** Root yaw that points the rig's front along the fighter's facing. */
@@ -202,6 +247,11 @@ const _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
+/**
+ * Scratch for the bus handlers only. They run re-entrantly, part way through
+ * another Fighter's tick, so they may not borrow the vectors above.
+ */
+const _hv = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 
 // ---------------------------------------------------------------------------
@@ -394,6 +444,9 @@ export class Fighter {
     /** Metres the pelvis is being held above where the clip put it. */
     this.pelvisLift = 0;
     this.currentClip = '';
+    /** Bus unsubscribers for the two events that land on this body. */
+    this._offHit = null;
+    this._offBlock = null;
     this.ready = false;
   }
 
@@ -406,8 +459,76 @@ export class Fighter {
     this.scene.add(this.group);
     this.#buildRig();
     Fighter.warmClipTiming();
+    this.#listenForBlows();
     this.ready = true;
     return this;
+  }
+
+  /**
+   * Subscribe to the two events that land on this body.
+   *
+   * Both fire synchronously inside `CombatSystem.simulate`, which is inside the
+   * sim tick, so what they arm is as deterministic as anything else in here.
+   * The handlers are held so `dispose()` can drop them — a fighter that has been
+   * torn down must not keep receiving blows.
+   */
+  #listenForBlows() {
+    this.#dropBlowListeners();
+    this._offHit = bus.on('hit', (p) => {
+      if (p.defender === this) this.#reactToBlow(p, false);
+    });
+    this._offBlock = bus.on('block', (p) => {
+      if (p.defender === this) this.#reactToBlow(p, true);
+    });
+  }
+
+  #dropBlowListeners() {
+    if (this._offHit) { this._offHit(); this._offHit = null; }
+    if (this._offBlock) { this._offBlock(); this._offBlock = null; }
+  }
+
+  /**
+   * Drive the receiving animator from the blow that just landed.
+   *
+   * The vector arrives in world space and the animator wants model space, so it
+   * is turned by the yaw the SIM believes in — `facing` plus the animation's own
+   * yaw — and not by `visualYaw`, which is a render-rate spring chasing that
+   * value and is therefore a different number on every frame.
+   *
+   * Force comes off the striking limb's speed rather than off the move's damage:
+   * a 60-damage launcher thrown by a slow arm should shake the body less than a
+   * fast one, and only the swept velocity knows the difference. The weight class
+   * rides on top of it rather than replacing it, because a third of hits come in
+   * on `#strikeVelocity`'s 8 m/s fallback and would otherwise be identical.
+   *
+   * The reaction is armed AFTER this tick's `animator.simulate` — `CombatSystem`
+   * resolves once both fighters have advanced — so the first tick it is evaluated
+   * on is the tick after contact, at half amplitude, reaching full on the second.
+   * @param {Object} p the bus payload
+   * @param {boolean} blocked
+   */
+  #reactToBlow(p, blocked) {
+    const anim = this.animator;
+    if (!anim) return;
+    if (p.velocity) _hv.copy(p.velocity); else _hv.set(0, 0, 0);
+    const speed = _hv.length();
+    if (speed < 1e-4) _hv.set((p.attacker?.facing ?? this.facing), 0, 0);
+    else _hv.divideScalar(speed);
+    _hv.applyAxisAngle(UP, -(yawForFacing(this.facing) + this.animYaw));
+
+    // A heavy chassis is moved less by the same blow, the same scaling the
+    // knockback already uses, so the two never disagree on screen. The clamp
+    // goes last, after every multiplier, or a counter-hit launcher stacks past
+    // the ceiling and throws the head 41 degrees in two frames.
+    let force = (speed / HIT_REF_SPEED) * (10 / (5 + (this.stats.weight ?? 5)));
+    force *= HIT_WEIGHT_SCALE[p.move?.weight] ?? 1;
+    if (p.counter) force *= 1.25;
+    force = THREE.MathUtils.clamp(force, HIT_FORCE_MIN, HIT_FORCE_MAX);
+    if (blocked) force *= BLOCK_FORCE_SCALE;
+
+    const region = blocked ? 'arm' : (p.region || 'torso');
+    anim.hitReaction({ dir: _hv, force, region });
+    anim.impact({ dir: _hv, force: force * HIT_RIPPLE_SCALE, region });
   }
 
   /**
@@ -623,7 +744,13 @@ export class Fighter {
       st.weight = 0;
       st.hasLast = false;
     }
-    if (this.animator) this.#play('idle.fight', 0, true);
+    if (this.animator) {
+      // Nothing else in the loop calls `Animator.reset()`, so a reaction armed on
+      // the KO frame would otherwise still be decaying through the first ticks of
+      // the next round, on a fighter standing on its mark.
+      this.animator.clearImpacts?.();
+      this.#play('idle.fight', 0, true);
+    }
     this.#drivePose();
     this.#buildHurtboxes();
   }
@@ -1130,8 +1257,14 @@ export class Fighter {
       throwRelease: true,
     });
     this.addMeter(dmg * METER_ON_DEAL);
+    // `velocity` and `bone` are part of the documented 'hit' payload and every
+    // consumer orients off them; this emit used to omit both, so a throw release
+    // was the one hit in the game that sprayed along the separation axis and
+    // moved nothing on the victim. `applyHit` has just written the exact velocity
+    // it is being thrown at, which is the honest answer for a release.
     bus.emit('hit', {
       attacker: this, defender: victim, move: mv, point, normal: _v2.set(dir, 0.3, 0).normalize().clone(),
+      velocity: victim.velocity.clone(), bone: this.facing === dir ? 'hand_R' : 'hand_L',
       damage: dmg, counter: false, region: 'torso', comboCount: 1,
     });
     bus.emit('hitstop', { ticks: 12 });
@@ -2181,6 +2314,7 @@ export class Fighter {
   }
 
   dispose() {
+    this.#dropBlowListeners();
     if (this.robot?.dispose) this.robot.dispose();
     this.scene.remove(this.group);
   }

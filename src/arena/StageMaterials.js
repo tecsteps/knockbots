@@ -18,6 +18,27 @@
  *     same vertical streak field, so a wall, a girder and a container all look
  *     like they have been standing in the same damp room for thirty years.
  *
+ * That second rule has a limit, and it was being overrun. One contractor's steel
+ * is not one contractor's *grain*: concrete aggregate, machined pitting and the
+ * flake under container paint are physically different sizes, and every set here
+ * was drawing them at roughly the same one — four to six centimetres — because
+ * they all reached for `worley` at a similar cell count over a similar world
+ * tile. The result is a speckle common to the truss, the shell and the barrier,
+ * and a shared speckle across unrelated materials is one of the strongest tells
+ * there is that a set was generated rather than built. So each class now owns
+ * three numbers of its own:
+ *
+ *   - **`TILE`, its world tile size**, spread from 1.4m on machined steel to
+ *     6.2m on poured concrete. The bins are UV'd in metres by `Stage`, so a
+ *     texture repeat is a world scale, and it is free.
+ *   - **its own grain and cell frequencies**, chosen so the smallest feature in
+ *     each set lands where that material's actually does — 11mm pits, 24mm
+ *     aggregate, 100mm paint flake, 208mm chip cells.
+ *   - **a low-frequency field an octave below anything it had**, one to three
+ *     metres across, which is what stops a 24m barrier reading as four copies of
+ *     one panel. Big tiles are what make room for it: a 1.5m tile has nowhere to
+ *     put a 3m blotch.
+ *
  * Maps are packed on the glTF convention (R=AO, G=roughness, B=metalness) so a
  * single texture serves `aoMap`, `roughnessMap` and `metalnessMap`.
  */
@@ -29,11 +50,19 @@ import {
   noiseTexture, radialSprite, stampText, sampleWrap, encodeSrgb,
 } from './ProcTex.js';
 
-/** Vertical streak field: the shared basis for every kind of weathering. */
-function streakField(size, seed, stretch = 7) {
+/**
+ * Vertical streak field: the shared basis for every kind of weathering.
+ *
+ * `cells` is the horizontal frequency of the runs and it is per class, not
+ * shared. Streaks are the most recognisable thing in the set — they are long,
+ * they are high contrast and they sit on every surface — so leaving them at one
+ * width across concrete, steel and container plate put the same signature on all
+ * three no matter how different the grain under it was.
+ */
+function streakField(size, seed, stretch = 7, cells = 26) {
   const f = new Float32Array(size * size);
-  const base = fbm(size, 26, { octaves: 4, seed });
-  const fine = fbm(size, 90, { octaves: 3, seed: seed + 11 });
+  const base = fbm(size, cells, { octaves: 4, seed });
+  const fine = fbm(size, cells * 3.5, { octaves: 3, seed: seed + 11 });
   for (let j = 0; j < size; j++) {
     for (let i = 0; i < size; i++) {
       // Sampling the same noise with a squashed vertical coordinate is what
@@ -88,12 +117,16 @@ function studGrid(height, size, cols, rows, radius, amount, offset = 0) {
 // Painted structural steel — gantries, railings, machinery housings
 // ---------------------------------------------------------------------------
 
+/** Painted steel tiles at 1.9m: 6mm grain, 21cm chip cells, 94cm blotching. */
 function paintedSteelSet(size, seed) {
-  const grain = fbm(size, 200, { octaves: 3, seed });
+  const grain = fbm(size, 300, { octaves: 2, seed });
   const macro = fbm(size, 7, { octaves: 4, seed: seed + 3 });
-  const streaks = streakField(size, seed + 5);
-  const { f1: cellF1 } = worley(size, 12, seed + 9, 0.9);
-  const scratch = fbm(size, 340, { octaves: 2, seed: seed + 13, ridged: true });
+  // Whole panels weather at different rates — one bay under a leak, the next
+  // dry — and that is a metre-scale field, an octave below anything else here.
+  const patch = fbm(size, 2, { octaves: 3, seed: seed + 31 });
+  const streaks = streakField(size, seed + 5, 6, 18);
+  const { f1: cellF1 } = worley(size, 9, seed + 9, 0.9);
+  const scratch = fbm(size, 240, { octaves: 2, seed: seed + 13, ridged: true });
 
   const height = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) height[k] = grain[k] * 0.16 + macro[k] * 0.1;
@@ -108,7 +141,7 @@ function paintedSteelSet(size, seed) {
     chipRaw[k] = clamp01(
       smoothstep(0.55, 0.9, macro[k] * 0.55 + streaks[k] * 0.75) * 0.9 +
       edge * 0.5 + smoothstep(0.72, 0.98, scratch[k]) * 0.55,
-    );
+    ) * (0.55 + patch[k] * 0.9);
   }
   const chip = blur(chipRaw, size, 1, 1);
 
@@ -123,11 +156,14 @@ function paintedSteelSet(size, seed) {
   const albedo = bakeAlbedo(size, (i, j, k, out) => {
     const c = chip[k];
     const dirt = clamp01(streaks[k] * 0.85 + macro[k] * 0.3 - 0.15);
+    // The metre-scale field rides the paint value as well as the chipping, so a
+    // run of gantry does not come out one flat colour between its chips.
+    const bay = 0.84 + patch[k] * 0.32;
     for (let ch = 0; ch < 3; ch++) {
       let v = lerp(paint[ch], paintDark[ch], macro[k] * 0.7 + grain[k] * 0.3);
       v = lerp(v, steel[ch] * (0.65 + grain[k] * 0.5), c);
       v = lerp(v, grime[ch], dirt * 0.42);
-      out[ch] = v * (0.86 + ao[k] * 0.14);
+      out[ch] = v * bay * (0.86 + ao[k] * 0.14);
     }
   });
 
@@ -145,15 +181,20 @@ function paintedSteelSet(size, seed) {
 // Dark machined steel — trusses, frames, the machinery wall
 // ---------------------------------------------------------------------------
 
+/** Machined steel tiles at 1.4m: 11mm pits, 3mm brush grain, 70cm blotching. */
 function darkMetalSet(size, seed) {
   const brush = new Float32Array(size * size);
   const src = fbm(size, 260, { octaves: 3, seed });
   for (let j = 0; j < size; j++) {
     for (let i = 0; i < size; i++) brush[j * size + i] = sampleWrap(src, size, i / 12, j);
   }
-  const pit = worley(size, 46, seed + 4, 1.0).f1;
-  const macro = fbm(size, 5, { octaves: 4, seed: seed + 7 });
-  const streaks = streakField(size, seed + 8, 9);
+  // Pitting on machined stock is an order finer than aggregate in concrete. At
+  // 46 cells over the old tile it was 4cm across, which is the same size as the
+  // concrete's aggregate and the container's flake — the shared speckle itself.
+  const pit = worley(size, 130, seed + 4, 1.0).f1;
+  const macro = fbm(size, 4, { octaves: 5, seed: seed + 7 });
+  const patch = fbm(size, 2, { octaves: 2, seed: seed + 29 });
+  const streaks = streakField(size, seed + 8, 11, 34);
 
   const height = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) {
@@ -172,10 +213,11 @@ function darkMetalSet(size, seed) {
   const albedo = bakeAlbedo(size, (i, j, k, out) => {
     const b = brush[k];
     const dirt = clamp01(streaks[k] * 0.9 - 0.1);
+    const bay = 0.86 + patch[k] * 0.3;
     for (let ch = 0; ch < 3; ch++) {
       let v = lerp(dark[ch], steel[ch], b * 0.75 + macro[k] * 0.35);
       v = lerp(v, oil[ch], dirt * 0.5);
-      out[ch] = v * (0.82 + ao[k] * 0.18);
+      out[ch] = v * bay * (0.82 + ao[k] * 0.18);
     }
   });
 
@@ -195,11 +237,16 @@ function darkMetalSet(size, seed) {
 // Corrugated container steel — faded paint over deep rust
 // ---------------------------------------------------------------------------
 
+/** Container plate tiles at 2.2m: 275mm ribs, 20mm orange peel, 100mm flake. */
 function containerSet(size, seed) {
-  const grain = fbm(size, 170, { octaves: 3, seed });
+  // Coarser than the steel set's grain on purpose. Paint over a corrugated skin
+  // fails as orange peel and lifting flake, both of which are visibly bigger
+  // than the pitting on a machined member.
+  const grain = fbm(size, 110, { octaves: 4, seed });
   const rustBlob = fbm(size, 9, { octaves: 5, seed: seed + 2 });
-  const streaks = streakField(size, seed + 6, 5);
-  const flake = worley(size, 34, seed + 11, 1).f1;
+  const weather = fbm(size, 2, { octaves: 3, seed: seed + 27 });
+  const streaks = streakField(size, seed + 6, 4, 12);
+  const flake = worley(size, 22, seed + 11, 1).f1;
 
   const height = new Float32Array(size * size);
   for (let j = 0; j < size; j++) {
@@ -214,11 +261,13 @@ function containerSet(size, seed) {
   scribeGrid(height, size, 1, 3, 0.4, 0.007);
   const rustMask = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) {
-    rustMask[k] = clamp01(
+    // Rust is a whole-panel event before it is a local one: one box in a stack
+    // has gone over and the one beside it has not.
+    rustMask[k] = clamp01((
       smoothstep(0.5, 0.82, rustBlob[k]) * 0.9 +
       smoothstep(0.45, 0.85, streaks[k]) * 0.7 +
-      smoothstep(0.78, 1, 1 - flake[k]) * 0.4,
-    );
+      smoothstep(0.78, 1, 1 - flake[k]) * 0.4
+    ) * (0.45 + weather[k] * 1.2));
   }
   for (let k = 0; k < size * size; k++) height[k] -= rustMask[k] * 0.16 * grain[k];
 
@@ -252,12 +301,22 @@ function containerSet(size, seed) {
 // Poured concrete — the barrier walls and the pit surround
 // ---------------------------------------------------------------------------
 
+/**
+ * Poured concrete tiles at 6.2m: 24mm aggregate, 15mm fines, 3m pour variation.
+ *
+ * The biggest tile in the set, because concrete is what the biggest surfaces are
+ * made of — the 24m barrier and the terrace — and those are precisely where a
+ * short tile is legible as a repeat.
+ */
 function concreteSet(size, seed) {
-  const aggregate = worley(size, 58, seed, 1).f1;
-  const fines = fbm(size, 220, { octaves: 3, seed: seed + 1 });
+  const aggregate = worley(size, 260, seed, 1).f1;
+  const fines = fbm(size, 420, { octaves: 3, seed: seed + 1 });
   const macro = fbm(size, 6, { octaves: 5, seed: seed + 4 });
-  const streaks = streakField(size, seed + 7, 6);
-  const crackField = fbm(size, 16, { octaves: 4, seed: seed + 21, ridged: true });
+  // Pour-to-pour variation: three metres across, an octave below `macro` and
+  // the only field here big enough to break the barrier's repeat.
+  const pour = fbm(size, 2, { octaves: 3, seed: seed + 33 });
+  const streaks = streakField(size, seed + 7, 8, 14);
+  const crackField = fbm(size, 22, { octaves: 4, seed: seed + 21, ridged: true });
 
   const height = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) {
@@ -282,17 +341,21 @@ function concreteSet(size, seed) {
 
   const albedo = bakeAlbedo(size, (i, j, k, out) => {
     const dirt = clamp01(streaks[k] * 0.95 - 0.08);
+    const bay = 0.8 + pour[k] * 0.42;
     for (let ch = 0; ch < 3; ch++) {
       let v = lerp(mid[ch], pale[ch], fines[k] * 0.7 + smoothstep(0.2, 0, aggregate[k]) * 0.5);
       v = lerp(v, dark[ch], macro[k] * 0.5);
       v = lerp(v, stain[ch], dirt * 0.55 + cracks[k] * 0.6);
-      out[ch] = v * (0.78 + ao[k] * 0.22);
+      out[ch] = v * bay * (0.78 + ao[k] * 0.22);
     }
   });
 
   const rough = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) {
-    rough[k] = clamp01(0.88 + fines[k] * 0.1 - streaks[k] * 0.1);
+    // A float-finished bay and a tamped one sit next to each other on a real
+    // pour, and the difference shows up in the highlight long before it shows
+    // up in the albedo.
+    rough[k] = clamp01(0.88 + fines[k] * 0.1 - streaks[k] * 0.1 - (pour[k] - 0.5) * 0.16);
   }
   return { albedo, normal: makeTexture(normal, size), orm: packOrm(ao, rough, null, size) };
 }
@@ -301,10 +364,12 @@ function concreteSet(size, seed) {
 // Hazard striping — the kerbs, bumpers and door frames
 // ---------------------------------------------------------------------------
 
+/** Striped kerbs and bumpers, tiling at 1.6m: 27cm chevrons, 11mm grain. */
 function hazardSet(size, seed) {
-  const grain = fbm(size, 190, { octaves: 3, seed });
+  const grain = fbm(size, 150, { octaves: 3, seed });
   const wear = fbm(size, 11, { octaves: 4, seed: seed + 5 });
-  const streaks = streakField(size, seed + 9, 5);
+  const traffic = fbm(size, 2, { octaves: 3, seed: seed + 37 });
+  const streaks = streakField(size, seed + 9, 5, 22);
   const scuff = fbm(size, 300, { octaves: 2, seed: seed + 17, ridged: true });
 
   const stripe = new Float32Array(size * size);
@@ -318,9 +383,14 @@ function hazardSet(size, seed) {
   const stripeSoft = blur(stripe, size, 1, 1);
 
   // Paint wears off the raised concrete underneath in traffic patterns.
+  // Paint goes where the traffic goes, and traffic is a metre-scale pattern —
+  // a worn track across a kerb, not an even fade over the whole of it.
   const worn = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) {
-    worn[k] = clamp01(smoothstep(0.46, 0.86, wear[k]) * 0.9 + smoothstep(0.7, 1, scuff[k]) * 0.6);
+    worn[k] = clamp01(
+      (smoothstep(0.46, 0.86, wear[k]) * 0.9 + smoothstep(0.7, 1, scuff[k]) * 0.6) *
+      (0.5 + traffic[k] * 1.15),
+    );
   }
 
   const height = new Float32Array(size * size);
@@ -656,6 +726,23 @@ export function makeArenaMaterials(opts = {}) {
   const concSet = concreteSet(big, 401);
   const hazSet = hazardSet(small, 503);
   const grateSet = gratingSet(Math.min(512, small), 601);
+
+  // World tile per class, as a repeat against the metres-per-tile the `Stage`
+  // UV'd each bin at (concrete 3.4, steel 1.5, dark 1.9, container 2.2, hazard
+  // 1.6). The point of the spread is that no two classes share a period: with
+  // every set landing between 1.5 and 3.4 metres the whole hangar carried one
+  // beat, and a shared beat across materials that have nothing to do with each
+  // other is what makes a set look procedural. Container and hazard keep their
+  // scale because both carry authored features at a real size — 275mm
+  // corrugation and 270mm chevrons — that a repeat would put wrong.
+  const tile = (set, r) => {
+    for (const t of [set.albedo, set.normal, set.orm]) t?.repeat.set(r, r);
+  };
+  tile(concSet, 0.55);   // 6.18m
+  tile(boxSet, 1.0);     // 2.20m
+  tile(steelSet, 0.8);   // 1.88m
+  tile(hazSet, 1.0);     // 1.60m
+  tile(darkSet, 1.35);   // 1.41m
 
   const textures = {
     steelAlbedo: steelSet.albedo, steelNormal: steelSet.normal, steelOrm: steelSet.orm,

@@ -278,6 +278,49 @@ export function railing(length, opts = {}) {
 }
 
 /**
+ * Ladder-type cable tray along +X, origin at the centre of the run, tray floor
+ * at y=0.
+ *
+ * Every industrial interior has one and it is the most useful single object in
+ * the kit for a long wall, because it is the only piece of infrastructure that
+ * is *legible as a repeat*: the rungs are a fixed pitch, so a tray running away
+ * from the lens gives the eye a ruler for the whole depth of the room. It is
+ * also mostly holes, so a twenty-six metre run costs about the same as one
+ * girder.
+ *
+ * @param {number} length
+ * @param {number} width rail centre to rail centre
+ * @param {object} [opts]
+ */
+export function cableTray(length, width, opts = {}) {
+  const rungPitch = opts.rungPitch ?? 0.3;
+  const depth = opts.depth ?? 0.1;
+  const t = opts.thickness ?? 0.018;
+  const parts = [];
+
+  for (const s of [-1, 1]) {
+    parts.push(place(bevelBox(length, depth, t, t * 0.35), { pos: [0, depth / 2, s * width / 2] }));
+    // Return lip folded in along the top of each rail. It is one centimetre of
+    // geometry and it is what puts a continuous specular line down the run.
+    parts.push(place(bevelBox(length, t, 0.032, t * 0.3), { pos: [0, depth - t / 2, s * (width / 2 - 0.016)] }));
+  }
+  const rungs = Math.max(2, Math.round(length / rungPitch));
+  for (let i = 0; i <= rungs; i++) {
+    parts.push(place(bevelBox(0.03, t, width, t * 0.3), {
+      pos: [-length / 2 + (i * length) / rungs, t / 2, 0],
+    }));
+  }
+  const cables = opts.cables ?? 3;
+  for (let i = 0; i < cables; i++) {
+    const r = 0.015 + (i % 3) * 0.008;
+    parts.push(place(new THREE.CylinderGeometry(r, r, length, 6, 1), {
+      pos: [0, t + r, -width / 2 + width * ((i + 0.5) / cables)], rot: [0, 0, Math.PI / 2],
+    }));
+  }
+  return mergeAll(parts);
+}
+
+/**
  * Open lattice girder along +X: two chords, verticals and alternating
  * diagonals. This is the single most recognisable industrial silhouette, and
  * because it is mostly holes it costs very little against the triangle budget.
@@ -474,20 +517,28 @@ export const CROWD_ARCHETYPES = 6;
  * holds — and the arms are always built, because the gap between an arm and the
  * ribcage is the one hole that tells the eye it is looking at a person.
  *
- * Skin, hair and clothing are separated into an `aTone` vertex mask rather than
- * left to one flat tint. A crowd where the heads share the value of the coats is
- * a row of bollards — but a crowd of *bare* heads is worse, because at twelve
- * metres a skull is one bright oval per person and forty identical ovals in a
- * line read as a shelf of shop mannequins, which is exactly what the stage was
- * failing on. Hair cuts that oval down to a face and gives the head a third
- * value, and it is the cheapest silhouette break anywhere in the figure.
+ * Clothing is separated into an `aTone` vertex mask rather than left to one flat
+ * tint, and the mask has five bands rather than three. A crowd where the heads
+ * share the value of the coats is a row of bollards — but a crowd of *bare*
+ * heads is worse, because at twelve metres a skull is one bright oval per person
+ * and forty identical ovals in a line read as a shelf of shop mannequins. Hair
+ * cuts that oval down to a face and gives the head a third value.
+ *
+ * The jacket/trousers split is the same argument one step down the figure. An
+ * earlier pass drew it in the shader off a height threshold, which cannot work:
+ * the threshold is one number in the figure's local space and the figures are
+ * scaled per instance, so the waistline slid up and down the body and on the
+ * short ones landed above the hips. Cut here, it lands on the actual garment
+ * every time, and shoes and headwear come out as a fifth value — the two places
+ * on a person that are reliably darker than anything they are wearing.
  *
  * @param {number} [seed] varies proportion, stance, hair and headwear within an
  *   archetype
  * @param {number} [archetype] 0 stand, 1 cheer, 2 lean on rail, 3 arms folded,
  *   4 filming, 5 hunched with hands pocketed
  * @returns {THREE.BufferGeometry} origin at the feet, facing -Z, carrying a
- *   float `aTone` attribute that is 0 on clothing, 1 on bare skin and 2 on hair
+ *   float `aTone` attribute: 0 jacket, 1 bare skin, 2 hair, 3 trousers,
+ *   4 shoes/headwear/bag
  */
 export function crowdFigure(seed = 0, archetype = 0) {
   const r = (n) => {
@@ -508,7 +559,11 @@ export function crowdFigure(seed = 0, archetype = 0) {
   // is the only part of this figure that carries any information at twenty
   // metres — close that gap and it collapses straight back into a capsule.
   const shoulderX = 0.26 * bulk;
-  const parts = [];
+  // Five tone runs, kept as separate piles so the mask is filled from four
+  // vertex offsets instead of tagged primitive by primitive.
+  const parts = [];   // jacket
+  const trews = [];   // trousers
+  const kit = [];     // shoes, headwear, bag, the camera in archetype 4
   const skin = [];
   const hair = [];
 
@@ -526,9 +581,9 @@ export function crowdFigure(seed = 0, archetype = 0) {
     const foot = [s * (stance + r(10 + s) * 0.05), 0, (r(12 + s) - 0.5) * 0.14];
     const knee = [s * (stance + 0.02), hipY * 0.5, foot[2] * 0.4 + 0.03];
     const hip = [s * 0.085 * bulk, hipY, 0];
-    parts.push(segment(hip, knee, 0.078 * bulk, 0.062 * bulk));
-    parts.push(segment(knee, foot, 0.06 * bulk, 0.048 * bulk));
-    parts.push(place(new THREE.BoxGeometry(0.09, 0.05, 0.2), { pos: [foot[0], 0.025, foot[2] - 0.03] }));
+    trews.push(segment(hip, knee, 0.078 * bulk, 0.062 * bulk));
+    trews.push(segment(knee, foot, 0.06 * bulk, 0.048 * bulk));
+    kit.push(place(new THREE.BoxGeometry(0.09, 0.05, 0.2), { pos: [foot[0], 0.025, foot[2] - 0.03] }));
   }
 
   // Torso: hips, ribcage, shoulder yoke.
@@ -572,16 +627,18 @@ export function crowdFigure(seed = 0, archetype = 0) {
     }
   }
   if (hat === 0) {
-    parts.push(place(new THREE.CylinderGeometry(0.108 * tall, 0.104 * tall, 0.08, 9), { pos: [head[0], head[1] + 0.07, head[2]] }));
-    parts.push(place(bevelBox(0.2, 0.02, 0.13, 0.008), { pos: [head[0], head[1] + 0.035, head[2] - 0.12], rot: [0.12, 0, 0] }));
+    kit.push(place(new THREE.CylinderGeometry(0.108 * tall, 0.104 * tall, 0.08, 9), { pos: [head[0], head[1] + 0.07, head[2]] }));
+    kit.push(place(bevelBox(0.2, 0.02, 0.13, 0.008), { pos: [head[0], head[1] + 0.035, head[2] - 0.12], rot: [0.12, 0, 0] }));
   } else if (hat === 1) {
-    parts.push(place(new THREE.SphereGeometry(0.113 * tall, 9, 6, 0, Math.PI * 2, 0, Math.PI * 0.62), { pos: [head[0], head[1] + 0.01, head[2]] }));
+    kit.push(place(new THREE.SphereGeometry(0.113 * tall, 9, 6, 0, Math.PI * 2, 0, Math.PI * 0.62), { pos: [head[0], head[1] + 0.01, head[2]] }));
   } else if (hat === 2) {
     // Hood: a shell behind the head that widens the silhouette at the shoulders.
+    // It stays on the jacket run — a hood is part of the coat, and giving it the
+    // headwear value put a dark cap on a light coat that read as a second head.
     parts.push(place(new THREE.SphereGeometry(0.145 * tall, 9, 7), { pos: [head[0], head[1] - 0.02, head[2] + 0.06], scale: [1, 1.05, 0.85] }));
   }
   if (r(6) > 0.72) {
-    parts.push(place(bevelBox(0.26 * bulk, 0.34 * tall, 0.16, 0.03), { pos: at(0, chestY + 0.02, 0.22 * bulk) }));
+    kit.push(place(bevelBox(0.26 * bulk, 0.34 * tall, 0.16, 0.03), { pos: at(0, chestY + 0.02, 0.22 * bulk) }));
   }
 
   // Arms. Every archetype places the elbow and the hand explicitly; the wrong
@@ -602,7 +659,7 @@ export function crowdFigure(seed = 0, archetype = 0) {
     } else if (k === 4 && s > 0) {
       elbow = at(s * (shoulderX + 0.11), shoulderY - 0.12 * tall, -0.08);
       hand = at(s * 0.13, shoulderY + 0.16 * tall, -0.22);
-      parts.push(place(bevelBox(0.075, 0.14, 0.014, 0.005), { pos: [hand[0], hand[1] + 0.06, hand[2] - 0.02], rot: [0.2, 0, 0.1] }));
+      kit.push(place(bevelBox(0.075, 0.14, 0.014, 0.005), { pos: [hand[0], hand[1] + 0.06, hand[2] - 0.02], rot: [0.2, 0, 0.1] }));
     } else if (k === 5) {
       elbow = at(s * (shoulderX + 0.15), shoulderY - 0.32 * tall, 0.04);
       hand = at(s * 0.12, hipY + 0.02, -0.13);
@@ -619,17 +676,21 @@ export function crowdFigure(seed = 0, archetype = 0) {
     skin.push(place(new THREE.SphereGeometry(armR * 0.95, 6, 4), { pos: hand }));
   }
 
-  // Clothing, then skin, then hair — three contiguous runs, so the mask is
-  // filled from two vertex offsets instead of tagged part by part.
-  const clothed = mergeAll(parts);
-  const bare = mergeAll(skin);
-  const mane = hair.length ? mergeAll(hair) : null;
-  const geo = mergeAll(mane ? [clothed, bare, mane] : [clothed, bare]);
-  const nClothed = clothed.attributes.position.count;
-  const nBare = bare.attributes.position.count;
+  // Five contiguous runs in mask order, so the whole attribute is four `fill`
+  // calls over one array rather than a tag on every primitive.
+  const runs = [[parts, 0], [skin, 1], [hair, 2], [trews, 3], [kit, 4]]
+    .filter(([list]) => list.length)
+    .map(([list, tone]) => {
+      const g = mergeAll(list);
+      return { g, tone, n: g.attributes.position.count };
+    });
+  const geo = mergeAll(runs.map((r) => r.g));
   const mask = new Float32Array(geo.attributes.position.count);
-  mask.fill(1, nClothed, nClothed + nBare);
-  if (mane) mask.fill(2, nClothed + nBare);
+  let off = 0;
+  for (const r of runs) {
+    if (r.tone) mask.fill(r.tone, off, off + r.n);
+    off += r.n;
+  }
   geo.setAttribute('aTone', new THREE.Float32BufferAttribute(mask, 1));
   return geo;
 }

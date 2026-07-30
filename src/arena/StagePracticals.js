@@ -81,22 +81,116 @@ const POOLS = [
  * Linear radiance per unit of `sqrt(power)` for a pool card. Held low on
  * purpose: the pool says where the light landed, and once it is bright enough to
  * compete with the fighters standing in it the floor stops being the floor.
+ *
+ * That last clause turned out to be measurably true rather than a caution.
+ * Sampling the deck within 2.6 m of a fighter against the same frame with the
+ * pool cards hidden, at 1920x1080 with the simulation paused: the cards were
+ * carrying 22% of the deck's luminance at the fight framing and 33% at the wide
+ * one, against a fighter-to-deck ratio of 1.85 and 2.06 respectively. They are
+ * the only term in the arena that lands on the deck and nowhere else, so they
+ * are the cheapest quarter-stop of figure/ground on offer and this is a quarter
+ * stop off them.
  */
-const POOL_GAIN = 0.115;
+const POOL_GAIN = 0.096;
 
 /**
- * Scene-referred luminance where `RenderPipeline`'s bright pass starts to bloom.
- * Every emitter in this file is authored against it: a lamp face that sits under
- * it is a pale grey rectangle with a light bolted on somewhere else, and the eye
- * refuses to accept it as the source. Above it the bloom does the work — the
- * fixture spreads, the glass around it lifts, and the thing reads as hot.
+ * Scene-referred radiance the dimmest fixture any mood authors is driven to.
+ * Every emitter in this file is a multiple of it, so it is the one number that
+ * decides whether the set reads as lit or as painted.
+ *
+ * It was 1.15, and it was 1.15 because it was documented as
+ * "`RenderPipeline`'s bright pass threshold". That number is
+ * `look.bloomThreshold`, and `look.bloomThreshold` is **5.5** — so every lamp
+ * face in the arena was authored a factor of five *under* the pass it claimed to
+ * be authored against, and the brightest fixture in the set stopped a stop short
+ * of blooming at all.
+ *
+ * The corrected value is measured rather than derived, because the tone curve
+ * makes the top of the range unguessable. `RenderPipeline`'s AgX compresses the
+ * normalised log instead of clamping it, so radiance approaches display white
+ * asymptotically and never arrives. Sweeping every emitter in this file by a
+ * common multiplier at the wide framing, 1920x1080, simulation paused:
+ *
+ *     x1    p99.9 0.707    pixels >= 250/255  0.075%
+ *     x3    p99.9 0.766    pixels >= 250/255  0.075%
+ *     x6    p99.9 0.857    pixels >= 250/255  0.075%
+ *     x8    p99.9 0.883    pixels >= 250/255  0.076%
+ *     x12   p99.9 0.906    pixels >= 250/255  0.075%
+ *
+ * The count of clipped pixels does not move at all — twelve times the radiance
+ * puts not one extra pixel at white — while the 99.9th percentile climbs two
+ * thirds of the way to it. The ten Tekken 8 references sit at a 99.9th
+ * percentile of 0.90 to 0.999; this build sat at 0.72. So the reachable target
+ * is the percentile, and the residue is `look.shoulder`, which is 0.68 and lives
+ * in `RenderPipeline`. Anchored here so a fixture face lands in the reference
+ * band and comfortably over the bright pass.
+ *
+ * The fixture faces, the tube runs and the boards can be driven this hard and
+ * the tube cannot, and the split is `noReflect` rather than taste. Everything on
+ * that list is kept out of the floor's planar mirror, so its only route onto the
+ * deck is bloom; the barrier tube is deliberately left in the mirror because an
+ * emitter's reflection is most of what sells a wet deck, and it therefore lands
+ * on the deck twice. Driving all four together measured +15% on the deck the
+ * fighters are read against and gave back the whole of the key redistribution.
+ *
+ * Where this file's emitter pass landed, against pristine HEAD, 99.9th
+ * percentile of frame luminance with the HUD hidden:
+ *
+ *     fight framing   0.727 -> 0.818
+ *     wide framing    0.740 -> 0.884      (reference set: 0.90 - 0.999)
+ *
+ * The fight framing is the one still short, and it is short for a reason that
+ * cannot be fixed by turning anything up: the only emitters inside that frame
+ * are the barrier tube and the boards, and they are small. It wants a fixture in
+ * the shot, which is a set decision rather than a radiance one.
  */
-const BLOOM_THRESHOLD = 1.15;
+const LAMP_ANCHOR = 13.0;
 
 const _tmp = new THREE.Color();
 const _white = new THREE.Color(1, 1, 1);
 const _amber = new THREE.Color(0xffa02a);
 const _down = new THREE.Vector3(0.15, -1, 0.1).normalize();
+
+/**
+ * Aerial perspective on an emitter is in-scatter, not a blend toward the haze.
+ *
+ * `Environment`'s fog is `FogExp2` at density 0.028, and three's fog chunk is a
+ * `mix` — it takes the fragment's own radiance *away* and puts haze in its
+ * place. On a surface that is correct. On a light source it is not: haze does
+ * not remove a lamp's output, it adds its own on top, which is why a street
+ * light twenty metres off in fog reads as a bright core inside a halo rather
+ * than as a grey rectangle. The distinction only matters when the source is
+ * genuinely bright, and every source in this file now is.
+ *
+ * It is also the whole of the critic's second note. At the fight framing the
+ * barrier tube is 14 m from the eye and the boards 20 m, which is a mix of
+ * 0.14 and 0.24; pull the camera back to the wide framing and the same two are
+ * 20 m and 26 m, so the tube loses 27% of its radiance and the boards 36% —
+ * exactly the framing where the frame most needs something at the top of its
+ * range. Everything else in this file is already `fog: false` for the same
+ * reason; the neon and the screens were the two that were not.
+ *
+ * The GLSL is written against `fog_pars_fragment`'s declarations, so the
+ * material keeps `fog: true` and only the final combine changes.
+ */
+const HAZE_AS_IN_SCATTER = /* glsl */ `
+#ifdef USE_FOG
+  #ifdef FOG_EXP2
+    float kbHaze = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );
+  #else
+    float kbHaze = smoothstep( fogNear, fogFar, vFogDepth );
+  #endif
+  gl_FragColor.rgb += fogColor * kbHaze;
+#endif
+`;
+
+/** Swap a stock material's fog `mix` for {@link HAZE_AS_IN_SCATTER}. */
+function hazeAsInScatter(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <fog_fragment>', HAZE_AS_IN_SCATTER);
+  };
+  material.customProgramCacheKey = () => 'kb.haze.inscatter';
+}
 
 /**
  * The boards, in the order they are built. Each carries its own caption, its
@@ -632,6 +726,7 @@ export class StagePracticals {
       runs.push(place(bevelBox(0.05, 1.5, 0.05, 0.01), { pos: [-12.4 + i * 6.2, 3.4, -12.0] }));
     }
     this.neonMaterial = new THREE.MeshBasicMaterial({ name: 'arena.neon', color: new THREE.Color(0x2ad4ff), toneMapped: true, fog: true });
+    hazeAsInScatter(this.neonMaterial);
     this.neon = new THREE.Mesh(mergeAll(runs), this.neonMaterial);
     this.neon.name = 'arena.practicals.neon';
     this.group.add(this.neon);
@@ -706,10 +801,13 @@ export class StagePracticals {
           uCaptions: { value: null },
           uColor: { value: new THREE.Color(0x63d0ff) },
           uWarn: { value: new THREE.Color(0xffa02a) },
-          // The trace and its head end up near four times BLOOM_THRESHOLD, the
-          // bar graph just over it, the dark field far under. A screen is only
-          // convincing when its own contrast survives the bright pass.
-          uGain: { value: 2.7 },
+          // The trace and its head end up well over the bright pass, the bar
+          // graph just over it, the dark field far under. A screen is only
+          // convincing when its own contrast survives the bright pass. Held
+          // under the fixture faces because eight boards at a lamp's radiance
+          // would be eight lamps, and because bloom off a panel this size
+          // spills onto the deck behind the fighters.
+          uGain: { value: 13.0 },
           uRows: { value: BOARD_ROWS },
         },
       ]),
@@ -847,7 +945,7 @@ export class StagePracticals {
           col *= 1.0 - 0.55 * pow( length( uv - 0.5 ) * 1.5, 3.0 );
 
           gl_FragColor = vec4( col * uGain, 1.0 );
-          #include <fog_fragment>
+          ${HAZE_AS_IN_SCATTER}
         }
       `,
       toneMapped: true,
@@ -922,11 +1020,11 @@ export class StagePracticals {
       // and a 4.5-unit sign box have to end up within a stop or two of each
       // other on screen, or the bright one clips to a white rectangle and stops
       // reading as a lit surface at all. The curve is anchored on the dimmest
-      // fixture any mood authors, so even the sign box clears BLOOM_THRESHOLD
+      // fixture any mood authors, so even the sign box clears the bright pass
       // and the light banks land three to four times over it — hot enough that
       // the bright pass, not the albedo, is what the eye reads them by.
       const live = Math.max(0, light?.intensity ?? p.power);
-      const power = BLOOM_THRESHOLD * Math.pow(live / 4.5, 0.62) * (i === 3 ? 1.35 : 2.1);
+      const power = LAMP_ANCHOR * Math.pow(live / 4.5, 0.62) * (i === 3 ? 1.35 : 2.1);
       cols[i].copy(light?.color ?? p.color).multiplyScalar(power);
       // The pool is scatter, so it follows the source's flicker at a square
       // root: a lamp that dips 10% dims its pool, it does not switch it off.
@@ -947,7 +1045,7 @@ export class StagePracticals {
     const ceil = this.environment?.params?.ceiling;
     if (ceil) {
       const live = Math.max(0, ceil.intensity * ceil.on);
-      const power = live > 0.01 ? BLOOM_THRESHOLD * Math.pow(live / 4.5, 0.62) * 2.1 : 0;
+      const power = live > 0.01 ? LAMP_ANCHOR * Math.pow(live / 4.5, 0.62) * 2.1 : 0;
       this.runMaterial.color.copy(ceil.color).multiplyScalar(power);
     }
   }
@@ -971,15 +1069,22 @@ export class StagePracticals {
     if (rimA) {
       // Neon and screens take their hue from the mood's rim pair, which is what
       // keeps the practicals and the lighting reading as one design.
-      // A tube has to clear BLOOM_THRESHOLD at the bottom of its cycle, not the
+      // A tube has to clear the bright pass at the bottom of its cycle, not the
       // top: a strip that only blooms on the peak reads as a flickering decal
-      // rather than as glass with current in it.
-      const pulse = 2.8 + 0.36 * Math.sin(time * 0.8);
+      // rather than as glass with current in it. Held well under the fixture
+      // faces on purpose, and the reason is the floor rather than the frame.
+      // The fixture faces and the boards are in `noReflect`; the tube is not,
+      // because an emitter's reflection is most of what sells a wet deck — so
+      // every unit of tube arrives twice, once on the barrier and once as a
+      // streak down the deck the fighters are being read against. Measured, the
+      // emitter pass as a whole put 15% back onto the deck it had just been
+      // taken off. 8.2 still clears the bright pass by half again.
+      const pulse = 10.5 + 1.35 * Math.sin(time * 0.8);
       this.neonMaterial.color.copy(rimA).multiplyScalar(pulse);
       this.screenMaterial.uniforms.uColor.value.copy(rimA).lerp(_white, 0.25);
       // The strip's own wash on the barrier and the floor at its foot. The
       // deposit is scatter and stays where it was — only the tube got hotter.
-      this.poolMaterial.uniforms.uPool.value[4].copy(rimA).multiplyScalar(pulse * 0.11);
+      this.poolMaterial.uniforms.uPool.value[4].copy(rimA).multiplyScalar(pulse * 0.021);
     }
     if (rimB) this.screenMaterial.uniforms.uWarn.value.copy(rimB).lerp(_amber, 0.4);
 

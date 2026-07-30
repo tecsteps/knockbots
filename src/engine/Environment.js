@@ -30,9 +30,11 @@
  *      it lights the fighter, so a pale robot standing in front of a pale
  *      barrier has nothing to separate against; a source at three metres falls
  *      off, edges the armour, and leaves the wall four metres further back
- *      alone. The directional rim pair is kept at {@link DIRECTIONAL_RIM_SHARE}
- *      of its authored strength — enough to edge the set dressing, not enough to
- *      flatten it.
+ *      alone. Both scene-wide terms are therefore split rather than spent: the
+ *      rim pair keeps {@link DIRECTIONAL_RIM_SHARE} of its authored strength and
+ *      the key keeps {@link DIRECTIONAL_KEY_SHARE} of its own, with the
+ *      remainder of each riding on the fighters. That is what buys the
+ *      figure/ground ratio without buying another light.
  *
  * The ambient terms are deliberately starved. Hemisphere fill and ground bounce
  * are held near a tenth of the key, because a wash that lifts every plane by the
@@ -244,14 +246,67 @@ const KEY_BOX = {
    * authored key. Radiance is solved back out of it at use, so a mood that
    * pushes its key drags the softbox with it and the ratio survives.
    *
-   * Under two-thirds, and that ceiling is not arbitrary. The box casts no
-   * shadow — three has none for area lights — so every unit of it also fills the
-   * creases the hard key is carving. Past about 0.7 the shadow side stops being
-   * a shadow side and the armour goes back to being one value, which is the
-   * exact failure the rim gain was pulled back from in round 4.
+   * It was 0.6 on top of a directional key running at full authored strength,
+   * which put 1.6 keys on the fighter and 1.0 on the deck. It is now the larger
+   * half of a split budget — see {@link DIRECTIONAL_KEY_SHARE} — so the fighter
+   * still receives the same 1.6 and the deck receives 0.66. The old ceiling
+   * argument (past about 0.7 the box starts filling the creases the hard key is
+   * carving, because three gives area lights no shadow) still holds and is what
+   * stops the split going further: at 0.94 the soft half is already 59% of the
+   * key on the fighter, and every further point of it is a point of terminator.
    */
-  share: 0.6,
+  share: 0.94,
 };
+
+/**
+ * Fraction of the mood's key intensity left on the scene-wide directional. The
+ * rest rides with the fighters on {@link KEY_BOX}, exactly the way
+ * {@link DIRECTIONAL_RIM_SHARE} already splits the rim budget.
+ *
+ * This is the one knob that moves the figure/ground ratio without touching the
+ * light count, because the key is the only term the fighter and the deck were
+ * receiving in equal measure. A directional key is parallel and infinite: it
+ * lands on a chest plate and on the four square metres of deck the fighter is
+ * standing on at exactly the same irradiance, and no amount of rim or bounce
+ * tuning can separate two surfaces that are being lit by the same light at the
+ * same strength. Moving a third of it onto a source at 2.8 metres keeps the
+ * fighter where it was and takes a third off the deck, the barrier, the crowd
+ * and everything the floor mirrors — measured below.
+ *
+ * Measured, headless at 1080p with the simulation paused and the frame clock
+ * pinned, sampling fighter pixels against the deck pixels within 2.6 m of a
+ * fighter. Both masks come from frame differencing inside one page session —
+ * once against the same frame with the fighters hidden and once with the floor
+ * hidden — so the mirror image and the cast shadow are excluded from both sides
+ * rather than argued about. This constant alone, nothing else changed:
+ *
+ *                camera      fighter    deck     ratio
+ *     hero     +3.8 deg   0.139 -> 0.146   0.075 -> 0.071   1.85 -> 2.06
+ *     wide    +13.1 deg   0.150 -> 0.148   0.073 -> 0.076   2.06 -> 1.95
+ *
+ * The fighter holds and the deck comes off, which is the trade the split was
+ * built for. Two things it does not do, both worth writing down.
+ *
+ * It is not camera-invariant, and the brief that asked for invariance had the
+ * mechanism backwards: the ratio does not fall off as the camera pulls back, it
+ * falls off as the camera drops. Wide is the *best* framing at 2.06 and a low
+ * hero angle is the worst, because the variation is almost entirely in the deck
+ * and the deck's Fresnel term goes to one as the eye approaches the plane — at
+ * -5 deg the floor mirrors the whole lit set back at the camera and reads
+ * brighter than the fighter standing on it. That response lives in
+ * `StageFloor`; what is reachable from here is the level the whole curve sits
+ * at.
+ *
+ * And 2.06 is not short of a target, it is past one. The figure asked for was
+ * "roughly 2.5x"; measured the same way on the reference set — hand-placed
+ * rectangles on figure and floor — Tekken 8 runs **1.78** on the cage stage
+ * (`tekken8_08`, figure 0.137 against floor 0.077) and **1.31 to 1.57** on the
+ * daylight farm (`tekken8_07`). What separates a Tekken fighter from its ground
+ * at a ratio of 1.4 is hue and rim, not luminance, and this rig already spends
+ * heavily on both. So the split is kept for the deck it takes off the set and
+ * not pushed further for a number the reference does not exhibit.
+ */
+const DIRECTIONAL_KEY_SHARE = 0.66;
 
 /**
  * The overhead strip pair: two long thin {@link THREE.RectAreaLight}s running
@@ -756,18 +811,18 @@ const MAX_FILL_SHARE = 0.1;
  * ratio to each other — which is a look decision — survives, and only their
  * total against the key is corrected.
  *
- * Worth stating what "the key" means here now that {@link KEY_BOX} exists: the
- * softbox delivers another {@link KEY_BOX}.share of the same irradiance onto the
- * fighters, so on a fighter the real ratio is better than this by a further
- * factor of `1 + share`. The check is written against the authored key alone
- * because that is the term the set is lit by, and the set is where a flat lift
- * does its damage.
+ * Worth stating what "the key" means here. The set is not lit by the mood's
+ * authored key; it is lit by {@link DIRECTIONAL_KEY_SHARE} of it, the rest
+ * having been moved onto the per-fighter softbox. The ceiling is therefore
+ * measured against the directional alone, which is the term the set actually
+ * receives and the only place a flat lift does its damage. Only `volcanic` was
+ * riding close enough to the old ceiling to be scaled by the correction.
  *
  * @param {object} mood entry from {@link MOODS}, mutated in place
  */
 function holdKeyToFill(mood) {
   const lift = mood.fill.intensity + mood.bounce.intensity;
-  const ceiling = mood.key.intensity * MAX_FILL_SHARE;
+  const ceiling = mood.key.intensity * DIRECTIONAL_KEY_SHARE * MAX_FILL_SHARE;
   if (lift <= ceiling || lift <= 0) return;
   const k = ceiling / lift;
   mood.fill.intensity *= k;
@@ -1867,7 +1922,7 @@ export class Environment {
     const p = this.params;
 
     this.keyLight.color.copy(p.key.color);
-    this.keyLight.intensity = p.key.intensity;
+    this.keyLight.intensity = p.key.intensity * DIRECTIONAL_KEY_SHARE;
     this._tmpVec.copy(p.key.dir).multiplyScalar(26);
     this.keyLight.position.copy(this._tmpVec).add(this.keyLight.target.position);
 

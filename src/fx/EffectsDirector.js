@@ -49,7 +49,9 @@
 
 import * as THREE from 'three';
 import { bus } from '../core/Bus.js';
-import { WEIGHT, GROUND_Y, ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, TICK_DT } from '../core/Constants.js';
+import {
+  WEIGHT, GROUND_Y, ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, TICK_DT, FIGHTER_HEIGHT,
+} from '../core/Constants.js';
 import { FX_SHAPE, FX_PART } from '../combat/MoveSchema.js';
 import { bakeFxTextures } from './FxTextures.js';
 import { SparkSystem } from './SparkSystem.js';
@@ -106,6 +108,14 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
  * a metre across, bright enough to clip while it lives, and gone inside four
  * frames. Anything that survives long enough to be seen expanding has already
  * stopped being an impact.
+ *
+ * `light` is the one number here measured against the struck robot rather than
+ * against the effect. It is a point light half a metre off the armour, so it is
+ * the second-largest contributor to blown-out pixels on the contact frame after
+ * the overlay's heat spill — and unlike the spill it blows out the one surface
+ * the hit is supposed to be revealing. Cut by a third across the table: the
+ * contact still reads as lit from inside the blow, and the panel lines under it
+ * survive the frame.
  */
 const HIT_FX = {
   [WEIGHT.LIGHT]: {
@@ -113,35 +123,35 @@ const HIT_FX = {
     ring: 0.28, ringLife: 0.13, thick: 0.16, ringHeat: 2.2,
     flash: 0.26, flashHeat: 3.2, flashLife: 0.075,
     core: 0.10, coreHeat: 2.6, coreLife: 0.42, ember: 10,
-    debris: 0, fluid: 0, light: 3.0, impact: 0, dust: 0,
+    debris: 0, fluid: 0, light: 2.1, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
     sparks: 340, jet: 105, speed: 8.6, size: 0.032, heat: 3.0, sparkLife: 0.19,
     ring: 0.40, ringLife: 0.15, thick: 0.17, ringHeat: 2.8,
     flash: 0.36, flashHeat: 3.8, flashLife: 0.09,
     core: 0.13, coreHeat: 3.4, coreLife: 0.55, ember: 16,
-    debris: 0, fluid: 5, light: 5.0, impact: 0, dust: 2,
+    debris: 0, fluid: 5, light: 3.4, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
     sparks: 680, jet: 200, speed: 10.4, size: 0.038, heat: 3.4, sparkLife: 0.24,
     ring: 0.62, ringLife: 0.19, thick: 0.18, ringHeat: 3.4,
     flash: 0.56, flashHeat: 4.6, flashLife: 0.11,
     core: 0.19, coreHeat: 4.4, coreLife: 0.72, ember: 26,
-    debris: 8, fluid: 12, light: 12.0, impact: 0.55, dust: 6,
+    debris: 8, fluid: 12, light: 8.0, impact: 0.55, dust: 6,
   },
   [WEIGHT.LAUNCHER]: {
     sparks: 780, jet: 225, speed: 11.4, size: 0.04, heat: 3.5, sparkLife: 0.26,
     ring: 0.72, ringLife: 0.21, thick: 0.19, ringHeat: 3.6,
     flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
     core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 30,
-    debris: 10, fluid: 14, light: 14.0, impact: 0.62, dust: 8,
+    debris: 10, fluid: 14, light: 9.3, impact: 0.62, dust: 8,
   },
   [WEIGHT.ULTRA]: {
     sparks: 1150, jet: 330, speed: 14.5, size: 0.048, heat: 4.0, sparkLife: 0.30,
     ring: 1.20, ringLife: 0.28, thick: 0.22, ringHeat: 4.2,
     flash: 0.7, flashHeat: 6.0, flashLife: 0.16,
     core: 0.28, coreHeat: 5.6, coreLife: 0.9, ember: 42,
-    debris: 18, fluid: 26, light: 26.0, impact: 1.0, dust: 14,
+    debris: 18, fluid: 26, light: 17.0, impact: 1.0, dust: 14,
   },
 };
 
@@ -250,7 +260,7 @@ export class EffectsDirector {
     this.impact = { level: 0, decay: 9, lines: 0, linesDecay: 11, invert: 0, invertDecay: 22 };
     this.flash = { amount: 0, decay: 8 };
     this.overdrive = {
-      on: false, t: 0, hold: 0, level: 0, desat: 0, flash: 0,
+      on: false, t: 0, hold: 0, level: 0, desat: 0, flash: 0, bar: 0,
       fighter: null, color: new THREE.Color(0.4, 0.75, 1),
     };
     this.overlayCenter = new THREE.Vector2();
@@ -449,6 +459,45 @@ export class EffectsDirector {
     _roll.copy(dir).transformDirection(this.camera.matrixWorldInverse);
     if (_roll.x * _roll.x + _roll.y * _roll.y < 1e-8) return 0;
     return Math.atan2(_roll.y, _roll.x);
+  }
+
+  /**
+   * How far the attacker's crown and feet sit from `cy`, in the aspect-corrected
+   * half-heights `OverlayPass` measures its radii in: the frame is one unit
+   * tall about its centre and `aspect` units wide. `cy` is the takeover's own
+   * centre, so this is the subject's on-screen size as the overlay sees it.
+   *
+   * The overdrive treatment is keyed to this rather than to fixed fractions of
+   * the frame. Measured across the super cinematic, the attacker goes from 24%
+   * of the frame height at tick 45 to 74% at tick 149 — the camera dollies from
+   * ten metres to under four while the move plays. A vignette written in screen
+   * fractions is a ring around two small figures at the start of that shot and
+   * a stain across both bodies at the end of it.
+   *
+   * Height, specifically, and only the attacker's. Two earlier versions were
+   * wrong in the same way — both folded the distance across to the defender
+   * into a number that is supposed to describe how big the subject is.
+   * Measuring the furthest of the four foot-and-crown points read 0.81 against
+   * a frame half-width of 0.89, so every radius downstream was larger than the
+   * frame and the drain never engaged: background luma 0.295 against the
+   * subject's 0.351, a ratio of 1.19. Restricting it to the vertical axis but
+   * keeping both fighters still read 0.363 while the attacker occupied 28% of
+   * the frame, because the defender is launched and is nowhere near the
+   * attacker's chest in frame. Horizontal reach belongs in the vignette's own
+   * aspect; the defender's height belongs to the defender.
+   */
+  #subjectScreenRadius(fighter, cy) {
+    const cam = this.camera;
+    if (!cam || !fighter?.position) return 0.2;
+    const p = fighter.position;
+    const h = FIGHTER_HEIGHT * (fighter.def?.proportions?.height ?? 1);
+    let r = 0;
+    for (let k = 0; k < 2; k++) {
+      _v2.set(p.x, p.y + (k ? h : 0), p.z).project(cam);
+      const d = Math.abs(_v2.y - cy) * 0.5;
+      if (d > r) r = d;
+    }
+    return THREE.MathUtils.clamp(r, 0.07, 0.46);
   }
 
   // -------------------------------------------------------------------------
@@ -929,7 +978,15 @@ export class EffectsDirector {
     this.#palette(f, 'emissive', _c);
     this.overdrive.on = true;
     this.overdrive.t = 0;
-    this.overdrive.hold = 1.1;
+    // Long enough to cover the cinematic that runs over it. `FightCamera` holds
+    // `super` for 220 ticks and the move slows the simulation to 0.35 for the
+    // first 40 of them, which is 4.9 seconds of wall time; the treatment used
+    // to build for 0.32s, hold for 1.1s and be gone by 1.65s. It therefore
+    // covered the charge-up and none of the shot the camera had spent eighty
+    // ticks pushing in to compose — the money frame played out against a fully
+    // lit arena with no takeover on it at all. Held to the end of the dolly and
+    // a little past the connect.
+    this.overdrive.hold = 3.5;
     this.overdrive.fighter = f;
     this.overdrive.color.copy(_c);
 
@@ -1289,13 +1346,19 @@ export class EffectsDirector {
       od.level = Math.max(0, od.level - dt * 1.8);
     }
     od.flash = Math.max(0, od.flash - dt * 5.5);
-    od.desat = od.level * 0.6;
+    od.desat = od.level * 0.94;
+    // The bars lead the drain in and lag it out, so the crop arrives before the
+    // world drains and is the last thing to leave.
+    od.bar = od.on
+      ? Math.min(1, od.bar + dt * 5.5)
+      : Math.max(0, od.bar - dt * 2.4);
 
     u.uSuper.value = od.level;
     u.uDesat.value = od.desat;
     u.uSuperFlash.value = od.flash;
+    u.uSuperBar.value = od.bar;
     if (od.color) u.uSuperColor.value.copy(od.color);
-    if (od.fighter && this.camera && od.level > 0) {
+    if (od.fighter && this.camera && (od.level > 0 || od.bar > 0)) {
       _v.copy(od.fighter.position);
       _v.y += 1.0;
       _v.project(this.camera);
@@ -1303,6 +1366,7 @@ export class EffectsDirector {
         THREE.MathUtils.clamp(_v.x, -1.2, 1.2),
         THREE.MathUtils.clamp(_v.y, -1.2, 1.2),
       );
+      u.uSuperRadius.value = this.#subjectScreenRadius(od.fighter, _v.y);
     }
 
     u.uTime.value = this.time;
@@ -1390,13 +1454,14 @@ export class EffectsDirector {
     this.overdrive.level = 0;
     this.overdrive.desat = 0;
     this.overdrive.flash = 0;
+    this.overdrive.bar = 0;
     this.overdrive.hold = 0;
 
     if (this._pass) {
       const u = this._pass.uniforms;
       u.uImpact.value = 0; u.uSpeedLines.value = 0; u.uInvert.value = 0;
       u.uSuper.value = 0; u.uDesat.value = 0; u.uSuperFlash.value = 0;
-      u.uFlashAmount.value = 0;
+      u.uSuperBar.value = 0; u.uFlashAmount.value = 0;
       for (const r of u.uRings.value) r.set(0, 0, 0, 0);
       u.uActive.value = 0;
     }

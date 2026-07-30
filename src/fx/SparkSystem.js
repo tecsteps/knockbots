@@ -266,7 +266,14 @@ export class SparkSystem {
 
         // Cosine-lobe about the normal, widened by `spread`. Fragments are
         // heavy, so they hold the line of the blow more tightly than the motes.
-        const lobe = spread * (ti === 2 ? 0.7 : 1);
+        //
+        // A clean cone has a clean edge, and a clean edge is what turns a fan
+        // into a swept arc — the eye reads the boundary rather than the debris.
+        // One spark in fourteen is thrown well outside it, so the fan has
+        // stragglers the way a real one does without the bulk of the burst
+        // losing the line of the blow.
+        const wide = Math.random() < 0.07 ? 2.3 : 1;
+        const lobe = Math.min(1, spread * (ti === 2 ? 0.7 : 1) * wide);
         const u = Math.random();
         const phi = Math.random() * Math.PI * 2;
         const cosT = 1 - u * lobe * lobe;
@@ -274,10 +281,24 @@ export class SparkSystem {
         const cx = Math.cos(phi) * sinT;
         const cz = Math.sin(phi) * sinT;
 
-        // Heavy tail on speed: a few sparks fly much further than the rest,
-        // which is what stops a burst from looking like a uniform puff.
-        const r = Math.random();
-        const sp = speed * tier.speed * (0.35 + r * r * r * 2.1);
+        // Speed decides streak length, so its distribution is the distribution
+        // of streak lengths, and that is what a burst is read by on the one
+        // frame anyone sees it. The previous curve was `0.35 + r^3 * 2.1`,
+        // which does have a heavy tail — but a cubed uniform puts half the
+        // population between 0.35 and 0.61, a 1.7x window. Half the fan was
+        // therefore drawn at one length with a handful of long fliers around
+        // it, which reads as a texture with some noise on it rather than as
+        // debris of assorted mass.
+        //
+        // Log-uniform gives every part of the band the same share of the
+        // population instead of piling it at the bottom: 0.44 to 1.32 is a
+        // clean 3x, evenly occupied. The fliers are then explicit rather than
+        // emergent — one spark in fourteen at two to three times the top of
+        // the band — and the two together keep the burst's mean speed where
+        // the cubed curve had it, so nothing downstream needs retuning.
+        const speedSpread = 0.44 * Math.exp(Math.random() * 1.1);
+        const flier = Math.random() < 0.07 ? 1.7 + Math.random() * 1.2 : 1;
+        const sp = speed * tier.speed * speedSpread * flier;
 
         let vx = (_dir.x * cosT + _tan.x * cx + _bit.x * cz) * sp;
         let vy = (_dir.y * cosT + _tan.y * cx + _bit.y * cz) * sp;
@@ -301,7 +322,12 @@ export class SparkSystem {
         aLife[l + 3] = size * tier.size * (0.75 + Math.random() * 0.5);
 
         const s = i * 2;
-        aStyle[s] = tier.streak;
+        // Streak weight is jittered inside the tier as well, because length is
+        // the product of speed and this, and two independent spreads populate
+        // the range far more evenly than one wide one does. Scaling rather
+        // than offsetting is what keeps the fragment tier at exactly zero, so
+        // chips of plate go on tumbling instead of smearing.
+        aStyle[s] = tier.streak * (0.72 + Math.random() * 0.56);
         aStyle[s + 1] = Math.random() * 6.283;
       }
     }

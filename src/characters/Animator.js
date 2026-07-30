@@ -19,7 +19,8 @@
  *   2. compose clip LAYERS: base + masked override layers + additive layers
  *   3. forward kinematics pass A (world transforms of the clip pose)
  *   4. procedural additive stack: breathing, look-at, secondary-motion springs,
- *      impact recoil ripple, then user layers from addProceduralLayer()
+ *      impact recoil ripple, the hit-reaction layer, then user layers from
+ *      addProceduralLayer()
  *   5. forward kinematics pass B (world transforms of the procedural pose)
  *   6. two-bone IK: explicit targets and foot planting, written back as local
  *      deltas so the result survives into the pose snapshot
@@ -94,6 +95,79 @@ const RIPPLE = {
   arm: [['clavicle_L', 0, 0.9], ['clavicle_R', 0, 0.9], ['chest', 1, 0.66], ['spine02', 2, 0.44], ['neck', 2, 0.4], ['head', 3, 0.36], ['spine01', 3, 0.28], ['hips', 4, 0.18]],
   leg: [['hips', 0, 1.0], ['spine01', 1, 0.7], ['spine02', 2, 0.5], ['chest', 3, 0.38], ['neck', 4, 0.3], ['head', 5, 0.28]],
 };
+
+/**
+ * The hit-reaction layer: how a blow travels through the body it lands on.
+ *
+ * Every number is a share of one rotation about the axis perpendicular to the
+ * blow and to up, so the whole table is driven by a single signed magnitude.
+ * The SIGNS are the shape and are not free: positive drives a bone's tip along
+ * the blow, negative folds it back into it. Reading `torso` top to bottom, the
+ * pelvis is driven away, the three spine joints and the chest fold toward the
+ * strike, and the neck and head are thrown past it — which sums to a chest
+ * tilted 1.06 units into the blow with the head 1.19 units the other way. That
+ * counter-curve is the entire point. A body that rotates as one piece reads as
+ * a mannequin being pushed; a body that jackknifes reads as one that was hit.
+ *
+ * The regions differ in where the fold sits, and `head` is deliberately the odd
+ * one out: its spine signs are POSITIVE. A blow to the jaw does not fold a body
+ * forward, it arches the whole trunk back and whips the skull past it, and a
+ * head table built on the torso's signs put the head 14mm nearer the striker
+ * than it started. A leg check is nearly all pelvis with the head trailing.
+ */
+const HIT_LAYER = {
+  head:  { hips: 0.10, spine01: 0.14, spine02: 0.20, chest: 0.26, neck: 0.60, head: 0.80 },
+  torso: { hips: 0.42, spine01: -0.34, spine02: -0.52, chest: -0.62, neck: 0.95, head: 1.30 },
+  arm:   { hips: 0.26, spine01: -0.20, spine02: -0.34, chest: -0.46, neck: 0.70, head: 0.95 },
+  leg:   { hips: 0.66, spine01: -0.28, spine02: -0.18, chest: -0.10, neck: 0.42, head: 0.58 },
+};
+
+/**
+ * Net rotation the torso chain hands the shoulders, per region. The arm layer
+ * gives exactly this back on a delayed envelope, so the arms hold the world
+ * orientation the body has just left instead of being carried rigidly with it.
+ */
+const HIT_TORSO_SUM = Object.fromEntries(Object.entries(HIT_LAYER).map(
+  ([region, g]) => [region, g.hips + g.spine01 + g.spine02 + g.chest],
+));
+
+/**
+ * One unit of hit reaction, radians. Measured over a CPU-vs-CPU match, `force`
+ * comes in at 0.35 for a glancing light, 0.81 median and 1.49 for a launcher, so
+ * a median blow folds the chest 15 degrees and throws the head 17 the other way.
+ */
+const HIT_ANGLE = 0.30;
+/** Ticks the head takes to reach full snap, and the ticks it settles over. */
+const HIT_RISE = 2;
+const HIT_FALL = 16;
+/** Ticks the arms trail the torso by. */
+const HIT_ARM_LAG = 2;
+/**
+ * Share of the torso's rotation the arms withhold. Below 1 they eventually
+ * catch up rather than staying behind forever; the lag alone is what reads.
+ */
+const HIT_ARM_SLACK = 0.9;
+/** Radians the guard opens by at force 1: the elbows unfold and the wrists drop. */
+const HIT_ELBOW_SLACK = 0.16;
+const HIT_WRIST_SLACK = 0.09;
+/** Share of the blow that becomes a twist about up, so a hook spins the chassis. */
+const HIT_TWIST = 0.45;
+
+/**
+ * Envelope of a hit reaction: a smoothstep onto the peak, then a squared decay
+ * carrying one counter-swing. `cos(2.4s)` crosses zero at s = 0.65, so the body
+ * overshoots back through neutral once and settles, which is what a struck mass
+ * on a spine does. Returns 0 outside the window, so a lagged copy of it needs no
+ * special casing at either end.
+ */
+function hitEnvelope(t, rise, fall) {
+  if (t <= 0) return 0;
+  if (t < rise) { const u = t / rise; return u * u * (3 - 2 * u); }
+  const s = (t - rise) / fall;
+  if (s >= 1) return 0;
+  const k = 1 - s;
+  return k * k * Math.cos(2.4 * s);
+}
 
 /** Bones whose per-tick delta feeds the "how busy is the body" estimate. */
 const ENERGY_BONES = ['chest', 'head', 'shoulder_L', 'shoulder_R', 'hip_L', 'hip_R'];
@@ -481,6 +555,20 @@ export class Animator {
 
     this.secondary = { enabled: true, scale: 1 };
     this.recoil = { enabled: true, scale: 1 };
+
+    /**
+     * The hit-reaction layer. `t < 0` is idle; arming sets it to 0 and every
+     * tick after is a lookup into two fixed envelopes. Nothing here is a state
+     * integrator, so it re-simulates exactly and costs one table walk a tick
+     * while a reaction is live and a single compare when it is not.
+     */
+    this.hitLayer = {
+      enabled: true, scale: 1, t: -1, force: 0,
+      rise: HIT_RISE, fall: HIT_FALL,
+      vec: new THREE.Vector3(),
+      gain: HIT_LAYER.torso,
+      armGain: -HIT_TORSO_SUM.torso * HIT_ARM_SLACK,
+    };
 
     this.bodyVelocity = new THREE.Vector3();
     this._prevBodyVelocity = new THREE.Vector3();
@@ -1049,6 +1137,60 @@ export class Animator {
   }
 
   /**
+   * Drive the hit-reaction layer from a blow that just landed on THIS body.
+   *
+   * `impact()` above rings the chassis; this is the gross motion underneath it —
+   * the head thrown off the blow inside two ticks, the trunk folding into it,
+   * the arms let go of. It rides over whatever reaction clip the state machine
+   * chose rather than replacing it, because the clip carries the recovery and
+   * the footwork and this carries the moment of contact, and a single authored
+   * clip cannot know which direction the blow came from.
+   *
+   * Re-arming mid-decay restarts it, which is what a combo should look like: the
+   * second hit lands on a body that has not finished absorbing the first, and the
+   * envelope should reflect the newer blow, not average the two.
+   *
+   * @param {Object} o
+   * @param {THREE.Vector3} o.dir  direction the blow travels, model space
+   * @param {number} [o.force]     0..1 for a jab, up to ~1.6 for a launcher
+   * @param {string} [o.region]    head|torso|arm|leg (default 'torso')
+   */
+  hitReaction({ dir, force = 1, region = 'torso' }) {
+    const H = this.hitLayer;
+    if (!H.enabled || !(force > 0)) return;
+    _v0.copy(dir);
+    if (_v0.lengthSq() < 1e-8) _v0.set(0, 0, -1);
+    _v0.normalize();
+    // Torque about the horizontal axis perpendicular to the blow, plus a twist
+    // about up so a hook spins the trunk instead of only tipping it. Kept as one
+    // rotation vector: every bone in the table is then the same rotation scaled,
+    // and the whole reaction stays a single axis the eye can follow.
+    _v1.crossVectors(_AXIS_Y, _v0);
+    if (_v1.lengthSq() < 1e-6) _v1.copy(_AXIS_X); else _v1.normalize();
+    H.vec.set(_v1.x, -_v0.x * HIT_TWIST, _v1.z).normalize();
+    H.gain = HIT_LAYER[region] || HIT_LAYER.torso;
+    H.armGain = -(HIT_TORSO_SUM[region] ?? HIT_TORSO_SUM.torso) * HIT_ARM_SLACK;
+    H.force = force;
+    H.t = 0;
+  }
+
+  /**
+   * Drop everything a blow left in flight: the reaction envelope, the undelivered
+   * ripple impulses and the energy still in the chassis springs.
+   *
+   * `reset()` does this too, but it also empties every layer and the pose with
+   * them. A fighter put back on its mark between rounds wants the second thing
+   * without the first — it has already chosen its idle clip by the time it asks —
+   * so this is the narrow version.
+   */
+  clearImpacts() {
+    this.hitLayer.t = -1;
+    this.hitLayer.force = 0;
+    this._ripple.length = 0;
+    for (const b in this.springs) this.springs[b].reset();
+  }
+
+  /**
    * Add a procedural pose modifier.
    * @param {(pose: Pose, ctx: Object) => void} fn
    * @param {{stage?:'pre'|'post'}} [opts] 'pre' runs before IK (default), 'post' after
@@ -1110,6 +1252,7 @@ export class Animator {
     this.#applyBreathing(cur);
     this.#applyLookAt(cur);
     this.#applySecondary(cur);
+    this.#applyHitReaction(cur);
     for (let i = 0; i < this._proceduralPre.length; i++) this._proceduralPre[i](cur, this._ctx);
 
     // 5 — world transforms of the procedural pose, for IK.
@@ -1594,6 +1737,49 @@ export class Animator {
     this._springsPrimed = true;
   }
 
+  /**
+   * Write the hit reaction over whatever the clips produced.
+   *
+   * The trunk is one rotation vector scaled per bone, so the head, the fold and
+   * the pelvis drive are guaranteed to stay on the same axis and cannot drift
+   * apart as the envelope decays. The arms are the same rotation given back at
+   * the clavicle on an envelope two ticks stale: a clavicle is a child of the
+   * chest, so handing back what the chest just did leaves the arm sitting where
+   * it was in the world. What the eye reads is not the counter-rotation, it is
+   * the two-tick difference between the two envelopes — the arms arriving late.
+   */
+  #applyHitReaction(pose) {
+    const H = this.hitLayer;
+    if (H.t < 0) return;
+    H.t++;
+    if (H.t > H.rise + H.fall) { H.t = -1; return; }
+
+    const drive = H.force * H.scale * HIT_ANGLE;
+    const amp = hitEnvelope(H.t, H.rise, H.fall) * drive;
+    if (Math.abs(amp) > 1e-4) {
+      for (const bone in H.gain) {
+        _v0.copy(H.vec).multiplyScalar(amp * H.gain[bone]);
+        vecToQuat(_v0, _q1);
+        addQuat(pose, bone, _q1, 1);
+      }
+    }
+
+    const lag = hitEnvelope(H.t - HIT_ARM_LAG, H.rise, H.fall);
+    if (Math.abs(lag) < 1e-4) return;
+    _v0.copy(H.vec).multiplyScalar(lag * drive * H.armGain);
+    vecToQuat(_v0, _q1);
+    addQuat(pose, 'clavicle_L', _q1, 1);
+    addQuat(pose, 'clavicle_R', _q1, 1);
+    // Positive X unfolds both elbows on this rig, so one sign opens the guard on
+    // both sides: a struck fighter's hands come apart, they do not stay welded
+    // to a stance it has already been knocked out of.
+    const slack = lag * H.force * H.scale;
+    addEuler(pose, 'elbow_L', HIT_ELBOW_SLACK * slack, 0, 0, 1);
+    addEuler(pose, 'elbow_R', HIT_ELBOW_SLACK * slack, 0, 0, 1);
+    addEuler(pose, 'wrist_L', HIT_WRIST_SLACK * slack, 0, 0, 1);
+    addEuler(pose, 'wrist_R', HIT_WRIST_SLACK * slack, 0, 0, 1);
+  }
+
   // =========================================================================
   // Inverse kinematics
   // =========================================================================
@@ -1884,6 +2070,8 @@ export class Animator {
     this.inertia.t1 = 0;
     this._inLive.fill(0);
     this._ripple.length = 0;
+    this.hitLayer.t = -1;
+    this.hitLayer.force = 0;
     for (const b in this.springs) this.springs[b].reset();
     for (const q of this._prevParentQuat) q.identity();
     for (const q of this._energyPrev) q.identity();

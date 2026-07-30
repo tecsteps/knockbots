@@ -27,7 +27,7 @@ import { Rng } from '../core/Rng.js';
 import {
   bevelBox, place, mergeAll, worldUv, truss, railing, pipeRun, tube,
   hydraulicRam, crowdFigure, CROWD_ARCHETYPES, insetPanel, boltRow, catenary, spanX,
-  portalCrane, chimney,
+  portalCrane, chimney, cableTray,
 } from './GeoKit.js';
 import { BANNER_ROWS } from './StageMaterials.js';
 
@@ -61,8 +61,29 @@ const CROWD_PALETTE = [
   0x2a2029, 0x22333c, 0x2c333a, 0x6a3410,
 ];
 
-/** Trousers: the coat colour dropped toward a common dark. */
-const CROWD_LOWER = 0x0a0c11;
+/**
+ * Trousers. Not the coat colour dropped toward a common dark — that was the
+ * previous scheme and it is why a populated terrace still read as a row of
+ * shapes: every figure came out as one hue at two brightnesses, which the eye
+ * resolves as one value at twelve metres. Legs are their own palette, mostly
+ * denim and dark workwear, and crucially they are dealt *independently* of the
+ * coat, so a rust jacket over blue jeans and a blue jacket over black trousers
+ * are two different people rather than two exposures of one.
+ */
+const CROWD_LEGS = [
+  0x1a2130, 0x243044, 0x101318, 0x2b3038, 0x232019, 0x2f3542,
+  0x0d0f13, 0x1b1d21, 0x33301f, 0x16233a, 0x262a2e, 0x1c1712,
+  0x2a2d33, 0x141b2a, 0x372f26, 0x11141a,
+];
+
+/**
+ * Shoes, hats and bags. The two ends of a person are reliably the darkest thing
+ * they have on, and holding them out of both garment tints is what stops a pale
+ * coat running straight into a pale hat and swallowing the head.
+ */
+const CROWD_KIT = [
+  0x0a0a0c, 0x131316, 0x1b1206, 0x0e1418, 0x2a2118, 0x101820, 0x1f1c19, 0x080a0d,
+];
 
 /**
  * Skin, held out of the clothing tint by the figure's own vertex mask.
@@ -125,6 +146,7 @@ export class StageStructure {
     this.#columnsAndRoof();
     this.#catwalks();
     this.#machineryBank();
+    this.#backServices();
     this.#pipework();
     this.#shellWall();
     this.#outerShell();
@@ -182,6 +204,7 @@ export class StageStructure {
 
     this.#barrierPanels(W, face);
     this.#barrierFabrication(W, face);
+    this.#barrierCapping(W, face);
 
     // Spectator terrace. Four steps rather than one shelf, because a crowd on
     // a single level is a row: every figure sits at one height, occludes its
@@ -478,6 +501,55 @@ export class StageStructure {
     }
   }
 
+  /**
+   * The capping on top of the barrier, and the recesses under it.
+   *
+   * The steel cap is a 24m strip drawn as one bevelled box, and it runs across
+   * the frame at exactly the height a standing fighter's chest is. That makes it
+   * the longest single edge in the composition and, until now, the flattest: one
+   * chamfer, one value, no interruption anywhere along it. Real capping is
+   * folded in lengths and spliced, and every splice is a raised plate on four
+   * bolts — which is a shadow every four metres along a line the eye tracks the
+   * whole width of the shot.
+   *
+   * The recesses do the same job on the other axis. Below the banner run the
+   * kerb is 250mm of unbroken concrete for twenty-four metres; a shallow inset
+   * in each bay puts a horizontal shadow into it that follows the key light
+   * round as the camera dollies, which a painted line cannot.
+   */
+  #barrierCapping(W, face) {
+    const b = this.bins;
+    const capY = 1.25;                 // top of the cap
+    const nose = face + 0.055;         // the cap overhangs the panel line
+    const bays = 6;
+    const pitch = W / bays;
+
+    // A fastener every 250mm along the nose. Individually invisible; together
+    // they are the only thing that gives the cap's edge a length.
+    b.steel.push(place(boltRow(W - 0.5, 95, 0.019, 0.013), { pos: [0, capY - 0.055, nose] }));
+
+    for (let i = 0; i <= bays; i++) {
+      const x = -W / 2 + pitch * i;
+      // Splice plate over the joint between two lengths of capping, lapped on
+      // top rather than butted, which is how it is actually done.
+      b.steel.push(place(bevelBox(0.34, 0.022, 0.78, 0.008), { pos: [x, capY + 0.011, face - 0.29] }));
+      for (const dz of [-0.26, 0.26]) {
+        b.steel.push(place(boltRow(0.22, 2, 0.021, 0.014), {
+          pos: [x, capY + 0.022, face - 0.29 + dz], rot: [-Math.PI / 2, 0, 0],
+        }));
+      }
+      // Return down the front face of the cap, so the splice reads from the
+      // fight camera as well as from above.
+      b.steel.push(place(bevelBox(0.3, 0.1, 0.03, 0.008), { pos: [x, capY - 0.05, nose + 0.012] }));
+    }
+
+    // Recessed kerb panels under the banner run, one per bay.
+    for (let i = 0; i < bays; i++) {
+      const x = -W / 2 + pitch * (i + 0.5);
+      b.concrete.push(place(insetPanel(pitch - 0.52, 0.24, 0.05, 0.055), { pos: [x, 0.28, face - 0.019] }));
+    }
+  }
+
   /** Camera-side service edge: a low step, a rail, and a cable tray. */
   #frontEdge() {
     const b = this.bins;
@@ -610,6 +682,62 @@ export class StageStructure {
     b.dark.push(place(bevelBox(11, 0.22, 1.3, 0.02), { pos: [-12.5, 4.2, z0 - 3.4], rot: [0, 0.34, -0.13] }));
   }
 
+  /**
+   * The cable tray running the width of the hall behind the crowd, and the
+   * drops off it into the machinery bank.
+   *
+   * Everything the fight camera can see between the fence rail and the roof
+   * trusses is either a *mass* — machinery, containers, the crane girder — or a
+   * *line* running the long way across frame, and every one of those lines is
+   * currently smooth: pipe, girder, catwalk, conduit. A cable tray is the one
+   * piece of building services that is periodic, and periodicity is what makes a
+   * run legible as receding: the rungs foreshorten, so the eye reads twenty-four
+   * metres of depth off a member six centimetres deep. It is also almost all
+   * holes, so the whole run costs about what one girder does.
+   *
+   * Its height was measured, not chosen. Projecting candidate points through the
+   * live camera at both shipping framings shows the visible slice of the back of
+   * the hall is far shallower than it looks from a plan: at the wide framing the
+   * HUD cuts in at about screen y=140 and the crowd's heads reach y=165, which
+   * leaves a band roughly one metre deep around **y = 4.3 at z = -13.4**. A first
+   * pass put this run at 5.6m, where it projected to screen y=58 at the wide and
+   * y=-45 at the hero — entirely behind the HUD in one and off the top of the
+   * frame in the other. A run nobody can see is not detail, it is triangles, so
+   * the measurement moved it rather than the intuition.
+   */
+  #backServices() {
+    const b = this.bins;
+    const y = 4.35;
+    const z = -13.35;
+    const W = 25.2;
+
+    b.steel.push(place(cableTray(W, 0.5, { rungPitch: 0.32, depth: 0.11, cables: 4 }), { pos: [0, y, z] }));
+
+    // Cantilever brackets back to the machinery bank, on the pitch a real tray
+    // is supported at. Each is an arm and a diagonal, and the diagonals are what
+    // stop the run reading as a floating stripe.
+    for (let x = -12; x <= 12; x += 1.6) {
+      b.steel.push(place(bevelBox(0.05, 0.09, 0.7, 0.012), { pos: [x, y - 0.02, z - 0.32] }));
+      const st = spanX([x, y - 0.05, z + 0.24], [x, y - 0.52, z - 0.62]);
+      b.steel.push(place(bevelBox(st.length, 0.045, 0.045, 0.012), { pos: st.pos, rot: st.rot }));
+    }
+
+    // Drops off the tray into the bank below: a gland box, a bundle of conduit
+    // and the flexible tails at the bottom of each. They are what stop the run
+    // reading as a stripe painted across the machinery — a service main that
+    // never feeds anything is a decal.
+    for (const x of [-9.4, -2.2, 4.6, 10.8]) {
+      b.steel.push(place(bevelBox(0.4, 0.46, 0.26, 0.02), { pos: [x, y - 0.4, z - 0.16] }));
+      b.steel.push(place(boltRow(0.28, 3, 0.019, 0.013), { pos: [x, y - 0.58, z - 0.02] }));
+      for (const dx of [-0.11, 0, 0.11]) {
+        b.steel.push(place(new THREE.CylinderGeometry(0.032, 0.032, 1.2, 7), { pos: [x + dx, y - 1.22, z - 0.16] }));
+      }
+      b.dark.push(tube(catenary(
+        [x - 0.11, y - 1.82, z - 0.16], [x + 0.4, y - 2.5, z - 0.5], 0.16, 6,
+      ), 0.028, 6));
+    }
+  }
+
   /** Pipe runs: the connective tissue that makes a set look built. */
   #pipework() {
     const b = this.bins;
@@ -667,13 +795,10 @@ export class StageStructure {
       { x: 2.5, y: 9.5, w: 10.0, h: 8.0 },
       { x: 13.5, y: 6.5, w: 7.0, h: 6.0 },
     ];
-    // The wall is built as horizontal bands that skip where a hole is, which is
-    // cheaper and more controllable than any boolean.
-    const bands = 22;
-    for (let i = 0; i < bands; i++) {
-      const y0 = (i * H) / bands;
-      const y1 = ((i + 1) * H) / bands;
-      const yc = (y0 + y1) / 2;
+    // Clear runs of wall at a given height, with the openings taken out. The
+    // plating, the girts and the access hatches all cut against it, so a hole
+    // stays a hole in every layer instead of only in the skin.
+    const spansAt = (yc) => {
       const spans = [[-W / 2, W / 2]];
       for (const h of holes) {
         if (yc < h.y - h.h / 2 || yc > h.y + h.h / 2) continue;
@@ -686,11 +811,50 @@ export class StageStructure {
           if (cut[1] < c) spans.push([cut[1], c]);
         }
       }
-      for (const [a, c] of spans) {
+      return spans;
+    };
+
+    // The wall is built as horizontal bands that skip where a hole is, which is
+    // cheaper and more controllable than any boolean.
+    const bands = 22;
+    for (let i = 0; i < bands; i++) {
+      const y0 = (i * H) / bands;
+      const y1 = ((i + 1) * H) / bands;
+      const yc = (y0 + y1) / 2;
+      for (const [a, c] of spansAt(yc)) {
         const w = c - a;
         if (w < 0.05) continue;
         b.container.push(place(bevelBox(w, y1 - y0 - 0.02, 0.34, 0.015), { pos: [(a + c) / 2, yc, SHELL_Z] }));
       }
+    }
+
+    // Girts: the rails the plating is actually fixed to, standing 300mm proud
+    // of the skin. Without them the shell is forty-six metres of one plane and
+    // it turns as a single value under the key — the corrugation in the map
+    // gives it a grain but no depth, and a grain with no depth is what makes a
+    // wall read as a painted flat. These are also the only members on the wall
+    // that can throw a shadow *along* it, which is the cue that sells its size.
+    for (const y of [1.55, 4.35, 11.75, 14.55, 17.35, 20.15, 22.95]) {
+      for (const [a, c] of spansAt(y)) {
+        const w = c - a;
+        if (w < 0.6) continue;
+        b.dark.push(place(bevelBox(w - 0.1, 0.2, 0.3, 0.02), { pos: [(a + c) / 2, y, SHELL_Z + 0.22] }));
+        b.dark.push(place(boltRow(w - 0.9, Math.max(2, Math.round(w / 1.5)), 0.03, 0.02), {
+          pos: [(a + c) / 2, y, SHELL_Z + 0.38],
+        }));
+      }
+    }
+
+    // Access hatches and louvre panels, in the bays the openings left standing.
+    // `insetPanel` is a frame plus a recessed face, so each one is a real
+    // shadow-catching pocket rather than a rectangle drawn on the map.
+    for (const [x, y, w, h] of [
+      [-19.4, 4.6, 2.6, 2.0], [-2.4, 4.2, 2.2, 2.6], [8.9, 4.4, 2.0, 2.4],
+      [20.0, 5.2, 2.8, 2.2], [-19.4, 10.6, 2.6, 1.6], [20.0, 11.2, 2.8, 1.8],
+    ]) {
+      b.dark.push(place(insetPanel(w, h, 0.14, 0.12), { pos: [x, y, SHELL_Z + 0.24] }));
+      b.dark.push(place(boltRow(w - 0.24, 5, 0.026, 0.018), { pos: [x, y - h / 2 + 0.06, SHELL_Z + 0.32] }));
+      b.dark.push(place(boltRow(w - 0.24, 5, 0.026, 0.018), { pos: [x, y + h / 2 - 0.06, SHELL_Z + 0.32] }));
     }
     // Torn edges: ragged plate fragments around each opening.
     const rng = this.rng;
@@ -709,9 +873,16 @@ export class StageStructure {
       b.dark.push(place(bevelBox(h.w + 0.5, 0.22, 0.5, 0.02), { pos: [h.x, h.y - h.h / 2 - 0.15, SHELL_Z - 0.1] }));
       b.dark.push(place(bevelBox(h.w + 0.5, 0.22, 0.5, 0.02), { pos: [h.x, h.y + h.h / 2 + 0.15, SHELL_Z - 0.1] }));
     }
-    // Columns of the shell, in front of the plating.
+    // Columns of the shell, in front of the plating, with a splice bolt group
+    // where a stanchion of this height would actually be jointed.
     for (let i = -5; i <= 5; i++) {
       b.dark.push(place(bevelBox(0.3, H, 0.42, 0.02), { pos: [i * 4.2, H / 2, SHELL_Z + 0.3] }));
+      for (const y of [3.9, 15.2]) {
+        b.dark.push(place(bevelBox(0.46, 0.62, 0.05, 0.012), { pos: [i * 4.2, y, SHELL_Z + 0.52] }));
+        for (const dy of [-0.19, 0.19]) {
+          b.dark.push(place(boltRow(0.26, 2, 0.028, 0.019), { pos: [i * 4.2, y + dy, SHELL_Z + 0.55] }));
+        }
+      }
     }
   }
 
@@ -1281,14 +1452,15 @@ export class StageStructure {
    *   1. **One silhouette.** So the figure comes in six postures, each built at
    *      two proportion seeds — twelve outlines, dealt across the roster and
    *      then stretched, turned and leant per instance.
-   *   2. **One value.** Clothing is dealt from a palette of real garment
-   *      colours; skin and hair are masked out of it in the geometry, so a head
-   *      is a dark cap over a face over a collar rather than one bright oval.
-   *      This is the whole difference between a crowd and a row of bollards,
-   *      and it is why the tint is a custom attribute rather than
-   *      `instanceColor`: three only folds `instanceColor` into the fragment
-   *      when `vertexColors` is on, which would demand a real colour attribute
-   *      on every figure and still leave no way to hold skin out of it.
+   *   2. **One value.** Every figure carries five albedo bands cut into the
+   *      geometry — jacket, trousers, shoes/headwear, skin, hair — and all five
+   *      are dealt per instance from their own palettes, with the trousers
+   *      forced a minimum distance in value from the coat above them. One tint
+   *      per figure is the failure mode this replaces: a body in a single value
+   *      is a shape, and a rank of shapes is a fence. This is also why the tints
+   *      are custom attributes rather than `instanceColor`: three only folds
+   *      `instanceColor` into the fragment when `vertexColors` is on, and one
+   *      colour per instance could not carry five bands anyway.
    *   3. **One depth.** They stand on four terrace treads and the back of the
    *      stand fades on view depth, so the ranks recede and overlap instead of
    *      lining up on one shelf at one brightness.
@@ -1317,7 +1489,6 @@ export class StageStructure {
     // thing the eye lands on, so it takes barely any of the environment.
     mat.envMapIntensity = 0.2;
     const uTime = this.timeUniform;
-    const uLower = { value: new THREE.Color().setHex(CROWD_LOWER, THREE.SRGBColorSpace) };
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = uTime;
       shader.vertexShader = shader.vertexShader
@@ -1329,8 +1500,9 @@ export class StageStructure {
           attribute vec3 aTint;
           attribute vec3 aFlesh;
           attribute vec3 aMane;
+          attribute vec3 aTrews;
+          attribute vec3 aKit;
           uniform float uTime;
-          uniform vec3 uLower;
           varying vec3 vTint;
           varying float vSink;
         `)
@@ -1349,16 +1521,17 @@ export class StageStructure {
             transformed.x += sway * transformed.y * 0.42;
             transformed.y += bob;
           }
-          // Trousers are darker than the coat above them, always. A figure in
-          // one value head to foot is a jumpsuit, and forty jumpsuits is a
-          // chain gang; the waist break is what makes them people in clothes.
-          float garment = smoothstep( 0.74, 0.94, position.y );
-          vec3 clothed = mix( uLower, aTint, garment * 0.55 + 0.12 );
-          // aTone is 0 clothing, 1 skin, 2 hair — one attribute, two weights,
-          // no branch.
-          float wSkin = clamp( 1.0 - abs( aTone - 1.0 ), 0.0, 1.0 );
-          float wHair = clamp( 1.0 - abs( aTone - 2.0 ), 0.0, 1.0 );
-          vTint = mix( mix( clothed, aFlesh, wSkin ), aMane, wHair );
+          // aTone is 0 jacket, 1 skin, 2 hair, 3 trousers, 4 shoes/hat/bag.
+          // Integer bands, so one clamped triangle window per band picks it out
+          // with no branch and no height threshold — the previous scheme cut the
+          // waist at a fixed local y, which slid off the hips the moment an
+          // instance was scaled.
+          float wSkin  = clamp( 1.0 - abs( aTone - 1.0 ), 0.0, 1.0 );
+          float wHair  = clamp( 1.0 - abs( aTone - 2.0 ), 0.0, 1.0 );
+          float wTrews = clamp( 1.0 - abs( aTone - 3.0 ), 0.0, 1.0 );
+          float wKit   = clamp( 1.0 - abs( aTone - 4.0 ), 0.0, 1.0 );
+          vec3 worn = mix( mix( aTint, aTrews, wTrews ), aKit, wKit );
+          vTint = mix( mix( worn, aFlesh, wSkin ), aMane, wHair );
         `)
         .replace('#include <project_vertex>', /* glsl */ `
           #include <project_vertex>
@@ -1369,7 +1542,6 @@ export class StageStructure {
           // arrive as one card.
           vSink = 1.0 - exp( -max( 0.0, -mvPosition.z - 12.0 ) * 0.1 );
         `);
-      shader.uniforms.uLower = uLower;
       shader.uniforms.uSink = this.midgroundHaze;
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vTint;\nvarying float vSink;\nuniform vec3 uSink;')
@@ -1454,6 +1626,8 @@ export class StageStructure {
       const tints = new Float32Array(mine.length * 3);
       const flesh = new Float32Array(mine.length * 3);
       const manes = new Float32Array(mine.length * 3);
+      const legs = new Float32Array(mine.length * 3);
+      const kits = new Float32Array(mine.length * 3);
       mine.forEach((s, i) => {
         _e.set(0, s.ry, 0);
         _q.setFromEuler(_e);
@@ -1469,6 +1643,22 @@ export class StageStructure {
         _c.setHex(CROWD_PALETTE[rng.int(CROWD_PALETTE.length)], THREE.SRGBColorSpace)
           .multiplyScalar(rng.range(0.72, 1.28));
         _c.toArray(tints, i * 3);
+        const coatY = (_c.r + _c.g + _c.b) / 3;
+        // Trousers, dealt independently and then *forced apart* in value from
+        // the coat. Two garment palettes are not enough on their own: deal both
+        // at random and roughly a third of the figures come out with a coat and
+        // a pair of legs within a couple of per cent of each other, and those
+        // are exactly the ones that read as a single shape. A hard minimum
+        // separation is what turns the split from a statistic into something the
+        // eye can find on every figure in the rank.
+        _c.setHex(CROWD_LEGS[rng.int(CROWD_LEGS.length)], THREE.SRGBColorSpace)
+          .multiplyScalar(rng.range(0.7, 1.3));
+        const legY = (_c.r + _c.g + _c.b) / 3;
+        if (Math.abs(legY - coatY) < 0.011) _c.multiplyScalar(legY > coatY ? 1.7 : 0.52);
+        _c.toArray(legs, i * 3);
+        _c.setHex(CROWD_KIT[rng.int(CROWD_KIT.length)], THREE.SRGBColorSpace)
+          .multiplyScalar(rng.range(0.7, 1.35));
+        _c.toArray(kits, i * 3);
         _c.setHex(CROWD_SKIN[rng.int(CROWD_SKIN.length)], THREE.SRGBColorSpace)
           .multiplyScalar(rng.range(0.7, 1.14));
         _c.toArray(flesh, i * 3);
@@ -1484,6 +1674,8 @@ export class StageStructure {
       geo.setAttribute('aTint', new THREE.InstancedBufferAttribute(tints, 3));
       geo.setAttribute('aFlesh', new THREE.InstancedBufferAttribute(flesh, 3));
       geo.setAttribute('aMane', new THREE.InstancedBufferAttribute(manes, 3));
+      geo.setAttribute('aTrews', new THREE.InstancedBufferAttribute(legs, 3));
+      geo.setAttribute('aKit', new THREE.InstancedBufferAttribute(kits, 3));
       this.crowdMeshes.push(mesh);
       this.group.add(mesh);
     }
