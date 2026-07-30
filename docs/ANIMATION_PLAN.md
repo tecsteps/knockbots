@@ -201,3 +201,30 @@ hips/height.
 **Not a defect, but required for the feature to read:** a leaf spring bone only shows if the
 skinned geometry extends *away* from the bone origin. The bone is a hinge; geometry centred on
 the origin rotates in place and does nothing visible.
+
+---
+
+## Pending: the −Z forward assumption survives inside Animator
+
+Found by an independent Codex review, verified here. **Do not fix by rewriting `Animator.js`
+from a stale buffer** — it is under active edit; apply as a targeted change.
+
+The rig header wrongly claimed "−Z is the direction the fighter FACES" for most of this
+project's life. That header has been corrected, but code written against it has not:
+
+- `Animator.js:1007` — the comment still states *"AnimationFormat: −Z is forward"*. It is
+  **+Z**, verified from the data: `loco.dashFwd`'s root track ends at z = +0.94, `dashBack` at
+  z = −1.08, and `toe_L` sits at z = +0.14 from the foot.
+- `Animator.js:1117` and `:1156` — both use `_v0.set(0, 0, -1)` as the forward fallback when the
+  supplied blow direction is degenerate (`lengthSq < 1e-8`).
+
+**Scope it before fixing it.** The fallback only fires when `dir` is missing or zero, so a hit
+carrying a real vector is unaffected. But when it does fire, the ripple and hit-reaction layers
+torque the chassis *away* from the correct axis — a hit with no usable direction reacts
+backwards. Worth establishing how often a degenerate direction actually reaches `hitReaction`
+and `#ripple` before deciding whether this is a one-line constant change or a signal that
+callers are not passing a vector they should be.
+
+Note the `hit` bus event carries `velocity` — the striking bone's true swept world velocity in
+m/s — precisely so this never has to fall back. If the degenerate path is being hit often, the
+real defect is upstream in the caller, not here.
