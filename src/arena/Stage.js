@@ -157,11 +157,22 @@ export class Stage {
     // Volumetrics and decals must not appear in the mirror; a light shaft is
     // already integrated along the view ray and a decal is painted on the very
     // surface doing the reflecting.
+    //
+    // Everything after those is there for cost rather than correctness. The
+    // mirror is a second scene render and was the single largest block of draw
+    // calls in the frame — 47 of 171 at the hero framing. Each module names the
+    // meshes whose reflection is not worth a draw call, and the merged sets do
+    // the same through the spec in `#commitBins`. Measured at 1080p: 47 draw
+    // calls down to 33, with 01-hero-idle and 06-stage-wide captured either side
+    // and no difference visible in the floor at either framing.
     this.reflector.exclude([
       this.volumetrics.group,
       this.floor.decals,
       this.dust.points,
       this.walls.dents,
+      ...this.mergedNoReflect,
+      ...this.structure.noReflect,
+      ...this.practicals.noReflect,
     ]);
 
     this.scene.add(this.root);
@@ -177,19 +188,32 @@ export class Stage {
    * rather than a tiling surface.
    */
   #commitBins(bins) {
+    // key, material, metresPerTile, casts shadows, appears in the mirror.
+    //
+    // The mirror column is the cheaper half of the draw-call budget: every set
+    // that stays in it is drawn a second time. What earns a place there is
+    // whether it is what makes the floor read as wet — and measured against
+    // captures, that is the pit itself. Dropping `steel`, `dark` and `concrete`
+    // from the mirror flattens the floor visibly: the vertical smear the
+    // barrier band throws down the right of the wide shot disappears and the
+    // deck goes matte. Dropping the other five changes nothing that can be seen
+    // at either framing, because they are signage and containers standing
+    // outside the pit, behind the only surface doing the reflecting.
     const spec = [
-      ['concrete', this.materials.concrete, 3.4, true],
-      ['hazard', this.materials.hazard, 1.6, true],
-      ['steel', this.materials.steel, 1.5, true],
-      ['dark', this.materials.darkMetal, 1.9, true],
-      ['container', this.materials.container, 2.2, true],
-      ['grate', this.materials.grating, null, true],
-      ['chain', this.materials.chainLink, null, false],
-      ['plate', this.materials.warningPlate, null, false],
-      ['banner', this.materials.barrierBanner, null, false],
+      ['concrete', this.materials.concrete, 3.4, true, true],
+      ['hazard', this.materials.hazard, 1.6, true, false],
+      ['steel', this.materials.steel, 1.5, true, true],
+      ['dark', this.materials.darkMetal, 1.9, true, true],
+      ['container', this.materials.container, 2.2, true, false],
+      ['grate', this.materials.grating, null, true, false],
+      ['chain', this.materials.chainLink, null, false, false],
+      ['plate', this.materials.warningPlate, null, false, false],
+      ['banner', this.materials.barrierBanner, null, false, false],
     ];
     this.merged = [];
-    for (const [key, mat, uv, shadows] of spec) {
+    /** Merged sets the mirror pass skips. @type {THREE.Mesh[]} */
+    this.mergedNoReflect = [];
+    for (const [key, mat, uv, shadows, reflects] of spec) {
       const list = bins[key];
       if (!list || !list.length) continue;
       const geo = mergeAll(list);
@@ -201,6 +225,7 @@ export class Stage {
       mesh.matrixAutoUpdate = false;
       this.root.add(mesh);
       this.merged.push(mesh);
+      if (!reflects) this.mergedNoReflect.push(mesh);
       bins[key] = null;
     }
   }

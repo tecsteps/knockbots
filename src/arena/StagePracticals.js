@@ -254,6 +254,16 @@ export class StagePracticals {
     this.#screens(bins);
     this.#sparks(textures, sparkPoint);
     this.syncToEnvironment();
+
+    /**
+     * Fittings the floor's mirror pass skips. The beacons and the neon stay in
+     * it — an emitter's reflection is most of what sells a wet deck — but the
+     * ceiling runs and their housings are twelve metres up and read in the
+     * mirror as a pair of pale lines behind the fighters, and the wall screens
+     * face away from the pit. None of the three survives the roughness gather.
+     * @type {THREE.Object3D[]}
+     */
+    this.noReflect = [this.ceilingRuns, this.runHousings, this.screens, this.emitters];
   }
 
   // -------------------------------------------------------------------------

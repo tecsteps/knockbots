@@ -711,6 +711,17 @@ export function makeArenaMaterials(opts = {}) {
 
     // Onlookers are pure silhouette: nearly black, matte, and deliberately not
     // shadow casters so a crowd of forty costs nothing in the shadow pass.
+    //
+    // It has to stay a Standard material, and that was measured rather than
+    // assumed. The crowd is the second-widest band of shaded pixels in the
+    // frame and every one of them runs the physical BRDF over fifteen analytic
+    // lights, three of them RectAreaLights, so a Lambert swap looked like free
+    // milliseconds. It is not: with the area lights and the IBL gone the
+    // figures lose the fill that shapes them and the whole terrace collapses
+    // into a flat blue-grey mass — 2.04 mean absolute difference over the frame
+    // against a 1.08 noise floor, and all of it inside the crowd band, with the
+    // bodies visibly darker and the faces gone. The area lights are what make
+    // this read as people rather than bollards.
     crowd: new THREE.MeshStandardMaterial({
       name: 'arena.crowd', color: 0x0b0c10, roughness: 0.92, metalness: 0.0, envMapIntensity: 0.35, dithering: true,
     }),

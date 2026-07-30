@@ -179,3 +179,41 @@ checking what the capture was of.
 The manifest carries `geometries`, `textures` and `programs` alongside `calls` and `triangles`
 precisely so this is checkable. **Compare those counts against a known-good capture before
 believing a number**, and if they differ, the scene is not the one you think you measured.
+
+## Two ways a timing method lies
+
+Both found the hard way on this project. Either will silently invalidate a per-pass table.
+
+**Short measurement blocks understate large changes.** The K=8-frames-with-3-discarded method
+reported hiding the entire arena as costing **0.75ms**. A 2.5-second hold on the same
+configuration reports **13.4ms**. Eight frames measures the GPU queue draining, not the new
+configuration reaching steady state. The block method is adequate for small deltas and wrong for
+large ones — which is the opposite of what intuition suggests, and it means any earlier per-pass
+table produced with it may have understated its biggest items.
+
+**Cross-session before/after captures cannot resolve a change of this size.** Two runs of an
+identical build at an identical simulation tick differ by **7.1/255 mean pixel difference**,
+because the camera spring integrates on render dt and converges differently each run. Any visual
+A/B has to happen *inside one page session*, with film grain and motion blur disabled, which
+brings the noise floor down to about **1.08/255**. A change measured at 2.0/255 against that
+floor is real; the same change measured across sessions is invisible.
+
+## What the frame is actually made of
+
+Measured at the hero framing, 1920x1080, headless ANGLE/Metal, adaptive resolution pinned:
+
+    renderScale 1.0  ->  28.6 ms
+    renderScale 0.7  ->  17.0 ms
+    renderScale 0.5  ->  15.3 ms
+
+That is roughly **6ms fixed and 23ms proportional to shaded pixels** — the frame is pixel-bound,
+not draw-call-bound. The scene carries 15 analytic lights (4 directional, 4 spot, 4 point,
+3 RectArea) plus a hemisphere, and the arena covers ~85% of the screen through several layers of
+overdraw: hiding arena subsystems one at a time sums to ~17ms, while hiding the whole arena
+returns 27ms, because removing one layer only exposes the next.
+
+Draw calls at the same framing: reflection 47, shadow 25, arena main 46, crowd 13, fighters 34,
+remainder 6 — 171 scene, 198 whole-frame, against a 120 budget. Real, but not the bottleneck.
+
+**Consequence for anyone optimising here: reducing draw calls will not reach 60fps. Reducing
+shaded pixels or light count will.**

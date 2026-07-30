@@ -141,6 +141,16 @@ export class StageStructure {
     this.#fan();
     this.#drones();
     this.bins = null;
+
+    /**
+     * Meshes the floor's mirror pass skips. Everything here stands either
+     * behind the terrace or above the roof line, so the only part of the deck
+     * that could carry its reflection is the strip already occluded by the
+     * barrier it sits behind. The crowd, the skyline and the backdrop are on
+     * `LAYER.NO_REFLECT` and do not need to be listed.
+     * @type {THREE.Object3D[]}
+     */
+    this.noReflect = [this.midground, this.foreground, this.containers, this.fan, this.drones, this.droneLights];
   }
 
   // -------------------------------------------------------------------------
@@ -1258,6 +1268,7 @@ export class StageStructure {
     // they stay out of the shadow pass.
     mesh.castShadow = false;
     mesh.receiveShadow = true;
+    this.containers = mesh;
     this.group.add(mesh);
   }
 
@@ -1572,6 +1583,13 @@ export class StageStructure {
    * and they fade through their own exponential haze toward the mood's fog
    * colour. Doing the haze here rather than with `scene.fog` is what lets a
    * 90m skyline sit behind a 12m room without either one looking wrong.
+   *
+   * All three layers are one `InstancedMesh`. They were three, one per depth
+   * band, because each band wants its own tint, haze gain and lit-window
+   * density — but those are three numbers, and a number that varies per tower
+   * is an instanced attribute, not a material. Carrying them as attributes
+   * makes the skyline one draw call instead of three and leaves every layer
+   * free to keep the values it had.
    */
   #city(quality) {
     const layers = quality === 'low' ? 2 : 3;
@@ -1580,119 +1598,133 @@ export class StageStructure {
       { z: -64, count: 24, w: [4, 9], h: [12, 34], spread: 105, tint: 0x151b24, haze: 2.1, win: 0.55 },
       { z: -92, count: 20, w: [5, 12], h: [16, 44], spread: 140, tint: 0x11161d, haze: 2.9, win: 0.34 },
     ];
-    this.cityMaterials = [];
     const rng = this.rng;
+    const total = spec.slice(0, layers).reduce((n, s) => n + s.count, 0);
 
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const sizes = new Float32Array(total * 3);
+    const hashes = new Float32Array(total);
+    const tints = new Float32Array(total * 3);
+    const bands = new Float32Array(total * 2);
+    const mesh = new THREE.InstancedMesh(geo, PLACEHOLDER, total);
+    const size = new THREE.Vector3();
+    _q.identity();
+
+    let n = 0;
     for (let l = 0; l < layers; l++) {
       const s = spec[l];
-      const geo = new THREE.BoxGeometry(1, 1, 1);
-      const sizes = new Float32Array(s.count * 3);
-      const hashes = new Float32Array(s.count);
-      const mesh = new THREE.InstancedMesh(geo, PLACEHOLDER, s.count);
-      const size = new THREE.Vector3();
-      _q.identity();
-      for (let i = 0; i < s.count; i++) {
+      // Tints are authored as sRGB hex, and the shader writes straight into a
+      // linear-working buffer, so the conversion has to happen here.
+      _c.setHex(s.tint, THREE.SRGBColorSpace);
+      for (let i = 0; i < s.count; i++, n++) {
         const w = rng.range(s.w[0], s.w[1]);
         const d = rng.range(s.w[0], s.w[1]);
         const h = rng.range(s.h[0], s.h[1]);
         size.set(w, h, d);
-        sizes[i * 3] = w; sizes[i * 3 + 1] = h; sizes[i * 3 + 2] = d;
-        hashes[i] = rng.next();
+        sizes[n * 3] = w; sizes[n * 3 + 1] = h; sizes[n * 3 + 2] = d;
+        hashes[n] = rng.next();
+        _c.toArray(tints, n * 3);
+        bands[n * 2] = s.haze;
+        bands[n * 2 + 1] = s.win;
         _p.set((i / (s.count - 1) - 0.5) * s.spread + rng.range(-3, 3), h / 2 - 2, s.z + rng.range(-9, 9));
         _m.compose(_p, _q, size);
-        mesh.setMatrixAt(i, _m);
+        mesh.setMatrixAt(n, _m);
       }
-      geo.setAttribute('aSize', new THREE.InstancedBufferAttribute(sizes, 3));
-      geo.setAttribute('aHash', new THREE.InstancedBufferAttribute(hashes, 1));
-      mesh.instanceMatrix.needsUpdate = true;
-
-      mesh.material = new THREE.ShaderMaterial({
-        name: `arena.city${l}`,
-        uniforms: {
-          uTime: this.timeUniform,
-          uTint: { value: new THREE.Color(s.tint) },
-          uHaze: { value: new THREE.Color(0x1b2634) },
-          uHazeAmount: { value: s.haze },
-          uWindow: { value: new THREE.Color(0xffc98a) },
-          uWindowDensity: { value: s.win },
-          uWindowGain: { value: 1.0 },
-        },
-        vertexShader: /* glsl */ `
-          attribute vec3 aSize;
-          attribute float aHash;
-          varying vec3 vLocal;
-          varying vec3 vSize;
-          varying vec3 vNrm;
-          varying float vHash;
-          varying float vDepth;
-          void main() {
-            vLocal = position;
-            vSize = aSize;
-            vNrm = normal;
-            vHash = aHash;
-            vec4 mv = modelViewMatrix * instanceMatrix * vec4( position, 1.0 );
-            vDepth = -mv.z;
-            gl_Position = projectionMatrix * mv;
-          }
-        `,
-        fragmentShader: /* glsl */ `
-          uniform vec3 uTint;
-          uniform vec3 uHaze;
-          uniform vec3 uWindow;
-          uniform float uHazeAmount;
-          uniform float uWindowDensity;
-          uniform float uWindowGain;
-          uniform float uTime;
-          varying vec3 vLocal;
-          varying vec3 vSize;
-          varying vec3 vNrm;
-          varying float vHash;
-          varying float vDepth;
-
-          float hash21( vec2 p ) {
-            p = fract( p * vec2( 231.34, 451.77 ) );
-            p += dot( p, p + 34.21 );
-            return fract( p.x * p.y );
-          }
-
-          void main() {
-            vec3 col = uTint;
-            if ( abs( vNrm.y ) < 0.5 ) {
-              // Window grid at a fixed world pitch, so towers of different
-              // sizes share one storey height.
-              float across = mix( vSize.x, vSize.z, abs( vNrm.x ) );
-              vec2 uvw = vec2( ( abs( vNrm.x ) > 0.5 ? vLocal.z : vLocal.x ) * across,
-                               vLocal.y * vSize.y );
-              vec2 pitch = vec2( 0.95, 1.9 );
-              vec2 cellId = floor( uvw / pitch );
-              vec2 f = fract( uvw / pitch );
-              float pane = step( 0.24, f.x ) * step( f.x, 0.76 ) * step( 0.3, f.y ) * step( f.y, 0.74 );
-              float r = hash21( cellId + vHash * 97.0 );
-              float on = step( 1.0 - uWindowDensity * 0.3, r );
-              // A handful blink; most are simply on or off for the night.
-              float blink = r > 0.99 ? step( 0.5, fract( uTime * 0.31 + r * 10.0 ) ) : 1.0;
-              // Offices run cold, flats run warm: mixing the two is what stops a
-              // skyline reading as one orange stencil.
-              vec3 lamp = mix( uWindow, vec3( 0.55, 0.74, 1.0 ), step( 0.55, fract( r * 7.3 ) ) );
-              float lit = pane * on * blink * ( 0.25 + r * 0.55 );
-              col = mix( col, lamp * uWindowGain, lit );
-            }
-            float haze = 1.0 - exp( -max( 0.0, vDepth - 22.0 ) * 0.0125 * uHazeAmount );
-            col = mix( col, uHaze, haze );
-            gl_FragColor = vec4( col, 1.0 );
-          }
-        `,
-        fog: false,
-      });
-      const mat = mesh.material;
-      mesh.name = `arena.structure.city${l}`;
-      mesh.castShadow = false;
-      mesh.receiveShadow = false;
-      mesh.frustumCulled = false;
-      mesh.layers.set(LAYER.NO_REFLECT);
-      this.cityMaterials.push(mat);
-      this.group.add(mesh);
     }
+    geo.setAttribute('aSize', new THREE.InstancedBufferAttribute(sizes, 3));
+    geo.setAttribute('aHash', new THREE.InstancedBufferAttribute(hashes, 1));
+    geo.setAttribute('aTint', new THREE.InstancedBufferAttribute(tints, 3));
+    geo.setAttribute('aBand', new THREE.InstancedBufferAttribute(bands, 2));
+    mesh.instanceMatrix.needsUpdate = true;
+
+    mesh.material = new THREE.ShaderMaterial({
+      name: 'arena.city',
+      uniforms: {
+        uTime: this.timeUniform,
+        uHaze: { value: new THREE.Color(0x1b2634) },
+        uWindow: { value: new THREE.Color(0xffc98a) },
+        uWindowGain: { value: 1.0 },
+      },
+      vertexShader: /* glsl */ `
+        attribute vec3 aSize;
+        attribute float aHash;
+        attribute vec3 aTint;
+        attribute vec2 aBand;
+        varying vec3 vLocal;
+        varying vec3 vSize;
+        varying vec3 vNrm;
+        varying float vHash;
+        varying float vDepth;
+        varying vec3 vTint;
+        varying vec2 vBand;
+        void main() {
+          vLocal = position;
+          vSize = aSize;
+          vNrm = normal;
+          vHash = aHash;
+          vTint = aTint;
+          vBand = aBand;
+          vec4 mv = modelViewMatrix * instanceMatrix * vec4( position, 1.0 );
+          vDepth = -mv.z;
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uHaze;
+        uniform vec3 uWindow;
+        uniform float uWindowGain;
+        uniform float uTime;
+        varying vec3 vLocal;
+        varying vec3 vSize;
+        varying vec3 vNrm;
+        varying float vHash;
+        varying float vDepth;
+        varying vec3 vTint;
+        varying vec2 vBand;
+
+        float hash21( vec2 p ) {
+          p = fract( p * vec2( 231.34, 451.77 ) );
+          p += dot( p, p + 34.21 );
+          return fract( p.x * p.y );
+        }
+
+        void main() {
+          vec3 col = vTint;
+          if ( abs( vNrm.y ) < 0.5 ) {
+            // Window grid at a fixed world pitch, so towers of different
+            // sizes share one storey height.
+            float across = mix( vSize.x, vSize.z, abs( vNrm.x ) );
+            vec2 uvw = vec2( ( abs( vNrm.x ) > 0.5 ? vLocal.z : vLocal.x ) * across,
+                             vLocal.y * vSize.y );
+            vec2 pitch = vec2( 0.95, 1.9 );
+            vec2 cellId = floor( uvw / pitch );
+            vec2 f = fract( uvw / pitch );
+            float pane = step( 0.24, f.x ) * step( f.x, 0.76 ) * step( 0.3, f.y ) * step( f.y, 0.74 );
+            float r = hash21( cellId + vHash * 97.0 );
+            float on = step( 1.0 - vBand.y * 0.3, r );
+            // A handful blink; most are simply on or off for the night.
+            float blink = r > 0.99 ? step( 0.5, fract( uTime * 0.31 + r * 10.0 ) ) : 1.0;
+            // Offices run cold, flats run warm: mixing the two is what stops a
+            // skyline reading as one orange stencil.
+            vec3 lamp = mix( uWindow, vec3( 0.55, 0.74, 1.0 ), step( 0.55, fract( r * 7.3 ) ) );
+            float lit = pane * on * blink * ( 0.25 + r * 0.55 );
+            col = mix( col, lamp * uWindowGain, lit );
+          }
+          float haze = 1.0 - exp( -max( 0.0, vDepth - 22.0 ) * 0.0125 * vBand.x );
+          col = mix( col, uHaze, haze );
+          gl_FragColor = vec4( col, 1.0 );
+        }
+      `,
+      fog: false,
+    });
+    mesh.name = 'arena.structure.city';
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.frustumCulled = false;
+    mesh.layers.set(LAYER.NO_REFLECT);
+    this.city = mesh;
+    this.cityMaterials = [mesh.material];
+    this.group.add(mesh);
   }
 
   /** Housing and guard for the extract fan. Static, so it merges with the set. */

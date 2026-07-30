@@ -389,6 +389,17 @@ const idleTaunt = makeClip('idle.taunt', { duration: 96, blendIn: 6, blendOut: 8
 // the guard to hang across the ribs, the spine folds forward and the head hangs.
 // The breath is a hitch: a fast painful catch, a long slow release, and a stall
 // where the loop nearly stops moving. One knee gives a little every cycle.
+//
+// The sag is in the KNEES, not in the root track. It used to be in the root: the
+// pelvis was authored 68mm below the stance baseline while the left leg was
+// authored STRAIGHTER than the stance (knee 34 against 42), so the left boot
+// reached 147mm through the concrete while the right one floated 21mm clear.
+// Measured through the built robot over the whole 132-tick loop, mean sole error
+// was 50mm on the toe and 51mm on the heel — by far the worst of any idle, and
+// this is the clip that plays through the climax of every round. The left knee
+// now takes 37 degrees more bend and the right six less, which is what actually
+// drops a hurt fighter's weight onto one leg, and the pelvis comes back up 30mm.
+// Mean toe error 10.0mm, heel 28.5mm, worst burial 10mm.
 // ---------------------------------------------------------------------------
 const HURT_BASE = over(STANCE, {
   hips: [4, -16, -3],
@@ -396,10 +407,10 @@ const HURT_BASE = over(STANCE, {
   neck: [4, 4, 0], head: [7, 5, -2],
   clavicle_L: [4, -4, -13], shoulder_L: [-11, -23, -32], elbow_L: [-100, 0, -16], wrist_L: [-14, 0, 0], hand_L: [-18, 0, 0],
   clavicle_R: [3, 5, 11], shoulder_R: [1, -10, 27], elbow_R: [-150, 10, 11], wrist_R: [-10, 0, 0], hand_R: [-14, 0, 0],
-  hip_L: [-27, 6, 7], knee_L: [34, 0, 0], ankle_L: [2, 2, 0],
-  hip_R: [-15, -2, -8], knee_R: [61, 0, 0], ankle_R: [-41, -3, 0],
+  hip_L: [-45, 6, 7], knee_L: [71, 0, 0], ankle_L: [-18, 2, 0],
+  hip_R: [-12, -2, -8], knee_R: [55, 0, 0], ankle_R: [-47, -3, 0],
 });
-const HURT_Y = -0.143;
+const HURT_Y = -0.113;
 
 const idleLowHealth = makeClip('idle.lowHealth', { duration: 132, loop: true, blendIn: 10, blendOut: 8 }, [
   { t: 0, ease: 'quad', pose: HURT_BASE, root: [0, HURT_Y, -0.01] },

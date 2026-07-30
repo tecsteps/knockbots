@@ -229,8 +229,10 @@ function difficultyProfile(level) {
 const DIR_GLYPH = { 1: '↙', 2: '↓', 3: '↘', 4: '←', 5: '·', 6: '→', 7: '↖', 8: '↑', 9: '↗' };
 /** Attack buttons, in the Tekken limb order `Input.js` produces. */
 const BUTTON_LABEL = { 1: 'LP', 2: 'RP', 3: 'LK', 4: 'RK', 5: 'OD' };
-/** Rows kept in the input history readout. */
-const HISTORY_ROWS = 12;
+/** Rows kept in the input history readout. Fixed, so the card never resizes
+ *  under the player mid-session; the surplus rows hold their space at zero
+ *  opacity and the log fills from the bottom. */
+const HISTORY_ROWS = 10;
 /** Frame-data cells, in the order a frame display lists them. */
 const FRAME_CELLS = [
   ['startup', 'STARTUP'], ['active', 'ACTIVE'], ['recovery', 'RECOVERY'],
@@ -644,7 +646,7 @@ export class MenuSystem {
       const t = idx - n;
       if (dy > 0) this.nav.index = 0;
       else if (dy < 0) this.nav.index = Math.min(n - 1, (rows - 1) * cols + Math.min(t, cols - 1));
-      else if (dx) this.nav.index = n + ((t + dx + tail) % tail);
+      else if (dx) this.nav.index = n + this.#nextVisibleTail(t, dx, tail);
     } else {
       let row = Math.floor(idx / cols);
       let col = idx % cols;
@@ -661,6 +663,26 @@ export class MenuSystem {
     }
     this.#applyFocus();
     bus.emit('uiHover', {});
+  }
+
+  /**
+   * Next tail slot in direction `dx` that is actually on screen.
+   *
+   * LOCK IN is `display: none` on a pointer device — it exists for a finger,
+   * which has no ENTER key — so walking the footer sideways used to park the
+   * cursor on an invisible control for one keypress. Bounded by the tail
+   * length, and it falls back to the raw step, so a footer whose buttons were
+   * all hidden would still move rather than hang.
+   */
+  #nextVisibleTail(t, dx, tail) {
+    const items = this.nav.items;
+    const base = items.length - tail;
+    let slot = t;
+    for (let hop = 0; hop < tail; hop++) {
+      slot = (slot + dx + tail) % tail;
+      if (items[base + slot]?.el.offsetParent !== null) return slot;
+    }
+    return (t + dx + tail) % tail;
   }
 
   /**
@@ -1499,7 +1521,7 @@ export class MenuSystem {
     st.label.textContent = 'PRACTICE DUMMY';
     st.tag.textContent = `${String(this._dummyIndex + 1).padStart(2, '0')} / ${String(n).padStart(2, '0')}`;
     st.value.textContent = def.name;
-    st.note.textContent = `${def.archetype.toUpperCase()} · ${chassisOf(def).label} · ${massOf(def)} KG`;
+    st.note.textContent = `${def.archetype} · ${chassisOf(def).label} · ${massOf(def)} kg`.toUpperCase();
     st.root.style.setProperty('--kbg-hot', 'var(--kb-cyan)');
     for (let i = 0; i < st.notches.length; i++) {
       st.notches[i].classList.toggle('kbg-notch--on', i === Math.round((this._dummyIndex / Math.max(1, n - 1)) * (st.notches.length - 1)));
@@ -1841,6 +1863,7 @@ export class MenuSystem {
 
     const banner = el('div', 'kbg-banner');
     banner.append(el('b', null, 'TRAINING'), el('span', null, 'CLOCK HELD · ROUNDS OFF · HEALTH RESTORES'));
+    banner.setAttribute('role', 'status');
 
     const panel = el('div', 'kbg-panel');
 
@@ -2016,8 +2039,11 @@ export class MenuSystem {
       r.dir.textContent = DIR_GLYPH[entry.dir] || '·';
       r.dir.classList.toggle('kbg-hist-dir--idle', entry.dir === 5);
       r.btns.replaceChildren(...entry.buttons.map((b) => el('i', `kbg-btn kbg-btn--${b}`, BUTTON_LABEL[b] || String(b))));
+      // Frames since the previous input — the number a player counts to learn a
+      // link. Anything past 99 is "a while ago" and says nothing useful.
       const prev = list[list.length - rows.length + i - 1];
-      r.gap.textContent = prev ? String(Math.min(99, entry.tick - prev.tick)) : '';
+      const gap = prev ? entry.tick - prev.tick : -1;
+      r.gap.textContent = gap < 0 ? '' : gap > 99 ? '99+' : String(gap);
     }
   }
 
@@ -2927,27 +2953,38 @@ const KBG_CSS = `
 .kbg-step--focus, .kbg-step:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--kbg-hot) 55%, transparent), 0 0 1.3em rgba(0,0,0,0.5); }
 .kbg-step--focus::before { transform: scaleY(1); }
 
+/* Both hold one line: "PRACTICE DUMMY" wrapping to two and "02 / 10" splitting
+   across them was what a 390px footer did to this row before. */
 .kbg-step-top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.8em; }
 .kbg-step-label {
+  min-width: 0;
   font-size: 0.5em; font-weight: 800; letter-spacing: 0.28em;
   color: var(--kb-text-faint); text-transform: uppercase;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .kbg-step-tag {
+  flex: 0 0 auto;
   font-family: var(--kb-font-mono); font-size: 0.5em; letter-spacing: 0.14em;
   color: var(--kb-text-dim);
+  white-space: nowrap;
 }
 
 .kbg-step-row { display: flex; align-items: center; gap: 0.5em; }
-/* The two signs are drawn, not typeset — see #buildStepper. `currentColor` on
+/* The two signs are drawn, not typeset — see #buildStepper. \`currentColor\` on
    the bars means the hover and focus states are still one colour change. */
 .kbg-step-btn {
   position: relative;
   flex: 0 0 auto;
   width: 1.7em; height: 1.7em;
   color: var(--kb-text-dim);
-  background: rgba(255,255,255,0.045);
+  background: rgba(255,255,255,0.07);
+  /* One chamfered corner rather than a full parallelogram: an inset box-shadow
+     is clipped along with the box, so cutting both ends leaves the outline as
+     two floating dashes and the control stops reading as a button at all. This
+     is the same single-cut shape the roster tiles use, and three of its four
+     edges survive to draw the border. */
   box-shadow: inset 0 0 0 1px var(--kb-line-strong);
-  clip-path: polygon(0.35em 0, 100% 0, calc(100% - 0.35em) 100%, 0 100%);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 0.4em), calc(100% - 0.4em) 100%, 0 100%);
   transition: color 0.12s ease, background 0.12s ease;
 }
 .kbg-step-btn::before, .kbg-step-btn::after {
@@ -3108,26 +3145,28 @@ const KBG_CSS = `
    belongs to \`HUD.js\`, top to bottom, and the bottom centre is the only strip
    nothing else claims — the touch pad puts its stick bottom-left and its
    buttons bottom-right, and this layer takes no input anyway. */
+/* One row, not two. Stacked, the caption sat within a few pixels of the
+   viewport's bottom edge on the 1080p capture and was clipped; a single line
+   also reads in one glance, which is all a mode badge has to do. */
 .kbg-banner {
-  position: absolute; bottom: calc(1.1em + var(--kb-sa-b)); left: 50%;
+  position: absolute; bottom: calc(1.5em + var(--kb-sa-b)); left: 50%;
   transform: translateX(-50%);
-  display: flex; flex-direction: column; align-items: center; gap: 0.25em;
-  text-align: center;
+  display: flex; align-items: center; gap: 0.8em;
   white-space: nowrap;
 }
 .kbg-banner b {
   font-family: var(--kb-font-display);
-  font-size: 0.72em; font-weight: 900; letter-spacing: 0.42em;
+  font-size: 0.66em; font-weight: 900; letter-spacing: 0.4em;
   color: var(--kb-good);
-  padding: 0.28em 0.6em 0.22em 1em;
-  background: rgba(51,255,180,0.1);
-  box-shadow: inset 0 0 0 1px rgba(51,255,180,0.34);
-  clip-path: polygon(0.7em 0, 100% 0, calc(100% - 0.7em) 100%, 0 100%);
+  padding: 0.3em 0.55em 0.24em 0.95em;
+  background: rgba(51,255,180,0.12);
+  box-shadow: inset 0 0 0 1px rgba(51,255,180,0.38);
+  clip-path: polygon(0.65em 0, 100% 0, calc(100% - 0.65em) 100%, 0 100%);
 }
 .kbg-banner span {
   font-family: var(--kb-font-mono);
-  font-size: 0.46em; letter-spacing: 0.24em;
-  color: var(--kb-text-faint);
+  font-size: 0.46em; letter-spacing: 0.22em;
+  color: var(--kb-text-dim);
 }
 
 /* Left flank, not right.
@@ -3213,7 +3252,7 @@ const KBG_CSS = `
 .kbg-hist-row:nth-child(4) { opacity: 0.75; }
 .kbg-hist-row--empty:nth-child(-n+4) { opacity: 0; }
 .kbg-hist-dir {
-  font-size: 0.62em; line-height: 1; text-align: center;
+  font-size: 0.7em; line-height: 1; text-align: center;
   color: var(--kb-cyan);
 }
 .kbg-hist-dir--idle { color: var(--kb-grey-dim); }
@@ -3237,12 +3276,28 @@ const KBG_CSS = `
    cannot be got any other way, so the input log — which a player can at least
    feel through their own thumbs — is what goes. The stack still starts below
    the combo counter's footprint. */
+/* Type is in px through this whole block, not em.
+   -------------------------------------------------------------------------
+   \`.hud\`'s clamp bottoms out at 11px on an 844-wide viewport, and this panel's
+   labels are 0.4em of that — 4.4px, photographed and unreadable. The em scale
+   is right for a desktop where the root is 20px and wrong at the floor, so on
+   a handset the small type stops scaling and holds a legible size instead. */
 @media (max-height: 560px) {
-  .kbg-panel { top: calc(14em + var(--kb-sa-t)); width: 12.5em; }
-  .kbg-banner b { font-size: 0.58em; letter-spacing: 0.28em; }
-  .kbg-banner span { font-size: 0.42em; letter-spacing: 0.18em; }
+  .kbg-panel { top: calc(14em + var(--kb-sa-t)); width: 150px; }
+  .kbg-banner b { font-size: 11px; letter-spacing: 0.26em; padding: 0.3em 0.5em 0.24em 0.8em; }
+  /* The chip alone carries the message at this size; the caption would be 5px. */
+  .kbg-banner span { display: none; }
   .kbg-card--inputs { display: none; }
-  .kbg-mv-name { font-size: 0.62em; }
+  .kbg-card { padding: 0.5em 0.6em 0.55em; }
+  .kbg-card-h { font-size: 9px; letter-spacing: 0.18em; padding-bottom: 0.4em; margin-bottom: 0.45em; }
+  .kbg-mv-name { font-size: 13px; }
+  .kbg-mv-input { font-size: 9px; letter-spacing: 0.08em; margin-bottom: 0.5em; }
+  .kbg-fd { gap: 0.35em 0.4em; }
+  .kbg-fd-cell i { font-size: 8px; letter-spacing: 0.08em; }
+  .kbg-fd-cell b { font-size: 12px; }
+  .kbg-step--foot .kbg-step-label, .kbg-step--foot .kbg-step-tag { font-size: 9px; letter-spacing: 0.16em; }
+  .kbg-step--foot .kbg-step-value { font-size: 15px; letter-spacing: 0.06em; }
+  .kbg-step--foot .kbg-meta-cell { font-size: 8px; letter-spacing: 0.1em; }
   /* Two lines of consequence text will not fit next to a stepper on a 844px
      row that also carries the hints and two buttons; the band name and the
      ladder are what the control is for, and the note goes. */
@@ -3258,11 +3313,35 @@ const KBG_CSS = `
 }
 
 /* -- narrow: portrait phones ------------------------------------------------ */
+/* Same px floor as the short block, and for the same measured reason: at 390px
+   wide \`.hud\` clamps to 11px and every fraction of it disappears. */
 @media (max-width: 760px) and (min-height: 561px) {
-  .kbg-panel { top: calc(15em + var(--kb-sa-t)); width: min(13.5em, 48vw); }
+  /* Docked low rather than high. \`FightCamera\` frames the pair on the vertical
+     centre of the viewport, so in portrait the machines sit in a band across
+     the middle and the top half is sky — a panel at 15em landed straight on
+     them. The floor below is the empty half. */
+  .kbg-panel {
+    top: auto; bottom: calc(3.6em + var(--kb-sa-b));
+    width: min(165px, 48vw);
+  }
+  .kbg-card-h { font-size: 9px; letter-spacing: 0.18em; }
+  .kbg-mv-name { font-size: 13px; }
+  .kbg-mv-input { font-size: 9px; letter-spacing: 0.08em; }
+  .kbg-fd-cell i { font-size: 8px; letter-spacing: 0.08em; }
+  .kbg-fd-cell b { font-size: 12px; }
+  .kbg-hist-row { height: 12px; }
+  .kbg-hist-dir { font-size: 11px; }
+  .kbg-btn { font-size: 7px; }
+  .kbg-hist-gap { font-size: 8px; }
+  .kbg-banner b { font-size: 11px; letter-spacing: 0.26em; }
+  .kbg-banner span { display: none; }
   /* The footer is a wrapping row on a phone; the control takes its own line,
      which also gives the two consequence lines their column back. */
   .kbg-step--foot { flex: 1 1 100%; min-width: 0; font-size: 0.95em; }
+  .kbg-step-label, .kbg-step-tag { font-size: 9px; letter-spacing: 0.1em; }
+  .kbg-step-value { font-size: 16px; }
+  .kbg-step-note { font-size: 10px; }
+  .kbg-meta-cell { font-size: 8px; letter-spacing: 0.1em; }
 }
 
 /* -- touch: 44px is the floor for anything a finger lands on ---------------- */

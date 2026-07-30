@@ -1946,7 +1946,7 @@ kbSeamH *= kbSurface.w;
 //   .w  flags; bit 0 asks for a fastener row
 //
 // This is the half of the surfacing problem the shader cannot solve on its own.
-// `plateFrame` tells it where the plate ends; only the builder knows what the
+// plateFrame tells it where the plate ends; only the builder knows what the
 // plate IS. A hydraulic rod, a rubber boot and a structural frame member are
 // turned, moulded and welded respectively and none of them has a panel gap on
 // it — and until this attribute was read, all three were divided at the same
@@ -1967,8 +1967,15 @@ float kbRim = vKbLayout.z * ( 1.0 / 255.0 );
 // a stack of pauldron lames read as one quilted lump instead of as five
 // pressings laid over each other, and the geometry cannot tell them apart: the
 // shader can see where a plate ends, not whether something is sitting there.
-float kbLip = kbSeam * kbRim;
-float kbJoint = kbSeam * ( 1.0 - kbRim );
+// A part narrower than a couple of pixels cannot show a rim: the perimeter ramp
+// widens to one pixel as the plate shrinks, so at that size the *whole* plate
+// would be rim and a bracket would turn into a chip of bare alloy. Fading the
+// bright half out as the plate approaches pixel scale leaves the surface tone,
+// which is what a part that small should contribute. The dark half needs no such
+// guard — a plate fading toward its own shadow is the correct limit.
+float kbLipFade = smoothstep( 1.2, 3.0, min( vKbFrame.z, vKbFrame.w ) / max( kbPx, 1e-5 ) );
+float kbLip = kbSeam * kbRim * kbLipFade;
+float kbJoint = kbSeam * ( 1.0 - kbRim * kbLipFade );
 float kbHaloJ = kbSeamH * ( 1.0 - kbRim );
 diffuseColor.rgb *= 1.0 - 0.34 * kbJoint - 0.13 * kbHaloJ;
 float kbLipLum = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );

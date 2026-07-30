@@ -2378,10 +2378,13 @@ function buildTorso(rig, spec, def) {
     });
   }
 
-  // back plate + shoulder-blade panels
+  // back plate + shoulder-blade panels. The back is the largest single face on
+  // the machine and the one the fight camera sees most of, so it is described as
+  // what it is: a bolted access deck over the spine, butted to the plates around
+  // it on three sides.
   const bz = -FRONT * cd * 0.42 + rz(m.collar * 0.18);
   rig.add('chest', bevelBox(cw * 0.94, ch * 0.98, cd * 0.30, 0.016, { topX: 0.96, botX: 0.78 }), 'armorSecondary',
-    { p: [0, m.collar * 0.18, bz], r: [plan.rake * DEG, 0, 0], tier: TIER.PRIMARY });
+    { p: [0, m.collar * 0.18, bz], r: [plan.rake * DEG, 0, 0], tier: TIER.PRIMARY, role: 'deck' });
   for (const { sign, mirror } of SIDES) {
     rig.add('chest', bevelBox(cw * 0.30, ch * 0.60, 0.03, 0.010, { topX: 0.88 }), 'carbon', {
       p: [sign * cw * 0.26, m.collar * 0.30, bz - FRONT * cd * 0.16],
@@ -3982,6 +3985,9 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
       { y: sh * 0.5, w: sw * 0.96, d: sd * 0.94, round: 0.08 },
     ]), 'armorPrimary', {
       p: at, r: [0, 0, sign * -pd.tilt * 0.35 * DEG], mirror, tier: TIER.PRIMARY,
+      // The one square plate a corridor guard's shoulder is: a bolted deck, not
+      // a pressing, so it takes the wide pitch and the fastener row.
+      role: 'deck',
     });
     for (const sy of [-1, 1]) {
       rig.add(`clavicle_${S}`, bevelBox(sw * 1.04, 0.026, sd * 1.04, 0.006), 'trim', {
@@ -4011,6 +4017,11 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
         // the lathe sweeps about +Y; -90 about X lays that sweep into the
         // frontal plane so the arc runs from under the arm up over the shoulder
         p: at, r: [-90 * DEG, 0, 0], mirror, tier: TIER.PRIMARY,
+        // A lame is one pressing with a free ground rim all the way round and
+        // no fasteners on show. Saying so is what stops the surfacing shading
+        // its leading edge as a butted joint holding shadow, which is what made
+        // a stack of five read as one quilted lump.
+        role: 'lame',
       });
       // Rolled edge along the leading rim of each lame: a thin band standing
       // proud of the plate right where a real one would be ground bright, and
@@ -4934,7 +4945,10 @@ function buildLeg(rig, spec, side, sign, mirror) {
       { y: 0.028, w: fw * 1.30, d: fl * 0.90, round: 0.24, smooth: true },
       { y: 0.066, w: fw * 1.14, d: fl * 0.78, z: -FRONT * fl * 0.03, round: 0.28, smooth: true },
       { y: 0.091, w: fw * 0.98, d: fl * 0.58, z: -FRONT * fl * 0.06, round: 0.38 },
-    ]), 'armorPrimary', { mirror, tier: TIER.PRIMARY });
+      // A boot shell is one deep drawing: very few, very large panels and no
+      // fastener anywhere a kerb could reach. It is also the part of the machine
+      // that gets scuffed hardest, so its rim wants to read as ground metal.
+    ]), 'armorPrimary', { mirror, tier: TIER.PRIMARY, role: 'boot' });
     rig.add(`foot_${S}`, bevelBox(fw * 1.28, 0.030, fl * 0.90, 0.006), 'rubber',
       { p: [0, -0.015, 0], mirror, tier: TIER.PRIMARY });
     rig.add(`toe_${S}`, loftHull([
