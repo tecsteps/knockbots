@@ -19,8 +19,25 @@ is the only integration point and it calls exactly the methods below.
   albedo/emissive textures are `SRGBColorSpace`, all data maps (normal, roughness,
   metalness, AO) are `NoColorSpace`. Lights are in physical units.
 - Performance target: **60fps at 1920×1080 on an M-series laptop GPU**, with a
-  quality tier system that degrades gracefully. Budget: ≤ 900k triangles on
-  screen, ≤ 120 draw calls, ≤ 8 render targets.
+  quality tier system that degrades gracefully.
+
+  **The frame is fill-bound, and the draw-call budget is a compliance metric, not
+  a performance one.** Measured by injecting sub-pixel triangles into the live
+  scene and alternating them in 2.5s holds: **a draw call costs about 1.2
+  microseconds**. Doubling the frame's draw calls is invisible; cutting the 51 we
+  are currently over by would return roughly 0.06ms. Two separate briefs this
+  round aimed effort at that number before it was measured — do not be the third.
+
+  What the frame is actually made of, at 1080p: roughly **18ms proportional to
+  shaded pixels and 11ms fixed**, from the curve 28.6 / 17.0 / 15.3 ms at
+  renderScale 1.0 / 0.7 / 0.5. Fifteen analytic lights, and an arena covering
+  ~85% of the screen through several overdraw layers. **Frames are bought by
+  shading fewer pixels or fewer lights — not by fewer draws and not by fewer
+  triangles** (601k, already inside budget).
+
+  Standing budgets, in priority order: ≤ 900k triangles (currently met),
+  ≤ 8 render targets, ≤ 120 draw calls (currently 181 whole-frame; 109 of that is
+  two robots plus the post chain before the arena draws anything).
 
 ## Shared modules (already written — depend on them, do not rewrite)
 

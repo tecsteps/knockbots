@@ -217,3 +217,38 @@ remainder 6 — 171 scene, 198 whole-frame, against a 120 budget. Real, but not 
 
 **Consequence for anyone optimising here: reducing draw calls will not reach 60fps. Reducing
 shaded pixels or light count will.**
+
+## A draw call costs about 1.2 microseconds here
+
+Measured, not assumed. 120 sub-pixel triangles were injected into the live scene — inside the
+frustum so they are drawn, well under a pixel so they shade nothing — and alternated on/off in
+2.5-second holds, 7 pairs, resolution pinned, adaptive resolution off, simulation paused. Two
+variants, because they are different costs: all sharing one material, and each with its own
+material clone (which forces a re-upload of the 23-light uniform block per draw).
+
+    +240 draws, one shared material :  -0.45 ms   IQR [-2.10, +0.10]
+    +240 draws, unique materials    :  +0.20 ms   IQR [-0.20, +0.65]
+
+(240 rather than 120 because the mirror draws them again.) Both intervals straddle zero. The
+clean repetitions give +0.1 to +0.3ms for 240 draws — about **1.2us each**.
+
+**Consequence: the 120-draw-call charter budget is a compliance metric, not a performance one.**
+An arena prune that took scene draws 171 -> 154 and triangles 635k -> 602k measured **-0.38ms,
+IQR [-9.80, +19.90]** — straddling zero, exactly as the per-draw cost predicts. It was kept
+because it is free and regression-tested, not because it bought frames.
+
+Where the draws actually are, after that prune: two robots **64** (32 main, 17 mirror at LOD1,
+15 shadow), post chain **27**, arena **72**, remainder 18. Deleting the entire arena would still
+leave 109.
+
+## Suspect: the "whole post chain is 5.8ms" figure
+
+That number was produced by toggling `pass.enabled`, which does **not** remove the composer's
+render-target allocations or its blits — so it measures the passes' shading and not the chain's
+fixed cost. An almost-empty scene (arena and fighters hidden, 7 draws, 6k triangles) still
+measures **13-14ms at 1080p**, which is far more than 5.8ms of post plus a trivial scene.
+
+Until that is re-measured properly, **treat 5.8ms as a lower bound on the post chain, not its
+cost**, and do not repeat it as settled. The reflection pass, measured the same careful way, is
+**4.3ms with a tight IQR [3.80, 5.25]** — a second scene render through the same 23-light block,
+and one of the largest single items in the frame.
