@@ -37,6 +37,23 @@ const PORT = Number(arg('port', 5199));
  * inside the browser with `KB` (the Game) in scope, then we wait `settle` ms and
  * grab the canvas.
  */
+/**
+ * True once no announcement banner is on screen.
+ *
+ * Staged shots re-enter the fight phase, which replays the round-start
+ * intro — so "FIGHT" was being drawn across the exact frames the impact and
+ * KO axes are judged on, and the KO shot showed the round-start banner and a
+ * 60-second timer over a finished round. Waiting on the banner rather than on
+ * a guessed delay keeps the announcement out of shots that are not about it.
+ */
+const NO_BANNER = `(() => {
+  const q = window.KB?.hud?.announceQueue;
+  const busy = window.KB?.hud?.announceBusy;
+  const el = document.querySelector('.announce-layer');
+  const visible = el && getComputedStyle(el).opacity > 0.02 && el.textContent.trim();
+  return !busy && (!q || q.length === 0) && !visible;
+})()`;
+
 const SHOTS = [
   {
     name: '01-hero-idle',
@@ -147,6 +164,7 @@ const SHOTS = [
   {
     name: '05-juggle',
     note: 'Airborne juggle — pose readability off the ground.',
+    preRoll: true,
     setup: `window.KB.testHarness.forceJuggle({ attacker: 0, hits: 3 });`,
     settle: 1400,
   },
@@ -159,8 +177,15 @@ const SHOTS = [
   {
     name: '07-super',
     note: 'Overdrive/super cinematic — the money shot.',
+    // Was a bare 1500 ms settle, which is the same failure this file already
+    // documents for 04-impact: it photographed the charge pose with the
+    // opponent standing there unreacting, i.e. the wind-up rather than the
+    // super. Wait for the blow to actually land, then hold for the cinematic.
+    preRoll: true,
     setup: `window.KB.testHarness.forceSuper({ attacker: 0 });`,
-    settle: 1500,
+    waitFor: 'window.__kbShotHit',
+    settle: 700,
+    verify: '__kbShotHit',
   },
   {
     name: '08-hud',
@@ -188,8 +213,52 @@ const SHOTS = [
   {
     name: '10-ko',
     note: 'KO slow-motion moment — the dramatic beat.',
-    setup: `window.KB.testHarness.forceKO({ loser: 1 });`,
-    settle: 1800,
+    // The shot named for the KO did not contain one. `forceKO` drops the loser
+    // to 6 HP and arms a heavy, but nothing waited for the blow to land, so a
+    // fixed 1800 ms settle photographed two upright fighters at near-full
+    // health with the timer at 43 and the K.O. announcement yet to fire. The
+    // interface axis was scored partly on the absence of a beat that simply
+    // had not happened yet. Wait for the health to actually reach zero.
+    preRoll: true,
+    // Re-arm until the round actually ends, rather than firing once and hoping.
+    // A single `forceKO` is not reliable: whether the armed heavy connects
+    // depends on what the *previous* shot left the fighters doing — a preceding
+    // shot that re-enters the fight phase restarts the round intro, and the
+    // blow is thrown into an intro pose. Alone the shot passed, in a full run
+    // it silently produced a non-KO, and that asymmetry is exactly why it went
+    // unnoticed for several rounds. Retrying is honest here: the shot's job is
+    // to photograph a KO, so it should keep trying to cause one and say so if
+    // it cannot.
+    setup: `(() => {
+      let tries = 0;
+      const arm = () => {
+        if (window.KB.phase === 'ko' || tries >= 8) return;
+        tries++;
+        window.KB.testHarness.forceKO({ loser: 1 });
+        window.__kbKoTries = tries;
+        setTimeout(arm, 700);
+      };
+      arm();
+    })()`,
+    // Gate on the phase the game actually enters. There is no 'ko' bus event --
+    // the round ends via 'roundEnd' and Game moves to PHASE.KO -- so a listener
+    // for one was watching for something that does not exist.
+    waitFor: "window.KB.phase === 'ko'",
+    settle: 900,
+    verify: '__kbKo',
+    prep: `window.__kbKo = null;
+      (() => { const s = window.KB.bus.on('roundEnd', (e) => {
+        window.__kbKo = { winner: e.winner, loserHealth: window.KB.fighters[1].health }; s(); }); })();`,
+  },
+  {
+    name: '12-select-screen',
+    note: 'Character select — roster tiles, portraits and the responsive grid.',
+    // The interface critic could not score three of the four announcement and
+    // menu surfaces on this axis because they were never captured; it refused
+    // to score the select screen rather than guess, and the axis lost points
+    // for the coverage gap. If a surface is judged, it has to be photographed.
+    setup: `window.KB.setPhase('select'); window.KB.menus.show('select');`,
+    settle: 1400,
   },
 ];
 
@@ -287,15 +356,31 @@ async function main() {
     ${PIN_CLOCK}
     const off = ${offset};
     const stop = window.KB.bus.on('hit', (e) => {
-      window.__kbHit = { tick: window.KB.tick };
+      // Count RENDERED FRAMES, not sim ticks.
+      //
+      // This waited on KB.tick - hitTick >= off, and KB.tick is precisely
+      // what does not advance during hitstop — the freeze gates the sim
+      // accumulator, so zero ticks run. "+1 tick past contact" therefore
+      // waited out the entire freeze first and shuttered ~330 ms after the
+      // blow. It only ever produced a usable image because the FX clock is
+      // slowed during the freeze too, so two bugs cancelled: the instrument
+      // was systematically rewarding effects that persist too long, which is
+      // the exact defect the critic keeps naming on this axis.
+      //
+      // Two agents found this independently in the same round, from opposite
+      // directions — one measuring reaction poses, one measuring effects.
+      window.__kbHit = { tick: window.KB.tick, frames: 0 };
       stop();
       const wait = () => {
-        if (window.KB.tick - window.__kbHit.tick >= off) {
+        if (window.__kbHit.frames >= off) {
           window.KB.paused = true;
           window.KB.clock.getDelta = () => 0;  // stop the effects ageing before the shutter
+          window.__kbHit.hitstopLeft = window.KB.hitstopTicks;
           window.__kbHit.frozen = true;
+        } else {
+          window.__kbHit.frames++;
+          requestAnimationFrame(wait);
         }
-        else requestAnimationFrame(wait);
       };
       wait();
     });
@@ -305,7 +390,7 @@ async function main() {
     try {
       await page.evaluate(`(() => { try { ${ENTER_MATCH} } catch (e) { console.error('enter', e); } })()`);
       await page.waitForTimeout(500);
-      if (shot.freezeOnHit) {
+      if (shot.freezeOnHit || shot.preRoll) {
         // A frozen shot has no settle window by construction, so the framing
         // that is live at contact is the framing that gets photographed — and
         // `KB.paused` stops the simulation but NOT the camera rig, which keeps
@@ -321,20 +406,44 @@ async function main() {
         // almost no reprojection velocity for motion blur to smear.
         await page.evaluate(`window.KB.startMatch(0, 1); window.KB.setPhase('fight'); window.KB.fightCamera.cinematic('fight');`);
         await page.waitForFunction('window.KB.phaseTicks > 60', null, { timeout: 15000 }).catch(() => {});
-        await page.waitForTimeout(900);
-        await page.evaluate(ARM_HIT_FREEZE(shot.impactOffset ?? 0));
+        await page.waitForFunction(NO_BANNER, null, { timeout: 15000 })
+          .catch(() => console.warn(`[capture] ${shot.name}: round-start banner never cleared`));
+        await page.waitForTimeout(400);
+        if (shot.freezeOnHit) await page.evaluate(ARM_HIT_FREEZE(shot.impactOffset ?? 0));
       }
+      // Every shot arms a hit sentinel, so any shot can wait on contact rather
+      // than on a guessed delay. Cheap, and it removes the whole class of
+      // "photographed the wind-up" failure that has cost this project four
+      // rounds of invalid scores on two different axes.
+      await page.evaluate(`(() => {
+        window.__kbShotHit = null;
+        const stop = window.KB.bus.on('hit', (e) => {
+          window.__kbShotHit = { landed: true, tick: window.KB.tick };
+          stop();
+        });
+      })()`);
+      if (shot.prep) await page.evaluate(`(() => { try { ${shot.prep} } catch (e) { console.error('prep', e); } })()`);
       await page.evaluate(`(() => { try { ${shot.setup} } catch (e) { console.error('shot setup', e); } })()`);
+      if (shot.waitFor) {
+        await page.waitForFunction(shot.waitFor, null, { timeout: 15000 })
+          .catch(() => console.warn(`[capture] ${shot.name}: WAITED OUT — "${shot.waitFor}" never became true, `
+            + 'this frame is not the moment the shot is named for and must not be scored'));
+      }
       if (shot.verify) {
         // A shot that can report whether it framed its subject must be made to
         // say so out loud, and the answer rides into the manifest so a score
         // can never again be defended with a frame nobody checked.
         const v = await page.evaluate(`window.${shot.verify} ?? null`);
         verified[shot.name] = v;
-        if (v && v.clear === false) {
+        if (v === null) {
+          console.warn(`[capture] ${shot.name}: SELF-CHECK DID NOT FIRE (${shot.verify}) — `
+            + 'this frame is not the moment the shot is named for and must not be scored');
+        } else if (v.clear === false) {
           console.warn(`[capture] ${shot.name}: SUBJECT OCCLUDED by ${v.blocker} (${v.gap}m in front) — do not score this frame`);
-        } else if (v) {
+        } else if (v.dist) {
           console.log(`[capture] ${shot.name}: subject clear at ${v.dist}m`);
+        } else {
+          console.log(`[capture] ${shot.name}: verified ${JSON.stringify(v)}`);
         }
       }
       if (shot.freezeOnHit) {
@@ -397,7 +506,37 @@ async function main() {
     console.log(`[capture] ${shot.name}${shot.freezeOnHit ? ' (frozen at contact)' : ''}`);
   }
 
-  const fps = await page.evaluate(`window.KB?.renderer?.stats?.fps ?? null`);
+  // Measure the framerate rather than sampling it.
+  //
+  // This used to read `renderer.stats.fps`, one instantaneous sample taken
+  // after the KO shot — with the sim paused, a cinematic running and the
+  // camera parked wherever the last shot left it. Three runs of the SAME BUILD
+  // returned 5.00, 65.06 and 142.48. That number was quoted as evidence the
+  // 60fps constraint was met, which it could not support in either direction.
+  //
+  // Instead: return to live fight framing, let it settle, then time a fixed
+  // window of real rAF callbacks and report the median and p95 frame interval.
+  // The median is the honest headline; p95 is what a player actually feels.
+  const perf = await page.evaluate(`(() => new Promise((res) => {
+    const KB = window.KB;
+    KB.paused = false;
+    KB.startMatch(0, 1); KB.setPhase('fight'); KB.fightCamera.cinematic('fight');
+    const dts = [];
+    let last = performance.now(), warm = 0;
+    const tick = (now) => {
+      const dt = now - last; last = now;
+      if (warm++ > 30) dts.push(dt);          // discard the restart transient
+      if (dts.length < 480) requestAnimationFrame(tick);
+      else {
+        dts.sort((a, b) => a - b);
+        res({ frames: dts.length,
+              medianMs: +dts[dts.length >> 1].toFixed(2),
+              p95Ms: +dts[Math.floor(dts.length * 0.95)].toFixed(2) });
+      }
+    };
+    requestAnimationFrame(tick);
+  }))()`).catch((e) => { console.warn(`[capture] perf probe failed: ${e.message.split('\n')[0]}`); return null; });
+  const fps = perf ? +(1000 / perf.medianMs).toFixed(1) : null;
   const info = await page.evaluate(`(() => {
     const r = window.KB?.renderer?.renderer; if (!r) return null;
     return { calls: r.info.render.calls, triangles: r.info.render.triangles,
@@ -405,14 +544,16 @@ async function main() {
              geometries: r.info.memory.geometries };
   })()`);
 
-  writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({ shots: manifest, fps, info, verified, errors: errors.slice(0, 40) }, null, 2));
+  writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({ shots: manifest, fps, perf, info, verified, errors: errors.slice(0, 40) }, null, 2));
 
   if (errors.length) {
     console.warn(`[capture] ${errors.length} console error(s):`);
     for (const e of errors.slice(0, 10)) console.warn('  ', e);
   }
   console.log(`[capture] wrote ${manifest.length} shots to ${OUT}`);
-  if (info) console.log(`[capture] draw calls ${info.calls}, tris ${info.triangles}, fps ${fps ?? '?'}`);
+  if (info) console.log(`[capture] draw calls ${info.calls}, tris ${info.triangles}`);
+  if (perf) console.log(`[capture] frame time ${perf.medianMs}ms median, ${perf.p95Ms}ms p95 over ${perf.frames} frames`
+    + ` -> ${fps} fps${fps < 60 ? '  *** BELOW THE 60FPS CONSTRAINT ***' : ''}`);
 
   await browser.close();
   await server.close();

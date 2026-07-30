@@ -215,7 +215,14 @@ export function makeTestHarness(game) {
       const a = fighters()[1 - li];
       const set = MOVES[a.moveSetKey] || MOVES.standard;
       const move = findMoveByTag(set, 'heavy') || findMoveByTag(set, 'launcher');
-      stage(a, d, 1.0);
+      // 1.02, not 1.0, and the difference is whether this function does what it
+      // says. At 1.0 the heavy whiffs -- measured: the defender's health sat at
+      // 6 and no round ever ended -- so `10-ko` photographed two upright
+      // fighters under a round-start banner for several rounds and the
+      // interface axis was scored on the absence of a beat that had never
+      // happened. This is the same distance `forceHit` uses, which lands every
+      // time. Overridable so a caller can probe the edge deliberately.
+      stage(a, d, o.dist ?? 1.02);
       d.health = 6;
       d.recoverable = 0;
       a.health = MAX_HEALTH * 0.42;

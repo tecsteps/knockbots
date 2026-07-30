@@ -62,6 +62,8 @@ export class Game {
 
     this.timeScale = 1;
     this.hitstopTicks = 0;
+    /** Real time banked toward the next hitstop tick. See #frame. */
+    this.hitstopAccum = 0;
     this.slowmo = { scale: 1, ticks: 0 };
 
     this.round = 1;
@@ -250,7 +252,23 @@ export class Game {
     let scale = this.timeScale;
     if (this.slowmo.ticks > 0) { scale *= this.slowmo.scale; this.slowmo.ticks--; }
     const frozen = this.hitstopTicks > 0;
-    if (frozen) this.hitstopTicks--;
+    if (frozen) {
+      // Hitstop used to lose one tick per *rendered frame*, which made the most
+      // game-feel-critical constant in the project a function of the player's
+      // hardware. Two ways that went wrong, both measured: the contact burst
+      // makes the frozen frames the slowest in the game — 43.3 ms during the
+      // freeze against 11.1 ms after — so a launcher's nominal 11 ticks
+      // (183 ms) actually ran 327 ms, and the freeze lengthened itself in
+      // proportion to how heavy the hit was. In the other direction, a 144 Hz
+      // display would have run it at 2.4x speed. Frame data is the game, and a
+      // freeze inside the sim's own timeline has to be drained on the sim's own
+      // clock — the same fixed TICK_DT the accumulator uses.
+      this.hitstopAccum += raw * scale;
+      while (this.hitstopAccum >= TICK_DT && this.hitstopTicks > 0) {
+        this.hitstopAccum -= TICK_DT;
+        this.hitstopTicks--;
+      }
+    } else if (this.hitstopAccum) this.hitstopAccum = 0;
 
     if (!this.paused && !frozen) this.accumulator += raw * scale;
 
