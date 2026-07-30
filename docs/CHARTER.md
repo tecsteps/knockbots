@@ -39,6 +39,18 @@ is the only integration point and it calls exactly the methods below.
   ≤ 8 render targets, ≤ 120 draw calls (currently 181 whole-frame; 109 of that is
   two robots plus the post chain before the arena draws anything).
 
+  Frame decomposition at 1080p, 28.2ms baseline, paired blocks with intervals —
+  see docs/PROFILING.md for the method and its failure modes:
+
+      main scene pass  ~18.0 ms   <- the target
+      all post           6.4 ms   (AO 2.27, DOF 1.85, SMAA 1.45, MB 1.15, bloom 0.98, grade 0.42)
+      shadows            2.25 ms
+      reflection         1.27 ms
+
+  **GTAO is not free.** An earlier revision of this file claimed it measured
+  negative and was effectively free; that does not reproduce. It is 2.27ms with a
+  tight interval, measured twice, and is the largest single post item.
+
 ## Shared modules (already written — depend on them, do not rewrite)
 
 | File | Provides |

@@ -252,3 +252,62 @@ Until that is re-measured properly, **treat 5.8ms as a lower bound on the post c
 cost**, and do not repeat it as settled. The reflection pass, measured the same careful way, is
 **4.3ms with a tight IQR [3.80, 5.25]** — a second scene render through the same 23-light block,
 and one of the largest single items in the frame.
+
+## Corrected frame decomposition, and two probes that were lying
+
+Measured at 1080p, adaptive resolution off, renderScale pinned to 1, simulation paused,
+30 paired blocks of K=8 with 3 discarded. Baseline 28.2ms.
+
+    all post        6.40 ms   IQR [ 6.10,  6.90]
+      ao            2.27 ms   IQR [ 2.10,  2.90]    (re-measured as a drift check: 2.57)
+      dof           1.85 ms   IQR [-0.85,  3.95]
+      smaa          1.45 ms   IQR [ 0.70,  2.25]
+      motion blur   1.15 ms   IQR [ 0.05,  4.45]
+      bloom         0.98 ms   IQR [ 0.50,  1.90]
+      grade         0.42 ms   IQR [-0.05,  0.80]
+    shadows         2.25 ms   IQR [ 1.55,  2.65]
+    reflection      1.27 ms   IQR [ 0.75,  1.70]
+
+Post at 6.4ms is close enough to the earlier 5.8ms that the figure stands after all. Shadows are
+2.25ms, not the 1.5ms previously on record. **GTAO is 2.27ms and is the largest single post item
+— the earlier claim that it "measured negative, is half-res and free" does not reproduce and has
+been removed from the charter.**
+
+Subtracting all three leaves the **main scene pass at roughly 18ms of the 28.2ms frame**.
+
+**`_passes.gbuffer` is an alias for `_passes.scene`** (RenderPipeline.js:1716). Toggling it
+disables the scene render and collapses the frame to 0.2ms. Any per-pass table containing a
+"gbuffer" row is reporting an artifact.
+
+**Unresolved:** the reflection pass measures 1.27ms by short blocks and 4.3ms by long holds — a
+3x disagreement. The long-hold run had drifted to a ~51ms baseline, which argues for the short
+number, but neither is settled.
+
+## An overdraw probe that was measuring the sky
+
+`scratchpad/arenaperf/overdraw.mjs` reported "144 fragments per pixel", "40x opaque overdraw" and
+a "97% ceiling on a depth prepass". All three are false by roughly 16x. `scene.overrideMaterial`
+**does not apply to `scene.background`**, so the procedural HDRI painted the frame with its own
+colours and the readback summed those bytes as though they were fragment counts. Its 8-bit
+counter also saturated at 255 without saying so.
+
+The catch was a calibration the original lacked: render **one flat quad and nothing else**, which
+must read exactly 1.00 fragment per covered pixel. The original read **32.4**. With
+`scene.background` nulled for the duration it reads **1.00, max 1**.
+
+Corrected figures, hero framing at 1080p:
+
+    fragments rasterised per screen pixel   all 18.02   opaque only 9.89
+    fragments surviving the depth test      all  3.11   opaque only 2.45
+    calibration (floor slab alone)          1.00, max 1
+
+Front-to-back sorting and early-Z already discard 75% of rasterised fragments, but the opaque
+pass still shades every screen pixel **2.45 times**. A perfect depth prepass takes that to 1.0,
+so the ceiling is **59% of opaque scene shading — not 97%**. Against an 18ms scene pass that is
+worth single-digit milliseconds, which is the right order for a 20ms target. It costs a
+depth-only pass over the same geometry, and the alpha-tested materials (chain-link fence,
+grating) must be carried into it with their alpha test intact or they punch holes in the depth
+buffer.
+
+**Any probe that counts fragments needs a calibration case with a known answer.** Without one,
+this probe was wrong by 16x and nobody would have known.
