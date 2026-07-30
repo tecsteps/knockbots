@@ -69,7 +69,11 @@ const IN_FIGHT_PHASES = new Set(['intro', 'ready', 'fight', 'ko', 'roundEnd']);
  * layer-gated) with the opponent, stage and background left out of frame.
  */
 const PORTRAIT_LAYER = 6;
-const PORTRAIT_SIZE = 128;
+// Matches `RosterPortraits`' own render size. At 128 the cached 256px roster
+// bust was resampled down on the way into the canvas and then scaled back up
+// by the browser at DPR 2 — two resamples for no reason, on the one image in
+// the HUD whose whole job is to be recognisable at 63 CSS px.
+const PORTRAIT_SIZE = 256;
 
 /** Reusable scratch vector for world -> screen projection. */
 const _proj = new THREE.Vector3();
@@ -154,11 +158,25 @@ export class HUD {
     const block = document.createElement('div');
     block.className = `hp-block hp-block--${p}`;
 
-    // Portrait chip: a live render of the fighter's head (see
-    // `#capturePortrait`) over a beveled metal plate, with a monogram
-    // fallback shown until that first capture lands.
+    // Portrait chip: a rendered bust of the fighter (see `#capturePortrait`)
+    // over a beveled metal plate, with a monogram fallback shown until that
+    // first capture lands.
+    //
+    // Two boxes, not one, and the reason is a defect that survived thirteen
+    // rounds because nobody looked at this at magnification. The chip is a
+    // chamfered hexagon cut with `clip-path`, and its player-identity keyline
+    // used to be an `inset` box-shadow on a `::after` sharing that clip. An
+    // inset box-shadow draws a RECTANGULAR ring inside the border box, so on
+    // the two edges the chamfer actually cuts, the clip removed the ring
+    // entirely: measured on a 4x DOM raster, each chip carried its cyan/red
+    // keyline on two of its four sides and nothing at all on the other two.
+    // A frame is now a real filled shape (`.portrait-chip`) with the picture
+    // inset inside it (`.portrait-chip__inner`), both clipped, so the keyline
+    // is the gap between two chamfered polygons and cannot miss a corner.
     const portrait = document.createElement('div');
     portrait.className = 'portrait-chip';
+    const portraitInner = document.createElement('div');
+    portraitInner.className = 'portrait-chip__inner';
     const portraitCanvas = document.createElement('canvas');
     portraitCanvas.className = 'portrait-canvas';
     portraitCanvas.width = PORTRAIT_SIZE;
@@ -167,7 +185,8 @@ export class HUD {
     portraitFallback.className = 'portrait-fallback';
     const portraitMono = document.createElement('span');
     portraitFallback.appendChild(portraitMono);
-    portrait.append(portraitCanvas, portraitFallback);
+    portraitInner.append(portraitCanvas, portraitFallback);
+    portrait.append(portraitInner);
 
     // The bar is two nested boxes: `.hp-frame` is the outer metal bezel
     // (bevel + keyline + cast shadow, see ui.css), `.hp-inner` is the

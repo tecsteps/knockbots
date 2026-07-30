@@ -52,6 +52,25 @@
  * and the clip's end onto the move's last, and stretches the wind-up and the
  * recovery separately to suit; the declaration is therefore load-bearing and has
  * to move whenever the strike does.
+ *
+ * ROUND 14 audited every one of those declarations against the rig, and six of
+ * the 34 named a bone travelling under half as far as the limb actually leading
+ * the strike. `impact.bone` is read by nothing in src/ — only by the offline
+ * measurement tools — so a wrong one does not break the game, it silently makes
+ * every speed and carry number for that clip a measurement of a limb standing
+ * still. `k.spinKick` was the worst: it declared `foot_L`, the PLANTED foot,
+ * which travels 0.143m by contact while foot_R travels 1.017m. That is why this
+ * file has recorded it as a decelerator since round 11.
+ *
+ * Corrected here: k.lowKick knee_L -> foot_L, k.spinKick foot_L -> foot_R (and
+ * its tick 19 -> 18, one past the peak of the swing). `k.sweep` was left alone:
+ * it declares knee_L, which travels 0.556m and is a real authored hitbox anchor,
+ * and the limb that leads it is the planting hand rather than the strike.
+ *
+ * Corrected fleet-wide, on the right bones at the right ticks, the numbers this
+ * file quotes above move: mean contact-frame speed as a share of peak 0.863 ->
+ * 0.879, clips decelerating into contact 5/34 -> 4/34, mean carry 247 -> 268mm.
+ * Those are re-measurements, not improvements — the animation did not change.
  */
 
 import { validateClip } from '../AnimationFormat.js';
@@ -63,7 +82,11 @@ export const KICK_CLIPS = {
   'k.lowKick': {
     name: 'Low Kick',
     duration: 33, blendIn: 3, blendOut: 7,
-    impact: { tick: 16, bone: 'knee_L' },
+    // Was `knee_L` (0.315m of travel). The blow lands with the shin tip:
+    // foot_L travels 0.850m. See the note on `impact.bone` at the top of the
+    // file -- the wrong bone here made every offline speed measurement of this
+    // clip a measurement of the joint the foot swings around.
+    impact: { tick: 16, bone: 'foot_L' },
     root: [
       { t: 0, p: [0, -0.075, 0], ease: 'quad' },
       { t: 10, p: [0, -0.107, 0.02], ease: 'linear' },
@@ -1096,7 +1119,16 @@ export const KICK_CLIPS = {
   'k.spinKick': {
     name: 'Spin Kick',
     duration: 45, blendIn: 4, blendOut: 10,
-    impact: { tick: 19, bone: 'foot_L' },
+    // Was `foot_L`, the PLANTED foot: it travels 0.143m by the contact tick
+    // while foot_R travels 1.017m, a factor of 7.1. All four moves that use
+    // this clip anchor FOOT_R. This is why the clip has read as the file's
+    // worst decelerator (contact/peak 0.50) since round 11 -- that number was
+    // measured on the foot standing on the floor.
+    //
+    // The tick was 19, one past the peak of the swing. foot_R travels 38, 49,
+    // 39 then 16cm on t16-t19, and its reach is furthest at t18. Contact-frame
+    // speed 0.33 of peak at t19, 0.80 at t18.
+    impact: { tick: 18, bone: 'foot_R' },
     root: [
       { t: 0, p: [0, -0.075, 0], ease: 'sine' },
       { t: 7.77, p: [0, -0.111, 0], ease: 'sine' },

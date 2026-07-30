@@ -120,35 +120,35 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
 const HIT_FX = {
   [WEIGHT.LIGHT]: {
     sparks: 190, jet: 64, speed: 7.4, size: 0.028, heat: 2.6, sparkLife: 0.16,
-    ring: 0.28, ringLife: 0.13, thick: 0.16, ringHeat: 2.2,
+    ring: 0.28, ringLife: 0.13, thick: 0.095, ringHeat: 2.2,
     flash: 0.26, flashHeat: 3.2, flashLife: 0.075,
     core: 0.10, coreHeat: 2.6, coreLife: 0.42, ember: 10,
     debris: 0, fluid: 0, light: 2.1, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
     sparks: 340, jet: 105, speed: 8.6, size: 0.032, heat: 3.0, sparkLife: 0.19,
-    ring: 0.40, ringLife: 0.15, thick: 0.17, ringHeat: 2.8,
+    ring: 0.40, ringLife: 0.15, thick: 0.10, ringHeat: 2.8,
     flash: 0.36, flashHeat: 3.8, flashLife: 0.09,
     core: 0.13, coreHeat: 3.4, coreLife: 0.55, ember: 16,
     debris: 0, fluid: 5, light: 3.4, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
     sparks: 680, jet: 200, speed: 10.4, size: 0.038, heat: 3.4, sparkLife: 0.24,
-    ring: 0.62, ringLife: 0.19, thick: 0.18, ringHeat: 3.4,
+    ring: 0.62, ringLife: 0.19, thick: 0.11, ringHeat: 3.4,
     flash: 0.56, flashHeat: 4.6, flashLife: 0.11,
     core: 0.19, coreHeat: 4.4, coreLife: 0.72, ember: 26,
     debris: 8, fluid: 12, light: 8.0, impact: 0.55, dust: 6,
   },
   [WEIGHT.LAUNCHER]: {
     sparks: 780, jet: 225, speed: 11.4, size: 0.04, heat: 3.5, sparkLife: 0.26,
-    ring: 0.72, ringLife: 0.21, thick: 0.19, ringHeat: 3.6,
+    ring: 0.72, ringLife: 0.21, thick: 0.115, ringHeat: 3.6,
     flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
     core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 30,
     debris: 10, fluid: 14, light: 9.3, impact: 0.62, dust: 8,
   },
   [WEIGHT.ULTRA]: {
     sparks: 1150, jet: 330, speed: 14.5, size: 0.048, heat: 4.0, sparkLife: 0.30,
-    ring: 1.20, ringLife: 0.28, thick: 0.22, ringHeat: 4.2,
+    ring: 1.20, ringLife: 0.28, thick: 0.135, ringHeat: 4.2,
     flash: 0.7, flashHeat: 6.0, flashLife: 0.16,
     core: 0.28, coreHeat: 5.6, coreLife: 0.9, ember: 42,
     debris: 18, fluid: 26, light: 17.0, impact: 1.0, dust: 14,
@@ -217,6 +217,14 @@ const MAX_BEATS = 128;
  */
 const DUST = new THREE.Color(0.46, 0.42, 0.37);
 
+/**
+ * How fast the impact light's envelope runs, in 1/seconds of FX time. 18 is a
+ * 56ms window, which the 0.6 hitstop FX clock delivers in four to five rendered
+ * frames — the 2-4 frame screen event `docs/CRITIC.md` asks for, with one frame
+ * of grace because a light on geometry has to be seen falling, not just seen.
+ */
+const IMPACT_LIGHT_RATE = 18.0;
+
 /** Bones that can carry a trail, with the joint that forms the ribbon's inner edge. */
 const TRAIL_BONES = [
   ['hand_R', 'elbow_R', 1.0],
@@ -256,8 +264,17 @@ export class EffectsDirector {
     this.group.name = 'fx';
     this.group.matrixAutoUpdate = false;
 
-    /** Screen-space punctuation state, decayed every frame. */
-    this.impact = { level: 0, decay: 9, lines: 0, linesDecay: 11, invert: 0, invertDecay: 22 };
+    /**
+     * Screen-space punctuation state, decayed every frame on the FX clock.
+     *
+     * `docs/CRITIC.md` asks for screen effects that last 2-4 frames, and these
+     * rates are what deliver that once the hitstop FX clock runs at 0.6 (see
+     * `HITSTOP_FX_RATE`). Measured, launcher, clock pinned to 1/60: at decay 9
+     * the radial smear was still on screen six frames after contact — and at
+     * the old 0.08 FX clock, sixteen. The numbers here are chosen against the
+     * delivered frame count, not against a nominal duration in seconds.
+     */
+    this.impact = { level: 0, decay: 18, lines: 0, linesDecay: 21, invert: 0, invertDecay: 30 };
     this.flash = { amount: 0, decay: 8 };
     this.overdrive = {
       on: false, t: 0, hold: 0, level: 0, desat: 0, flash: 0, bar: 0,
@@ -558,7 +575,10 @@ export class EffectsDirector {
 
     this.#palette(e.attacker, 'emissive', _c2);
     c.hot.copy(_c2).lerp(_c.setRGB(1, 0.95, 0.88), 0.7);
-    c.ring.copy(_c2).lerp(_c.setRGB(1, 1, 1), 0.45);
+    // A compression front is white-hot. The attacker's palette belongs in the
+    // wake as a hint, not across the whole band: at 0.45 the ring came out a
+    // flat salmon that read as painted plastic against the arena.
+    c.ring.copy(_c2).lerp(_c.setRGB(1, 1, 1), 0.82);
     this.#palette(e.defender, 'trim', c.shard);
     this.#palette(e.defender, 'emissive', c.coolant);
     return c;
@@ -1113,8 +1133,16 @@ export class EffectsDirector {
     l.position.copy(at);
     l.color.setHex(hex);
     l.intensity = want;
+    l.userData.peak = want;
     l.distance = 6.5;
     l.userData.decay = 1;
+    // Born this frame, so it has not aged yet. `#runBeats` fires the flash and
+    // `#updateLights` runs later in the same `update()`, which was charging the
+    // contact frame — the one frame the whole effect exists for — a full step
+    // of decay before it was ever drawn. Measured: 8.6 candela delivered on the
+    // contact frame against a 14.6 authored peak, a 41% loss on the brightest
+    // moment in the game. The same one-frame tax applied to the impact overlay.
+    l.userData.fresh = true;
   }
 
   /**
@@ -1135,6 +1163,7 @@ export class EffectsDirector {
     this.impact.lines = Math.max(this.impact.lines, s * 0.85);
     if (extreme) this.impact.invert = Math.max(this.impact.invert, 0.85);
     this._speedSeed = Math.random() * 90;
+    this.impact.fresh = true;   // do not age it before it has been drawn once
   }
 
   // -------------------------------------------------------------------------
@@ -1254,15 +1283,33 @@ export class EffectsDirector {
     this.trails.update(dt);
   }
 
-  /** Decays the impact light and silences it when spent. */
+  /**
+   * Decays the impact light.
+   *
+   * A flash has to *snap*, and it has to reach zero on its own. The previous
+   * envelope did neither: an `exp(-11 dt)` ramp gated by a separate linear
+   * counter running at 9/s, which meant the light was still at 37% of peak when
+   * the counter expired and cut it to zero outright. Measured on a launcher
+   * with the clock pinned to 1/60: 14.6 candela at contact, still 5.4 nine
+   * frames later, then a hard step to 0. A slow glow that ends in a pop is why
+   * a bright impact still reads as a decal composited over the scene rather
+   * than a light event inside it — the surrounding armour does brighten (+21%
+   * measured against the same frame with the light silenced), it just never
+   * brightens *suddenly*.
+   *
+   * One envelope now, `peak * d^2` over a fixed short window, which is fast at
+   * the front, lands exactly on zero, and needs no cutoff. Nothing is created,
+   * shown or hidden here — see the note on `impactLight` in the constructor for
+   * why toggling a light's visibility is forbidden in this file.
+   */
   #updateLights(dt) {
     const l = this.impactLight;
     if (!l || !this.lightsEnabled || l.userData.decay <= 0) return;
-    const d = l.userData.decay - dt * 9.0;
+    if (l.userData.fresh) { l.userData.fresh = false; return; }
+    const d = l.userData.decay - dt * IMPACT_LIGHT_RATE;
     if (d <= 0) { l.intensity = 0; l.userData.decay = 0; return; }
     l.userData.decay = d;
-    l.intensity *= Math.exp(-dt * 11.0);
-    if (l.intensity < 0.05) { l.intensity = 0; l.userData.decay = 0; }
+    l.intensity = (l.userData.peak || l.intensity) * d * d;
   }
 
   /** Feeds the arena lighting and the depth prepass into the smoke shader. */
@@ -1320,11 +1367,16 @@ export class EffectsDirector {
       }
     }
 
-    // Impact frame decay.
+    // Impact frame decay. A punch fired earlier in this same `update()` has not
+    // been drawn yet, so it skips one step — see `#flashLight`.
     const imp = this.impact;
-    imp.level = Math.max(0, imp.level - dt * imp.decay);
-    imp.lines = Math.max(0, imp.lines - dt * imp.linesDecay);
-    imp.invert = Math.max(0, imp.invert - dt * imp.invertDecay);
+    if (imp.fresh) {
+      imp.fresh = false;
+    } else {
+      imp.level = Math.max(0, imp.level - dt * imp.decay);
+      imp.lines = Math.max(0, imp.lines - dt * imp.linesDecay);
+      imp.invert = Math.max(0, imp.invert - dt * imp.invertDecay);
+    }
     this.flash.amount = Math.max(0, this.flash.amount - dt * this.flash.decay);
 
     u.uImpact.value = imp.level;
@@ -1412,6 +1464,7 @@ export class EffectsDirector {
       // that nothing is advancing.
       this.impactLight.intensity = 0;
       this.impactLight.userData.decay = 0;
+      this.impactLight.userData.fresh = false;
     }
     this.debris.setShadows(ultra);
     this.trails.setIntensity(high ? 1.6 : 1.3);
@@ -1446,9 +1499,15 @@ export class EffectsDirector {
         for (const s of slots) { s.handle = -1; s.primed = false; }
       }
     }
-    if (this.impactLight) { this.impactLight.intensity = 0; this.impactLight.userData.decay = 0; }
+    if (this.impactLight) {
+      this.impactLight.intensity = 0;
+      this.impactLight.userData.decay = 0;
+      this.impactLight.userData.peak = 0;
+      this.impactLight.userData.fresh = false;
+    }
 
     this.impact.level = 0; this.impact.lines = 0; this.impact.invert = 0;
+    this.impact.fresh = false;
     this.flash.amount = 0;
     this.overdrive.on = false;
     this.overdrive.level = 0;

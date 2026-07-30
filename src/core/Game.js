@@ -13,7 +13,10 @@
  */
 
 import * as THREE from 'three';
-import { TICK_DT, MAX_TICKS_PER_FRAME, ROUNDS_TO_WIN, ROUND_TIME_SECONDS, TICK_HZ, MAX_HEALTH } from './Constants.js';
+import {
+  TICK_DT, MAX_TICKS_PER_FRAME, ROUNDS_TO_WIN, ROUND_TIME_SECONDS, TICK_HZ, MAX_HEALTH,
+  HITSTOP_FX_RATE, HITSTOP_SCENE_RATE,
+} from './Constants.js';
 
 /** Health restored per tick in training, once a fighter is out of hitstun. */
 const TRAINING_REFILL = 1.4;
@@ -61,10 +64,28 @@ export class Game {
     this.phaseTicks = 0;
 
     this.timeScale = 1;
+    /**
+     * Per-fighter freeze, in ticks. A hit is a transfer of force, and the
+     * sources are consistent that the two sides of it should not stutter
+     * together — SmashWiki on hitlag: an attacker's self-hitlag is "generally
+     * smaller than the hitlag applied to opponents". While both counters are
+     * live the whole simulation is gated, which is exactly today's behaviour.
+     * When only one is live the sim runs and that fighter alone holds, so the
+     * attacker recovers first and the blow reads as having been *delivered*.
+     *
+     * Nothing emits asymmetric durations yet: `CombatSystem` sends a single
+     * `ticks`, both counters get it, and this is bit-identical to the previous
+     * global gate. The other half of the change is described on `#wireEvents`.
+     */
+    this.freezeTicks = [0, 0];
+    /** Longest remaining freeze. Kept because the capture harness reads it. */
     this.hitstopTicks = 0;
     /** Real time banked toward the next hitstop tick. See #frame. */
     this.hitstopAccum = 0;
     this.slowmo = { scale: 1, ticks: 0 };
+    /** Presentation clock rates during hitstop. See #render. Tunable at runtime for A/B. */
+    this.hitstopFxRate = HITSTOP_FX_RATE;
+    this.hitstopSceneRate = HITSTOP_SCENE_RATE;
 
     this.round = 1;
     this.wins = [0, 0];
@@ -141,8 +162,43 @@ export class Game {
     return this;
   }
 
+  /**
+   * The other half of asymmetric hitstop lives in `src/combat/CombatSystem.js`,
+   * which this workstream does not own. The contract it needs to satisfy, and
+   * the only change required there:
+   *
+   *     bus.emit('hitstop', { ticks: stopTicks })                 // today
+   *     bus.emit('hitstop', { ticks: stopTicks,                   // wanted
+   *                           attackerIndex: attacker.index,
+   *                           attackerTicks: Math.max(2, Math.round(stopTicks * 0.7)),
+   *                           defenderTicks: stopTicks })
+   *
+   * `ticks` stays for every listener that already reads it (`AudioDirector`
+   * gates its impact bloom on it). Adding the three optional fields is the
+   * whole change; every emit site in CombatSystem.js — lines 367, 401, 412,
+   * 422, 478, 583 — and the two in Fighter.js (1276, 1332) can adopt it
+   * independently, and any that does not keeps today's symmetric freeze.
+   *
+   * 0.7 is the starting ratio, not a measured one: Smash's self-hitlag is a
+   * flat multiplier below 1 and SFV's attacker freeze is shorter than the
+   * defender's, but neither publishes a figure this engine can be held to. It
+   * should be swept once something emits it.
+   */
   #wireEvents() {
-    bus.on('hitstop', ({ ticks }) => { this.hitstopTicks = Math.max(this.hitstopTicks, ticks); });
+    bus.on('hitstop', (e) => {
+      const ticks = e?.ticks || 0;
+      const i = e?.attackerIndex;
+      if (Number.isInteger(i) && i >= 0 && i < 2) {
+        const a = e.attackerTicks ?? ticks;
+        const d = e.defenderTicks ?? ticks;
+        this.freezeTicks[i] = Math.max(this.freezeTicks[i], a);
+        this.freezeTicks[1 - i] = Math.max(this.freezeTicks[1 - i], d);
+      } else {
+        this.freezeTicks[0] = Math.max(this.freezeTicks[0], ticks);
+        this.freezeTicks[1] = Math.max(this.freezeTicks[1], ticks);
+      }
+      this.hitstopTicks = Math.max(this.freezeTicks[0], this.freezeTicks[1]);
+    });
     bus.on('timeScale', ({ scale, ticks }) => { this.slowmo.scale = scale; this.slowmo.ticks = ticks; });
     bus.on('roundEnd', ({ winner }) => {
       if (winner >= 0) this.wins[winner]++;
@@ -227,6 +283,8 @@ export class Game {
 
   #resetRound() {
     this.roundTimer = ROUND_TIME_SECONDS * TICK_HZ;
+    this.freezeTicks[0] = 0; this.freezeTicks[1] = 0;
+    this.hitstopTicks = 0; this.hitstopAccum = 0;
     this.fighters[0].reset(new THREE.Vector3(-1.9, 0, 0), 1);
     this.fighters[1].reset(new THREE.Vector3(1.9, 0, 0), -1);
     this.combat.reset();
@@ -251,7 +309,10 @@ export class Game {
     // Hitstop freezes the sim but keeps FX and camera alive at reduced rate.
     let scale = this.timeScale;
     if (this.slowmo.ticks > 0) { scale *= this.slowmo.scale; this.slowmo.ticks--; }
-    const frozen = this.hitstopTicks > 0;
+    // The world stops only while BOTH fighters are held. If one has been
+    // released early the simulation runs again and the other holds alone,
+    // inside the tick loop.
+    const frozen = this.freezeTicks[0] > 0 && this.freezeTicks[1] > 0;
     if (frozen) {
       // Hitstop used to lose one tick per *rendered frame*, which made the most
       // game-feel-critical constant in the project a function of the player's
@@ -264,11 +325,13 @@ export class Game {
       // freeze inside the sim's own timeline has to be drained on the sim's own
       // clock — the same fixed TICK_DT the accumulator uses.
       this.hitstopAccum += raw * scale;
-      while (this.hitstopAccum >= TICK_DT && this.hitstopTicks > 0) {
+      while (this.hitstopAccum >= TICK_DT && this.freezeTicks[0] > 0 && this.freezeTicks[1] > 0) {
         this.hitstopAccum -= TICK_DT;
-        this.hitstopTicks--;
+        this.freezeTicks[0]--;
+        this.freezeTicks[1]--;
       }
     } else if (this.hitstopAccum) this.hitstopAccum = 0;
+    this.hitstopTicks = Math.max(this.freezeTicks[0], this.freezeTicks[1]);
 
     if (!this.paused && !frozen) this.accumulator += raw * scale;
 
@@ -305,7 +368,12 @@ export class Game {
           this.input.commandsFor(0, this.fighters[0]),
           this.cpu[1] ? this.cpu[1].think(this.tick) : this.input.commandsFor(1, this.fighters[1]),
         ];
-        for (let i = 0; i < 2; i++) this.fighters[i].simulate(cmds[i]);
+        // A fighter still inside its own freeze holds its pose, its move
+        // counter and its stun timer; everything else advances around it.
+        for (let i = 0; i < 2; i++) {
+          if (this.freezeTicks[i] > 0) { this.freezeTicks[i]--; continue; }
+          this.fighters[i].simulate(cmds[i]);
+        }
         this.combat.simulate(this.tick);
         if (this.training) this.#sustainTraining();
         else if (--this.roundTimer <= 0) this.combat.timeOut();
@@ -355,13 +423,24 @@ export class Game {
     }
   }
 
+  /**
+   * One rendered frame.
+   *
+   * Two presentation clocks, not one. The scene runs at `hitstopSceneRate`
+   * during a freeze — that is the freeze. The effects run at `hitstopFxRate`,
+   * which is much faster, because the burst is the only thing telling the
+   * player that time is passing at all; see `HITSTOP_FX_RATE` in Constants for
+   * the sweep this was picked from. Neither touches the accumulator, so the
+   * sim still sees a clean fixed TICK_DT and stays deterministic.
+   */
   #render(dt, alpha, frozen) {
-    const visualDt = frozen ? dt * 0.08 : dt;
-    for (const f of this.fighters) f.render(alpha, visualDt);
-    this.stage.update(visualDt, this.tick);
-    this.fx.update(visualDt, alpha);
-    this.fightCamera.render(alpha, visualDt);
-    this.hud.update(this, visualDt);
-    this.renderer.render(this.scene, this.camera, visualDt);
+    const sceneDt = frozen ? dt * this.hitstopSceneRate : dt;
+    const fxDt = frozen ? dt * this.hitstopFxRate : dt;
+    for (const f of this.fighters) f.render(alpha, sceneDt);
+    this.stage.update(sceneDt, this.tick);
+    this.fx.update(fxDt, alpha);
+    this.fightCamera.render(alpha, sceneDt);
+    this.hud.update(this, sceneDt);
+    this.renderer.render(this.scene, this.camera, sceneDt);
   }
 }

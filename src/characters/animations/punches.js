@@ -250,6 +250,45 @@
  * crosses the trunk in the camera plane — not re-easing the keys on it. That is
  * a bigger pose change than a round should take on unverified, and it should be
  * done against a rendered strip, not against this metric alone.
+ *
+ * ---------------------------------------------------------------------------
+ * ROUND 14: the six-clip finding above is an artifact of the metric. DISPROVED.
+ * ---------------------------------------------------------------------------
+ * The "retreat" numbers are whole-body 1-IoU against the guard. IoU is
+ * area-weighted, and in the guard silhouette the LEGS are 54.9% of the pixels,
+ * the torso 44.5% and the striking ARM 12.2%. So that number is roughly five
+ * times more sensitive to the stance than to the strike, and the six flagged
+ * clips are the six that shift weight hardest.
+ *
+ * Shown causally rather than by correlation. Hold one region rigid from the
+ * wind-up peak through impact-1, leaving the rise into the peak untouched, and
+ * re-measure the retreat:
+ *
+ *   clip              baseline   arm held   legs held   root held
+ *   p.overhand          0.257      0.228      0.149       0.116
+ *   sp.plasmaBurst      0.211      0.202      0.188       0.211
+ *   sp.rocketPunch      0.203      0.203      0.153       0.178
+ *   p.uppercut          0.181      0.183      0.000       0.143
+ *   p.launcherPunch     0.140      0.196      0.115       0.000
+ *   p.hammerFist        0.113      0.113      0.000       0.138
+ *
+ * Freezing the entire striking arm changes nothing (mean 0.184 -> 0.188).
+ * Freezing the legs removes most of it and zeroes two outright. The trough is
+ * the stance re-crossing the guard's own footprint as weight transfers — the
+ * mechanic CRITIC.md rewards — not a wind-up being thrown away. Round 13's
+ * prescription, re-routing the fist's arc, aims at a limb that barely moves
+ * the quantity.
+ *
+ * Re-scored on the STRIKING LIMB's own region, which is what the claim was
+ * about, two of the six are not defects at all: p.hammerFist retreats 0.000 and
+ * p.launcherPunch 0.126 at a trough of 0.78 divergence. Two clips the list does
+ * not mention rank above four of the six: t.grabAttempt 0.404 and p.siegeSlam
+ * 0.288. The one clip where the original story was literally true was
+ * p.uppercut — and see its own note, because the cause there was neither an arc
+ * nor an easing.
+ *
+ * Use the limb-only silhouette for any future claim about a tell. The
+ * whole-body number cannot see an arm.
  */
 
 import { validateClip } from '../AnimationFormat.js';
@@ -374,7 +413,18 @@ export const PUNCH_CLIPS = {
   'p.jabAlt': {
     name: 'Snap Jab',
     duration: 22, blendIn: 2, blendOut: 6,
-    impact: { tick: 9, bone: 'elbow_R' },
+    // Was `elbow_R`, which travels 0.141m by the contact tick while hand_L
+    // travels 0.618m. Nothing in src/ reads `impact.bone` -- only the offline
+    // measurement tools do -- so the wrong bone silently made every
+    // contact-speed and carry number for this clip a measurement of a limb
+    // that is standing still. Both consumers already anchor FIST_L.
+    //
+    // The tick was 9, which is in the recoil between this clip's two
+    // extensions: hand_L reach runs 0.57 at t7, 0.54 at t8, 0.51 at t9, then
+    // out again to 0.63 at t13. Contact-frame speed 0.36 of peak at t9, 1.00
+    // at t7. Moved to the first extension rather than the second, so the
+    // retime shifts by two ticks rather than four.
+    impact: { tick: 7, bone: 'hand_L' },
     root: [
       { t: 0, p: [0, -0.075, 0], ease: 'linear' },
       { t: 1, p: [0, -0.077, 0], ease: 'linear' },
@@ -734,8 +784,36 @@ export const PUNCH_CLIPS = {
     },
   },
 
-  // i16. Sinks 10cm into the rear leg on ticks 0-9, then extends the whole
-  // body upward. The launcher read is the root rising, not the fist.
+  // i16. Sinks into the rear leg, then extends the whole body upward.
+  //
+  // ROUND 14. This clip's fist used to DESCEND into contact. Driven through the
+  // rig, hand_R ran y 1.501 at t0, a shallow low of 1.373 at t9, back up to
+  // 1.480 at t13 and 1.368 at contact — so its minimum height over the whole
+  // startup WAS its contact height, and it finished 13cm below the guard hand.
+  // Rise from the low point to contact, against the other three rising moves:
+  //
+  //     p.uppercut       0.000 m        k.launcherKick   1.533 m
+  //     p.launcherPunch  0.436 m        sp.risingFang    1.207 m
+  //
+  // A launcher whose fist ends below the guard cannot read as a launcher, and
+  // it explains this clip's silhouette numbers without any appeal to occlusion:
+  // with the elbow folded to -154 deg at t9 the arm is collapsed to a point, so
+  // there is no chamber for the eye to read, and the small circle it does make
+  // at chest height passes straight through the guard hand's position.
+  //
+  // The chamber below now sinks the fist to the hip (y 1.073 at t13) and rises
+  // 0.295m into an UNCHANGED contact pose. The contact, tick-0 and final poses
+  // are bit-identical to before, so nothing the combat system reads has moved.
+  // Striking-arm silhouette divergence at impact-4, the last frame a defender
+  // can act on: 0.355 -> 0.592, from the lowest of all 34 clips to above the
+  // median. Arm retreat 0.343 -> 0.210. Worst single-tick hurtbox travel
+  // 0.175 -> 0.260m, well inside the file's 60cm rule, and 0.333m when the
+  // interpolation is sampled at 8x per tick.
+  //
+  // The remaining half of this is NOT in this file: contact is still at
+  // y 1.368, below the guard. Raising it is a Moves.js change, because both
+  // consumers are HEIGHT.MID with a 25-26cm capsule on hand_R and raising the
+  // fist to head height would turn them into highs.
   'p.uppercut': {
     name: 'Uppercut',
     duration: 36, blendIn: 3, blendOut: 8,
@@ -809,15 +887,23 @@ export const PUNCH_CLIPS = {
         { t: 19, r: [-27.88, 0, 0], ease: 'quad' }, { t: 26, r: [-17, 0, 0], ease: 'sine' },
         { t: 36, r: [-14, 0, 0], ease: 'linear' }],
       clavicle_R: [{ t: 0, r: [0, 8, 4] }],
+      // The chamber, re-authored in round 14 — see the note above the clip.
+      // The fist SINKS to the hip (world y 1.501 -> 1.098) across t5-t13 and
+      // then rises into an unchanged contact pose. Solved against the rig for a
+      // target hand path, with a continuity regulariser on the shoulder,
+      // because the chain is redundant and an unregularised solve returns a
+      // different Euler branch at every key.
       shoulder_R: [{ t: 0, r: [-22, 0, 36], ease: 'quad' }, { t: 4, r: [-14.76, 9.67, 47], ease: 'linear' },
-        { t: 9, r: [-12.9, 10.9, 45.33], ease: 'linear' }, { t: 13, r: [-26.32, -5.76, 29.44], ease: 'linear' },
-        { t: 14, r: [-32.38, -13.85, 20.24], ease: 'linear' }, { t: 15, r: [-40.56, -24.77, 7.82], ease: 'linear' },
+        { t: 9, r: [8.4, -49.3, 57.33], ease: 'sine' }, { t: 12, r: [25.9, -79, 44.63], ease: 'quart' },
+        { t: 13, r: [27.7, -84.3, 42.73], ease: 'linear' },
+        { t: 14, r: [20.5, -77.6, 47.53], ease: 'linear' }, { t: 15, r: [4.7, -67.4, 56.03], ease: 'linear' },
         { t: 16, r: [-51.3, -39.1, -8.5], ease: 'snap' }, { t: 19, r: [-68.3, -43.39, -24.17], ease: 'sine' },
         { t: 22, r: [-53.2, -39, -9.8], ease: 'quad' }, { t: 26, r: [-40, -30.9, 6.1], ease: 'sine' },
         { t: 36, r: [-22, 0, 36], ease: 'linear' }],
       elbow_R: [{ t: 0, r: [-145, 0, -1], ease: 'quad' }, { t: 4, r: [-156, 0, -1], ease: 'linear' },
-        { t: 9, r: [-153.98, 0, -1], ease: 'linear' }, { t: 13, r: [-134.8, 0, -1], ease: 'linear' },
-        { t: 14, r: [-123.69, 0, -1], ease: 'linear' }, { t: 15, r: [-108.69, 0, -1], ease: 'linear' },
+        { t: 9, r: [-139.48, 0, -1], ease: 'sine' }, { t: 12, r: [-115.08, 0, -1], ease: 'quart' },
+        { t: 13, r: [-110.58, 0, -1], ease: 'linear' },
+        { t: 14, r: [-113.88, 0, -1], ease: 'linear' }, { t: 15, r: [-111.28, 0, -1], ease: 'linear' },
         { t: 16, r: [-89, 0, -1], ease: 'snap' }, { t: 19, r: [-81, 0, -1], ease: 'sine' },
         { t: 22, r: [-94.2, 0, -1], ease: 'quad' }, { t: 26, r: [-106.3, 0, -1], ease: 'sine' },
         { t: 36, r: [-145, 0, -1], ease: 'linear' }],
@@ -1672,7 +1758,16 @@ export const PUNCH_CLIPS = {
   'p.lowJab': {
     name: 'Low Jab',
     duration: 26, blendIn: 3, blendOut: 6,
-    impact: { tick: 11, bone: 'hand_R' },
+    // Was `hand_R` (0.224m of travel); the strike is thrown with hand_L
+    // (0.714m), which is also what the `lowJab` move anchors.
+    //
+    // The tick was 11, and 11 is inside the RECOIL. Measured on hand_L, this
+    // clip extends twice: reach from the chest runs 0.55 at t9, 0.50 at t10,
+    // 0.44 at t11, then back out to 0.59 by t16. Fighter pins this tick onto
+    // the move's first active frame, so the hitbox was going live on the frame
+    // the fist was most retracted. Contact-frame speed as a share of the
+    // drive's peak: 0.35 at t11, 0.98 at t9.
+    impact: { tick: 9, bone: 'hand_L' },
     root: [
       { t: 0, p: [0, -0.075, 0], ease: 'linear' },
       { t: 1, p: [0, -0.079, 0], ease: 'linear' },

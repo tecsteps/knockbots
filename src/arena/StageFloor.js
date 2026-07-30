@@ -278,11 +278,24 @@ function bakeFloorMaps(size) {
 
       // Slab: expansion joints on a 4m grid, aggregate popping through, a
       // long-wavelength dish so water has somewhere to collect.
+      //
+      // A 2m half-grid is interleaved under the 4m one at a third of the
+      // strength — a real slab this size is poured in bays and sawn into panels
+      // inside them, and the sawn cut is shallower and dirtier than the formed
+      // joint. This is here for a measured reason: the deck carries 55% of the
+      // wide frame's 8x8 tiles, and at the wide framing a 4m grid puts a joint
+      // through roughly one tile in five. Halving the pitch is the cheapest way
+      // to put a hard edge in a tile that had none, and it costs no texture, no
+      // triangle and no draw call.
       const jx = Math.abs(((wx / 4 + 100.5) % 1) - 0.5) * 4;
       const jz = Math.abs(((wz / 4 + 100.5) % 1) - 0.5) * 4;
+      const sx = Math.abs(((wx / 2 + 100.5) % 1) - 0.5) * 2;
+      const sz = Math.abs(((wz / 2 + 100.5) % 1) - 0.5) * 2;
       const joint = Math.max(
         1 - smoothstep(0.012, 0.03, jx),
         1 - smoothstep(0.012, 0.03, jz),
+        (1 - smoothstep(0.008, 0.026, sx)) * 0.34,
+        (1 - smoothstep(0.008, 0.026, sz)) * 0.34,
         seam * 0.85,
       );
       const crack = smoothstep(0.9, 0.995, crk) * (1 - joint);

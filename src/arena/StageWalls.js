@@ -26,6 +26,97 @@ const WALL_LEN = 22;       // length of the run
 const RELIEF = 0.13;       // frame proud of the recessed panel face
 const BAY = 3.15;          // pilaster spacing
 
+/**
+ * The ribbon board's colour cycle, and why it is warm.
+ *
+ * Two separate measured gaps meet on this run of geometry.
+ *
+ * **Detail.** The wide frame was scored on mean 8x8 luma standard deviation over
+ * named screen regions, three captures, spread under 0.0009:
+ *
+ *     back barrier band (dressed)   0.0506
+ *     right truss / containers      0.0279
+ *     crowd terrace                 0.0243
+ *     side barrier wall (bare)      0.0195
+ *
+ * The back barrier and the side barriers are the *same concrete*, at comparable
+ * distance, differing only in that one carries event dressing and the other
+ * carries two recessed panels across eleven metres. 2.6x, inside one frame, with
+ * the material held constant — which is as close to a controlled experiment as
+ * this set offers, and it says the deficit is dressing rather than shading.
+ *
+ * **Hue.** The same frame holds two major hue bins with 88% of its saturated
+ * pixels in cyan and azure, against a reference spread of two to five. Every
+ * emitter in the room is a cool tube. So the ribbon is deliberately the warm
+ * band: amber, signal red and a tungsten white, none of which exists anywhere
+ * else in the mid-ground, and each segment is a whole bay wide so it survives to
+ * a handful of pixels at twenty metres instead of averaging away to grey.
+ *
+ * Values are linear-ish radiance, not sRGB — this feeds a `MeshBasicMaterial`
+ * through the same tone map as everything else, so a "white" segment at 1.0
+ * lands mid-grey. They are pushed above 1 to sit on the AgX shoulder.
+ */
+const RIBBON_COLOURS = [
+  [2.10, 0.66, 0.10],  // amber
+  [1.55, 0.10, 0.05],  // signal red
+  [1.65, 1.42, 1.10],  // tungsten white
+  [2.10, 0.66, 0.10],  // amber
+  [1.30, 0.16, 0.06],  // signal red, darker
+  [1.65, 1.42, 1.10],  // tungsten white
+  [2.10, 0.66, 0.10],  // amber
+];
+
+/**
+ * Welds the ribbon segments into one geometry, colour carried per vertex.
+ *
+ * `GeoKit.mergeAll` deliberately keeps only position/normal/uv so a stray
+ * attribute can never trip the merge, which means it drops exactly the colour
+ * attribute this needs — so the quads are laid out by hand. They are quads on a
+ * plane, so this is four vertices and two triangles apiece and nothing is lost.
+ *
+ * Each record is authored in the barrier's local frame (x=0 is the face the
+ * fighters hit, +x runs away from the pit) and mapped to world by the same
+ * translate-and-flip the rest of the wall uses, so a segment on the -x wall is
+ * the mirror of its partner rather than a separate authoring.
+ *
+ * @param {{side:number,x:number,y0:number,y1:number,z0:number,z1:number,colour:number[]}[]} segs
+ */
+function buildRibbon(segs) {
+  const n = segs.length;
+  const pos = new Float32Array(n * 6 * 3);
+  const nrm = new Float32Array(n * 6 * 3);
+  const uv = new Float32Array(n * 6 * 2);
+  const col = new Float32Array(n * 6 * 3);
+  let p = 0, u = 0;
+  for (const s of segs) {
+    const f = s.side > 0 ? 1 : -1;           // +1: no flip. -1: rotate PI about Y.
+    const wx = (x) => f > 0 ? ARENA_HALF_WIDTH + x : -ARENA_HALF_WIDTH - x;
+    const wz = (z) => f > 0 ? WALL_Z + z : WALL_Z - z;
+    // Wound so the face normal points at the pit on both walls; the local
+    // ordering is +z then +y, which crosses to -x, and rotating PI about Y is a
+    // rotation so it preserves the winding while taking the normal to +x.
+    const q = [
+      [s.x, s.y0, s.z0], [s.x, s.y0, s.z1], [s.x, s.y1, s.z1],
+      [s.x, s.y0, s.z0], [s.x, s.y1, s.z1], [s.x, s.y1, s.z0],
+    ];
+    const t = [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]];
+    for (let i = 0; i < 6; i++) {
+      pos[p] = wx(q[i][0]); pos[p + 1] = q[i][1]; pos[p + 2] = wz(q[i][2]);
+      nrm[p] = -f; nrm[p + 1] = 0; nrm[p + 2] = 0;
+      col[p] = s.colour[0]; col[p + 1] = s.colour[1]; col[p + 2] = s.colour[2];
+      uv[u] = t[i][0]; uv[u + 1] = t[i][1];
+      p += 3; u += 2;
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.computeBoundingSphere();
+  return geo;
+}
+
 /** Critically damped scalar spring; the wall's recoil is a real impulse. */
 class Recoil {
   constructor(hz = 4.5) {
@@ -60,7 +151,11 @@ export class StageWalls {
     this.lampPositions = [];
 
     const emissive = [];
-    for (const side of [-1, 1]) this.#buildSide(side, bins, emissive);
+    /** Ribbon-board segments; carry their own colour, so they cannot share the strip. */
+    const ribbon = [];
+    /** Where the wall floods land, filled by `#dressSide`. */
+    this._washes = [];
+    for (const side of [-1, 1]) this.#buildSide(side, bins, emissive, ribbon);
 
     // Safety strip: a low amber line that grazes the floor and gives the wet
     // concrete at the base of the wall something to reflect. It is unlit and
@@ -72,6 +167,18 @@ export class StageWalls {
     strip.name = 'arena.wall.strip';
     this.group.add(strip);
 
+    // Ribbon board. One mesh, one draw call, fourteen independently coloured
+    // segments — the colour rides in a vertex attribute rather than in fourteen
+    // materials, the same trick `StagePracticals` uses for its four fixtures.
+    this.ribbonMaterial = new THREE.MeshBasicMaterial({
+      name: 'arena.wall.ribbon', color: new THREE.Color(0xffffff), vertexColors: true,
+      toneMapped: true, fog: true,
+    });
+    this.ribbon = new THREE.Mesh(buildRibbon(ribbon), this.ribbonMaterial);
+    this.ribbon.name = 'arena.wall.ribbon';
+    this.group.add(this.ribbon);
+
+    this.#buildWashes();
     this.#buildPads(materials);
     this.#buildLamps(bins);
     this.#buildDecals(textures);
@@ -86,7 +193,7 @@ export class StageWalls {
    * Authors one barrier. Local frame: x=0 is the surface the fighters hit and
    * everything is built outward from it; z runs along the barrier.
    */
-  #buildSide(side, bins, emissive) {
+  #buildSide(side, bins, emissive, ribbon) {
     const M = (geo) => place(geo, { pos: [side * ARENA_HALF_WIDTH, 0, WALL_Z], rot: [0, side > 0 ? 0 : Math.PI, 0] });
     const half = WALL_LEN / 2;
 
@@ -144,6 +251,188 @@ export class StageWalls {
     bins.steel.push(M(place(new THREE.CylinderGeometry(0.05, 0.05, WALL_LEN, 8), {
       pos: [WALL_T * 0.5, WALL_H + 0.16 + fenceH, 0], rot: [Math.PI / 2, 0, 0],
     })));
+
+    this.#dressSide(side, bins, ribbon, bays, half);
+  }
+
+  /**
+   * Event dressing on the side barriers — the ribbon board, its supply, and the
+   * work lights over it.
+   *
+   * These two walls are eleven metres of concrete each and they own the left and
+   * right quarters of every wide, KO and replay framing. Bare they carried a
+   * pilaster every three metres and two recessed panels, and measured at 0.0195
+   * mean 8x8 luma std against the *back* barrier's 0.0506 — same material, same
+   * distance, 2.6x apart, the difference being that the back barrier is dressed
+   * and these were not. See {@link RIBBON_COLOURS} for the full table.
+   *
+   * What goes on them is deliberately not more banners. The back barrier already
+   * spends the four legends in the atlas and a legend the viewer can read twice
+   * in one frame is worse than no legend at all, so the sides are dressed as
+   * *infrastructure*: a lit ribbon board on the coping, the conduit that feeds
+   * it, and three caged floods per side. Infrastructure repeats without reading
+   * as repetition, which is exactly what eleven metres of wall wants.
+   *
+   * Everything except the ribbon segments themselves lands in the shared bins
+   * and so costs no draw call. The ribbon is one merged mesh for both walls.
+   *
+   * @param {number} side -1 or +1
+   * @param {object} bins shared geometry bins, merged by `Stage`
+   * @param {object[]} ribbon out-param: per-segment `{quad, colour}` records
+   * @param {number} bays pilaster bays along the run
+   * @param {number} half half the run length
+   */
+  #dressSide(side, bins, ribbon, bays, half) {
+    const M = (geo) => place(geo, { pos: [side * ARENA_HALF_WIDTH, 0, WALL_Z], rot: [0, side > 0 ? 0 : Math.PI, 0] });
+    const bayW = WALL_LEN / bays;
+    const gap = 0.14;
+    const segW = bayW - gap;
+
+    // Ribbon board, mounted on the fascia of the steel coping. The coping
+    // already overhangs the play plane by 8cm at y=4.4, which is above anything
+    // a fighter's capsule reaches, so the board hangs off its inner edge rather
+    // than intruding anywhere new.
+    const RIB_X = -0.086;
+    const RIB_Y0 = 4.28;
+    const RIB_Y1 = 4.54;
+
+    // Dark shroud the segments sit in. One box for the whole run plus a divider
+    // at every joint: the dividers are what turn a continuous glowing line into
+    // a board with panels in it, and they are the high-frequency edge the metric
+    // is actually counting.
+    bins.dark.push(M(place(bevelBox(0.10, RIB_Y1 - RIB_Y0 + 0.10, WALL_LEN, 0.012), {
+      pos: [RIB_X + 0.056, (RIB_Y0 + RIB_Y1) / 2, 0],
+    })));
+    for (let i = 0; i <= bays; i++) {
+      const z = -half + (i * WALL_LEN) / bays;
+      bins.dark.push(M(place(bevelBox(0.13, RIB_Y1 - RIB_Y0 + 0.16, gap + 0.05, 0.012), {
+        pos: [RIB_X + 0.04, (RIB_Y0 + RIB_Y1) / 2, z],
+      })));
+    }
+
+    for (let i = 0; i < bays; i++) {
+      const z = -half + (i + 0.5) * bayW;
+      ribbon.push({
+        side, x: RIB_X, y0: RIB_Y0, y1: RIB_Y1, z0: z - segW / 2, z1: z + segW / 2,
+        colour: RIBBON_COLOURS[i % RIBBON_COLOURS.length],
+      });
+    }
+
+    // Supply: a conduit along the wall at chest-of-the-terrace height, a
+    // junction box per bay, and a drop from each box up to the board. The drops
+    // are the part that makes the board read as wired rather than painted on.
+    const CONDUIT_Y = 2.62;
+    bins.steel.push(M(place(new THREE.CylinderGeometry(0.045, 0.045, WALL_LEN - 0.3, 6), {
+      pos: [0.06, CONDUIT_Y, 0], rot: [Math.PI / 2, 0, 0],
+    })));
+    for (let i = 0; i < bays; i++) {
+      const z = -half + (i + 0.5) * bayW;
+      bins.dark.push(M(place(bevelBox(0.17, 0.23, 0.21, 0.014), { pos: [0.085, CONDUIT_Y, z] })));
+      bins.steel.push(M(place(new THREE.CylinderGeometry(0.032, 0.032, RIB_Y0 - CONDUIT_Y - 0.1, 5), {
+        pos: [0.05, (RIB_Y0 + CONDUIT_Y) / 2, z + 0.16],
+      })));
+    }
+
+    // A second bolt row on the mid frame band. The top band already has one;
+    // this is the line that keeps the eye from travelling three metres along an
+    // unbroken edge in the middle of the wall.
+    bins.steel.push(M(place(boltRow(WALL_LEN - 1.2, 14, 0.024, 0.018), {
+      pos: [0.02, 2.22, 0], rot: [0, -Math.PI / 2, 0],
+    })));
+
+    // Caged floods on stub brackets, raked down the wall face, each with the
+    // pool it throws. No analytic light is attached — a shadowless point light
+    // costs a flat 1.5ms in this scene and there are six of these — so the pool
+    // is a gradient card, the same fake `StagePracticals` uses on the deck.
+    //
+    // The card is the whole point and the can is the excuse for it, which is the
+    // opposite of how this was first built. Measured, three captures a side: the
+    // cans, the conduit, the junction boxes and a second bolt row — about 1500
+    // triangles of honest hardware on a wall the metric says is empty — moved
+    // that wall from 0.0195 to 0.0199 mean 8x8 luma std, which is inside the
+    // run-to-run spread. The lit ribbon over them, one two-triangle quad per
+    // bay, moved its own band from 0.0310 to 0.0672. At twenty metres through
+    // FogExp2 at 0.028 there is not enough light landing on this wall for
+    // geometry to cast a shadow the frame can resolve; **only emitters register
+    // here**, which is the same result the fence-wire experiment got from the
+    // other direction.
+    for (let i = 1; i < bays; i += 2) {
+      const z = -half + i * bayW;
+      bins.dark.push(M(place(bevelBox(0.26, 0.05, 0.05, 0.012), { pos: [0.14, 3.72, z] })));
+      bins.dark.push(M(place(new THREE.CylinderGeometry(0.105, 0.09, 0.24, 8, 1), {
+        pos: [0.24, 3.58, z], rot: [0, 0, -0.16],
+      })));
+      bins.dark.push(M(place(new THREE.CylinderGeometry(0.155, 0.105, 0.13, 8, 1), {
+        pos: [0.27, 3.42, z], rot: [0, 0, -0.16],
+      })));
+      this._washes.push({ side, z, y: 3.44 });
+    }
+  }
+
+  /**
+   * The pools the wall floods throw, as gradient cards on the barrier face.
+   *
+   * One card per can: a cone that starts at the shade, widens going down, and
+   * dies before it reaches the impact pads — so the wall it lights is the part
+   * of it the wide framing actually holds, and the fight plane at the bottom
+   * stays the cleanest band in frame, which is the rule the whole set is built
+   * to. Additive and depth-write off, so a card never occludes the concrete it
+   * is brightening; the falloff is baked into vertex colour rather than into a
+   * texture because a 7x9 lattice is cheaper than a sampler and the gradient is
+   * smooth enough that nothing shows.
+   */
+  #buildWashes() {
+    const NZ = 7, NY = 9;
+    const HALF_W = 1.45, TOP = 3.44, DROP = 2.55;
+    const n = this._washes.length * (NZ - 1) * (NY - 1) * 6;
+    const pos = new Float32Array(n * 3);
+    const col = new Float32Array(n * 3);
+    let p = 0;
+    // Warm tungsten, well above 1 so the top of the cone lands on the shoulder
+    // of the tone curve rather than in the middle of it.
+    const TINT = [1.55, 0.86, 0.42];
+    const at = (w, jz, jy) => {
+      const t = (jz / (NZ - 1)) * 2 - 1;            // -1..1 across the cone
+      const v = jy / (NY - 1);                      // 0 at the shade, 1 at the tail
+      const halfW = 0.34 + 0.66 * v;
+      const radial = Math.min(1, Math.abs(t) / halfW);
+      const a = (1 - radial * radial) * (1 - v) ** 1.5;
+      return {
+        x: 0.118, y: TOP - v * DROP, z: w.z + t * HALF_W, a: Math.max(0, a),
+      };
+    };
+    for (const w of this._washes) {
+      const f = w.side > 0 ? 1 : -1;
+      for (let jz = 0; jz < NZ - 1; jz++) {
+        for (let jy = 0; jy < NY - 1; jy++) {
+          const c = [at(w, jz, jy), at(w, jz + 1, jy), at(w, jz + 1, jy + 1), at(w, jz, jy + 1)];
+          for (const k of [0, 1, 2, 0, 2, 3]) {
+            const q = c[k];
+            pos[p] = f > 0 ? ARENA_HALF_WIDTH + q.x : -ARENA_HALF_WIDTH - q.x;
+            pos[p + 1] = q.y;
+            pos[p + 2] = f > 0 ? WALL_Z + q.z : WALL_Z - q.z;
+            col[p] = TINT[0] * q.a; col[p + 1] = TINT[1] * q.a; col[p + 2] = TINT[2] * q.a;
+            p += 3;
+          }
+        }
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.computeBoundingSphere();
+    this.washMaterial = new THREE.MeshBasicMaterial({
+      name: 'arena.wall.wash', color: new THREE.Color(0xffffff), vertexColors: true,
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+      toneMapped: true, fog: true, side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geo, this.washMaterial);
+    mesh.name = 'arena.wall.wash';
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.userData.gbuffer = false;
+    this.wash = mesh;
+    this.group.add(mesh);
   }
 
   /**
@@ -303,6 +592,17 @@ export class StageWalls {
     this.lampMaterial.color.setRGB(1.0, 0.94, 0.82).multiplyScalar(Math.max(0.05, hum * stutter) * 2.4);
     this.stripMaterial.color.setRGB(1.0, 0.42, 0.1).multiplyScalar(1.35 + 0.08 * Math.sin(time * 1.7));
 
+    // Ribbon board. A global gain only — the per-segment colour is in the mesh —
+    // carrying the same mains hum as the lamps plus a slow crawl, so the run
+    // never sits at one exact value across fourteen panels. It dips with the
+    // wall stutter too: everything on this barrier is on the same supply.
+    const crawl = 0.94 + 0.06 * Math.sin(time * 0.8) + 0.02 * Math.sin(time * 3.1);
+    const gain = crawl * (0.55 + 0.45 * Math.max(0.05, stutter));
+    this.ribbonMaterial.color.setRGB(gain, gain, gain);
+    // The floods are on the same supply, so their pools stutter with the lamps.
+    const wg = Math.max(0.05, hum * stutter);
+    this.washMaterial.color.setRGB(wg, wg, wg);
+
     let dirty = false;
     for (let i = 0; i < this._dentLife.length; i++) {
       if (this._dentLife[i] <= 0) continue;
@@ -334,6 +634,8 @@ export class StageWalls {
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.stripMaterial.dispose();
     this.lampMaterial.dispose();
+    this.ribbonMaterial.dispose();
+    this.washMaterial.dispose();
     this.dents.material.dispose();
   }
 }

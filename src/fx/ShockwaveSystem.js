@@ -44,6 +44,7 @@ varying float vT;
 varying float vHeat;
 varying float vThickness;
 varying float vSeed;
+varying float vGrow;   // eased radius as a fraction of the final radius
 
 ${GLSL_EASE}
 ${GLSL_BILLBOARD}
@@ -55,12 +56,14 @@ void main() {
   if ( life <= 0.0 || t < 0.0 || t >= 1.0 ) {
     gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
     vUv = vec2( 0.0 ); vTint = vec3( 0.0 ); vT = 1.0; vHeat = 0.0;
-    vThickness = 1.0; vSeed = 0.0;
+    vThickness = 1.0; vSeed = 0.0; vGrow = 1.0;
     return;
   }
 
-  float radius = maxR * easeOutQuint( t );
+  float grow = easeOutQuint( t );
+  float radius = maxR * grow;
   float size = max( radius, 1e-3 ) * 2.0;
+  vGrow = grow;
 
   vec4 mv;
   if ( aStyle.x < 0.5 ) {
@@ -94,6 +97,7 @@ varying float vT;
 varying float vHeat;
 varying float vThickness;
 varying float vSeed;
+varying float vGrow;
 
 void main() {
   vec2 d = vUv * 2.0 - 1.0;
@@ -109,24 +113,47 @@ void main() {
             + sin( ang * 23.0 + vSeed * 0.6 ) * 0.27;
   float rr = clamp( r * ( 1.0 + wob * 0.028 * ( 0.5 + vT ) ), 0.0, 1.0 );
 
-  // Thicker shocks read further down the profile, so a heavy hit has a fat wake
-  // and a light one is a hairline.
-  float u = clamp( 1.0 - ( 1.0 - rr ) / max( vThickness, 0.02 ), 0.0, 1.0 );
-  vec4 prof = texture2D( uRing, vec2( u, 0.5 ) );
+  // A shell of roughly constant width in metres occupies a SHRINKING fraction
+  // of the radius as the front runs outward. Holding that fraction constant —
+  // which is what a fixed vThickness does — is why this read as a rubber tube
+  // being inflated rather than a pressure front leaving an impact: at full
+  // expansion the band was still a fifth of the radius wide, and a fifth of a
+  // metre-radius ring is a 20cm-thick pipe. Dividing by the eased growth keeps
+  // the band's world width fixed and thins it on screen as it goes.
+  float th = clamp( vThickness * 0.3 / max( vGrow, 0.3 ), 0.025, vThickness );
+  float u = clamp( 1.0 - ( 1.0 - rr ) / max( th, 0.02 ), 0.0, 1.0 );
 
   // Energy is not distributed evenly around the front either.
   float amp = 0.62 + 0.38 * ( sin( ang * 5.0 - vSeed * 2.3 ) * 0.5 + 0.5 );
 
-  float fade = pow( 1.0 - vT, 2.2 );
-  vec3 col = vTint * prof.r * vHeat * fade * amp;
-  col += vec3( 1.0, 0.96, 0.92 ) * prof.g * vHeat * 0.5 * fade * amp;
+  // The radial profile lives in COVERAGE ONLY, and this is the whole fix.
+  // Additive output is colour x alpha, so a build that puts the profile in both
+  // squares it and the ring collapses to a wireframe hoop. The previous
+  // revision knew that and compensated by making alpha a very wide, very high
+  // Gaussian envelope — but a wide envelope at 0.95 alpha *is* a solid ring of
+  // paint, which is exactly what a critic at 2.5x magnification called it: an
+  // opaque flat torus with no internal structure. Shaping alpha and holding
+  // colour flat gives the same linear response with the shape kept sharp.
+  //
+  //   front     the shock itself: a razor line, ~5% of the band
+  //   shoulder  the compressed air behind it
+  //   wake      the long rarefaction, from the baked profile
+  float front    = exp( -pow( ( u - 0.93 ) * 15.0, 2.0 ) );
+  float shoulder = exp( -pow( ( u - 0.66 ) * 5.2, 2.0 ) ) * 0.17;
+  vec4 prof = texture2D( uRing, vec2( u, 0.5 ) );
+  float wake = prof.r * pow( u, 2.4 ) * 0.09;
+  float shape = clamp( front + shoulder + wake, 0.0, 1.0 );
 
-  // Coverage dies far faster than emission does, so a spent ring vanishes
-  // instead of hanging around as a fat grey torus once it has stopped being hot.
-  // The exponent is steep because the front is at its largest at the end of its
-  // life: whatever alpha survives to t = 0.6 is spread over four times the area
-  // it started with, which is exactly the wash that reads as a dirty lens.
-  float a = prof.a * pow( 1.0 - vT, 4.6 ) * uOpacity * ( 0.4 + amp * 0.5 );
+  float fade = pow( 1.0 - vT, 2.2 );
+
+  // The front is the hot part. Tint belongs to the wake, where the impact's
+  // own colour survives; the leading edge of a compression front is white.
+  vec3 col = mix( vTint, vec3( 1.0, 0.97, 0.93 ), clamp( front * 1.5, 0.0, 1.0 ) );
+  col *= vHeat * fade * amp;
+
+  // Coverage dies faster than emission, so a spent ring vanishes instead of
+  // hanging around as a grey wash once it has stopped being hot.
+  float a = shape * pow( 1.0 - vT, 2.8 ) * uOpacity * ( 0.45 + amp * 0.55 );
   if ( a < 0.004 ) discard;
   gl_FragColor = vec4( col, a );
 }`;

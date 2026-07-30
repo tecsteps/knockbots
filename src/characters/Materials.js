@@ -966,12 +966,49 @@ function microGrain(size, seed, aspect = 1) {
  *
  * The amplitude is not set by the metric. 0.035 reaches the 0.55 ratio the brief
  * asked for and turns every plate into hammered leather; 0.020 still pebbles the
- * darker plates. 0.013 is the largest amplitude that still reads as a cast tooth
- * on a painted plate, and it lands the ratio at 0.448 on the head crop and 0.398
- * on the torso. **The ratio target above 0.45 is not reachable through the normal
+ * darker plates. **The ratio target above 0.45 is not reachable through the normal
  * map without visibly damaging the surface** — see the note in `resolveSizes`.
+ *
+ * --- Round 14: 0.013 was still too much, and by round 13's own criterion ------
+ *
+ * Round 13 shipped 0.013 as "the largest amplitude that still reads as a cast
+ * tooth on a painted plate". On Vulkan, at the canonical closeup framing, at 5x
+ * magnification, it does not: the chest and head plates read as tooled leather —
+ * the exact failure round 13 predicted for 0.020 and above. It was judged on a
+ * band-energy number, and the number is monotone in amplitude all the way up
+ * through the point where the image falls apart.
+ *
+ * Measured on the deterministic closeup (freeze on tick t0+150, post off), three
+ * amplitudes on the same build:
+ *
+ *     grain    head 1px   torso 1px   torso 1px:4px   how the plate reads at 5x
+ *     0.013      4.295      2.988         0.399       hammered leather
+ *     0.006      3.977      2.737         0.370       fine cast tooth
+ *     0          3.974      2.439         0.362       smooth, and empty
+ *
+ * 0.006 costs 8% of the torso's 1px band against 0.013 and is unambiguously the
+ * better image; 0 costs a further 11% and the plates go dead. Shipped at 0.006.
+ * The metric says this is a regression. The metric is not the axis.
  */
-const GRAIN = { rough: 0.075, height: 0.013, aspect: 3 };
+const GRAIN = { rough: 0.075, height: 0.006, aspect: 3 };
+
+/**
+ * Bake-time A/B knobs, read once from `window.__KB_MAT` before any map is built.
+ * Nothing sets it in production; it exists so a probe harness can ablate a term
+ * of the *bake* without editing this file, the way `userData.kbUniforms` already
+ * lets one ablate a term of the *shader* without a rebuild.
+ *
+ *   grain       {@link GRAIN}.height override. The one to re-sweep.
+ *   chipMetal   the chip -> metalness coupling. Round 14 ran this at 0 to
+ *   wear        the chip -> albedo coupling, likewise at 0, and
+ *   panelValue  the atlas panel-role value break, lerped toward flat,
+ *
+ * all three to test round 13's attribution of the pale "decal" patches. None of
+ * them moved the artefact — see the correction at the chip loop.
+ */
+const AB = { grain: null, chipMetal: null, wear: null, panelValue: null };
+if (typeof window !== 'undefined' && window.__KB_MAT) Object.assign(AB, window.__KB_MAT);
+if (AB.grain !== null) GRAIN.height = AB.grain;
 
 const DETAIL_CACHE = new Map();
 const SHARED_TEXTURES = new Set();
@@ -1224,18 +1261,29 @@ function buildPlateDetail(size) {
     const flake = 1 - smoothstep(0.04, 0.26, blotch.f1[i]);
     const jag = flake * (0.82 + casting[i] * 0.3 + tooth[i] * 0.16);
     const gate = smoothstep(0.34, 0.86, edge[i] + (blotch.id[i] - 0.6) * 0.22);
-    // NOTE, round 13. The pale elliptical "wear blotches" that read as decals
-    // scattered across the plates are THIS mask, reaching the frame through
-    // `metalnessMap` and not through albedo: `metal` below is chip * 0.95, so a
-    // flake turns a patch of paint into a mirror and what lands on screen is a
-    // soft-edged oval of pale environment. Traced by ablation on the closeup rig
-    // — nulling `metalnessMap` alone removes every one of them, and nothing else
-    // does: albedo, clearcoat, and all eleven surface-story terms leave them
-    // untouched. Breaking the outline with a finer modulator was tried here and
-    // measured as nothing (band energy identical to four decimal places, absolute
-    // frame difference under 2/255 outside the panel lines) because
-    // `smoothstep(0.4, 0.82, jag)` saturates over the body of a flake; reverted.
-    // The lever is the `gate`/`metal` coupling, not the outline.
+    // CORRECTION, round 14. Round 13's note here said the pale elliptical patches
+    // that read as "decals scattered across the plates" were this mask arriving
+    // through `metalnessMap`, and that nulling `metalnessMap` alone removed every
+    // one of them. **That is wrong, and it cost round 14 most of a round to
+    // unpick.** Re-run on the deterministic closeup, the patches survive:
+    //
+    //   chip -> metalness nulled (metal = chip * 0)        unchanged
+    //   chip -> albedo nulled (the V_BARE lerp)            unchanged
+    //   both together                                      unchanged
+    //   every map on every robot material nulled at once   unchanged
+    //   all eleven surface-story terms, one at a time      unchanged
+    //   every analytic light off / envMapIntensity 0       unchanged
+    //   the whole post chain off, the decal quads hidden   unchanged
+    //   the camera orbited 7 degrees                       locked to the surface
+    //   kbLattice.x -> 0                                   GONE
+    //
+    // They are the shader's fastener heads. See the fix at the bolt block in
+    // STORY_FORM_FRAGMENT. Nothing in this loop was ever involved.
+    //
+    // Round 13's other finding here does still hold: breaking the flake outline
+    // with a finer modulator measures as nothing (band energy identical to four
+    // decimal places) because `smoothstep(0.4, 0.82, jag)` saturates over the body
+    // of a flake.
     // The hairline of bare metal sits on the plate *lip* — just outside the
     // groove, not inside it, where it would be buried in shadow and invisible.
     const rim = smoothstep(0.05, 0.26, bevel[i]) * (1 - smoothstep(0.36, 0.66, bevel[i]));
@@ -1342,7 +1390,7 @@ function buildPlateDetail(size) {
     rough = lerp(rough, 0.14, s * 0.85);
     rough = lerp(rough, 0.86, g * 0.8);
     rough = lerp(rough, 0.93, d * 0.5);
-    let metal = clamp01(c * 0.95 + s * 0.85);
+    let metal = clamp01(c * (AB.chipMetal ?? 0.95) + s * 0.85);
     metal *= 1 - g * 0.4;
     const o = i * 4;
     ormPainted[o] = clamp01(ao[i] * (1 - g * 0.25)) * 255;
@@ -1811,7 +1859,7 @@ function composePlateAlbedo(detail, wear, wearFloor = 0) {
     // here.
     const t3 = pid * 3;
     const role = t3 < 1 ? 0 : t3 < 2 ? 1 : 2;
-    let v = V_PAINT[role] * (0.87 + (t3 - role) * 0.28) * (0.82 + mottle * 0.36);
+    let v = lerp(0.65, V_PAINT[role], AB.panelValue ?? 1) * (0.87 + (t3 - role) * 0.28) * (0.82 + mottle * 0.36);
 
     // Panel lines and louvre depth. Shallow gaps are darkened paint rather than
     // black lines, but the floor of a gap is unpainted structure: converging on
@@ -1820,7 +1868,7 @@ function composePlateAlbedo(detail, wear, wearFloor = 0) {
     v = lerp(v * (1 - cav * 0.42), V_STRUCTURE, smoothstep(0.5, 1.0, cav));
 
     // Layered edge wear: paint -> thin primer ring -> bare steel.
-    const w = clamp01(chip * wear + wearFloor * (0.55 + grm * 0.45));
+    const w = clamp01(chip * wear * (AB.wear ?? 1) + wearFloor * (0.55 + grm * 0.45));
     const primer = smoothstep(0.08, 0.55, w) * (1 - smoothstep(0.58, 0.94, w));
     v = lerp(v, V_BARE, w);
     // The dark primer ring is what makes a chip read as a chip and not as a
@@ -2279,15 +2327,55 @@ if ( kbLattice.x > 0.0 && kbPitch > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 
 		float kbInset = min( kbEdge.x, kbEdge.y );
 		float kbStep = max( kbPitch * 0.5, 0.03 );
 		float kbS = ( fract( kbAlong / kbStep + 0.5 ) - 0.5 ) * kbStep;
-		float kbR = max( kbGw * 1.7, kbPx * 0.7 );
-		float kbDist = length( vec2( kbS, kbInset - kbR * 2.1 ) );
-		kbBolt = ( 1.0 - smoothstep( kbR * 0.65, kbR, kbDist ) ) * kbLattice.x * ( 1.0 - kbRim * 0.85 );
-		// Crown polished, base ringed with the shadow the head casts into the plate.
-		float kbBoltRing = ( 1.0 - smoothstep( kbR, kbR * 1.5, kbDist ) ) * ( 1.0 - kbBolt );
-		roughnessFactor = clamp( roughnessFactor - 0.22 * kbBolt + 0.10 * kbBoltRing, 0.06, 1.0 );
-		metalnessFactor = mix( metalnessFactor, 1.0, kbBolt * 0.7 );
-		diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * 0.75, kbBolt * 0.55 );
-		diffuseColor.rgb *= 1.0 - 0.20 * kbBoltRing;
+		// 1.7x the gap was an 8mm radius — a 15mm head on a machine whose panel
+		// gaps are 4.5mm, which is a coach bolt, not a fastener. See the note
+		// below on what that number was actually costing.
+		float kbR = max( kbGw * 1.15, kbPx * 0.7 );
+		float kbDist = length( vec2( kbS, kbInset - kbR * 2.4 ) );
+		float kbBoltT = clamp( kbDist / max( kbR, 1e-5 ), 0.0, 1.0 );
+		kbBolt = ( 1.0 - smoothstep( 0.72, 1.0, kbBoltT ) ) * kbLattice.x * ( 1.0 - kbRim * 0.85 );
+		// THE HEAD HAS TO HAVE A SHAPE.
+		//
+		// This is the artefact three rounds of critics have called "decals
+		// scattered across the plates", and it was mis-attributed twice: round 13
+		// traced it to metalnessMap and it is not there. Ablated on the frozen
+		// closeup, the pale soft-edged patches survive nulling the albedo, normal,
+		// roughness, metalness, AO, clearcoat and emissive maps together, every one
+		// of the eleven surface-story terms, every analytic light, the environment
+		// map, the whole post chain, and hiding the decal quads — and they vanish
+		// the instant kbLattice.x goes to zero. They are these fastener heads.
+		//
+		// They read as stickers because a flat mask cannot make a bolt. Roughness,
+		// metalness and albedo were being stepped to constants across the whole
+		// head, so what landed on screen was a disc of pale alloy at one value with
+		// a soft edge — which is exactly what a decal looks like. The head needs a
+		// normal: a shallow dome the highlight travels over, so the eye reads a
+		// turned crown catching the key rather than a spot of paint.
+		//
+		// Perturbed by screen-space derivatives of the dome height (Mikkelsen's
+		// method for unparametrised surfaces, the same one three's own bumpMap
+		// uses) because the fastener has no UVs of its own — it is placed
+		// analytically from plateFrame, so there is no tangent frame to read.
+		// The derivatives are of an analytic profile rather than a texture fetch,
+		// so this costs no bandwidth and cannot alias the way a sampled height can.
+		float kbDomeH = kbBolt * sqrt( max( 1.0 - kbBoltT * kbBoltT, 0.0 ) );
+		vec3 kbFx = normalize( - kbVx );   // vViewPosition is the negated view position
+		vec3 kbFy = normalize( - kbVy );
+		vec3 kbR1 = cross( kbFy, normal );
+		vec3 kbR2 = cross( normal, kbFx );
+		float kbFdet = dot( kbFx, kbR1 );
+		vec3 kbDomeG = sign( kbFdet ) * ( dFdx( kbDomeH ) * kbR1 + dFdy( kbDomeH ) * kbR2 );
+		normal = normalize( abs( kbFdet ) * normal - 0.55 * kbDomeG );
+		// Base ringed with the shadow the head casts into the plate.
+		float kbBoltRing = ( 1.0 - smoothstep( 1.0, 1.55, kbBoltT ) ) * ( 1.0 - kbBolt );
+		// Milder than it was on all three channels. A fastener is turned steel that
+		// has been in the weather, not chrome: at 0.7 metal, 0.55 albedo and -0.22
+		// roughness it out-shone every painted plate around it, which is half of why
+		// it read as something stuck on rather than something screwed in.
+		roughnessFactor = clamp( roughnessFactor - 0.11 * kbBolt + 0.10 * kbBoltRing, 0.06, 1.0 );
+		metalnessFactor = mix( metalnessFactor, 1.0, kbBolt * 0.45 );
+		diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * 0.55, kbBolt * 0.34 );
+		diffuseColor.rgb *= 1.0 - 0.22 * kbBoltRing;
 	}
 }
 `;
@@ -2627,14 +2715,48 @@ function paletteKey(p, sizes) {
  * and where they disagree the eye is the axis being scored. Shipped at 0.013:
  * ratio 0.449 on the head crop and 0.398 on the torso, from 0.400 and 0.336.
  *
- * What is left, for whoever takes the next swing: `kb.armor` runs at 2118
- * texels/metre, which is 1.13 texels per screen pixel at the closeup framing, so
- * the finest thing the plate bake can express is about two screen pixels and
- * everything above that is out of reach from this atlas by construction. Real
- * 1px content needs a second, independently tiled detail normal sampled in
- * object space — the story shader already does exactly this for the grunge map
- * and could carry one more fetch. That is the untested hypothesis with the most
- * headroom left in it.
+ * --- Round 14: the detail-normal lever was built, measured, and reverted ------
+ *
+ * Round 13 signed off with a hypothesis: `kb.armor` runs at 2118 texels/metre,
+ * which is 1.13 texels per screen pixel at the closeup framing, so the finest
+ * thing the plate bake can express is about two screen pixels, and genuine 1px
+ * content is therefore out of reach from this atlas *by construction*. The
+ * proposed fix was a second, independently tiled detail normal sampled triplanar
+ * in object space, so fine detail comes from a tiling rate rather than from texel
+ * density. It was written — a 256px two-octave height field, sampled triplanar
+ * and perturbing the shading normal by screen-space derivatives — and measured.
+ *
+ * **The premise is wrong, and round 13's own numbers already contradicted it.**
+ * If 1px content were unreachable from the atlas, changing the atlas could not
+ * move the 1px band; ablating {@link GRAIN} out of the plate normal moves it 8%
+ * on the head crop and 18% on the torso. The atlas reaches the 1px band fine.
+ *
+ * What the detail normal actually does, at 26 tiles/metre with the grain at
+ * 0.006 (deterministic closeup, post off, head / torso 1px):
+ *
+ *     detail 0                       3.977 / 2.737    the shipped surface
+ *     detail 0.6                     4.165 / 2.989    +4.7% / +9.2%, and
+ *                                                     indistinguishable at 5x
+ *     detail 0.6, 60 tiles/metre     4.206 / 2.931    likewise
+ *     detail 0.9 (mis-scaled, see    10.39 / 6.242    +142%, and the plate is
+ *     the note in the shader)                         salt-and-pepper aliasing
+ *
+ * So it recovers roughly what dropping the grain from 0.013 to 0.006 costs, buys
+ * nothing the eye can see, and above that amplitude it aliases. The limit on this
+ * axis is not the sampling rate: it is that normal variance at one to two screen
+ * pixels reads as noise before it reads as material, whichever map it comes from.
+ * Reverted, and the shader block deleted rather than left at zero strength.
+ *
+ * **Its fill-rate cost, which round 13 asked for, is nil.** Three extra texture
+ * fetches per character fragment, measured by alternating the two compiled
+ * shaders in 2.5-second holds inside one page load at a character-fill framing
+ * (both robots across most of the screen, adaptive resolution off): paired median
+ * delta **0.00 ms** over eight blocks, paired deltas spanning -3.2 to +2.8 ms
+ * with no sign bias. Independent runs of the *same* config differ by more than
+ * that — 9.9 ms and 15.3 ms median at that framing — so a between-run comparison
+ * cannot resolve a texture fetch on this machine and should not be attempted.
+ * The frame is not short of bandwidth on the character shader. It is short of
+ * ideas about what to put in it.
  */
 function resolveSizes(scale) {
   const q = (n) => Math.max(128, Math.round((n * scale) / 128) * 128);

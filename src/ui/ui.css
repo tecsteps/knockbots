@@ -578,42 +578,87 @@
  * before that first capture lands (character select -> intro is a handful of
  * frames) and on any renderer that can't support the readback.
  */
+/*
+ * THE FRAME IS A SHAPE, NOT A BOX-SHADOW.
+ *
+ * `.portrait-chip` is a solid chamfered hexagon filled with the player's
+ * identity colour; `.portrait-chip__inner` is the same hexagon inset by
+ * `--chip-edge`, holding the picture. The visible keyline is the difference
+ * between the two, so it follows the chamfer around all four sides.
+ *
+ * The previous version drew the keyline as `inset 0 0 0 0.08em <colour>` on a
+ * `::after` that shared the chip's `clip-path`. An inset box-shadow is a
+ * rectangular ring; the clip then cut away exactly the parts of that ring
+ * lying on the two chamfered edges. Photographed at 4x device scale, P1's chip
+ * had a cyan stroke on its top and right edges and bare cut geometry on its
+ * left and bottom; P2's was stroked top and left and bare right and bottom.
+ * Half of every chip's frame was missing, in both players' colours, in every
+ * capture this project has ever taken.
+ */
 .portrait-chip {
+  --chip-edge: 0.085em;
+  --chip-cut: 0.42em;
+  --chip-key: rgba(150, 165, 190, 0.8);
+  --chip-wash: rgba(120, 140, 170, 0.30);
   position: absolute;
   top: -0.4em;
   width: 3.15em;
   height: 3.15em;
   z-index: 3;
-  background: linear-gradient(155deg, #3f4758 0%, #171b25 42%, #05060a 100%);
-  clip-path: polygon(0.42em 0, 100% 0, 100% calc(100% - 0.42em), calc(100% - 0.42em) 100%, 0 100%);
-  box-shadow:
-    inset 0 0 0 0.05em rgba(0, 0, 0, 0.85),
-    inset 0 0.08em 0 rgba(255, 255, 255, 0.24),
-    inset 0 -0.1em 0.18em rgba(0, 0, 0, 0.6);
+  background: var(--chip-key);
+  clip-path: polygon(var(--chip-cut) 0, 100% 0, 100% calc(100% - var(--chip-cut)), calc(100% - var(--chip-cut)) 100%, 0 100%);
   filter: drop-shadow(0 0.4em 0.7em rgba(0, 0, 0, 0.55));
-  overflow: hidden;
 }
-.hp-block--p1 .portrait-chip { left: -0.4em; }
+.portrait-chip__inner {
+  position: absolute;
+  inset: var(--chip-edge);
+  overflow: hidden;
+  clip-path: polygon(var(--chip-cut) 0, 100% 0, 100% calc(100% - var(--chip-cut)), calc(100% - var(--chip-cut)) 100%, 0 100%);
+  /*
+   * A designed interior, and one that is finally visible.
+   *
+   * The old chip painted a brushed-plate gradient and a bevel highlight here
+   * and then covered every pixel of it: `RosterPortraits` cleared its render
+   * target to the game's opaque clear colour, so the portrait arrived as a
+   * fully opaque 256x256 tile — measured alpha coverage 100.0% on all ten
+   * machines. The bust is a cut-out now, so these layers do the work they were
+   * written for: a cold wash in the player's identity colour from the top, the
+   * machine's own light pooling under it, and a milled steel plate underneath.
+   */
+  background:
+    radial-gradient(120% 78% at 50% 6%, var(--chip-wash), transparent 72%),
+    radial-gradient(72% 40% at 50% 108%, rgba(0, 0, 0, 0.85), transparent 70%),
+    linear-gradient(155deg, #444d61 0%, #1b2130 46%, #070911 100%);
+  box-shadow:
+    inset 0 0.07em 0 rgba(255, 255, 255, 0.22),
+    inset 0 -0.12em 0.2em rgba(0, 0, 0, 0.7);
+}
+.hp-block--p1 .portrait-chip {
+  left: -0.4em;
+  --chip-key: rgba(79, 210, 255, 0.92);
+  --chip-wash: rgba(46, 150, 200, 0.34);
+}
 .hp-block--p2 .portrait-chip {
   right: -0.4em;
-  clip-path: polygon(0 0, calc(100% - 0.42em) 0, 100% 100%, 0.42em 100%, 0 calc(100% - 0.42em));
+  --chip-key: rgba(255, 95, 109, 0.92);
+  --chip-wash: rgba(190, 60, 78, 0.34);
+  clip-path: polygon(0 0, calc(100% - var(--chip-cut)) 0, 100% 100%, var(--chip-cut) 100%, 0 calc(100% - var(--chip-cut)));
 }
-.portrait-chip::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  clip-path: inherit;
-  pointer-events: none;
+.hp-block--p2 .portrait-chip__inner {
+  clip-path: polygon(0 0, calc(100% - var(--chip-cut)) 0, 100% 100%, var(--chip-cut) 100%, 0 calc(100% - var(--chip-cut)));
 }
-.hp-block--p1 .portrait-chip::after { box-shadow: inset 0 0 0 0.08em rgba(79, 210, 255, 0.85); }
-.hp-block--p2 .portrait-chip::after { box-shadow: inset 0 0 0 0.08em rgba(255, 95, 109, 0.85); }
 .portrait-canvas {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  /* Bleed the bust past the bottom of the chip so the crop lands inside the
+     chest rather than on a floating cut-off torso hanging in the middle of the
+     box, and scale it up a little so the head fills its share of a 63 px chip. */
+  left: -5%;
+  top: -6%;
+  width: 110%;
+  height: 110%;
   opacity: 0;
   transition: opacity 0.4s ease;
+  filter: drop-shadow(0 0.06em 0.12em rgba(0, 0, 0, 0.85));
 }
 .portrait-chip--ready .portrait-canvas { opacity: 1; }
 .portrait-chip--ready .portrait-fallback { opacity: 0; }
