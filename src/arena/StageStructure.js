@@ -222,9 +222,17 @@ export class StageStructure {
    * else stretches the type.
    *
    * The v remap is the whole trick: one texture, four legends, and a panel picks
-   * its band by squeezing its own v into that band's slice. Four panels get a
-   * band each and the last two repeat the two that read least — the dark ones —
-   * placed at the outer ends where the fight camera rarely dwells.
+   * its band by squeezing its own v into that band's slice.
+   *
+   * There are six bays and four legends, and an earlier pass resolved that by
+   * repeating two of them — which put `knockbots industrial league` on screen
+   * twice in the same frame. Repetition the viewer can *read* is the worst kind
+   * there is: the eye forgives a tiling concrete texture and never forgives the
+   * same sentence twice. So two bays stop being signs and start being
+   * infrastructure instead: a personnel gate and an equipment bay. Four bays,
+   * four legends, each exactly once — and the two that gave up their banner are
+   * now the only places on twenty-four metres of barrier that say anything about
+   * how the venue is actually operated.
    */
   #barrierPanels(W, face) {
     const b = this.bins;
@@ -234,16 +242,24 @@ export class StageStructure {
     const pw = pitch - gap;
     const ph = pw / 8;                // the aspect the atlas bands are drawn at
     const y = 0.66;                   // clear of the base angle, under the cap
-    // Band per bay. The two mid-frame bays take the coloured legends, which is
-    // where they are actually read from; the ends take the dark ones so the
-    // outer edge of frame does not out-contrast the fighters.
-    const band = [2, 0, 1, 3, 0, 2];
+    // Bay contents. The coloured legends land mid-frame where they are actually
+    // read from; the dark ones take the outer ends so the edge of frame does not
+    // out-contrast the fighters. `null` is a bay that carries hardware instead.
+    const bays = [2, null, 0, 1, null, 3];
 
     for (let i = 0; i < COUNT; i++) {
       const x = -W / 2 + pitch * (i + 0.5);
+      const r = bays[i];
+      if (r === null) {
+        // Bay 1 is the way in and out; bay 4 is where the power and the fire kit
+        // live. Both are dressed at the same height the banners occupy, so the
+        // run still reads as one band rather than a fence with holes in it.
+        if (i < COUNT / 2) this.#barrierGate(x, y, ph, pw, face);
+        else this.#barrierEquipment(x, y, ph, pw, face);
+        continue;
+      }
       const geo = new THREE.PlaneGeometry(pw, ph);
       const uv = geo.attributes.uv;
-      const r = band[i];
       for (let k = 0; k < uv.count; k++) {
         // Inset a hair inside the band so a mip never bleeds the neighbour's
         // ground colour across the seam.
@@ -264,6 +280,128 @@ export class StageStructure {
         pos: [x, y, face + 0.045], rot: [0, 0, Math.PI / 2],
       }));
     }
+  }
+
+  /**
+   * The personnel gate: how anyone actually gets into the pit.
+   *
+   * A barrier with no way through it is a wall, and a wall around a venue people
+   * walk into is a set-dressing mistake the eye catches without being able to say
+   * why. The parts are the ones that would be there — a leaf hung in a frame on
+   * two hinges, a drop bolt into a floor socket, a kick plate, and a diagonal
+   * brace so the leaf does not rack — and between them they put a *vertical* run
+   * of detail into a band that is otherwise entirely horizontal, which is worth
+   * as much compositionally as it is narratively.
+   */
+  #barrierGate(x, y, ph, pw, face) {
+    const b = this.bins;
+    const gw = pw * 0.62;             // the leaf; the rest of the bay stays panel
+    const z = face + 0.05;
+    const lx = x - pw / 2 + gw / 2 + 0.1;
+
+    // Frame: two jambs and a head, standing proud of the panel line.
+    for (const s of [-1, 1]) {
+      b.steel.push(place(bevelBox(0.09, ph + 0.14, 0.11, 0.015), { pos: [lx + s * gw / 2, y, z] }));
+    }
+    b.steel.push(place(bevelBox(gw + 0.18, 0.08, 0.11, 0.015), { pos: [lx, y + ph / 2 + 0.07, z] }));
+
+    // The leaf, set back in its frame, with a rail top and bottom.
+    b.dark.push(place(bevelBox(gw - 0.06, ph - 0.04, 0.05, 0.012), { pos: [lx, y, z - 0.035] }));
+    for (const dy of [-1, 1]) {
+      b.steel.push(place(bevelBox(gw - 0.06, 0.06, 0.06, 0.012), { pos: [lx, y + dy * (ph / 2 - 0.05), z - 0.01] }));
+    }
+    // Diagonal brace, hinge corner to latch corner — the direction a real leaf
+    // is braced, rising away from the hinge it hangs on.
+    const br = spanX([lx - gw / 2 + 0.08, y - ph / 2 + 0.06, z], [lx + gw / 2 - 0.08, y + ph / 2 - 0.06, z]);
+    b.steel.push(place(bevelBox(br.length, 0.05, 0.045, 0.01), { pos: br.pos, rot: br.rot }));
+
+    // Two hinges on the left jamb, a lever handle and a drop bolt on the right.
+    for (const dy of [-0.3, 0.3]) {
+      b.steel.push(place(new THREE.CylinderGeometry(0.032, 0.032, 0.14, 8), { pos: [lx - gw / 2, y + dy * ph, z + 0.02] }));
+      b.steel.push(place(bevelBox(0.11, 0.05, 0.03, 0.008), { pos: [lx - gw / 2 + 0.05, y + dy * ph, z + 0.02] }));
+    }
+    b.steel.push(place(bevelBox(0.05, 0.16, 0.04, 0.01), { pos: [lx + gw / 2 - 0.11, y + 0.02, z + 0.03] }));
+    b.steel.push(place(new THREE.CylinderGeometry(0.02, 0.02, 0.13, 7), {
+      pos: [lx + gw / 2 - 0.155, y + 0.02, z + 0.055], rot: [0, 0, Math.PI / 2],
+    }));
+    // Drop bolt into its floor socket, thrown home.
+    b.steel.push(place(new THREE.CylinderGeometry(0.019, 0.019, ph * 0.62, 7), { pos: [lx + gw / 2 - 0.14, y - ph * 0.42, z + 0.03] }));
+    b.steel.push(place(new THREE.CylinderGeometry(0.045, 0.05, 0.05, 9), { pos: [lx + gw / 2 - 0.14, 0.03, face + 0.13] }));
+
+    // Kick plate and the leading edge of the leaf, both hazard-striped.
+    //
+    // This is the part that makes the bay work rather than merely exist. Built in
+    // steel and dark metal the whole gate came out the same value as the
+    // shadowed concrete around it, so the bay read as a hole punched in the
+    // banner run — two dead zones traded for one repeated legend, which is no
+    // trade at all. Stripes are what an actual gate in an actual barrier carries,
+    // and they are the only thing at this distance with enough value contrast to
+    // say *gate* instead of *gap*.
+    b.hazard.push(place(bevelBox(gw - 0.14, 0.13, 0.025, 0.006), { pos: [lx, y - ph / 2 + 0.09, z - 0.005] }));
+    b.hazard.push(place(bevelBox(0.1, ph - 0.06, 0.055, 0.01), { pos: [lx + gw / 2 - 0.06, y, z - 0.005] }));
+    this.#barrierPlacard(lx + gw / 2 + 0.16, y + 0.06, face);
+  }
+
+  /**
+   * The equipment bay: the power disconnect, the fire point and the cable inlet.
+   *
+   * Everything in the pit is fed from somewhere and nothing in the set said
+   * where. This is that answer, and it earns its bay by being the one place on
+   * the barrier with real depth — a cabinet standing 200mm off the face throws a
+   * shadow the flat panels cannot, which is what stops this band reading as a
+   * printed stripe when the key light rakes along it.
+   */
+  #barrierEquipment(x, y, ph, pw, face) {
+    const b = this.bins;
+    const z = face + 0.02;
+
+    // Fire point: a cabinet with a proud door, hinge line and drop catch.
+    const fx = x - pw * 0.28;
+    b.dark.push(place(bevelBox(0.52, ph * 0.92, 0.2, 0.02), { pos: [fx, y, z + 0.1] }));
+    b.steel.push(place(bevelBox(0.46, ph * 0.86, 0.03, 0.01), { pos: [fx + 0.02, y, z + 0.21] }));
+    b.steel.push(place(new THREE.CylinderGeometry(0.022, 0.022, ph * 0.86, 7), { pos: [fx - 0.22, y, z + 0.21] }));
+    b.steel.push(place(bevelBox(0.05, 0.09, 0.035, 0.008), { pos: [fx + 0.22, y - 0.03, z + 0.23] }));
+    b.steel.push(place(boltRow(0.42, 4, 0.017, 0.011), { pos: [fx + 0.02, y - ph * 0.4, z + 0.215] }));
+
+    // Rotary disconnect: enclosure, handle boss, and the lever thrown to off.
+    // The enclosure is striped because a live isolator is, and because it is the
+    // one mark in this bay bright enough to carry it at twelve metres.
+    const dx = x + pw * 0.06;
+    b.hazard.push(place(bevelBox(0.34, 0.42, 0.17, 0.018), { pos: [dx, y + 0.04, z + 0.085] }));
+    b.steel.push(place(new THREE.CylinderGeometry(0.06, 0.06, 0.05, 10), { pos: [dx, y + 0.04, z + 0.19], rot: [Math.PI / 2, 0, 0] }));
+    b.steel.push(place(bevelBox(0.14, 0.035, 0.03, 0.008), { pos: [dx + 0.05, y - 0.01, z + 0.215], rot: [0, 0, -0.7] }));
+    b.steel.push(place(boltRow(0.26, 2, 0.016, 0.01), { pos: [dx, y - 0.17, z + 0.175] }));
+
+    // Cable inlet: a gland plate and two armoured tails dressed down the face
+    // into the base of the barrier, which is where they would actually go.
+    const cx = x + pw * 0.34;
+    b.steel.push(place(bevelBox(0.24, 0.14, 0.04, 0.01), { pos: [cx, y + ph * 0.3, z + 0.03] }));
+    for (const dxx of [-0.06, 0.06]) {
+      b.steel.push(place(new THREE.CylinderGeometry(0.026, 0.026, 0.05, 8), { pos: [cx + dxx, y + ph * 0.3, z + 0.07], rot: [Math.PI / 2, 0, 0] }));
+      b.dark.push(tube(catenary(
+        [cx + dxx, y + ph * 0.28, z + 0.07], [cx + dxx * 2.4, 0.12, face + 0.14], 0.1, 8,
+      ), 0.022, 6));
+    }
+    this.#barrierPlacard(x - pw * 0.46, y + 0.05, face);
+  }
+
+  /**
+   * A small stencilled sign on the barrier face.
+   *
+   * The plate texture carries three legends stacked in v; a placard takes one of
+   * them by squeezing its own v into that third. Small enough that only its
+   * shape and its yellow ink resolve at twelve metres, which is all a safety
+   * placard ever does in a photograph of a real venue — the point is that the
+   * barrier has them, not that they can be read.
+   */
+  #barrierPlacard(x, y, face) {
+    const geo = new THREE.PlaneGeometry(0.22, 0.28);
+    const uv = geo.attributes.uv;
+    const r = this.rng.int(3);
+    for (let k = 0; k < uv.count; k++) {
+      uv.setXY(k, uv.getX(k), (r + 0.06 + uv.getY(k) * 0.88) / 3);
+    }
+    this.bins.plate.push(place(geo, { pos: [x, y, face + 0.014] }));
   }
 
   /**
@@ -1253,7 +1391,12 @@ export class StageStructure {
           // Jitter deep enough that neighbours in a rank sit at visibly
           // different depths: a rank pegged to one z line is a chorus row.
           z: TERRACE_Z0 - rank * TERRACE_RUN - rng.range(0.25, 0.8),
-          ry: Math.PI + rng.range(-0.5, 0.5),
+          // One in five is turned well off the pit — talking to the person beside
+          // them rather than watching the fight. A terrace where every head
+          // points the same way is an audience of cameras, and this is the one
+          // orientation change that varies the silhouette without thinning the
+          // mass, which is the trap the rest of this method fell into.
+          ry: Math.PI + (rng.next() < 0.2 ? rng.range(-1.1, 1.1) : rng.range(-0.5, 0.5)),
           k: pick(rank === 0),
           phone: rank <= 2 && rng.next() < 0.22,
         });

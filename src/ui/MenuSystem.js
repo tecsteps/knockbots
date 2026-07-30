@@ -112,7 +112,7 @@ const PREVIEW_MARK = { x: 0, y: 0, z: 0 };
  * Where the opponent is parked while the screen is up — its normal right-hand
  * start mark, and pinned there for two reasons.
  *
- * A fighter auto-turns toward its opponent, and `#framingPortrait` swings the
+ * A fighter auto-turns toward its opponent, and \`#framingPortrait\` swings the
  * lens around the subject's *facing*: leave the opponent wherever the last
  * round dropped it and the camera lands on either side of the machine at
  * random. Second, `FightCamera#composeSubject` slides the look point sideways
@@ -386,7 +386,11 @@ export class MenuSystem {
     MenuSystem.#installStyles();
 
     this.root = document.createElement('div');
-    this.root.className = 'menu-root';
+    // `kbs-layer` is this module's own hook for raising the menu tree above the
+    // in-fight touch pad — see the rule of that name in KBS_CSS. It has to be a
+    // class of ours on an element of ours, because `menu-root` belongs to
+    // `ui.css` and `kbt-root` belongs to `TouchControls.js`.
+    this.root.className = 'menu-root kbs-layer';
     uiRoot.appendChild(this.root);
 
     this.current = null;
@@ -965,9 +969,13 @@ export class MenuSystem {
     // The compact layouts let the rack scroll as a safety valve on a very short
     // viewport. Only reach for the scroller when there actually is one — on
     // every other screen this is a wasted layout read.
-    if (rackGrid && rackGrid.scrollHeight > rackGrid.clientHeight + 1) {
-      tile.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    }
+    const scrolls = !!rackGrid && rackGrid.scrollHeight > rackGrid.clientHeight + 1;
+    // The one read above pays for the affordance too. A rank cut off flat at the
+    // rack's bottom edge reads as a clipping bug rather than as more content,
+    // and on a notched handset in landscape that is exactly what the valve
+    // produces: 45px of safe-area inset off a 390px screen is one rank's worth.
+    rackGrid?.classList.toggle('kbs-grid--scroll', scrolls);
+    if (scrolls) tile.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
   /** Six frames of glyph noise before the name resolves. Motion, not decoration:
@@ -1000,7 +1008,7 @@ export class MenuSystem {
    * Player one becomes the display stand: it is moved to the centre mark, the
    * opponent is hidden, and `FightCamera` is cut to its `portrait` framing. The
    * options object handed to `cinematic()` is kept and mutated per frame —
-   * `#framingPortrait` re-reads it every tick, so writing `yaw` on an object we
+   * \`#framingPortrait\` re-reads it every tick, so writing `yaw` on an object we
    * own is all it takes to drive a turntable through the camera's own springs
    * without reaching into anything that belongs to FightCamera.
    */
@@ -1358,6 +1366,26 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
  *    layout.
  */
 const KBS_CSS = `
+/* Lifts the whole menu tree above the touch pad.
+   -------------------------------------------------------------------------
+   Measured, on a 844x390 handset with the pad awake: eight of the ten roster
+   tiles and the BACK button returned "BLOCKED by .kbt-stickzone" from
+   elementFromPoint, so a phone player could reach the first two machines and
+   nothing else. That is the whole of the reported "not responsive" — the
+   breakpoints were laying the screen out correctly and another layer was
+   eating the taps.
+
+   TouchControls mounts \`.kbt-root\` (z-index 40) into the same #ui stacking
+   context and is not phase-aware, and \`kbt-off\` only zeroes its opacity, so
+   its stick catchment stays hit-testable over every front-end screen. The pad
+   ought not to be live outside a fight at all, but that is another module's
+   file; 41 here is the fix this one can make, and it is the correct z-order
+   regardless: a modal front-end screen is the topmost interactive layer.
+
+   Safe because \`menu-root\` is \`pointer-events: none\` unless a screen is up,
+   so during a fight this changes nothing about who receives a touch. */
+.kbs-layer { z-index: 41; }
+
 /* Its own type scale. .menu-root clamps at 23px, which is right for a centred
    title card but leaves this screen's readouts unreadably small on a 4K panel —
    every dimension below is in em off this one number. */
@@ -1467,6 +1495,14 @@ const KBS_CSS = `
 /* Below this the rack has no room for a third line and it clips mid-glyph. */
 @media (max-height: 840px) {
   .kbs-tile-frame { display: none; }
+}
+/* Set from #moveCarriage, which has already measured the overflow, and only
+   when there is some — a fade over a rack that is not scrolling would dim its
+   last rank for nothing. Masked rather than overlaid so it works over the live
+   render behind the compact layouts, where a solid gradient strip would not. */
+.kbs-grid--scroll {
+  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 1.5em), transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 1.5em), transparent 100%);
 }
 .kbs-carriage {
   position: absolute; left: 0; top: 0;
@@ -1865,44 +1901,88 @@ const KBS_CSS = `
   /* Width is the scarce axis, and 13px flat left the 0.5em readouts at 6px.
      Off vw with a 14px floor they land at 15-16px base on a real phone. */
   .kbs-screen { font-size: clamp(14px, 4.1vw, 19px); }
+  /* Four rows, and the dossier is not one of them.
+     -----------------------------------------------------------------------
+     FightCamera has no vertical framing option: \`#framingPortrait\` sets the
+     look point to the subject's mid-height, so the machine is always drawn on
+     the vertical centre of the *viewport*. A window that does not contain that
+     centre line photographs the wrong part of the body, and the first stacked
+     build proved it — on a 390x844 handset the stage band ran y=50..197 while
+     the machine's centre was at 422, so the window showed a pair of arms and
+     cut the head off entirely.
+
+     The arithmetic then says the dossier cannot have a row of its own. Budget
+     at 390x844: 844 less header 27, rack 272, footer 53, four gaps 35 and
+     padding 26 leaves 431 for stage plus dossier, and the stage alone needs
+     ~375 to reach past the centre line. So the dossier docks *over* the foot
+     of the window instead — which is what these screens look like anyway, and
+     costs the render nothing, since it covers the shins.
+
+     Done with explicit line placement rather than named areas because two
+     children have to share row 3, and a \`grid-template-areas\` cell can only be
+     named once. Every child is re-placed here for that reason. */
   .kbs {
     grid-template-columns: minmax(0, 1fr);
-    /* The preview keeps a hard floor: it is the reason for the screen, and a
-       stack of auto rows will happily starve it to nothing otherwise. */
-    grid-template-rows: auto minmax(8em, 1fr) auto auto auto;
-    grid-template-areas: "head" "stage" "doss" "rack" "foot";
+    grid-template-rows: auto minmax(6em, 1fr) auto auto auto;
+    grid-template-areas: none;
     --kbs-pad-x: 1.1em;
     gap: 0.55em;
     padding:
       calc(0.9em + var(--kbs-safe-t)) calc(var(--kbs-pad-x) + var(--kbs-safe-r))
       calc(0.7em + var(--kbs-safe-b)) calc(var(--kbs-pad-x) + var(--kbs-safe-l));
   }
+  .kbs-head { grid-area: 1 / 1 / 2 / 2; }
+  .kbs-stage { grid-area: 2 / 1 / 4 / 2; }
+  .kbs-doss { grid-area: 3 / 1 / 4 / 2; justify-content: flex-end; }
+  .kbs-rack { grid-area: 4 / 1 / 5 / 2; }
+  .kbs-foot { grid-area: 5 / 1 / 6 / 2; }
   /* Stacked, so the veil is stacked too: clear across the band the machine
-     stands in, solid under the dossier and rack below it. The horizontal
-     gradient of the wide layout would darken exactly the wrong thing. */
+     stands in, solid under the rack below it. The horizontal gradient of the
+     wide layout would darken exactly the wrong thing.
+
+     The stops are percentages and the dock is not: the card's top edge sits at
+     37% of a 390x844 screen and 27% of a 360x640 one, so a ramp tuned to the
+     tall case left the machine showing through the gaps between the roster
+     tiles on the short one. Tuned to the short case instead, which costs the
+     tall one a soft falloff across the machine's waist just above the card —
+     and that reads as the figure being seated into the panel rather than as
+     anything lost. */
   .kbs-scrim {
     background:
-      linear-gradient(180deg, rgba(4,6,10,0.94) 0%, rgba(4,6,10,0.4) 8%, rgba(4,6,10,0.04) 17%,
-                      rgba(4,6,10,0) 30%, rgba(4,6,10,0.3) 42%, rgba(4,6,10,0.82) 52%,
-                      rgba(4,6,10,0.95) 62%, rgba(4,6,10,0.97) 100%),
-      radial-gradient(130% 34% at 50% 26%, rgba(255,138,42,0.07), transparent 68%);
+      linear-gradient(180deg, rgba(4,6,10,0.94) 0%, rgba(4,6,10,0.34) 6%, rgba(4,6,10,0.03) 13%,
+                      rgba(4,6,10,0) 25%, rgba(4,6,10,0.34) 33%, rgba(4,6,10,0.74) 40%,
+                      rgba(4,6,10,0.93) 45%, rgba(4,6,10,0.97) 50%, rgba(4,6,10,0.97) 100%),
+      radial-gradient(130% 34% at 50% 22%, rgba(255,138,42,0.07), transparent 68%);
   }
   .kbs-head { padding-bottom: 0.4em; }
   .kbs-title { font-size: 1.2em; }
   .kbs-head-count { display: none; }
   /* The rack is full width now, so two columns are wide tiles rather than the
-     squeezed pair the wide layout's flank produced. */
+     squeezed pair the wide layout's flank produced. What it is not allowed to
+     be is tall: five rows at the wide layout's tile height came to 358px of the
+     844 available and that is the budget the preview needs, so the silhouette —
+     which is what sets the row height — is capped well under it. \`overflow-y\`
+     is the valve for a viewport short enough that even these do not fit; a
+     390x640 handset scrolls rather than running the last rank off the screen
+     and under the footer, which is what it did before. */
   .kbs-grid {
     max-height: none;
     grid-auto-rows: minmax(46px, auto);
     gap: 0.35em;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
   }
-  .kbs-tile { padding: 0.3em 0.5em 0.3em 0.4em; }
-  .kbs-sil { max-height: 3.4em; }
+  .kbs-grid::-webkit-scrollbar { display: none; }
+  .kbs-tile { padding: 0.24em 0.5em 0.24em 0.4em; }
+  .kbs-sil { max-height: 2.4em; }
   .kbs-tile-frame { display: none; }
-  /* Sized to its content in the wide layout; here it is a fixed band and the
-     stage above it gets everything left over, so it is trimmed to the readout
-     the player is actually comparing machines on. */
+  /* Sized to its content in the wide layout; here it is the docked panel over
+     the foot of the preview, so it is trimmed to the readout the player is
+     actually comparing machines on and its own eyebrow goes — the card leads
+     with the name, and a second label printed across the machine's knees is
+     noise. */
+  .kbs-doss .kbs-eyebrow { display: none; }
   .kbs-card {
     padding: 0.6em 0.75em 0.7em;
     gap: 0.3em;
@@ -1919,6 +1999,21 @@ const KBS_CSS = `
   .kbs-stage-tag { top: 0.4em; left: 0.2em; }
   .kbs-foot { padding-top: 0.5em; gap: 0.7em; }
   .kbs-opponent { display: none; }
+}
+
+/* -- narrow and short: the stacked layout's tightest case ---------------------- */
+/* A 360x640 handset, and any phone whose browser chrome is eating the viewport.
+   The rack and footer cost the same there as on a tall screen, so the whole
+   squeeze lands on the preview: measured at 640 the docked card was 173px of a
+   270px window, 64% of it, and the machine's head fell outside the visible band
+   altogether. The spec grid is the block to give up, because the roster tile
+   already carries chassis and mass — nothing is lost that is not on screen
+   twice. Trimming the card does not shrink the window, it moves the dock down:
+   row 3 is the card and row 2 takes back every pixel it releases. */
+@media (max-width: 760px) and (min-height: 561px) and (max-height: 720px) {
+  .kbs-spec, .kbs-sub { display: none; }
+  .kbs-name.kb-text { font-size: 1.08em; }
+  .kbs-card { padding: 0.5em 0.7em 0.6em; }
 }
 
 /* -- touch: no hover to browse with ------------------------------------------- */

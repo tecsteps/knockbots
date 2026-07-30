@@ -323,25 +323,33 @@ export class EffectsDirector {
       this.flashes.mesh,
     );
 
-    // Impact lights. Allocated once and never added, removed, OR HIDDEN.
+    // The impact light. Added to the scene once and never removed OR HIDDEN.
     //
-    // The original comment here had the right instinct and the wrong mechanism:
-    // it avoided add/remove but used `visible`, and three.js counts only visible
-    // lights when it builds a material's shader key. So toggling one on impact
-    // walked numPointLights 4 -> 5 -> 6, recompiling 12-20 programs per step and
-    // stalling a single frame by 437ms, 494ms and 831ms — the multi-second hitch
-    // players hit mid-combat. They now stay visible for the life of the scene and
-    // are silenced with `intensity = 0`, which touches no shader key.
-    this.impactLights = [];
-    for (let i = 0; i < 3; i++) {
-      const l = new THREE.PointLight(0xffd9a8, 0, 9, 2);
-      l.castShadow = false;
-      l.visible = true;   // never toggled; see above
-      l.userData.decay = 0;
-      this.group.add(l);
-      this.impactLights.push(l);
-    }
-    this._lightCursor = 0;
+    // Two separate mistakes were measured out of this one object.
+    //
+    // The first was `visible`. three.js counts only *visible* lights when it
+    // builds a material's shader key, so flashing a hidden light on impact walked
+    // `numPointLights` 4 -> 5 -> 6 and recompiled every material that got drawn.
+    // Diffing `renderer.info.programs` across the stall frame showed 12, 20 and 8
+    // new programs on those transitions, blocking a single frame for 494ms, 831ms
+    // and 437ms. That is the mid-combat hitch. It also recurs once per light-count
+    // variant, so three flashes overlapping would have bought a 7-light variant
+    // and a fourth stall. The light now stays visible for the life of the scene
+    // and is silenced with `intensity = 0`, which is not part of any shader key.
+    //
+    // The second was the pool size. Holding three of them visible fixes the
+    // stall and then charges for it forever: measured by slow alternation with
+    // the sim frozen and adaptive resolution pinned (fast toggling is invalid
+    // here — see docs/PROFILING.md), 1 light costs 28.8ms/frame and 3 cost
+    // 32.5ms, five cycles each, spread under 0.2ms. 3.7ms of a 29ms frame to
+    // light flashes that cannot be told apart: a flash decays in 0.11s and even
+    // juggle filler hits are 0.33s apart, so the second and third light were
+    // almost always idle and always billed. One light, retargeted per impact,
+    // with the brightest live flash winning — see `#flashLight`.
+    this.impactLight = new THREE.PointLight(0xffd9a8, 0, 9, 2);
+    this.impactLight.castShadow = false;
+    this.impactLight.userData.decay = 0;
+    this.group.add(this.impactLight);
 
     this.scene.add(this.group);
 
@@ -353,7 +361,7 @@ export class EffectsDirector {
 
   /**
    * Locates the arena key light so dust and smoke are lit by the same rig, and
-   * calibrates the impact lights against it.
+   * calibrates the impact light against it.
    *
    * Lights are in physical units here, and the two kinds are not interchangeable:
    * a directional light's intensity is irradiance, a point light's is candela,
@@ -1031,16 +1039,23 @@ export class EffectsDirector {
   }
 
   /**
-   * Fires one of the pooled impact lights. Nothing is created or added; the
-   * lights live in the scene at zero intensity so no material ever recompiles.
+   * Aims the single impact light at a contact point. Nothing is created, added
+   * or shown; the light already lives in the scene, so no material recompiles.
+   *
+   * With one light there is a contention rule to get right. Several beats can
+   * flash in the same frame — a heavy connecting at 18 candela while a ground
+   * scuff asks for 3 — and last-writer-wins would let the scuff extinguish the
+   * hit. The brightest live flash keeps the light instead, which is also what
+   * the eye would have read off three overlapping lights anyway.
    */
   #flashLight(at, intensity, hex) {
-    if (!this.impactLights || !this.lightsEnabled) return;
-    const l = this.impactLights[this._lightCursor];
-    this._lightCursor = (this._lightCursor + 1) % this.impactLights.length;
+    const l = this.impactLight;
+    if (!l || !this.lightsEnabled) return;
+    const want = intensity * (this.lightScale ?? 1);
+    if (want < l.intensity) return;
     l.position.copy(at);
     l.color.setHex(hex);
-    l.intensity = intensity * (this.lightScale ?? 1);
+    l.intensity = want;
     l.distance = 6.5;
     l.userData.decay = 1;
   }
@@ -1182,17 +1197,15 @@ export class EffectsDirector {
     this.trails.update(dt);
   }
 
-  /** Decays the pooled impact lights and parks them when spent. */
+  /** Decays the impact light and silences it when spent. */
   #updateLights(dt) {
-    if (!this.lightsEnabled) return;
-    for (const l of this.impactLights) {
-      if (!l.visible) continue;
-      const d = l.userData.decay - dt * 9.0;
-      if (d <= 0) { l.intensity = 0; l.userData.decay = 0; continue; }
-      l.userData.decay = d;
-      l.intensity *= Math.exp(-dt * 11.0);
-      if (l.intensity < 0.05) { l.intensity = 0; l.userData.decay = 0; }
-    }
+    const l = this.impactLight;
+    if (!l || !this.lightsEnabled || l.userData.decay <= 0) return;
+    const d = l.userData.decay - dt * 9.0;
+    if (d <= 0) { l.intensity = 0; l.userData.decay = 0; return; }
+    l.userData.decay = d;
+    l.intensity *= Math.exp(-dt * 11.0);
+    if (l.intensity < 0.05) { l.intensity = 0; l.userData.decay = 0; }
   }
 
   /** Feeds the arena lighting and the depth prepass into the smoke shader. */
@@ -1325,9 +1338,16 @@ export class EffectsDirector {
     const ultra = q === 'ultra';
     const high = ultra || q === 'high';
 
+    // Silenced, not hidden, on the lower tiers: the light stays in the scene so
+    // that changing tier mid-session cannot recompile the world either. It costs
+    // its 2.6ms on every tier, which is the price of the tier switch being free.
     this.lightsEnabled = high;
-    if (!high && this.impactLights) {
-      for (const l of this.impactLights) { l.intensity = 0; }
+    if (!high && this.impactLight) {
+      // Clear the decay too: `#updateLights` is gated on `lightsEnabled`, so a
+      // flash interrupted by a tier change would otherwise keep a live countdown
+      // that nothing is advancing.
+      this.impactLight.intensity = 0;
+      this.impactLight.userData.decay = 0;
     }
     this.debris.setShadows(ultra);
     this.trails.setIntensity(high ? 1.6 : 1.3);
@@ -1362,9 +1382,7 @@ export class EffectsDirector {
         for (const s of slots) { s.handle = -1; s.primed = false; }
       }
     }
-    if (this.impactLights) {
-      for (const l of this.impactLights) { l.intensity = 0; l.userData.decay = 0; }
-    }
+    if (this.impactLight) { this.impactLight.intensity = 0; this.impactLight.userData.decay = 0; }
 
     this.impact.level = 0; this.impact.lines = 0; this.impact.invert = 0;
     this.flash.amount = 0;

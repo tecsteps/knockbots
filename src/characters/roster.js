@@ -23,8 +23,23 @@
  *    bone. It is what makes the panel breaks read.
  *
  * Proportion multipliers stay inside 0.9..1.15 as the rig requires; the real
- * silhouette differentiation comes from `silhouette`, which changes what is
- * built on top of the bones rather than the bones themselves.
+ * silhouette differentiation comes from `silhouette` and `build`, which change
+ * what is grown on top of the bones rather than the bones themselves.
+ *
+ * `silhouette` and `build` are two descriptions of the same character at two
+ * levels of resolution, and they are separate on purpose:
+ *
+ *  - `silhouette` is the abstract read — proportion scalars plus a coarse
+ *    vocabulary shared with `MenuSystem`, which draws a 2D select-screen tile
+ *    from it. Its values are a closed set that the tile renderer switches on.
+ *  - `build` names the actual hero forms `RobotBuilder` grows. Every field is a
+ *    distinct value across the whole cast, because the requirement it exists to
+ *    satisfy is that no two fighters are the same shape. Five chassis serve ten
+ *    fighters, so a chassis cannot be what decides this.
+ *
+ * They must agree. A `build.head` of `kabuto` and a `silhouette.head` of `mask`
+ * are the same helmet described twice, once for a 100-pixel SVG and once for
+ * geometry.
  *
  * @typedef {Object} CharacterDef
  * @property {string} id                 stable key, lowercase, no spaces
@@ -39,6 +54,7 @@
  * @property {string} moveSet            key into MOVES: standard|heavy|agile|technical
  * @property {VoiceDef} voice
  * @property {SilhouetteDef} silhouette
+ * @property {BuildDef} build
  * @property {{intro:string,victory:string,taunt:string,idle:string}} signature clip ids
  *
  * @typedef {Object} VoiceDef
@@ -63,6 +79,16 @@
  * @property {number} cables      count of exposed cable runs
  * @property {number} spikes      count of hard silhouette-breaking protrusions
  * @property {number} vents       count of emissive vents
+ *
+ * The hero forms. Ten distinct values per field, one per fighter — that is the
+ * whole point of the block, and `check.mjs` holds it to that.
+ *
+ * @typedef {Object} BuildDef
+ * @property {string} head   skull form: furnace|swept|turret|crown|kabuto|mandible|lantern|bunker|mono|insulator
+ * @property {string} torso  dominant body mass: barrel|keel|hump|column|cuirass|carapace|skeletal|wall|reference|drum
+ * @property {string} dorsal back unit: reactor|thrusters|drum|wings|spine|elytra|coil|tank|none|ladder
+ * @property {string} legs   limb topology: plantigrade|digitigrade|splayed|piston
+ * @property {string} mark   the one landmark element: stacks|canards|hook|fan|scabbards|raptor|rings|towershield|yoke|coils
  */
 
 /** Chassis families. RobotBuilder reads these to pick plate shapes and joint hardware. */
@@ -162,11 +188,14 @@ export const ROSTER = [
     stats: { power: 10, speed: 3, reach: 7, weight: 9, defense: 5 },
     moveSet: 'heavy',
     voice: { pitch: 0.58, timbre: 0.16, resonance: 0.72, grit: 0.85, servo: 58, impact: 96, tone: 'furnace' },
+    // Mass low and central rather than up on the shoulders: the barrel belly is
+    // the read, which is what keeps this apart from BASTION's square wall.
     silhouette: {
-      shoulders: 1.42, chestDepth: 1.3, waist: 0.86, limbTaper: 0.72,
+      shoulders: 1.20, chestDepth: 1.34, waist: 1.16, limbTaper: 0.78,
       backpack: 'reactor', head: 'mask', legs: 'plantigrade', plating: 'slab',
       greeble: 0.7, cables: 6, spikes: 4, vents: 8,
     },
+    build: { head: 'furnace', torso: 'barrel', dorsal: 'reactor', legs: 'splayed', mark: 'stacks' },
     signature: { intro: 'i.powerUp', victory: 'v.saluteCharge', taunt: 'idle.taunt', idle: 'idle.fight' },
   },
 
@@ -190,10 +219,11 @@ export const ROSTER = [
     moveSet: 'agile',
     voice: { pitch: 1.42, timbre: 0.86, resonance: 0.44, grit: 0.12, servo: 420, impact: 640, tone: 'chime' },
     silhouette: {
-      shoulders: 0.86, chestDepth: 0.82, waist: 0.7, limbTaper: 0.5,
+      shoulders: 0.80, chestDepth: 0.88, waist: 0.66, limbTaper: 0.46,
       backpack: 'thrusters', head: 'visor', legs: 'digitigrade', plating: 'layered',
       greeble: 0.32, cables: 2, spikes: 1, vents: 5,
     },
+    build: { head: 'swept', torso: 'keel', dorsal: 'thrusters', legs: 'digitigrade', mark: 'canards' },
     signature: { intro: 'i.walkOn', victory: 'v.pose', taunt: 'idle.taunt', idle: 'idle.fight' },
   },
 
@@ -217,10 +247,11 @@ export const ROSTER = [
     moveSet: 'heavy',
     voice: { pitch: 0.64, timbre: 0.24, resonance: 0.86, grit: 0.6, servo: 74, impact: 130, tone: 'drum' },
     silhouette: {
-      shoulders: 1.55, chestDepth: 1.24, waist: 0.94, limbTaper: 0.86,
+      shoulders: 1.58, chestDepth: 1.26, waist: 0.98, limbTaper: 0.88,
       backpack: 'drum', head: 'dome', legs: 'piston', plating: 'slab',
       greeble: 0.86, cables: 9, spikes: 0, vents: 4,
     },
+    build: { head: 'turret', torso: 'hump', dorsal: 'drum', legs: 'piston', mark: 'hook' },
     signature: { intro: 'i.stanceSet', victory: 'v.systemsNominal', taunt: 'idle.taunt', idle: 'idle.fight' },
   },
 
@@ -244,10 +275,11 @@ export const ROSTER = [
     moveSet: 'technical',
     voice: { pitch: 1.18, timbre: 0.92, resonance: 0.95, grit: 0.05, servo: 300, impact: 520, tone: 'choir' },
     silhouette: {
-      shoulders: 1.08, chestDepth: 0.86, waist: 0.66, limbTaper: 0.46,
+      shoulders: 0.96, chestDepth: 0.78, waist: 0.62, limbTaper: 0.42,
       backpack: 'wings', head: 'crown', legs: 'digitigrade', plating: 'filigree',
       greeble: 0.28, cables: 0, spikes: 6, vents: 10,
     },
+    build: { head: 'crown', torso: 'column', dorsal: 'wings', legs: 'digitigrade', mark: 'fan' },
     signature: { intro: 'i.powerUp', victory: 'v.pose', taunt: 'idle.taunt', idle: 'idle.fight' },
   },
 
@@ -271,10 +303,11 @@ export const ROSTER = [
     moveSet: 'technical',
     voice: { pitch: 0.96, timbre: 0.58, resonance: 0.62, grit: 0.28, servo: 190, impact: 320, tone: 'blade' },
     silhouette: {
-      shoulders: 1.16, chestDepth: 0.98, waist: 0.78, limbTaper: 0.62,
+      shoulders: 1.26, chestDepth: 0.92, waist: 0.74, limbTaper: 0.58,
       backpack: 'spine', head: 'mask', legs: 'plantigrade', plating: 'layered',
       greeble: 0.44, cables: 3, spikes: 2, vents: 4,
     },
+    build: { head: 'kabuto', torso: 'cuirass', dorsal: 'spine', legs: 'plantigrade', mark: 'scabbards' },
     signature: { intro: 'i.stanceSet', victory: 'v.pose', taunt: 'idle.taunt', idle: 'idle.fight' },
   },
 
@@ -298,10 +331,11 @@ export const ROSTER = [
     moveSet: 'agile',
     voice: { pitch: 1.3, timbre: 0.74, resonance: 0.38, grit: 0.44, servo: 510, impact: 470, tone: 'chitter' },
     silhouette: {
-      shoulders: 0.92, chestDepth: 0.9, waist: 0.6, limbTaper: 0.42,
+      shoulders: 0.88, chestDepth: 1.06, waist: 0.58, limbTaper: 0.40,
       backpack: 'wings', head: 'mandible', legs: 'digitigrade', plating: 'segmented',
       greeble: 0.5, cables: 4, spikes: 8, vents: 3,
     },
+    build: { head: 'mandible', torso: 'carapace', dorsal: 'elytra', legs: 'digitigrade', mark: 'raptor' },
     signature: { intro: 'i.walkOn', victory: 'v.pose', taunt: 'idle.taunt', idle: 'idle.fight' },
   },
 
@@ -325,10 +359,11 @@ export const ROSTER = [
     moveSet: 'technical',
     voice: { pitch: 1.06, timbre: 0.68, resonance: 0.55, grit: 0.5, servo: 260, impact: 380, tone: 'glitch' },
     silhouette: {
-      shoulders: 1.0, chestDepth: 0.94, waist: 0.72, limbTaper: 0.55,
+      shoulders: 0.92, chestDepth: 0.86, waist: 0.68, limbTaper: 0.52,
       backpack: 'coil', head: 'lantern', legs: 'digitigrade', plating: 'skeletal',
       greeble: 0.6, cables: 5, spikes: 3, vents: 7,
     },
+    build: { head: 'lantern', torso: 'skeletal', dorsal: 'coil', legs: 'digitigrade', mark: 'rings' },
     signature: { intro: 'i.pointTaunt', victory: 'v.pose', taunt: 'idle.taunt', idle: 'idle.fight' },
   },
 
@@ -351,11 +386,14 @@ export const ROSTER = [
     stats: { power: 7, speed: 4, reach: 5, weight: 9, defense: 10 },
     moveSet: 'heavy',
     voice: { pitch: 0.72, timbre: 0.34, resonance: 0.7, grit: 0.4, servo: 96, impact: 175, tone: 'bulwark' },
+    // Square: the shoulders are the widest point and the waist barely narrows,
+    // so the whole fighter reads as a door rather than as a body.
     silhouette: {
-      shoulders: 1.48, chestDepth: 1.22, waist: 0.9, limbTaper: 0.8,
+      shoulders: 1.50, chestDepth: 1.10, waist: 1.02, limbTaper: 0.94,
       backpack: 'tank', head: 'visor', legs: 'plantigrade', plating: 'slab',
       greeble: 0.66, cables: 4, spikes: 0, vents: 6,
     },
+    build: { head: 'bunker', torso: 'wall', dorsal: 'tank', legs: 'plantigrade', mark: 'towershield' },
     signature: { intro: 'i.stanceSet', victory: 'v.systemsNominal', taunt: 'idle.taunt', idle: 'idle.fight' },
   },
 
@@ -378,11 +416,15 @@ export const ROSTER = [
     stats: { power: 6, speed: 7, reach: 6, weight: 6, defense: 7 },
     moveSet: 'standard',
     voice: { pitch: 1.0, timbre: 0.62, resonance: 0.5, grit: 0.1, servo: 220, impact: 300, tone: 'clean' },
+    // The only fighter with nothing bolted to it. Its identity is that it is the
+    // one smooth, symmetrical, uninterrupted shape in the cast, so the numbers
+    // here are all deliberately near unity and the greeble budget stays low.
     silhouette: {
-      shoulders: 1.1, chestDepth: 1.0, waist: 0.82, limbTaper: 0.6,
+      shoulders: 1.06, chestDepth: 0.96, waist: 0.86, limbTaper: 0.62,
       backpack: 'none', head: 'mono', legs: 'plantigrade', plating: 'layered',
-      greeble: 0.4, cables: 2, spikes: 0, vents: 5,
+      greeble: 0.3, cables: 2, spikes: 0, vents: 5,
     },
+    build: { head: 'mono', torso: 'reference', dorsal: 'none', legs: 'plantigrade', mark: 'yoke' },
     signature: { intro: 'i.stanceSet', victory: 'v.systemsNominal', taunt: 'idle.taunt', idle: 'idle.fight' },
   },
 
@@ -406,10 +448,11 @@ export const ROSTER = [
     moveSet: 'standard',
     voice: { pitch: 0.86, timbre: 0.48, resonance: 0.78, grit: 0.66, servo: 140, impact: 245, tone: 'arc' },
     silhouette: {
-      shoulders: 1.24, chestDepth: 1.12, waist: 0.84, limbTaper: 0.7,
+      shoulders: 1.14, chestDepth: 1.18, waist: 1.06, limbTaper: 0.72,
       backpack: 'coil', head: 'crest', legs: 'piston', plating: 'segmented',
       greeble: 0.78, cables: 11, spikes: 2, vents: 6,
     },
+    build: { head: 'insulator', torso: 'drum', dorsal: 'ladder', legs: 'piston', mark: 'coils' },
     signature: { intro: 'i.powerUp', victory: 'v.saluteCharge', taunt: 'idle.taunt', idle: 'idle.fight' },
   },
 ];

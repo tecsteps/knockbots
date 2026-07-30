@@ -42,15 +42,32 @@
         text-transform: uppercase; font-weight: 400; margin-bottom: 16px;
       }
       #controls .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 12px 26px; }
-      /* keys column is fixed so every label starts on the same x */
       #controls .row { display: grid; grid-template-columns: 118px 1fr; align-items: center; gap: 12px; }
       #controls .keys { display: flex; gap: 4px; justify-content: flex-end; }
+
+      /* Positional key map. The caps sit where they physically sit, with a
+         half-key stagger per row, so the shape can be matched against the
+         keyboard without reading the letters. */
+      #controls .keymap { display: flex; gap: clamp(28px, 6vw, 72px); justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+      #controls .kc { display: flex; flex-direction: column; gap: 9px; }
+      #controls .kc-h { font-size: 8.5px; letter-spacing: .28em; color: #4f6a8c; text-transform: uppercase; }
+      #controls .kc-pad { display: flex; flex-direction: column; gap: 4px; }
+      #controls .kc-row { display: flex; gap: 4px; }
+      #controls .kc-list { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
+      #controls .kc-li { font-size: 10px; letter-spacing: .1em; color: #6f8bab; text-transform: uppercase; display: flex; gap: 7px; }
+      #controls .kc-li b { color: #9dc4ee; font-weight: 600; min-width: 1.1em; }
+
       #controls kbd {
-        display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 7px;
+        display: inline-grid; place-items: center; min-width: 30px; height: 30px; padding: 0 7px;
         background: linear-gradient(180deg, #1b2942, #101a2b);
-        border: 1px solid #26364f; border-bottom-width: 2px; border-radius: 4px;
-        font: 600 11px/1 ui-monospace, monospace; color: #cfe6ff;
+        border: 1px solid #26364f; border-bottom-width: 2px; border-radius: 5px;
+        font: 600 12px/1 ui-monospace, monospace; color: #cfe6ff;
       }
+      #controls kbd[data-tag]::after {
+        content: attr(data-tag); position: absolute; margin: -19px 0 0 19px;
+        font-size: 7.5px; color: #d08a4a; letter-spacing: .08em;
+      }
+      #controls kbd { position: relative; }
       #controls .lbl { font-size: 10.5px; letter-spacing: .1em; color: #6f8bab; text-transform: uppercase; text-align: left; }
       #controls .note { margin-top: 16px; font-size: 10.5px; letter-spacing: .06em; color: #d08a4a; line-height: 1.7; }
       @media (max-width: 620px) { #controls .grid { grid-template-columns: 1fr; } #controls .row { grid-template-columns: 108px 1fr; } }
