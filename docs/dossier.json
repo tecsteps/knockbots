@@ -1,7 +1,7 @@
 {
   "status": {
-    "rev": "0.13.0",
-    "commits": "76",
+    "rev": "0.14.0",
+    "commits": "81",
     "modules": 64,
     "lines": "53k",
     "clips": 91,
@@ -10,30 +10,28 @@
   },
   "verdicts": [
     {
-      "axis": "Stage detail",
-      "score": 80,
-      "pass": true
+      "axis": "Interface craft",
+      "score": 77
     },
     {
-      "axis": "Interface craft",
-      "score": 80,
-      "pass": true
+      "axis": "Stage detail",
+      "score": 74
     },
     {
       "axis": "Lighting & atmosphere",
-      "score": 75
+      "score": 73
     },
     {
       "axis": "Impact & effects",
-      "score": 69
+      "score": 66
+    },
+    {
+      "axis": "Animation quality",
+      "score": 63
     },
     {
       "axis": "Character rendering",
       "score": 63
-    },
-    {
-      "axis": "Animation quality",
-      "score": 64
     }
   ],
   "log": [
@@ -627,11 +625,31 @@
         "The interface point came from zooming in far enough to read the HUD as a player does. Fighter names were fusing with the player-identity colour bar — VULKAN rendering as IVULKAN. The glyph mask layers are absolutely positioned at inset zero, and an absolutely positioned box resolves against its ancestor’s padding box, so the gutter meant to hold the name clear of the bar was never applied to the ink at all.",
         "Separately, an audit that drove all 191 moves through the real rig found 27 hitting with the wrong limb. Every spin kick in the game — thirteen moves across all four movesets — anchored its hit capsule and its weapon ribbon to the planted pivot foot while the other leg swung through the opponent. At the impact tick the right foot travels 1.02m and the left 0.14m. Fixed. Twenty-six single-move cases remain queued."
       ]
+    },
+    {
+      "phase": "PHASE 19",
+      "when": "Round 13",
+      "rev": "rev 0.14.0",
+      "title": "Every score fell, and the instrument was why",
+      "paras": [
+        "Stage 80 to 74, interface 80 to 77, lighting 75 to 73, impact 69 to 66, animation 64 to 63, character flat at 63. The average fell 71.8 to 69.3 and both axes that had cleared the ship bar lost it. Nothing in the stage or interface code was edited this round.",
+        "All three critics on the falling axes volunteered, without being asked, that what they had measured was not a regression. The impact critic: “I cannot honestly call the 69 to 66 move a regression — treat this as a re-measurement.” The interface critic was blunter: “last round’s 80 was awarded without anyone zooming into the portrait chips. 80 was inflated; 77 is the corrected number.” The stage critic reached the same verdict by a different route, and then found one genuine regression that contradicts this dossier: round 12’s crowd change was published here as +6.7% crowd detail, and re-measured at matched scale and encoding it is −4.5% detail for +3.5% brightness. It traded texture for brightness. The published number does not reproduce.",
+        "Three of the four agents disproved the brief they were given, which is what they were asked to do.",
+        "The hitstop table was not changed, because the convention it was supposed to violate does not exist. Street Fighter V freezes 8, 12 and 16 frames; SF4 about 9, 11 and 13; SF2 between 10 and 14; Melee is floor(damage/3+3) capped at 20; Ultimate is damage×0.65+6 capped at 30. All are 60fps games quoting 60Hz frames, so there is no factor-of-two trap. Knockbots at 5, 8, 12 and 18 is at or below convention everywhere. The “1 to 3 frames” figure in our own research note appears to be a conflation with the 2 to 4 frame screen effect, which is a different thing entirely.",
+        "The lighting agent shipped nothing, and that was the right outcome. The brief asked it to test whether the fighters merge into the background for want of a rim. They do not: silhouette contrast at fight framing is 0.555 across three independent sessions, higher than every Tekken 8 reference measured with identical code, and figure-to-ground is 2.3 to 2.6 against the reference’s 2.4. It then generated five further hypotheses of its own and killed all five on the numbers.",
+        "The animation agent found that the directional hit-reaction layer three rounds of planning had listed as the top unbuilt item was already built and already working — hits from opposite sides differ by 0.401 in silhouette. What it found instead is better: the reaction was invisible for the first 83 to 300 milliseconds, which is exactly the frame the eye locks onto. Both halves of the reaction arm on a simulation that is about to stop, so during hitstop the body that had just been hit was bit-identical to the body that had not. Not similar — identical, 0.000. A presentation-only contact stamp took frozen-frame divergence from 0.009 to 0.252 without the deterministic tick being able to see it.",
+        "The character agent measured the brief’s recommended lever at a tenth of the one it had not named: the same grain field moves fine detail +4.1% through roughness and +44% through the normal. It also refused the round’s target. The ratio is monotone in grain amplitude and 0.55 is reachable, but the surface reads as pebbled leather well before that, so it shipped a third of the amplitude and said the metric and the eye disagree above 0.45. Where they disagree, the eye is the thing being scored.",
+        "And it found a bug worth the round on its own: Vulkan’s visor discs sat thirteen millimetres inside the head hull. The glow was buried in solid geometry, the face measured no brighter than the shoulder behind it, and every closeup showed a black hole behind a grille. Moved proud of the hull, the face went from 155 to 218 at the 95th percentile.",
+        "The instrument, though, is the real story of the round. The impact agent found that hitstop was drained once per rendered frame rather than on the simulation clock — so the most game-feel-critical constant in the project was scaled by the player’s hardware, and because the contact burst makes the frozen frames the slowest in the game, a launcher’s 183 millisecond freeze actually ran 327. It lengthened itself in proportion to how heavy the hit was. Fixed and re-measured at 1.05 times nominal.",
+        "Two agents then found the same capture defect from opposite directions, one measuring reaction poses and one measuring effects: the shutter waited on the simulation tick, which is precisely what does not advance during hitstop. “One tick past contact” waited out the entire freeze and fired a third of a second late. It only ever produced a usable image because the effects clock is slowed during the freeze as well — two bugs cancelling, and between them an instrument that systematically rewarded effects that persist too long, which is the exact complaint the critic has been filing against that axis for six rounds.",
+        "The shot named for the KO did not contain one. A fixed delay photographed two upright fighters under a round-start banner with the timer at 60 and the announcement yet to fire, and the interface axis was scored partly on the absence of a beat that had never happened. It passed in isolation and failed in a full run, because whether the killing blow lands depends on what the previous shot left the fighters doing — which is why it survived several rounds unnoticed. The select screen was never captured at all, so the critic refused to score three of the four surfaces on its axis and the score fell for the coverage gap.",
+        "The framerate number this dossier has been quoting was also meaningless: one instantaneous sample taken after the KO shot with the simulation paused. Three runs of the same build returned 5.00, 65.06 and 142.48. It has been replaced with a real measurement over 480 frames — 12.7 milliseconds median, 78.7fps, 27.1 at the 95th percentile — which independently corroborates the character agent’s 14.3. The constraint is met. The evidence previously offered for it was not evidence."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.13.0",
+    "rev": "0.14.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
