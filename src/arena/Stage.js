@@ -264,10 +264,27 @@ export class Stage {
     //
     // It is one light rather than two because a fighter can only be driven into
     // one barrier at a time, and an analytic light is evaluated per pixel over
-    // the whole frame whether or not its intensity is zero. Measured: removing
-    // the arena's three near-permanently-dark point lights returned ~9.7ms on a
-    // loaded baseline, which is more than the depth prepass buys. A light that
-    // is dark 99% of the match is not free; it is only invisible.
+    // the whole frame whether or not its intensity is zero.
+    //
+    // Measured, paired A/B with the sim paused, 1080p, render scale pinned,
+    // six alternations per point, hero framing. A shadowless PointLight in this
+    // scene costs a flat **~1.5ms**, and the cost is linear in the count:
+    //
+    //     1 light  1.55ms  IQR [1.3, 1.7]   (reproduced in a second session: 1.53)
+    //     2 lights 2.92ms  IQR [2.9, 3.0]
+    //     3 lights 4.37ms  IQR [4.2, 4.5]
+    //
+    // So collapsing two wall lights into one buys ~1.5ms. An earlier figure of
+    // mine — "~9.7ms for the arena's three" — was wrong by 2.2x; it came from
+    // three unpaired reps on a loaded machine whose own spread was 6.1-13.9ms.
+    // The paired numbers above are internally consistent (3 x 1.46 = 4.37) and
+    // consistent with mechanism: a RectAreaLight runs the full LTC path and
+    // costs roughly 4.6ms on a looser measurement, about 3x a point light,
+    // where the inflated figure implied only 1.4x — implausible for a
+    // normalize, an attenuation and a dot product against two texture lookups
+    // and matrix work. A light that is dark 99% of the match is not free; it is
+    // only invisible. It is just not worth 9.7ms, and claiming that it was
+    // would have made this change look like a regression when re-measured.
     this.wallLight = new THREE.PointLight(0xffe0b0, 0, 11, 2);
     this.wallLight.position.set(ARENA_HALF_WIDTH - 0.4, 2.0, 2.0);
     this.wallLight.castShadow = false;

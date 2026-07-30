@@ -180,9 +180,9 @@ The manifest carries `geometries`, `textures` and `programs` alongside `calls` a
 precisely so this is checkable. **Compare those counts against a known-good capture before
 believing a number**, and if they differ, the scene is not the one you think you measured.
 
-## Two ways a timing method lies
+## Three ways a timing method lies
 
-Both found the hard way on this project. Either will silently invalidate a per-pass table.
+All found the hard way on this project. Any of them will silently invalidate a per-pass table.
 
 **Short measurement blocks understate large changes.** The K=8-frames-with-3-discarded method
 reported hiding the entire arena as costing **0.75ms**. A 2.5-second hold on the same
@@ -335,3 +335,37 @@ for exactly this reason, with no visual change, because only one barrier is ever
 and recompiles every material — the first sample of the run above read **4380ms** for that
 reason. The median survives it, but `.visible` is not a free measurement instrument, and any
 probe using it must discard its first samples or measure something else.
+
+## A live match is a moving baseline
+
+The most expensive measurement error on this project so far, and the least obvious.
+
+A figure of "~9.7ms for the arena's three dark point lights" circulated, was used to justify a
+code change, and reached a committed comment. It was wrong by 2.2x. Re-measured paired with the
+**simulation paused**, six alternations per point, against a pristine HEAD copy:
+
+    1 point light removed   1.55 ms   IQR [1.3, 1.7]   (reproduced separately at 1.53)
+    2 point lights removed  2.92 ms   IQR [2.9, 3.0]
+    3 point lights removed  4.37 ms   IQR [4.2, 4.5]
+
+Flat ~1.5ms per shadowless point light, linear in the count (3 x 1.46 = 4.37), intervals of
+±0.1ms. Baselines across that run: 24.9 / 25.0 / 25.0 / 24.9 / 25.0 / 25.1 — no drift at all.
+
+The original came from unpaired repetitions taken during **live combat**. Over a multi-minute run
+the match itself progresses: rounds end, the KO cinematic fires, the camera reframes, effects
+fire and decay. Baselines drifted **37ms to 21ms within a single run**. Machine load contributed;
+the match contributed more.
+
+**Rule: any A/B lasting more than about a minute of live match time is measuring the match, not
+the change.** Pause the simulation, pin the render scale, alternate in short holds, and report
+the interval. The same harness that produced a 2.2x error unpaused is rock steady paused.
+
+A second, cheaper check that would have caught it: the implied ratio. A shadowless point light is
+a normalize, an attenuation and a dot product; it cannot plausibly cost 70% of a RectAreaLight
+running the full LTC integral. The corrected ratio is about 1:3, which is believable. **When a
+number implies an implausible ratio between two known-different costs, re-measure before
+publishing it.**
+
+Still loosely held, flagged by both agents who quoted it: the ~4.6ms-per-RectAreaLight figure is
+loosely measured on both sides, and two loose measurements agreeing is weaker than it looks. It
+needs redoing properly before anyone targets area lights again.
