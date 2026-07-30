@@ -110,6 +110,15 @@ const INERTIA_RISE_CAP = 2.5;
 /** Offsets under this many radians are not worth arming (~0.023 degrees). */
 const INERTIA_EPS = 4e-4;
 
+/**
+ * Per-tick survival of an IK correction after the caller has released the chain,
+ * and the weight below which the chain is finally let go. 0.62 puts the fade at
+ * five ticks, which is short enough that a foot leaving the ground is not dragged
+ * and long enough that the release cannot read as a snap.
+ */
+const IK_RELEASE_DECAY = 0.62;
+const IK_RELEASE_EPS = 0.02;
+
 // --- scratch, module-level so simulate() allocates nothing -------------------
 const _v0 = new THREE.Vector3();
 const _v1 = new THREE.Vector3();
@@ -120,6 +129,8 @@ const _q0 = new THREE.Quaternion();
 const _q1 = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _q3 = new THREE.Quaternion();
+const _qb0 = new THREE.Quaternion();
+const _qb1 = new THREE.Quaternion();
 const _e0 = new THREE.Euler();
 const _AXIS_Y = new THREE.Vector3(0, 1, 0);
 const _AXIS_X = new THREE.Vector3(1, 0, 0);
@@ -170,6 +181,27 @@ function addQuat(pose, bone, q, weight) {
   if (weight <= 0 || !(bone in pose.rot)) return;
   _q3.set(0, 0, 0, 1).slerp(q, Math.min(1, weight));
   pose.rot[bone].multiply(_q3);
+}
+
+/**
+ * Pre-multiply a stored delta onto a pose bone, scaled by weight. The IK release
+ * ramp needs this side: its delta was measured as `after * before^-1`, so it goes
+ * on the LEFT of whatever the clips have since written.
+ */
+function addQuatPre(pose, bone, q, weight) {
+  if (weight <= 0 || !(bone in pose.rot)) return;
+  _q3.set(0, 0, 0, 1).slerp(q, Math.min(1, weight));
+  pose.rot[bone].premultiply(_q3);
+}
+
+/**
+ * Record what a weighted slerp is about to add to `cur`, as `after * before^-1`.
+ * `bank` may be null, which is the common case — only the leg chains ask.
+ */
+function bankDelta(bank, i, cur, want, weight) {
+  if (!bank) return;
+  _qb0.copy(cur).slerp(want, weight);
+  bank[i].copy(_qb0).multiply(_qb1.copy(cur).invert());
 }
 
 /** Post-multiply an additive XYZ-Euler (radians) onto a pose bone. */
@@ -372,10 +404,20 @@ export class Animator {
     this._yawClips = new WeakMap();
 
     // --- IK -----------------------------------------------------------------
-    /** @type {Record<string, {target:THREE.Vector3|null, weight:number, current:number, preserveEnd:boolean, space:string}>} */
+    /**
+     * `hold` is the rotation the last solve ADDED to the chain's three bones and
+     * `holding` says there is one still worth fading. Between them they let a
+     * released chain give its correction back over several ticks — see `#applyIk`.
+     * @type {Record<string, {target:THREE.Vector3|null, weight:number, current:number,
+     *   preserveEnd:boolean, space:string, hold:THREE.Quaternion[], holding:boolean}>}
+     */
     this.ik = Object.create(null);
     for (const chain in IK_CHAINS) {
-      this.ik[chain] = { target: null, weight: 0, current: 0, preserveEnd: true, space: 'world' };
+      this.ik[chain] = {
+        target: null, weight: 0, current: 0, preserveEnd: true, space: 'world',
+        hold: [new THREE.Quaternion(), new THREE.Quaternion(), new THREE.Quaternion()],
+        holding: false,
+      };
     }
     // Floor contact is owned by Fighter, which drives the leg chains with its
     // own targets, so the built-in planter is off by default. Turn it on for
@@ -905,7 +947,8 @@ export class Animator {
   /**
    * Point an IK chain at a target.
    * @param {string} chain  key of Skeleton.IK_CHAINS: armL|armR|legL|legR
-   * @param {THREE.Vector3|null} target target position; null releases the chain
+   * @param {THREE.Vector3|null} target target position; null releases the chain,
+   *   which fades the correction out over a few ticks rather than dropping it
    * @param {number} weight 0..1
    * @param {{space?:'model'|'world', preserveEnd?:boolean}} [opts] targets are
    *   world space by default; pass `space: 'model'` for rig-local coordinates
@@ -913,7 +956,7 @@ export class Animator {
   setIkTarget(chain, target, weight = 1, opts = {}) {
     const slot = this.ik[chain];
     if (!slot) { this.#warn(`unknown IK chain "${chain}"`); return; }
-    if (!target) { slot.target = null; slot.weight = 0; return; }
+    if (!target) { slot.weight = 0; return; }
     if (!slot.target) slot.target = new THREE.Vector3();
     slot.target.copy(target);
     slot.weight = THREE.MathUtils.clamp(weight, 0, 1);
@@ -1564,11 +1607,42 @@ export class Animator {
         _v0.copy(slot.target);
         if (slot.space === 'world') this.#toModel(_v0);
         slot.current += (slot.weight - slot.current) * 0.35;
-        this.#solveTwoBone(pose, name, _v0, slot.current, slot.preserveEnd);
+        this.#solveTwoBone(pose, name, _v0, slot.current, slot.preserveEnd, slot.hold);
+        slot.holding = true;
         if (isLeg) this.footPlant._w[name] = 0;
         continue;
       }
-      slot.current += (0 - slot.current) * 0.3;
+
+      // Released. The correction fades over a few ticks instead of vanishing on
+      // the tick the caller let go, because a two-bone solve is nowhere near the
+      // identity at partial weight: dropping one at weight 0.9 writes the whole
+      // difference between the canonical limb and the authored one into a single
+      // frame. Measured over 4000 ticks of CPU-vs-CPU that release accounted for
+      // 12 of the 14 single-tick pops past 90 degrees on the whole rig, the worst
+      // a 143-degree ankle snap on a wake-up.
+      //
+      // What fades is the correction the last solve WROTE — the per-bone rotation
+      // it added on top of the clip — not the solve itself re-run at a lower
+      // weight. That distinction is the whole design, and it was measured: aiming
+      // a decaying weight at a held target re-canonicalises the limb every tick,
+      // which is the documented toe-down pitch of a partially weighted two-bone
+      // solve, and on `k.sweep` it took floor penetration from 65mm to 151mm.
+      // Replaying the banked delta introduces no new solve, so the fade can only
+      // shrink what was already on screen. Deterministic: a fixed decay applied
+      // to stored quaternions.
+      slot.current *= IK_RELEASE_DECAY;
+      if (slot.holding && slot.current > IK_RELEASE_EPS) {
+        const c = IK_CHAINS[name];
+        addQuatPre(pose, c.root, slot.hold[0], slot.current);
+        addQuatPre(pose, c.mid, slot.hold[1], slot.current);
+        if (slot.preserveEnd) addQuatPre(pose, c.end, slot.hold[2], slot.current);
+        this._ikApplied = true;
+        if (isLeg) this.footPlant._w[name] = 0;
+        continue;
+      }
+      slot.current = 0;
+      slot.holding = false;
+      slot.target = null;
 
       if (isLeg && this.footPlant.enabled) this.#plantFoot(pose, name);
     }
@@ -1635,11 +1709,14 @@ export class Animator {
    * @param {THREE.Vector3} target model space
    * @param {number} weight
    * @param {boolean} preserveEnd keep the end bone's world orientation
+   * @param {THREE.Quaternion[]} [bank] filled with the rotation this solve ADDED
+   *   to each of the three bones, so a release can fade exactly that back out
    */
-  #solveTwoBone(pose, chainName, target, weight, preserveEnd) {
+  #solveTwoBone(pose, chainName, target, weight, preserveEnd, bank = null) {
     const c = IK_CHAINS[chainName];
     const ri = this.index[c.root], mi = this.index[c.mid], ei = this.index[c.end];
     if (ri === undefined || mi === undefined || ei === undefined) return;
+    if (bank) { bank[0].identity(); bank[1].identity(); bank[2].identity(); }
 
     const len1 = this.restPos[mi].length();
     const len2 = this.restPos[ei].length();
@@ -1696,16 +1773,22 @@ export class Animator {
     const newMid = _q3.multiply(_q2);                       // _q3 now = new world quat of mid
 
     // --- write back as rest-relative local deltas -------------------------
+    // Each bone banks `after * before^-1`, the rotation this solve added in that
+    // bone's own local frame. Left-multiplying a decayed share of it onto a later
+    // clip pose reproduces the same visible correction without re-solving.
     const pr = this.parent[ri];
     _q2.copy(pr === -1 ? IDENTITY : this.worldQuat[pr]).invert().multiply(_q1);
     _q2.premultiply(this.restQuatInv[ri]);
+    bankDelta(bank, 0, pose.rot[this.names[ri]], _q2, weight);
     pose.rot[this.names[ri]].slerp(_q2, weight);
 
     _q0.copy(_q1).invert().multiply(newMid).premultiply(this.restQuatInv[mi]);
+    bankDelta(bank, 1, pose.rot[this.names[mi]], _q0, weight);
     pose.rot[this.names[mi]].slerp(_q0, weight);
 
     if (preserveEnd) {
       _q0.copy(newMid).invert().multiply(this.worldQuat[ei]).premultiply(this.restQuatInv[ei]);
+      bankDelta(bank, 2, pose.rot[this.names[ei]], _q0, weight);
       pose.rot[this.names[ei]].slerp(_q0, weight);
     }
   }
@@ -1808,6 +1891,8 @@ export class Animator {
       this.ik[chain].target = null;
       this.ik[chain].weight = 0;
       this.ik[chain].current = 0;
+      this.ik[chain].holding = false;
+      for (const q of this.ik[chain].hold) q.identity();
     }
     this.footPlant._w.legL = 0;
     this.footPlant._w.legR = 0;

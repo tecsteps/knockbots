@@ -147,6 +147,45 @@ const PELVIS_LIFT_STATES = new Set([
   STATE.INTRO, STATE.VICTORY,
 ]);
 
+/**
+ * States in which a boot under the floor is a foot problem the planter may act
+ * on. The exclusions are the same argument the pelvis correction makes, one step
+ * further out: a fighter getting up off the concrete has its shins vertical and
+ * its soles nowhere near the ground, so the sole test reads "buried by 670mm" and
+ * asks the leg solver for a correction two thirds of a metre tall. Measured over
+ * 5000 ticks of CPU-vs-CPU that produced a 119-degree single-tick snap on
+ * `ankle_L`, six times, every one of them during a wake-up.
+ *
+ * Hitstun stays IN, deliberately: most flinches are on the feet and want
+ * planting, and the ones that go down (`r.crumple`) are covered by the burial
+ * ceiling below rather than by excluding the whole state.
+ */
+const PLANT_STATES = new Set([
+  STATE.IDLE, STATE.WALK, STATE.DASH, STATE.BACKDASH, STATE.CROUCH, STATE.SIDESTEP,
+  STATE.ATTACK, STATE.BLOCK_HIGH, STATE.BLOCK_LOW, STATE.BLOCKSTUN, STATE.THROW,
+  STATE.INTRO, STATE.VICTORY, STATE.HITSTUN, STATE.JUMP_FALL,
+]);
+
+/**
+ * Burial past which the planter starts handing authority back, and the band it
+ * takes to hand all of it back.
+ *
+ * A correction much larger than the ceiling is not a plant, it is a different
+ * pose: the deepest a clip that is genuinely standing was measured asking for,
+ * after the pelvis correction has taken its share, is 51mm. Past that the clip
+ * has put the body somewhere the legs cannot reach and the honest answer is to
+ * leave it alone — hauling a leg 200mm through its own bend plane is what a snap
+ * looks like.
+ *
+ * It is a BAND and not a threshold, and that was measured too. Swept as a hard
+ * cutoff the pop count was not monotone in it — 0.10 gave 14 pops past 60
+ * degrees, 0.14 gave 36, 0.22 gave 16 — because a pose that sits near the value
+ * crosses it and back on alternating ticks and the correction chatters. Every
+ * other gate in this file fades for the same reason.
+ */
+const PLANT_CEILING = 0.10;
+const PLANT_CEILING_BAND = 0.12;
+
 /** +1 when the rig's local +Z is its front. See the file header. */
 export const FORWARD_SIGN = 1;
 /** Root yaw that points the rig's front along the fighter's facing. */
@@ -1803,7 +1842,7 @@ export class Fighter {
   #footIk() {
     if (!this.animator?.setIkTarget) return;
     const A = this.animator;
-    const grounded = !this.airborne && this.state !== STATE.KNOCKDOWN && this.state !== STATE.KO;
+    const grounded = !this.airborne && PLANT_STATES.has(this.state);
     for (const side of ['L', 'R']) {
       const chain = side === 'L' ? 'legL' : 'legR';
       const st = this.plantState[side];
@@ -1828,9 +1867,14 @@ export class Fighter {
       st.hasLast = true;
 
       // Contact, decided on what the CLIP wanted rather than on what came out,
-      // and held across a small band so a landing is not a switch.
-      const contact = grounded && intent < PLANT_BAND;
-      st.contact = contact ? THREE.MathUtils.clamp(1 - intent / PLANT_BAND, 0, 1) : 0;
+      // and held across a small band so a landing is not a switch. The ceiling is
+      // the other half of the test: a boot a quarter of a metre under is not in
+      // contact with anything, it belongs to a pose that is not standing. Smooth-
+      // stepped so both ends of the band have a continuous derivative.
+      const over = (bury - PLANT_CEILING) / PLANT_CEILING_BAND;
+      const deep = over <= 0 ? 1 : over >= 1 ? 0 : 1 - over * over * (3 - 2 * over);
+      const contact = grounded && intent < PLANT_BAND && deep > 0;
+      st.contact = contact ? THREE.MathUtils.clamp(1 - intent / PLANT_BAND, 0, 1) * deep : 0;
       st.weight += (st.contact - st.weight) * PLANT_RATE;
       if (st.weight < 0.004) st.weight = 0;
 
