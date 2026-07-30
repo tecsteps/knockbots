@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.8.0",
-    "commits": 30,
-    "modules": 64,
-    "lines": "42k",
+    "rev": "0.9.0",
+    "commits": "50",
+    "modules": 66,
+    "lines": "47k",
     "clips": 89,
     "moves": 191,
     "characters": 10
@@ -380,11 +380,95 @@
           "state": "wait"
         }
       ]
+    },
+    {
+      "phase": "PHASE 11",
+      "when": "Round 7",
+      "rev": "rev 0.8.1",
+      "title": "The freeze, named",
+      "paras": [
+        "The user played the deployed build and reported the interface stalling for seconds at a time. That single sentence was worth more than any critic score, and it pointed somewhere nobody had been looking.",
+        "The cause was a synchronous GPU readback disguised as interface work. Drawing the two fighter portraits into the HUD called readRenderTargetPixels, which flushes the entire graphics queue and blocks the main thread \u2014 measured at 316, 390, 164, 151 and 1382 milliseconds per call, two of them back to back on the first frame of a match. The rendering those portraits needed was under a millisecond. Worst interface frame went from 1382ms to 0.1ms.",
+        "Two of the fixes proposed for that round were measured and rejected rather than shipped. The animation-restart technique suggested would have silently broken the effects it was meant to preserve, because the API it relies on reports no animations on those elements at all. And the typeface, flagged as a suspect, was proven innocent by an interleaved test and deliberately left untouched."
+      ],
+      "tags": [
+        {
+          "label": "1382ms \u2192 0.1ms",
+          "state": "done"
+        },
+        {
+          "label": "2 fixes rejected",
+          "state": "done"
+        },
+        {
+          "label": "select rebuilt",
+          "state": "done"
+        }
+      ]
+    },
+    {
+      "phase": "PHASE 12",
+      "when": "Round 8",
+      "rev": "rev 0.9.0",
+      "title": "Where the frame actually went",
+      "paras": [
+        "Framerate had been quoted for several rounds from unpaired measurements taken while a dozen headless browsers competed for the GPU. On an unchanged configuration the frame time wandered from 28.6ms to 84.8ms \u2014 a 2.8-fold spread with nothing changed \u2014 so every conclusion drawn from those numbers was inside the noise, and they were withdrawn.",
+        "Measured properly, the answer was lighting, not geometry. Eight rectangular area lights cost roughly three milliseconds each and accounted for twenty-four of a forty-millisecond frame. Cutting them to three nearly doubled the framerate, and the closeup confirms the trade landed where it was aimed: the long specular bars still run down the plates, because the light that draws them is the one that was kept.",
+        "The last multi-second hitch was a subtler version of the same thing. Three impact lights were switched on and off per hit, and the renderer counts only visible lights when it builds a shader \u2014 so every flash recompiled every material in the scene, at 437, 494 and 831 milliseconds a time. Notably, the comment above that code already warned about exactly this hazard and then used the one mechanism that triggers it. Thirty seconds of combat now runs with no stall over 100ms and no shader compiles at all.",
+        "The select screen's reported unresponsiveness turned out not to be layout either. The touch pad's invisible catchment was sitting over it, so on a landscape phone eight of the ten machines and the back button could not be tapped."
+      ],
+      "tags": [
+        {
+          "label": "26 \u2192 48 fps",
+          "state": "done"
+        },
+        {
+          "label": "832ms \u2192 0 stalls",
+          "state": "done"
+        },
+        {
+          "label": "fps claims withdrawn",
+          "state": "done"
+        },
+        {
+          "label": "select reachable",
+          "state": "done"
+        }
+      ]
+    },
+    {
+      "phase": "PHASE 13",
+      "when": "Round 9",
+      "rev": "rev 0.9.0",
+      "title": "Real machines on the tiles",
+      "paras": [
+        "The roster drew ten hand-authored flat mannequins \u2014 near-identical grey humanoids differing only by an accent colour \u2014 while the game rendered ten genuinely distinct robots. None of that reached the screen.",
+        "The tiles now show rendered busts of the actual machines, and the expensive part was already being paid for: the menu builds every robot once in idle time to warm its material caches and then throws it away, so each one is photographed on the way to the bin. Nine of ten captured in fourteen seconds, worst frame 3.9 milliseconds, no stall at all.",
+        "The preview beside them had been presenting every machine from behind. The camera offset is a sine on one axis and a cosine on the other, and because fighters face along X rather than Z it is the sine that decides whether the front is visible. Two of my own probes measured the wrong axis and reported 'in front' for a frame that plainly showed a back \u2014 the measurement was answering a question nobody had asked, and only comparing it against the pixels caught it."
+      ],
+      "tags": [
+        {
+          "label": "rendered portraits",
+          "state": "done"
+        },
+        {
+          "label": "preview faced backwards",
+          "state": "done"
+        },
+        {
+          "label": "training mode",
+          "state": "done"
+        },
+        {
+          "label": "round 9 running",
+          "state": "run"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.8.0",
-    "note": "Redeployed each iteration. Bundle hash verified against the local build."
+    "rev": "0.9.0",
+    "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
