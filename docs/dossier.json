@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.14.0",
-    "commits": "81",
+    "rev": "0.15.0",
+    "commits": "86",
     "modules": 64,
-    "lines": "53k",
+    "lines": "54k",
     "clips": 91,
     "moves": 191,
     "characters": 10
@@ -11,27 +11,27 @@
   "verdicts": [
     {
       "axis": "Interface craft",
-      "score": 77
-    },
-    {
-      "axis": "Stage detail",
       "score": 74
     },
     {
+      "axis": "Stage detail",
+      "score": 70
+    },
+    {
       "axis": "Lighting & atmosphere",
-      "score": 73
+      "score": 68
     },
     {
       "axis": "Impact & effects",
-      "score": 66
-    },
-    {
-      "axis": "Animation quality",
-      "score": 63
+      "score": 58
     },
     {
       "axis": "Character rendering",
-      "score": 63
+      "score": 62
+    },
+    {
+      "axis": "Animation quality",
+      "score": 52
     }
   ],
   "log": [
@@ -645,11 +645,31 @@
         "The shot named for the KO did not contain one. A fixed delay photographed two upright fighters under a round-start banner with the timer at 60 and the announcement yet to fire, and the interface axis was scored partly on the absence of a beat that had never happened. It passed in isolation and failed in a full run, because whether the killing blow lands depends on what the previous shot left the fighters doing — which is why it survived several rounds unnoticed. The select screen was never captured at all, so the critic refused to score three of the four surfaces on its axis and the score fell for the coverage gap.",
         "The framerate number this dossier has been quoting was also meaningless: one instantaneous sample taken after the KO shot with the simulation paused. Three runs of the same build returned 5.00, 65.06 and 142.48. It has been replaced with a real measurement over 480 frames — 12.7 milliseconds median, 78.7fps, 27.1 at the 95th percentile — which independently corroborates the character agent’s 14.3. The constraint is met. The evidence previously offered for it was not evidence."
       ]
+    },
+    {
+      "phase": "PHASE 20",
+      "when": "Round 14",
+      "rev": "rev 0.15.0",
+      "title": "The critics audited the instrument, and it failed",
+      "paras": [
+        "Character 62, animation 52, impact 58, lighting 68, stage 70, interface 74. The average fell 69.3 to 64.0 and animation dropped eleven points. No axis is near the bar.",
+        "A large part of that is my own doing, and it is worth being exact about which part. The critics were instructed to refuse to score any capture that did not certify itself. Certification was opt-in, and only five of seventeen shots declared it — so five of six critics scored under protest on axes whose primary evidence carried no certification at all. That is an instruction defect, not a collapse in the game.",
+        "It also turned six visual critics into a harness audit team, and they found more real defects in one round than the previous three combined. Every one came with a file and a line number or a pixel count.",
+        "The shot named “full body” did not contain a full body. It asked the camera rig for a portrait at 4.2 metres and shipped the default two-fighter fight framing, because the camera re-asserts the fight framing on every phase change and the previous shot’s teardown unpauses the simulation — so the transition lands inside this shot’s settle window and silently discards what was asked for. It measured a 0.25 RMSE against the hero shot, and almost all of that difference was the banner and the timer digits.",
+        "The heavy-impact shot contained no hit. The harness printed “no hit landed”, then wrote the file, logged “frozen at contact”, and recorded an empty error list. That shot was added this round specifically to make the weight-to-effect-scale claim falsifiable, and it silently whiffed underneath a comment saying that a shot which silently whiffs is how such frames got scored for several rounds.",
+        "The juggle shot photographed the recovery rather than the juggle — three hits requested, one delivered, and the shutter opening after the attacker had finished recovering. Two shots shipped with a full-opacity FIGHT banner painted across them, one of them the character-select screen, which incidentally exposed a real product bug: the announcement survives a phase change and paints over a menu. The super shot certified itself green while ninety-five per cent of the frame was functionally black. The play-view shot was framed against an unlit ceiling void, 480 of 480 sampled pixels exactly zero. And two fighters in the roster lineup were standing in a rig T-pose.",
+        "The last of those is the important one, because it shows what certification was still missing: asserting that the right MOMENT was captured says nothing about whether the frame is legible. So every shot now measures its delivered pixels — exposure, dynamic range, how much is crushed to black, whether a banner is sitting over a shot that is not about one — and every defect is written into the manifest instead of dying as a console warning nobody reads.",
+        "Contact shots now retry, because whether a forced blow connects turned out to depend on what the previous shot left the fighters doing: the heavy landed reliably after the HUD shot and whiffed after the light-impact shot at the same distance, which is why tuning the spacing kept looking fixed and was not. They also record which move produced the frame, which the harness had been discarding — a shot that cannot name its own move cannot anchor a weight ladder. It now reads jab at 11.5 damage, roundhouse at 40.25, launcher at 31.0.",
+        "The result is seventeen shots, zero defects, sixteen certified, at 13.6 milliseconds median and 73.5fps.",
+        "The round’s engineering was strong even as the scores fell. The impact agent found that no effect beat past the first ever fired during hitstop — the fan, ring, debris, ember, fluid and dust beats are all scheduled two to six ticks out, and only 14.6 milliseconds of effect time elapsed across an entire eleven-frame freeze. Frames zero through eleven of a launcher were the same photograph. It swept the rate rather than setting it to full, and declined full speed on evidence: an ultra loses four fifths of its burst by frame six.",
+        "It also photographed the shockwave at 2x and found an opaque salmon tube occluding the arena signage, traced to the profile living in both colour and alpha with the alpha widened to a near-1.0 Gaussian. A wide envelope at 0.95 alpha is a ring of paint. And it disproved its own brief’s second claim — the impact flash does light adjacent geometry, +21% on both torsos against −1% on a far-crowd control — after throwing out its own first measurement, which had returned a confident number that was pure temporal-antialiasing noise on crowd twenty metres outside the light’s range.",
+        "The character agent disproved the round’s headline lever using the brief’s own arithmetic: if the armour atlas really put single-pixel detail out of reach by construction, ablating grain from the plate normal could not move the fine band. It moves it between eight and eighteen per cent."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.14.0",
+    "rev": "0.15.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
