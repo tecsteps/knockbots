@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.11.0",
-    "commits": "70",
+    "rev": "0.12.0",
+    "commits": "72",
     "modules": 67,
-    "lines": "49k",
+    "lines": "52k",
     "clips": 91,
     "moves": 191,
     "characters": 10
@@ -15,23 +15,23 @@
     },
     {
       "axis": "Interface craft",
-      "score": 74
+      "score": 78
     },
     {
       "axis": "Lighting & atmosphere",
-      "score": 71
+      "score": 73
     },
     {
       "axis": "Impact & effects",
-      "score": 68
+      "score": 70
     },
     {
       "axis": "Character rendering",
-      "score": 62
+      "score": 65
     },
     {
       "axis": "Animation quality",
-      "score": 59
+      "score": 62
     }
   ],
   "log": [
@@ -570,11 +570,49 @@
           "state": "wait"
         }
       ]
+    },
+    {
+      "phase": "PHASE 17",
+      "when": "Round 11",
+      "rev": "rev 0.12.0",
+      "title": "The strikes were slowing down as they landed",
+      "paras": [
+        "Every axis rose or held: interface to 78, character to 65, animation to 62, lighting to 73, impact to 70, stage steady at 78. The average moved 68.7 to 71.0, the largest gain in five rounds.",
+        "The change was in the instruction, not the work. After a round in which two axes fell because agents were handed a critic's fix list and told to execute it, this round told every agent the brief was a hypothesis to be measured first, and that disproving it was worth more than complying with it. Both animation agents did exactly that, and both briefs were wrong.",
+        "The first drove all twenty-seven strike clips through the real rig and measured the striking limb's speed on the frame the hitbox opens. Twenty-four of twenty-seven were decelerating into contact, at a median of a quarter of the limb's own peak speed; two were literally stationary at the moment of impact. The brief had asked for fast-release curves on the contact key \u2014 but every one of the fifteen already in those files was there, which pins the limb at the contact pose and then snatches it away. The curves existed and were on the wrong side of the blow. Afterwards, three of twenty-seven, with contact speed up from 0.30 to 0.92 of peak and the carry past contact more than doubled. It also measured three further changes, found each made things worse, and shipped none of them.",
+        "The second was told that the idle stance carried the worst ground contact in the game. Measured, idle is the best of nine groups and the fighting stance was already within six millimetres of the floor. One line below where the brief was pointing it found a blocking pose burying a boot a hundred and ninety-one millimetres into the concrete \u2014 a crouch pelvis with a standing leg set over it \u2014 and fixed that instead."
+      ],
+      "tags": [
+        {
+          "label": "avg 71.0",
+          "state": "done"
+        },
+        {
+          "label": "interface 78",
+          "state": "done"
+        },
+        {
+          "label": "stage 78",
+          "state": "done"
+        },
+        {
+          "label": "contact speed 0.30\u21920.92",
+          "state": "done"
+        },
+        {
+          "label": "both briefs disproved",
+          "state": "done"
+        },
+        {
+          "label": "4 plateau calls",
+          "state": "wait"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.11.0",
+    "rev": "0.12.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
