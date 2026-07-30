@@ -314,6 +314,11 @@ export class FightCamera {
     /** Focus report consumed by RenderPipeline. */
     this.focus = new THREE.Vector3(0, 1.05, 0);
     this.focusRadius = 3.2;
+    /** Extra depth-of-field slack a framing has asked for, metres. Only the
+     *  roster lineup sets it; every other framing leaves it at zero and keeps
+     *  the distance-derived ranges. Cleared on every `cinematic()` so a mode
+     *  cannot inherit the previous mode's slack. */
+    this._focusPad = 0;
     this._focusPayload = {
       center: new THREE.Vector3(), radius: 3.2, distance: 6.4,
       nearRange: 2.4, farRange: 9.5,
@@ -405,6 +410,7 @@ export class FightCamera {
     this.modeOpts = opts || {};
     this.modeTicks = 0;
     this._orbit = 0;
+    this._focusPad = 0;
 
     // Cinematic framings are cuts. Moves are moves.
     //
@@ -726,26 +732,76 @@ export class FightCamera {
   }
 
   /**
-   * Roster lineup: a level, symmetrical shot of a row of fighters standing off
-   * to one side of the stage. `target` is a bare world point here, not a
+   * Roster lineup: the cast, staged. `target` is a bare world point here, not a
    * fighter, which is why every framing resolves targets through one helper.
+   *
+   * The distance is SOLVED from the row's own half-width against the live
+   * camera aspect, not passed in. It used to be passed in, as
+   * `max(9, n * spacing * 0.95)`, and that number is why the shot failed its
+   * critique: it is a guess that happens to fit ten fighters in one rank, and
+   * one rank of ten at 16:9 has a hard ceiling. Measured on the shipped shot,
+   * every fighter came out 200-210 px of 1080 — 18.5 to 19.5 percent of frame
+   * height — and no amount of camera work fixes that while the row is 16 m
+   * wide, because the lens has to hold 16 m of width and the frame is only
+   * 9/16 as tall as it is wide. The staging had to change (see
+   * `TestHarness#rosterLineup`); this end just has to fit whatever it is given
+   * and stop inventing a distance.
+   *
+   * `maxDist` is the other half of it. `arena.structure.foreground` — the near
+   * gantry and its guard rails — occupies z 6.0 to 10.5 across the full width
+   * of the pit, so any camera standing further back than z = 6 shoots the cast
+   * THROUGH it. That is the rope-and-rail that crossed the old frame. The
+   * caller passes the clearance it measured and the solve is capped by it;
+   * if the row cannot fit inside that cap the lens widens rather than the
+   * camera retreating, because a wide lens costs edge distortion and retreating
+   * costs the whole shot.
    */
   #framingLineup(outPos, outLook) {
     const opts = this.modeOpts;
     const floor = this.floorY;
     if (!this.#targetPosition(opts.target, _focus)) _focus.set(0, floor + 1.0, 0);
 
-    const dist = THREE.MathUtils.clamp(opts.dist ?? 10, 3, 30);
-    const fov = opts.fov ?? 34;
-    this.focusRadius = dist * 0.55;
-
+    let fov = opts.fov ?? 34;
     const yaw = opts.yaw ?? 0;
+    const height = opts.height ?? 1.9;
+    let dist;
+
+    if (opts.halfWidth > 0) {
+      const aspect = this.camera?.aspect || 16 / 9;
+      // Horizontal half-angle of the frame, and the horizontal distance that
+      // puts `halfWidth` exactly on the frame edge. The rise between the camera
+      // and the look point eats vertical frame but not horizontal, so the
+      // width solve is a plain XZ-plane solve.
+      const solve = (f) => opts.halfWidth / (Math.tan(f * DEG * 0.5) * aspect);
+      dist = solve(fov);
+      const cap = opts.maxDist ?? Infinity;
+      if (dist > cap) {
+        // Widen the lens until the row fits inside the clearance, up to a limit
+        // where a hard-surface subject starts to shear at the frame edge.
+        const need = Math.atan(opts.halfWidth / (cap * aspect)) / DEG * 2;
+        fov = Math.min(Math.max(fov, need), 62);
+        dist = Math.min(solve(fov), cap);
+      }
+      dist = THREE.MathUtils.clamp(dist, 3, 30);
+    } else {
+      dist = THREE.MathUtils.clamp(opts.dist ?? 10, 3, 30);
+    }
+
+    // The depth of field has to hold the whole GROUP, front rank to back rank,
+    // and `#publishFocus` derives its ranges from the focus distance alone —
+    // which on a shot this shallow is not enough on its own. `focusDepth` is the
+    // caller's own measurement of how deep the staging is; it is published as a
+    // floor under the near and far ranges so no rank can fall out of focus.
+    this.focusRadius = Math.max(opts.halfWidth ?? dist * 0.55, dist * 0.4);
+    this._focusPad = opts.focusDepth ?? 0;
+
     outPos.set(
       _focus.x + Math.sin(yaw) * dist,
-      floor + (opts.height ?? 1.9),
+      floor + height,
       _focus.z + Math.cos(yaw) * dist,
     );
     outLook.copy(_focus);
+    this._fitDistance = dist;
     return fov;
   }
 
@@ -1193,6 +1249,16 @@ export class FightCamera {
     // the far walls and ceiling rig are allowed to soften.
     p.nearRange = THREE.MathUtils.clamp(p.distance * 0.45, 1.8, 5.5);
     p.farRange = THREE.MathUtils.clamp(p.distance * 2.4, 9, 45);
+    // A framing that knows how deep its own subject is can raise that floor.
+    // The ranges above scale with DISTANCE, which is the right default for a
+    // pair framing where the subject is thin and far — but the roster lineup is
+    // the opposite shape, a group several metres deep photographed from six,
+    // and the derived near range came out below the depth of its own back rank.
+    // `_focusPad` is the staging's measured half-depth plus its margin.
+    if (this._focusPad > 0) {
+      p.nearRange = Math.max(p.nearRange, this._focusPad);
+      p.farRange = Math.max(p.farRange, this._focusPad);
+    }
     bus.emit('cameraFocus', p);
   }
 

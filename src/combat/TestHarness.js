@@ -39,6 +39,10 @@ const TAG_ALIASES = {
  * @param {Object} game the Game instance (window.KB)
  * @returns {Object} the harness object to expose as `game.testHarness`
  */
+/** Scratch for the roster lineup's facing solve. */
+const _lq = new THREE.Quaternion();
+const _lv = new THREE.Vector3();
+
 export function makeTestHarness(game) {
   /** @type {Array<{at:number, fn:Function}>} */
   const scheduled = [];
@@ -246,10 +250,75 @@ export function makeTestHarness(game) {
       hideLineup();
       for (const f of fighters()) f.group.visible = false;
 
-      const spacing = opts.spacing ?? 1.65;
+      // TWO RANKS, and the reason is arithmetic rather than taste.
+      //
+      // The cast used to stand in one row of ten at 1.65 m spacing — 14.9 m of
+      // fighters, 16.2 m including bodies. At 16:9 a frame that holds 16.2 m of
+      // WIDTH is 9.1 m tall, so a 1.85 m machine can only ever be a fifth of it:
+      // measured on the shipped shot, every fighter came out 200-210 px of 1080,
+      // 18.5 to 19.5 percent of frame height. A critic said you cannot assess
+      // character rendering from it and was right — but no camera move fixes it,
+      // because the number is set by the row, not the lens.
+      //
+      // The stage puts a second, harder cap on top of that. `arena.structure.
+      // foreground` — the near gantry and its guard rails — spans z 6.0 to 10.5
+      // across the whole pit, measured from its world bounds. Every camera
+      // standing further back than z = 6 photographs the cast through it, which
+      // is the rail that crossed the old frame and the reason one fighter was
+      // reported as occluded outright. So the camera has under 6 m to work in,
+      // and a 16 m row cannot be shot from 6 m at any sane lens.
+      //
+      // Splitting the cast into a front and a back rank halves the width, which
+      // buys back both: the row fits inside the foreground clearance, and the
+      // fighters roughly double in the frame. Odd/even assignment puts
+      // neighbouring roster entries in different ranks, so the back rank sits in
+      // the front rank's gaps and nobody is hidden.
+      // 1.35 m within a rank. The cast's bounding-box widths run 0.67 to 1.29 m,
+      // and the two widest (Anvil and Bastion) are odd/even neighbours so they
+      // land in different ranks; the widest pair that ends up side by side is
+      // Anvil and Ronin at 1.29 and 1.20, which need 1.25 m of pitch. 1.35 is
+      // that plus a hand's clearance.
+      const spacing = opts.spacing ?? 1.35;
+      /** Where the lens will end up (see the `cinematic` call below). Known
+       *  here because the fan angle is measured against it. */
+      const camZ = opts.maxDist ?? 5.85;
+      /** Front rank forward of the mark, back rank behind it. Both are pushed
+       *  back far enough that the camera solve below still clears the gantry. */
+      const rankZ = [opts.frontZ ?? 0.35, opts.backZ ?? -2.05];
       const poses = ['i.stanceSet', 'idle.fight', 'v.pose', 'i.pointTaunt', 'idle.taunt', 'v.saluteCharge'];
       lineup = [];
       const n = ROSTER.length;
+
+      // Lay the ranks out in PROJECTED space, then convert to world.
+      //
+      // Spacing the two ranks in world metres and staggering the back one by
+      // half a pitch is the obvious construction and it does not work: the back
+      // rank is 2.4 m further away, so perspective drags it toward the vanishing
+      // point and it lands almost exactly behind its front-rank neighbour rather
+      // than in the gap. Measured on the world-space version at 1920 px, the
+      // outer pairs projected to screen x 535/580 and 1503/1552 — 45 px apart on
+      // a 1920 px frame, on machines 330 px wide. The flanking machines were
+      // hidden by the very neighbours the stagger existed to avoid.
+      //
+      // So the positions below are where each machine should appear ACROSS THE
+      // FRAME, measured at the front rank's depth, and the back rank's world x
+      // is that multiplied by its own depth ratio. Every machine then lands on
+      // its intended screen position regardless of which rank it is in, and the
+      // stagger does what it says.
+      const perRank = [Math.ceil(n / 2), Math.floor(n / 2)];
+      const stagger = perRank[0] === perRank[1] ? spacing * 0.5 : 0;
+      /** How much wider the back rank has to be laid out to project as though
+       *  it stood at the front rank's depth. */
+      const depthRatio = (camZ - rankZ[1]) / Math.max(camZ - rankZ[0], 0.5);
+      /** Screen-equivalent x, i.e. the position at the front rank's depth. */
+      const xs = [];
+      for (let i = 0; i < n; i++) {
+        const r = i % 2;
+        const k = (i - r) / 2;
+        xs.push((k - (perRank[r] - 1) / 2) * spacing + (r === 1 ? stagger : 0));
+      }
+      const midX = (Math.min(...xs) + Math.max(...xs)) * 0.5;
+
       for (let i = 0; i < n; i++) {
         const def = ROSTER[i];
         const bundle = createSkeleton(def.proportions);
@@ -258,8 +327,31 @@ export function makeTestHarness(game) {
         group.name = `lineup_${def.id}`;
         if (robot?.group) group.add(robot.group);
         if (!bundle.byName.root.parent) group.add(bundle.byName.root);
-        group.position.set((i - (n - 1) / 2) * spacing, GROUND_Y, 0);
-        group.rotation.y = Math.PI + (i - (n - 1) / 2) * 0.06;
+        const rank = i % 2;
+        // `x` is the screen-equivalent position; `wx` is where the machine
+        // actually stands to project there.
+        const x = xs[i] - midX;
+        const wx = rank === 1 ? x * depthRatio : x;
+        group.position.set(wx, GROUND_Y, rankZ[rank]);
+        // FACING THE LENS. This was `Math.PI + ...` and the half-turn is wrong:
+        // a built robot's front is +Z (`FRONT = 1` in RobotBuilder, and the
+        // roster portraits confirm it empirically — a camera on +Z is what
+        // photographs visors and faces). The lineup camera also stands on +Z, so
+        // adding pi turned the entire cast to face away from it. Measured on the
+        // shipped staging as the dot of each chest bone's own forward axis with
+        // the direction to the camera: vulkan -0.73, kestrel -0.85, anvil -0.73,
+        // seraph -0.94, ronin -0.90, mantis -0.89, nyx -0.99, bastion -0.99,
+        // axiom -0.55, volta -0.95. Ten out of ten negative — every character
+        // shot from behind, in the frame the character axis is scored on. At
+        // 200 px a figure that is nobody could tell; it is obvious at 400.
+        //
+        // Fanned by a fraction of the machine's OWN off-axis angle to the lens,
+        // so an outer machine turns slightly in and shows its front rather than
+        // its flank. A flat `x * k` was tried and is wrong twice over: it has no
+        // idea how far away the camera is, and its sign only looked right while
+        // the half-turn above was inverting it.
+        const fanTo = (px, pz) => Math.atan2(-px, camZ - pz) * 0.42;
+        group.rotation.y = fanTo(wx, rankZ[rank]);
         game.scene.add(group);
 
         const animator = new Animator(bundle, CLIPS);
@@ -278,13 +370,57 @@ export function makeTestHarness(game) {
         for (let t = 0; t < warm; t++) animator.simulate(t);
         animator.applyTo(bundle.bones, 1);
         group.updateMatrixWorld(true);
+
+        // Correct the residual yaw the POSE itself introduces.
+        //
+        // Turning the group is not enough on its own, because several of these
+        // clips rotate the torso as part of the pose — a taunt turns a shoulder
+        // toward the opponent. Measured against the camera after the half-turn
+        // above was fixed, the chest-forward dot still ran from 0.99 down to
+        // 0.68, which is 47 degrees off axis on Vulkan and 39 on Kestrel: two
+        // machines quietly presented three-quarters-away in a cast shot.
+        // So the group is counter-rotated by whatever the posed CHEST actually
+        // came out at, which lands every machine on its intended fan angle no
+        // matter what its clip did. Yaw only — a pose is allowed to lean and
+        // twist, it is just not allowed to choose which way the character
+        // faces the camera.
+        const chestBone = bundle.byName.chest ?? bundle.byName.spine02;
+        if (chestBone) {
+          chestBone.getWorldQuaternion(_lq);
+          _lv.set(0, 0, 1).applyQuaternion(_lq);
+          group.rotation.y += fanTo(wx, rankZ[rank]) - Math.atan2(_lv.x, _lv.z);
+          group.updateMatrixWorld(true);
+        }
         lineup.push({ group, robot, animator, bundle, offset: i * 7 });
       }
 
+      // Hand the camera what was actually staged and let it solve, rather than
+      // passing a distance guessed from the roster count.
+      //
+      // `halfWidth` is measured in the same screen-equivalent space the ranks
+      // were laid out in, so it already covers both, plus a body half-width so
+      // the outer machines are not clipped by the frame edge — both edge
+      // fighters were cropped in the shot this replaces. `maxDist` is the clearance in front
+      // of `arena.structure.foreground`, so the solve can never put the lens
+      // behind the gantry. `focusDepth` is the rank separation plus a margin,
+      // which is what stops the back rank falling out of the depth of field on
+      // a shot taken from six metres.
+      // 0.9 m of body pad, checked rather than guessed: with 0.75 the widest
+      // machine's outermost BONE projected to x = 50 of 1920, and armour plates
+      // hang past a bone. 0.9 opens the frame ~4% and puts that edge at 85 px.
+      const halfWidth = (Math.max(...xs) - Math.min(...xs)) * 0.5 + 0.9;
+      const focusDepth = (rankZ[0] - rankZ[1]) + 1.4;
+      // The camera looks slightly DOWN on the group. At eye level the back rank
+      // hides behind the front one; lifting the lens above the heads and tilting
+      // in is the same thing a photographer does with a two-row group, and it is
+      // what makes the second rank read.
       game.fightCamera?.cinematic?.('lineup', {
-        dist: Math.max(9, n * spacing * 0.95),
-        height: 1.9,
-        target: new THREE.Vector3(0, 1.0, 0),
+        halfWidth,
+        maxDist: (opts.maxDist ?? 5.85) - rankZ[0],
+        focusDepth,
+        fov: opts.fov ?? 40,
+        height: opts.height ?? 2.62,
+        target: new THREE.Vector3(0, GROUND_Y + 1.3, rankZ[0]),
       });
       return n;
     },

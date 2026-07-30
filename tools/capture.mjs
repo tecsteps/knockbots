@@ -297,7 +297,22 @@ const SHOTS = [
         const level = Math.abs(pl.y - ph.y) < 0.28 && Math.abs(pr.y - ph.y) < 0.28;
         if (wide && level) tpose++;
       });
-      return { fighters: n, restPose: tpose, ok: n > 0 && tpose === 0 };
+      // How much of the frame the cast actually occupies. A critic measured the
+      // old lineup at ~19% of frame height and concluded "you cannot assess
+      // character rendering, or even silhouette variety, from it" -- so the
+      // shot now has to prove the cast is big enough to judge.
+      let tallest = 0;
+      KB.scene.traverse((o) => {
+        if (!o.name || !o.name.startsWith('lineup_')) return;
+        const b = new THREE.Box3().setFromObject(o);
+        const c = b.getCenter(new THREE.Vector3());
+        const top = new THREE.Vector3(c.x, b.max.y, c.z).project(KB.camera);
+        const bot = new THREE.Vector3(c.x, b.min.y, c.z).project(KB.camera);
+        tallest = Math.max(tallest, Math.abs(top.y - bot.y) / 2);
+      });
+      const heightFrac = +tallest.toFixed(3);
+      return { fighters: n, restPose: tpose, castHeightFrac: heightFrac,
+               ok: n > 0 && tpose === 0 && heightFrac > 0.35 };
     })()`,
     settle: 1600,
   },
