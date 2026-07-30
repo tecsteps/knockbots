@@ -29,6 +29,7 @@ import {
   hydraulicRam, crowdFigure, CROWD_ARCHETYPES, insetPanel, boltRow, catenary, spanX,
   portalCrane, chimney,
 } from './GeoKit.js';
+import { BANNER_ROWS } from './StageMaterials.js';
 
 const PIT_BACK = -8.6;      // z of the pit's rear kerb
 const PIT_FRONT = 13.6;     // z of the front service edge
@@ -63,8 +64,28 @@ const CROWD_PALETTE = [
 /** Trousers: the coat colour dropped toward a common dark. */
 const CROWD_LOWER = 0x0a0c11;
 
-/** Skin, held out of the clothing tint by the figure's own vertex mask. */
-const CROWD_SKIN = [0x8f7259, 0x77563c, 0x573925, 0x3a2419, 0xa08265, 0x644731];
+/**
+ * Skin, held out of the clothing tint by the figure's own vertex mask.
+ *
+ * Deliberately dim and low in chroma. An earlier pass ran these two stops
+ * brighter and the result was forty orange ovals floating in a dark band — the
+ * faces became the highest-contrast feature anywhere in the frame, which is
+ * both wrong for a crowd standing twelve metres back behind a fence in an
+ * unlit stand, and the exact reason the crowd read as mannequins. A face wants
+ * to be *findable*, about a stop over the coat it sits on, not the brightest
+ * thing on screen.
+ */
+const CROWD_SKIN = [0x7a6250, 0x66493a, 0x4b3326, 0x33221a, 0x8b7260, 0x573e2e];
+
+/**
+ * Hair. Three quarters of it is within a hair's breadth of black, because that
+ * is what hair is under a cyan practical; the light browns and the one grey are
+ * there so that a rank of heads is not a rank of identical dark caps.
+ */
+const CROWD_HAIR = [
+  0x0b0908, 0x100c0a, 0x0e0b0c, 0x1a1210, 0x241a13, 0x2e2119,
+  0x3a2c1e, 0x141414, 0x4a4640, 0x18100c, 0x0d0c10, 0x2a1c14,
+];
 
 /** Stand-in until each city layer's own shader is built a few lines later. */
 const PLACEHOLDER = new THREE.MeshBasicMaterial();
@@ -126,12 +147,31 @@ export class StageStructure {
   // Near field
   // -------------------------------------------------------------------------
 
-  /** The pit's rear kerb, its fence, and the terrace the crowd stands on. */
+  /**
+   * The pit's rear kerb, its fence, and the terrace the crowd stands on.
+   *
+   * The kerb runs the whole width of frame directly behind the fighters, which
+   * makes it the surface the eye spends the most time on after the floor and
+   * the fighters themselves. Left as the bare box it started as, it was
+   * twenty-four metres of unbroken grey — the mid-ground reading as a smooth
+   * extrusion, which is the plainest version of the complaint against this
+   * stage. So it is fabricated rather than modelled: a bolted base angle, six
+   * dressed panels with cover strips over the movement joints between them, a
+   * conduit run on saddle clamps feeding two junction boxes, and a base plate
+   * with gussets and bolts under every fence post. None of it is decoration —
+   * it is the list of things that would actually be on a barrier like this, and
+   * it costs nothing because every piece lands in a bin that was already being
+   * merged.
+   */
   #backEdge() {
     const W = 24;
     const b = this.bins;
+    const face = PIT_BACK;  // camera-side face of the kerb
     b.concrete.push(place(bevelBox(W, 1.15, 0.6, 0.03), { pos: [0, 0.575, PIT_BACK - 0.3] }));
     b.steel.push(place(bevelBox(W, 0.1, 0.72, 0.02), { pos: [0, 1.2, PIT_BACK - 0.3] }));
+
+    this.#barrierPanels(W, face);
+    this.#barrierFabrication(W, face);
 
     // Spectator terrace. Four steps rather than one shelf, because a crowd on
     // a single level is a row: every figure sits at one height, occludes its
@@ -168,6 +208,126 @@ export class StageStructure {
     b.steel.push(place(new THREE.CylinderGeometry(0.055, 0.055, W, 8), {
       pos: [0, 1.25 + fenceH, PIT_BACK - 0.66], rot: [0, 0, Math.PI / 2],
     }));
+  }
+
+  /**
+   * The event dressing on the barrier: six printed panels, seams covered.
+   *
+   * The panels are the reason the barrier reads as a built thing rather than an
+   * extrusion. Six of them across twenty-four metres puts a vertical break every
+   * four metres — close enough that the eye never travels more than a fighter's
+   * width along an unbroken edge — and each one carries a different band of the
+   * banner atlas, so the run does not repeat across frame. They are cut at 8:1
+   * because that is the aspect each band of the atlas is authored at; anything
+   * else stretches the type.
+   *
+   * The v remap is the whole trick: one texture, four legends, and a panel picks
+   * its band by squeezing its own v into that band's slice. Four panels get a
+   * band each and the last two repeat the two that read least — the dark ones —
+   * placed at the outer ends where the fight camera rarely dwells.
+   */
+  #barrierPanels(W, face) {
+    const b = this.bins;
+    const COUNT = 6;
+    const pitch = W / COUNT;          // 4m bay
+    const gap = 0.16;                 // movement joint between panels
+    const pw = pitch - gap;
+    const ph = pw / 8;                // the aspect the atlas bands are drawn at
+    const y = 0.66;                   // clear of the base angle, under the cap
+    // Band per bay. The two mid-frame bays take the coloured legends, which is
+    // where they are actually read from; the ends take the dark ones so the
+    // outer edge of frame does not out-contrast the fighters.
+    const band = [2, 0, 1, 3, 0, 2];
+
+    for (let i = 0; i < COUNT; i++) {
+      const x = -W / 2 + pitch * (i + 0.5);
+      const geo = new THREE.PlaneGeometry(pw, ph);
+      const uv = geo.attributes.uv;
+      const r = band[i];
+      for (let k = 0; k < uv.count; k++) {
+        // Inset a hair inside the band so a mip never bleeds the neighbour's
+        // ground colour across the seam.
+        uv.setXY(k, uv.getX(k), (r + 0.02 + uv.getY(k) * 0.96) / BANNER_ROWS);
+      }
+      b.banner.push(place(geo, { pos: [x, y, face + 0.012] }));
+    }
+
+    // Cover strips over every joint, and returns at both ends. A movement joint
+    // on a real barrier is never left open — it is capped, and the cap is the
+    // line that makes the panel read as a panel rather than a printed stripe.
+    for (let i = 0; i <= COUNT; i++) {
+      const x = -W / 2 + pitch * i;
+      b.steel.push(place(bevelBox(gap + 0.06, ph + 0.1, 0.05, 0.012), {
+        pos: [x, y, face + 0.02],
+      }));
+      b.steel.push(place(boltRow(ph - 0.08, 3, 0.018, 0.012), {
+        pos: [x, y, face + 0.045], rot: [0, 0, Math.PI / 2],
+      }));
+    }
+  }
+
+  /**
+   * The ironwork the barrier is actually made of: base angle, conduit run, and
+   * a proper footing under every fence post.
+   *
+   * None of this is decoration. It is the list of parts that would be on a
+   * barrier like this, and each one earns its place by breaking a silhouette
+   * the eye would otherwise read as a single extruded edge: the base angle puts
+   * a shadow line along the floor join, the conduit puts a horizontal above the
+   * panels that is *not* parallel to the cap, and the post footings turn
+   * thirteen cylinders that appear to grow out of the concrete into thirteen
+   * things bolted onto it.
+   */
+  #barrierFabrication(W, face) {
+    const b = this.bins;
+
+    // Bolted base angle along the floor join: a vertical leg on the face and a
+    // horizontal leg out onto the pit floor, bolted every 1.5m.
+    b.steel.push(place(bevelBox(W, 0.16, 0.03, 0.01), { pos: [0, 0.09, face + 0.028] }));
+    b.steel.push(place(bevelBox(W, 0.03, 0.14, 0.01), { pos: [0, 0.017, face + 0.085] }));
+    b.steel.push(place(boltRow(W - 0.6, 17, 0.026, 0.016), { pos: [0, 0.1, face + 0.045] }));
+
+    // Conduit on saddle clamps, feeding two junction boxes. It sits above the
+    // panels and below the steel cap, which is the one horizontal band left
+    // undressed, and it is deliberately off-centre in that band so it does not
+    // read as a second cap line.
+    const cz = face + 0.075;
+    const cy = 1.01;
+    b.steel.push(place(new THREE.CylinderGeometry(0.035, 0.035, W - 0.4, 8), {
+      pos: [0, cy, cz], rot: [0, 0, Math.PI / 2],
+    }));
+    for (let x = -W / 2 + 0.9; x <= W / 2 - 0.9; x += 1.5) {
+      // Saddle clamp: a strap over the conduit into a small pad on the panel.
+      b.steel.push(place(bevelBox(0.09, 0.13, 0.02, 0.008), { pos: [x, cy + 0.01, cz - 0.045] }));
+      b.steel.push(place(new THREE.TorusGeometry(0.045, 0.011, 5, 10), { pos: [x, cy, cz] }));
+    }
+    for (const jx of [-5.2, 6.4]) {
+      b.steel.push(place(bevelBox(0.3, 0.4, 0.16, 0.015), { pos: [jx, cy - 0.06, cz - 0.02] }));
+      b.steel.push(place(boltRow(0.2, 2, 0.02, 0.012), { pos: [jx, cy - 0.06, cz + 0.062] }));
+      // Drop from the box down behind the panel line.
+      b.steel.push(place(new THREE.CylinderGeometry(0.022, 0.022, 0.34, 6), {
+        pos: [jx + 0.11, cy - 0.42, cz - 0.03],
+      }));
+    }
+
+    // Footings under the fence posts. Same x pitch the posts are built on, so a
+    // plate always lands under a post rather than near one.
+    const capTop = 1.25;
+    const pz = PIT_BACK - 0.66;
+    for (let i = -6; i <= 6; i++) {
+      const x = i * 2;
+      b.steel.push(place(bevelBox(0.26, 0.025, 0.26, 0.008), { pos: [x, capTop + 0.013, pz] }));
+      b.steel.push(place(boltRow(0.18, 2, 0.022, 0.014), {
+        pos: [x, capTop + 0.026, pz], rot: [-Math.PI / 2, 0, 0],
+      }));
+      // Two gussets, on the axis the fence is loaded along — a crowd leans on
+      // it, so they stiffen front-to-back, not side-to-side.
+      for (const dz of [-0.09, 0.09]) {
+        b.steel.push(place(bevelBox(0.016, 0.17, 0.1, 0.005), {
+          pos: [x, capTop + 0.11, pz + dz],
+        }));
+      }
+    }
   }
 
   /** Camera-side service edge: a low step, a rail, and a cable tray. */
@@ -966,27 +1126,37 @@ export class StageStructure {
   /**
    * Onlookers on the terrace, the catwalks and the containers.
    *
-   * Three things kill a crowd, and all three have to be fixed at once or the
-   * remaining two still read as wallpaper:
+   * Five things kill a crowd, and they have to be fixed together or the
+   * remaining ones still read as wallpaper:
    *
    *   1. **One silhouette.** So the figure comes in six postures, each built at
    *      two proportion seeds — twelve outlines, dealt across the roster and
    *      then stretched, turned and leant per instance.
    *   2. **One value.** Clothing is dealt from a palette of real garment
-   *      colours and skin is masked out of it in the geometry, so heads and
-   *      hands sit a stop above the coats. This is the whole difference between
-   *      a crowd and a row of bollards, and it is why the tint is a custom
-   *      attribute rather than `instanceColor`: three only folds `instanceColor`
-   *      into the fragment when `vertexColors` is on, which would demand a real
-   *      colour attribute on every figure and still leave no way to hold skin
-   *      out of the clothing tint.
-   *   3. **One depth.** They stand on four terrace treads, so the ranks recede
-   *      and overlap instead of lining up on a shelf.
+   *      colours; skin and hair are masked out of it in the geometry, so a head
+   *      is a dark cap over a face over a collar rather than one bright oval.
+   *      This is the whole difference between a crowd and a row of bollards,
+   *      and it is why the tint is a custom attribute rather than
+   *      `instanceColor`: three only folds `instanceColor` into the fragment
+   *      when `vertexColors` is on, which would demand a real colour attribute
+   *      on every figure and still leave no way to hold skin out of it.
+   *   3. **One depth.** They stand on four terrace treads and the back of the
+   *      stand fades on view depth, so the ranks recede and overlap instead of
+   *      lining up on one shelf at one brightness.
+   *   4. **Too few of them.** Gaps between figures show the empty tread behind,
+   *      and an audience you can see through is a queue. The terrace is packed
+   *      to the point where the back ranks are mostly occluded heads.
+   *   5. **No lights in it.** Every modern crowd is lit from inside by the
+   *      phones held up in it, and those few dozen bright points are the single
+   *      most legible cue that the mass is people. They are unlit instanced
+   *      quads — the one way to put light in a crowd that costs nothing, which
+   *      matters because this renderer is light-shader-bound and a real lamp
+   *      here would cost more than the whole crowd does.
    *
-   * Twelve draw calls, no shadow pass, and no matching pair anywhere in it.
+   * Thirteen draw calls, no shadow pass, and no matching pair anywhere in it.
    */
   #crowd(quality) {
-    const count = quality === 'low' ? 22 : quality === 'medium' ? 44 : 78;
+    const count = quality === 'low' ? 36 : quality === 'medium' ? 84 : 168;
     const seeds = quality === 'low' ? 1 : 2;
     const mat = this.materials.crowd.clone();
     mat.name = 'arena.crowdSway';
@@ -1005,13 +1175,15 @@ export class StageStructure {
         .replace('#include <common>', /* glsl */ `
           #include <common>
           attribute float aPhase;
-          attribute float aSkin;
+          attribute float aTone;
           attribute float aLean;
           attribute vec3 aTint;
           attribute vec3 aFlesh;
+          attribute vec3 aMane;
           uniform float uTime;
           uniform vec3 uLower;
           varying vec3 vTint;
+          varying float vSink;
         `)
         .replace('#include <begin_vertex>', /* glsl */ `
           #include <begin_vertex>
@@ -1032,12 +1204,31 @@ export class StageStructure {
           // one value head to foot is a jumpsuit, and forty jumpsuits is a
           // chain gang; the waist break is what makes them people in clothes.
           float garment = smoothstep( 0.74, 0.94, position.y );
-          vTint = mix( mix( uLower, aTint, garment * 0.55 + 0.12 ), aFlesh, aSkin );
+          vec3 clothed = mix( uLower, aTint, garment * 0.55 + 0.12 );
+          // aTone is 0 clothing, 1 skin, 2 hair — one attribute, two weights,
+          // no branch.
+          float wSkin = clamp( 1.0 - abs( aTone - 1.0 ), 0.0, 1.0 );
+          float wHair = clamp( 1.0 - abs( aTone - 2.0 ), 0.0, 1.0 );
+          vTint = mix( mix( clothed, aFlesh, wSkin ), aMane, wHair );
+        `)
+        .replace('#include <project_vertex>', /* glsl */ `
+          #include <project_vertex>
+          // Contrast falloff across the stand itself. The scene fog is solved
+          // for a twelve-metre room and moves the value almost nothing over the
+          // four metres from the fence to the back tread, so without this the
+          // rear rank is exactly as bright as the front one and four ranks
+          // arrive as one card.
+          vSink = 1.0 - exp( -max( 0.0, -mvPosition.z - 12.0 ) * 0.1 );
         `);
       shader.uniforms.uLower = uLower;
+      shader.uniforms.uSink = this.midgroundHaze;
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vTint;')
-        .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vTint;');
+        .replace('#include <common>', '#include <common>\nvarying vec3 vTint;\nvarying float vSink;\nuniform vec3 uSink;')
+        .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vTint;')
+        .replace('#include <opaque_fragment>', /* glsl */ `
+          #include <opaque_fragment>
+          gl_FragColor.rgb = mix( gl_FragColor.rgb, uSink, vSink * 0.62 );
+        `);
     };
     mat.customProgramCacheKey = () => 'kb-crowd';
 
@@ -1049,18 +1240,24 @@ export class StageStructure {
     const slots = [];
     for (let i = 0; i < count; i++) {
       const r = rng.next();
-      if (r < 0.72) {
+      if (r < 0.84) {
         // On the terrace. The back ranks are fuller than the front because the
-        // people who get to the barrier early are the ones already there.
-        const rank = Math.min(TERRACE_RANKS - 1, rng.int(TERRACE_RANKS) + (rng.next() < 0.3 ? 1 : 0));
+        // people who get to the barrier early are the ones already there, and
+        // the rearmost rank stands off the back of the top tread rather than on
+        // it, which puts a fifth band of heads behind the four.
+        const rank = Math.min(TERRACE_RANKS, rng.int(TERRACE_RANKS + 1) + (rng.next() < 0.34 ? 1 : 0));
+        const tread = Math.min(TERRACE_RANKS - 1, rank);
         slots.push({
-          x: rng.range(-11.5, 11.5),
-          y: TERRACE_Y0 + rank * TERRACE_RISE,
-          z: TERRACE_Z0 - rank * TERRACE_RUN - rng.range(0.3, 0.75),
-          ry: Math.PI + rng.range(-0.4, 0.4),
+          x: rng.range(-11.9, 11.9),
+          y: TERRACE_Y0 + tread * TERRACE_RISE,
+          // Jitter deep enough that neighbours in a rank sit at visibly
+          // different depths: a rank pegged to one z line is a chorus row.
+          z: TERRACE_Z0 - rank * TERRACE_RUN - rng.range(0.25, 0.8),
+          ry: Math.PI + rng.range(-0.5, 0.5),
           k: pick(rank === 0),
+          phone: rank <= 2 && rng.next() < 0.22,
         });
-      } else if (r < 0.92) {
+      } else if (r < 0.95) {
         // On the side catwalks, leaning over the rail.
         const side = rng.next() < 0.5 ? -1 : 1;
         slots.push({
@@ -1069,6 +1266,7 @@ export class StageStructure {
           z: rng.range(-9, 13),
           ry: (side > 0 ? -Math.PI / 2 : Math.PI / 2) + rng.range(-0.3, 0.3),
           k: pick(true),
+          phone: rng.next() < 0.3,
         });
       } else {
         // A few up on the containers.
@@ -1078,6 +1276,7 @@ export class StageStructure {
           z: rng.range(-14, -6),
           ry: Math.PI + rng.range(-0.6, 0.6),
           k: pick(false),
+          phone: false,
         });
       }
     }
@@ -1100,6 +1299,7 @@ export class StageStructure {
       const leans = new Float32Array(mine.length);
       const tints = new Float32Array(mine.length * 3);
       const flesh = new Float32Array(mine.length * 3);
+      const manes = new Float32Array(mine.length * 3);
       mine.forEach((s, i) => {
         _e.set(0, s.ry, 0);
         _q.setFromEuler(_e);
@@ -1108,6 +1308,7 @@ export class StageStructure {
         scale.set(rng.range(0.9, 1.14), rng.range(0.93, 1.11), rng.range(0.9, 1.14));
         _m.compose(_p.set(s.x, s.y, s.z), _q, scale);
         mesh.setMatrixAt(i, _m);
+        s.top = s.y + 1.62 * scale.y;
         // Garment colours, not a grey ramp. They are dark — this is a night
         // hangar — but they hold hue, so the cyan practicals behind the fence
         // separate a blue coat from a rust one instead of flattening both.
@@ -1115,8 +1316,11 @@ export class StageStructure {
           .multiplyScalar(rng.range(0.72, 1.28));
         _c.toArray(tints, i * 3);
         _c.setHex(CROWD_SKIN[rng.int(CROWD_SKIN.length)], THREE.SRGBColorSpace)
-          .multiplyScalar(rng.range(0.62, 1.06));
+          .multiplyScalar(rng.range(0.7, 1.14));
         _c.toArray(flesh, i * 3);
+        _c.setHex(CROWD_HAIR[rng.int(CROWD_HAIR.length)], THREE.SRGBColorSpace)
+          .multiplyScalar(rng.range(0.8, 1.25));
+        _c.toArray(manes, i * 3);
         phases[i] = rng.next();
         leans[i] = rng.range(-0.11, 0.11);
       });
@@ -1125,10 +1329,97 @@ export class StageStructure {
       geo.setAttribute('aLean', new THREE.InstancedBufferAttribute(leans, 1));
       geo.setAttribute('aTint', new THREE.InstancedBufferAttribute(tints, 3));
       geo.setAttribute('aFlesh', new THREE.InstancedBufferAttribute(flesh, 3));
+      geo.setAttribute('aMane', new THREE.InstancedBufferAttribute(manes, 3));
       this.crowdMeshes.push(mesh);
       this.group.add(mesh);
     }
     this.crowdMaterial = mat;
+    this.#crowdPhones(slots.filter((s) => s.phone));
+  }
+
+  /**
+   * The phones held up in the crowd: one instanced quad each, unlit.
+   *
+   * This is the cheapest high-value thing in the whole set. A dark mass of
+   * bodies is ambiguous — it could be a crowd, it could be a stack of crates in
+   * shadow. Three dozen small cold rectangles inside it are not ambiguous, and
+   * they carry the same information a hundred modelled faces would at a
+   * thousandth of the cost. They also do the job a light would do here without
+   * being one: `MeshBasicMaterial` never enters the lighting loop, so the whole
+   * bank is one draw call and no material in the scene recompiles.
+   *
+   * The screens drift in brightness rather than blinking. A blink reads as a
+   * fault light; a slow wander reads as a screen with something moving on it.
+   *
+   * @param {Array<{x:number,y:number,z:number,ry:number,top:number}>} holders
+   */
+  #crowdPhones(holders) {
+    if (!holders.length) return;
+    const rng = this.rng;
+    const mat = new THREE.MeshBasicMaterial({ name: 'arena.crowdPhone' });
+    const uTime = this.timeUniform;
+    // Same reason the crowd carries its tint by hand: `instanceColor` only
+    // reaches the fragment when `vertexColors` is on, and turning that on
+    // demands a `color` attribute this quad has no use for.
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = uTime;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', /* glsl */ `
+          #include <common>
+          attribute float aPhase;
+          attribute vec3 aScreen;
+          uniform float uTime;
+          varying vec3 vScreen;
+        `)
+        .replace('#include <begin_vertex>', /* glsl */ `
+          #include <begin_vertex>
+          float ph = aPhase * 6.2831853;
+          vScreen = aScreen * ( 0.6 + 0.4 * sin( uTime * 0.7 + ph ) * sin( uTime * 0.23 + ph * 1.7 ) );
+        `);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vScreen;')
+        .replace('#include <opaque_fragment>', '#include <opaque_fragment>\ngl_FragColor.rgb *= vScreen;');
+    };
+    mat.customProgramCacheKey = () => 'kb-crowd-phone';
+
+    const geo = new THREE.PlaneGeometry(0.075, 0.145);
+    const mesh = new THREE.InstancedMesh(geo, mat, holders.length);
+    mesh.name = 'arena.structure.crowdPhones';
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.layers.set(LAYER.NO_REFLECT);
+    const phases = new Float32Array(holders.length);
+    const screens = new Float32Array(holders.length * 3);
+    const scale = new THREE.Vector3();
+    holders.forEach((s, i) => {
+      // Held out toward the pit and either up over the heads in front or down
+      // at chest height, because in any real crowd both are happening.
+      const raised = rng.next() < 0.55;
+      _e.set(rng.range(-0.5, -0.15), s.ry + Math.PI, rng.range(-0.35, 0.35));
+      _q.setFromEuler(_e);
+      scale.set(rng.range(0.85, 1.2), rng.range(0.85, 1.2), 1);
+      _m.compose(_p.set(
+        s.x + rng.range(-0.16, 0.16),
+        raised ? s.top + rng.range(0.02, 0.26) : s.y + rng.range(1.15, 1.4),
+        s.z + rng.range(0.3, 0.5),
+      ), _q, scale);
+      mesh.setMatrixAt(i, _m);
+      // Screens are not white. A phone at night is a cold blue-white and a few
+      // of them are warmer, and that spread is what stops three dozen identical
+      // dots reading as a string of fairy lights. They are authored well over
+      // 1.0 in linear so the bloom threshold catches them: a screen that does
+      // not halo at all is a painted rectangle.
+      _c.setHSL(rng.range(0.52, 0.63), rng.range(0.1, 0.42), rng.range(0.55, 0.8))
+        .multiplyScalar(rng.range(1.5, 3.0));
+      _c.toArray(screens, i * 3);
+      phases[i] = rng.next();
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    geo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phases, 1));
+    geo.setAttribute('aScreen', new THREE.InstancedBufferAttribute(screens, 3));
+    this.crowdPhones = mesh;
+    this.crowdPhoneMaterial = mat;
+    this.group.add(mesh);
   }
 
   /**
@@ -1410,6 +1701,7 @@ export class StageStructure {
     this.backdropMaterial?.dispose();
     this.midgroundMaterial?.dispose();
     this.crowdMaterial?.dispose();
+    this.crowdPhoneMaterial?.dispose();
     this.droneLightMaterial?.dispose();
   }
 }

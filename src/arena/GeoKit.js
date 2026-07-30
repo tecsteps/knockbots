@@ -474,16 +474,20 @@ export const CROWD_ARCHETYPES = 6;
  * holds — and the arms are always built, because the gap between an arm and the
  * ribcage is the one hole that tells the eye it is looking at a person.
  *
- * Skin and clothing are separated into an `aSkin` vertex mask rather than left
- * to one flat tint. A crowd where the heads share the value of the coats is a
- * row of bollards; the light band of a face above a dark collar is the thing
- * that makes forty silhouettes resolve into forty people.
+ * Skin, hair and clothing are separated into an `aTone` vertex mask rather than
+ * left to one flat tint. A crowd where the heads share the value of the coats is
+ * a row of bollards — but a crowd of *bare* heads is worse, because at twelve
+ * metres a skull is one bright oval per person and forty identical ovals in a
+ * line read as a shelf of shop mannequins, which is exactly what the stage was
+ * failing on. Hair cuts that oval down to a face and gives the head a third
+ * value, and it is the cheapest silhouette break anywhere in the figure.
  *
- * @param {number} [seed] varies proportion, stance and headwear within an archetype
+ * @param {number} [seed] varies proportion, stance, hair and headwear within an
+ *   archetype
  * @param {number} [archetype] 0 stand, 1 cheer, 2 lean on rail, 3 arms folded,
  *   4 filming, 5 hunched with hands pocketed
  * @returns {THREE.BufferGeometry} origin at the feet, facing -Z, carrying a
- *   float `aSkin` attribute that is 1 on bare skin and 0 on clothing
+ *   float `aTone` attribute that is 0 on clothing, 1 on bare skin and 2 on hair
  */
 export function crowdFigure(seed = 0, archetype = 0) {
   const r = (n) => {
@@ -506,6 +510,7 @@ export function crowdFigure(seed = 0, archetype = 0) {
   const shoulderX = 0.26 * bulk;
   const parts = [];
   const skin = [];
+  const hair = [];
 
   // Everything above the waist is rotated about the hip pivot, so a lean moves
   // the shoulders, the head and both hands together instead of shearing them.
@@ -535,12 +540,37 @@ export function crowdFigure(seed = 0, archetype = 0) {
   const shR = at(shoulderX, shoulderY);
   parts.push(segment(shL, shR, 0.075 * bulk, 0.075 * bulk));
 
-  // Head, neck and one of four hat silhouettes.
+  // Head, neck, hair and one of four hat silhouettes.
   const neck = at(0, shoulderY + 0.02);
   const head = at(0, shoulderY + 0.19 * tall, 0.02);
-  skin.push(segment(neck, head, 0.052, 0.056));
-  skin.push(place(new THREE.SphereGeometry(0.102 * tall, 9, 7), { pos: head, scale: [0.95, 1.1, 1] }));
+  const headR = 0.098 * tall;
+  skin.push(segment(neck, head, 0.05, 0.054));
+  // Narrower than it is deep. A head modelled on a round sphere reads wide from
+  // the front, and a row of wide heads is the mannequin look again.
+  skin.push(place(new THREE.SphereGeometry(headR, 8, 6), { pos: head, scale: [0.88, 1.1, 0.98] }));
   const hat = (r(5) * 4) | 0;
+
+  // Hair, in three states: a full head bare, a cropped cap under a hat, and a
+  // shaved minority. The figure faces -Z, so the mass is offset toward +Z and
+  // the face stays clear of it.
+  if (r(7) > 0.15) {
+    const capped = hat !== 3;
+    hair.push(place(new THREE.SphereGeometry(
+      headR * 1.06, 8, 5, 0, Math.PI * 2, capped ? Math.PI * 0.24 : 0, Math.PI * (capped ? 0.4 : 0.6),
+    ), {
+      pos: [head[0], head[1] - (capped ? headR * 0.12 : 0), head[2] + headR * 0.11],
+      scale: [0.93, 1.05, 1.0],
+    }));
+    // Long hair on a third of them. The mass down the neck is a silhouette no
+    // cropped head in the rank next to it can produce, and it survives being
+    // three pixels tall better than any amount of detail on the face does.
+    if (r(8) > 0.68) {
+      hair.push(place(new THREE.CapsuleGeometry(headR * 0.66, headR * 1.2, 3, 7), {
+        pos: [head[0], head[1] - headR * 1.2, head[2] + headR * 0.7],
+        scale: [1.06, 1, 0.58],
+      }));
+    }
+  }
   if (hat === 0) {
     parts.push(place(new THREE.CylinderGeometry(0.108 * tall, 0.104 * tall, 0.08, 9), { pos: [head[0], head[1] + 0.07, head[2]] }));
     parts.push(place(bevelBox(0.2, 0.02, 0.13, 0.008), { pos: [head[0], head[1] + 0.035, head[2] - 0.12], rot: [0.12, 0, 0] }));
@@ -581,19 +611,26 @@ export function crowdFigure(seed = 0, archetype = 0) {
       elbow = at(s * (shoulderX + 0.05), shoulderY - 0.3 * tall, -0.02 + swing * 0.2);
       hand = at(s * (shoulderX + 0.02), shoulderY - 0.6 * tall, swing * 0.3);
     }
+    // The sleeve runs to the wrist and only the fist is bare. A hand modelled
+    // as a ball the width of the forearm puts a second bright dot beside every
+    // face, which is twice the number of light spots a crowd should have.
     parts.push(segment(sh, elbow, armR * 1.15, armR));
     parts.push(segment(elbow, hand, armR, armR * 0.82));
-    skin.push(place(new THREE.SphereGeometry(armR * 1.25, 6, 5), { pos: hand }));
+    skin.push(place(new THREE.SphereGeometry(armR * 0.95, 6, 4), { pos: hand }));
   }
 
-  // Clothing first, skin second, so the mask is one contiguous run and can be
-  // filled from a single vertex offset instead of tagged part by part.
+  // Clothing, then skin, then hair — three contiguous runs, so the mask is
+  // filled from two vertex offsets instead of tagged part by part.
   const clothed = mergeAll(parts);
   const bare = mergeAll(skin);
-  const geo = mergeAll([clothed, bare]);
+  const mane = hair.length ? mergeAll(hair) : null;
+  const geo = mergeAll(mane ? [clothed, bare, mane] : [clothed, bare]);
+  const nClothed = clothed.attributes.position.count;
+  const nBare = bare.attributes.position.count;
   const mask = new Float32Array(geo.attributes.position.count);
-  mask.fill(1, clothed.attributes.position.count);
-  geo.setAttribute('aSkin', new THREE.Float32BufferAttribute(mask, 1));
+  mask.fill(1, nClothed, nClothed + nBare);
+  if (mane) mask.fill(2, nClothed + nBare);
+  geo.setAttribute('aTone', new THREE.Float32BufferAttribute(mask, 1));
   return geo;
 }
 

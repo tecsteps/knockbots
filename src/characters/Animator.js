@@ -951,6 +951,25 @@ export class Animator {
     return _v0.y;
   }
 
+  /**
+   * Model-space origin of a bone as the clips posed it, before IK.
+   *
+   * The companion to `preIkPointY`, and needed for the same reason: an IK target
+   * built from a bone's CORRECTED position is a servo reading its own output,
+   * and it walks. Built from this it is a pure function of the animation.
+   * Model space rather than world is deliberate — a world-space target set on
+   * one tick and consumed on the next is dragged by whatever the body did in
+   * between, which on a clip that spins the root is most of a metre.
+   * @param {string} boneName
+   * @param {THREE.Vector3} out
+   * @returns {?THREE.Vector3} `out`, or null when the bone is not in this skeleton
+   */
+  preIkPos(boneName, out) {
+    const i = this.index[boneName];
+    if (i === undefined) return null;
+    return out.copy(this._preIkPos[i]);
+  }
+
   /** Velocity of the body in model space; drives lean and secondary motion. */
   setBodyVelocity(v) {
     this.bodyVelocity.copy(v);

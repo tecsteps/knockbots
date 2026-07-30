@@ -27,7 +27,16 @@
  * and serial number is drawn into a canvas atlas at build time.
  *
  * Coordinate reminder, from Skeleton.js: +Y up, +X is the fighter's LEFT, and
- * the fighter FACES -Z. So "front of the chest" is at negative Z.
+ * the fighter FACES +Z. So "front of the chest" is at positive Z.
+ *
+ * That last line was wrong until round 8 and it was not a documentation bug. The
+ * rig header claimed -Z was forward, this file was written from it, and the
+ * result was measurable on the built mesh: the visor centroid sat 0.127m behind
+ * the head origin along the facing axis while `toe_*` sat 0.14m in front of the
+ * foot. Every fighter's face pointed away from its opponent, every chest core at
+ * its own spine, and `02-closeup-face` photographed a nape for seven rounds. The
+ * fix is the sign below plus the rake and yaw literals that were authored
+ * against it; nothing about the rig changed.
  */
 
 import * as THREE from 'three';
@@ -38,7 +47,7 @@ import { Rng } from '../core/Rng.js';
 import { makeMaterialLibrary, makeMarkingAtlas, MARKINGS } from './Materials.js';
 
 const DEG = Math.PI / 180;
-const FRONT = -1; // multiply a "forward" offset by this to get world Z
+const FRONT = 1; // multiply a "forward" offset by this to get world Z
 
 const MIRROR_X = new THREE.Matrix4().makeScale(-1, 1, 1);
 const UP = new THREE.Vector3(0, 1, 0);
@@ -1878,12 +1887,12 @@ function buildPelvis(rig, spec) {
       { x: -0.5, z: -0.85, w: 0.17, rot: 12 },
     ];
     for (const pl of plates) {
-      const ang = Math.atan2(pl.x, pl.z * -FRONT);
+      const ang = Math.atan2(pl.x, pl.z * FRONT);
       // The flanking plates hang off the belt and should still be settling when
       // the hips have stopped; the front plate is bolted through the crotch
       // guard and does not move, so it stays on `hips`.
       rig.add('hips', bevelBox(pl.w, drop, 0.035, 0.010, { botX: 0.74 }), 'armorAccent', {
-        p: [pl.x * w * 0.50, floor + drop * 0.34, pl.z * d * 0.60 * -FRONT],
+        p: [pl.x * w * 0.50, floor + drop * 0.34, pl.z * d * 0.60 * FRONT],
         r: [pl.rot * DEG, ang, 0],
         order: 'YXZ',
         tier: TIER.PRIMARY,

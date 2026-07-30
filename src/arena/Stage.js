@@ -105,7 +105,7 @@ export class Stage {
      * one mesh per material. That is what keeps a set of six hundred primitives
      * inside a fighting game's draw-call budget.
      */
-    const bins = { dark: [], steel: [], concrete: [], hazard: [], grate: [], chain: [], container: [], plate: [] };
+    const bins = { dark: [], steel: [], concrete: [], hazard: [], grate: [], chain: [], container: [], plate: [], banner: [] };
 
     this.floor = new StageFloor({
       reflector: this.reflector,
@@ -186,6 +186,7 @@ export class Stage {
       ['grate', this.materials.grating, null, true],
       ['chain', this.materials.chainLink, null, false],
       ['plate', this.materials.warningPlate, null, false],
+      ['banner', this.materials.barrierBanner, null, false],
     ];
     this.merged = [];
     for (const [key, mat, uv, shadows] of spec) {

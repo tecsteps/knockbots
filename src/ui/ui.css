@@ -71,6 +71,27 @@
   --kb-cut-sm: 0.45em;
   --kb-radius: 2px;
 
+  /*
+   * Safe-area insets, hoisted to tokens rather than called inline.
+   *
+   * Three reasons. The HUD and the touch pad (whose CSS lives in
+   * `core/TouchControls.js`) have to agree on where the edge of the screen is,
+   * and one name is how that agreement is enforced. `env()` resolves to `0px`
+   * on every desktop and on `viewport-fit=auto`, so every `calc()` below is
+   * byte-identical to the old fixed value off a handset. And `env()` cannot be
+   * simulated — Chromium has no notch emulation — so a notched landscape
+   * layout is only testable if there is a variable to override, which is how
+   * the captures behind this block were taken.
+   *
+   * Landscape is the orientation this game is played in, and a notched phone
+   * in landscape puts its notch on one *side*: the left inset is the one that
+   * matters most, and it lands squarely on P1's portrait chip.
+   */
+  --kb-sa-t: env(safe-area-inset-top, 0px);
+  --kb-sa-r: env(safe-area-inset-right, 0px);
+  --kb-sa-b: env(safe-area-inset-bottom, 0px);
+  --kb-sa-l: env(safe-area-inset-left, 0px);
+
   /* Shadow / glow recipes reused everywhere so depth reads consistently */
   --kb-shadow-panel: 0 0.6em 2.2em rgba(0, 0, 0, 0.55), inset 0 0 0 1px var(--kb-line);
   --kb-glow-accent: 0 0 1.4em rgba(255, 138, 42, 0.55);
@@ -180,9 +201,9 @@
 
 .hud-top {
   position: absolute;
-  top: 0.9em;
-  left: 1.1em;
-  right: 1.1em;
+  top: calc(0.9em + var(--kb-sa-t));
+  left: calc(1.1em + var(--kb-sa-l));
+  right: calc(1.1em + var(--kb-sa-r));
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: start;
@@ -585,9 +606,9 @@
 
 .meter-wrap {
   position: absolute;
-  top: 5.5em;
-  left: 1.1em;
-  right: 1.1em;
+  top: calc(5.5em + var(--kb-sa-t));
+  left: calc(1.1em + var(--kb-sa-l));
+  right: calc(1.1em + var(--kb-sa-r));
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.7em;
@@ -686,7 +707,7 @@
  */
 .combo {
   position: absolute;
-  top: 8.6em;
+  top: calc(8.6em + var(--kb-sa-t));
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -695,8 +716,8 @@
   transform: scale(0.7);
   pointer-events: none;
 }
-.combo--p0 { left: 5%; align-items: flex-start; }
-.combo--p1 { right: 5%; align-items: flex-end; }
+.combo--p0 { left: calc(5% + var(--kb-sa-l)); align-items: flex-start; }
+.combo--p1 { right: calc(5% + var(--kb-sa-r)); align-items: flex-end; }
 .combo.combo--show { opacity: 1; transform: scale(1); }
 /* Double-buffered animation name, same technique and reason as
  * `.hp-flash--go-a/-b` above: the slam replays on every hit of a combo, so
@@ -823,6 +844,10 @@
 .announce-layer {
   position: absolute; inset: 0;
   display: grid; place-items: center;
+  /* Centring is `place-items` against the content box, so padding the insets
+   * moves the optical centre off a notch rather than letting "K.O." sit half
+   * under it. */
+  padding: var(--kb-sa-t) var(--kb-sa-r) var(--kb-sa-b) var(--kb-sa-l);
   pointer-events: none;
 }
 .announce-banner {

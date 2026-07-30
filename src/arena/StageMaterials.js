@@ -552,6 +552,90 @@ function warningPlate(size, seed, lines) {
   return tex;
 }
 
+/**
+ * Number of legend bands stacked in the barrier-banner texture. Band `r`
+ * occupies `[r / BANNER_ROWS, (r+1) / BANNER_ROWS]` in v; the caller picks one
+ * by remapping a quad's v into that range.
+ */
+export const BANNER_ROWS = 4;
+
+/**
+ * The dressing on the pit barrier: four legend bands in one texture, each one a
+ * whole panel's worth of graphic.
+ *
+ * The barrier is a twenty-four metre concrete band running the full width of
+ * frame directly behind the fighters, and bare it is the single largest
+ * featureless surface in the set — a smooth grey box, which is exactly the
+ * complaint against it. Every real venue covers that band in event dressing,
+ * and dressing fixes three things at once: it puts legible type in the
+ * mid-ground, it puts a saturated colour break where there was none, and it
+ * cuts a twenty-four metre run into panels with visible seams.
+ *
+ * The texture is **twice as wide as it is tall, with four bands** rather than a
+ * square with eight. That is not arbitrary: an atlas is only safe down to the
+ * mip level where each band still owns several rows, and eight bands in a
+ * square run out at mip 3 — about the level a panel twelve metres away is
+ * sampled at. Four bands in a 2:1 texture keep eight rows apiece two mips
+ * further down, which is past anything the fight camera can frame. Each band is
+ * then 8:1, the aspect the panels are cut at, so the stencil lands square
+ * instead of stretched.
+ *
+ * @param {number} width texture width; height is half of it
+ * @param {number} seed
+ * @param {Array<{text: string, ground: number, ink: number}>} bands
+ */
+function barrierBanner(width, seed, bands) {
+  const height = width / 2;
+  const band = height / BANNER_ROWS;
+  // `stampText` and `blur` both index on a square stride, so the fields are
+  // square and only the bottom half of each is ever read out.
+  const grime = streakField(width, seed, 5);
+  const scuff = fbm(width, 14, { octaves: 4, seed: seed + 7 });
+  const text = new Float32Array(width * width);
+  for (let r = 0; r < Math.min(bands.length, BANNER_ROWS); r++) {
+    const line = bands[r].text;
+    // Solved per band so the legend fills the panel instead of running off it.
+    const cell = Math.max(2, Math.min(Math.floor(band * 0.46), Math.floor((width * 0.92) / (line.length * 6))));
+    const w = line.length * 6 * cell - cell;
+    stampText(text, width, line, Math.round((width - w) / 2), Math.round(r * band + (band - 7 * cell) / 2), cell, cell * 0.6);
+  }
+  const soft = blur(text, width, 1, 1);
+
+  const data = new Uint8Array(width * height * 4);
+  for (let j = 0; j < height; j++) {
+    const r = Math.min(BANNER_ROWS - 1, Math.floor(j / band));
+    const ground = hexToLinear(bands[r].ground);
+    const ink = hexToLinear(bands[r].ink);
+    // Distance into the band, so the rules land on the panel's own edges.
+    const t = (j - r * band) / band;
+    // On a panel this shallow it is the rule lines, not the type, that carry
+    // the graphic at twelve metres.
+    const rule = smoothstep(0.95, 0.98, t) + smoothstep(0.05, 0.02, t);
+    for (let i = 0; i < width; i++) {
+      const k = j * width + i;
+      // Grime pools along the bottom edge; the ink wears off the high spots.
+      const dirt = clamp01(grime[k] * 0.8 + smoothstep(0.34, 0.0, t) * 0.55);
+      const worn = smoothstep(0.52, 0.88, scuff[k]);
+      const ink01 = clamp01(soft[k] * (1 - worn * 0.72));
+      const o = k * 4;
+      for (let ch = 0; ch < 3; ch++) {
+        let v = lerp(ground[ch] * (0.72 + scuff[k] * 0.5), ink[ch], Math.max(ink01, rule * 0.85));
+        v *= 1 - dirt * 0.6;
+        data[o + ch] = encodeSrgb(v);
+      }
+      data[o + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 8;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 // ---------------------------------------------------------------------------
 
 /**
@@ -587,6 +671,12 @@ export function makeArenaMaterials(opts = {}) {
     steam: radialSprite(96, 1.6, 0.0),
     scorch: scorchDecal(256, 907),
     warning: warningPlate(256, 1301, ['danger', 'test cell 09', 'no entry']),
+    banner: barrierBanner(big, 1601, [
+      { text: 'knockbots industrial league', ground: 0x191d23, ink: 0xd9dde4 },
+      { text: 'keep behind the line', ground: 0x62201a, ink: 0xe2dad1 },
+      { text: 'test cell 09  heavy division', ground: 0x151a21, ink: 0xc8a13c },
+      { text: 'kb foundry works', ground: 0x7a3c0a, ink: 0x1a1408 },
+    ]),
   };
   const dent = dentDecal(256, 811);
   textures.dentAlbedo = dent.albedo;
@@ -638,6 +728,14 @@ export function makeArenaMaterials(opts = {}) {
     warningPlate: new THREE.MeshStandardMaterial({
       name: 'arena.warningPlate', map: textures.warning, roughness: 0.62, metalness: 0.25,
       envMapIntensity: 0.6, dithering: true,
+    }),
+
+    // Printed vinyl over ply: matte, dead flat, and it takes almost nothing
+    // from the environment. A barrier graphic that picks up a specular sheen
+    // reads as painted metal and puts a highlight where the fighters are.
+    barrierBanner: new THREE.MeshStandardMaterial({
+      name: 'arena.barrierBanner', map: textures.banner, roughness: 0.84, metalness: 0.0,
+      envMapIntensity: 0.35, dithering: true,
     }),
 
     dentDecal: new THREE.MeshStandardMaterial({

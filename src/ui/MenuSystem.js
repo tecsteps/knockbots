@@ -76,8 +76,22 @@ const SCREEN_FOR_PHASE = {
 
 const PAUSABLE_PHASES = new Set(['intro', 'ready', 'fight', 'ko', 'roundEnd']);
 
-/** Roster grid shape. Two columns of five reads as a rack of units. */
+/** Roster grid shape on a wide screen. Two columns of five reads as a rack of
+ *  units. The compact layouts reflow the rack, so the keyboard grid walk reads
+ *  the *used* column count back out of the DOM (`#syncGridCols`) rather than
+ *  trusting this — a walk that disagrees with what is on screen sends the
+ *  cursor sideways when the player presses down. */
 const GRID_COLS = 2;
+
+/**
+ * True on a device with no hover — a phone or tablet.
+ *
+ * Queried per event, never cached: a tablet with a trackpad paired mid-session
+ * changes the answer, and this decides whether a tap browses or commits.
+ */
+function isTouchPointer() {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(hover: none)').matches;
+}
 
 /** Stat keys, in the order the dossier lists them. */
 const STAT_KEYS = ['power', 'speed', 'reach', 'weight', 'defense'];
@@ -687,10 +701,26 @@ export class MenuSystem {
 
       const idx = items.length;
       tile.addEventListener('mouseenter', () => {
+        // A tap on a touch screen synthesises mouseenter immediately before
+        // click. Honouring it would focus the tile and then let the click read
+        // that focus as "already inspected" and start the match — so a phone
+        // player could never browse the roster at all, the first tile they
+        // touched was the one they fought with. There is no hover to track on
+        // such a device; the click handler below owns the whole gesture.
+        if (isTouchPointer()) return;
         if (this.nav.index === idx) return;
         this.nav.index = idx; this.#applyFocus(); bus.emit('uiHover', {});
       });
-      tile.addEventListener('click', () => { this.nav.index = idx; this.#applyFocus(); bus.emit('uiConfirm', {}); this.#confirmSelect(i); });
+      tile.addEventListener('click', () => {
+        // First tap inspects, second tap on the same machine commits. On a
+        // pointer device the hover above has already done the inspecting, so
+        // `browsing` is false and one click still locks in as before.
+        const browsing = isTouchPointer() && this.nav.index !== idx;
+        this.nav.index = idx;
+        this.#applyFocus();
+        bus.emit(browsing ? 'uiHover' : 'uiConfirm', {});
+        if (!browsing) this.#confirmSelect(i);
+      });
       items.push({
         el: tile,
         action: () => this.#confirmSelect(i),
@@ -782,26 +812,36 @@ export class MenuSystem {
       h.append(el('kbd', null, k), document.createTextNode(v));
       hints.appendChild(h);
     }
+    // Both hint sets are built once and swapped by media query rather than by
+    // script: the keyboard legend is meaningless on a phone, and the two-tap
+    // rule is meaningless with a mouse.
+    const touchHint = el('div', 'kbs-touch-hint', 'TAP TO INSPECT · TAP AGAIN TO LOCK IN');
     const opponent = el('div', 'kbs-opponent');
     opponent.append(document.createTextNode('OPPONENT '), el('b', null, 'CPU · RANDOM'));
+    // A visible commit control. The two-tap rule works without it, but a
+    // touch player has no ENTER key and nothing on screen said so.
+    const lockBtn = this.#addNavButton(items, 'LOCK IN', () => this.#confirmSelect(this._select.focus), 'kbs-lock');
     const backBtn = this.#addNavButton(items, 'BACK', () => this.game.setPhase('menu'), 'kbs-back');
-    foot.append(hints, opponent, backBtn);
+    foot.append(hints, touchHint, opponent, lockBtn, backBtn);
 
     grid.append(head, rack, stage, doss, foot);
     screen.append(scrim, grid, el('div', 'kbs-flash'));
     this.root.appendChild(screen);
 
     // The carriage is placed in pixels, so it has to be replaced whenever the
-    // rack is re-laid out — a window resize, or the type scale crossing a clamp.
+    // rack is re-laid out — a window resize, a phone rotating, or the type
+    // scale crossing a clamp. The same event is what can change the column
+    // count under the grid walk, so both are refreshed together.
     if (typeof ResizeObserver === 'function') {
       new ResizeObserver(() => {
         if (this.current !== 'select') return;
+        this.#syncGridCols();
         this.#moveCarriage(this._select.tiles[this._select.focus]);
       }).observe(rackGrid);
     }
 
     this._select = {
-      root: screen, grid, tiles, carriage, stage, sweep, fallback,
+      root: screen, grid, rackGrid, tiles, carriage, stage, sweep, fallback,
       dName, dSub, dArchTag, dArchNote, dBio, dNote, dossCard,
       statFills, statNums, specVals, swatches,
       focus: -1, scrambleTimer: 0, swapTimer: 0, lockTimer: 0, locked: false,
@@ -828,8 +868,29 @@ export class MenuSystem {
     r.root.classList.remove('kbs-screen--lock');
     for (const t of r.tiles) t.classList.remove('kbs-tile--picked');
     r.tiles[this.p1Index]?.classList.add('kbs-tile--picked');
+    // Runs before `show()` reads `screens.select.cols`, so the first grid walk
+    // of the session already matches the layout the breakpoints chose.
+    this.#syncGridCols();
     this.#previewOpen();
     replayAnim(r.root, 'kbs-screen--enter');
+  }
+
+  /**
+   * Re-reads the rack's used column count and republishes it to the grid walk.
+   *
+   * The compact layouts reflow `.kbs-grid`, so `GRID_COLS` is only the wide
+   * default. Taking the number from the resolved `grid-template-columns` — a
+   * list of used pixel lengths once the grid is laid out — means the walk and
+   * the stylesheet cannot drift apart when a breakpoint is retuned.
+   */
+  #syncGridCols() {
+    const r = this._select;
+    if (!r?.rackGrid || !this.screens.select) return;
+    const tracks = getComputedStyle(r.rackGrid).gridTemplateColumns;
+    if (!tracks || tracks === 'none') return;
+    const cols = Math.max(1, tracks.split(' ').filter(Boolean).length);
+    this.screens.select.cols = cols;
+    if (this.current === 'select') this.nav.cols = cols;
   }
 
   #selectHide() {
@@ -893,12 +954,20 @@ export class MenuSystem {
 
   /** Slides the rack carriage onto the focused tile. One layout read per move. */
   #moveCarriage(tile) {
-    const { carriage } = this._select;
+    const { carriage, rackGrid } = this._select;
     if (!tile) return;
+    // offsetLeft/Top are measured against the grid's padding box, so they stay
+    // correct while it scrolls and the carriage scrolls with the tile.
     carriage.style.transform = `translate3d(${tile.offsetLeft}px, ${tile.offsetTop}px, 0)`;
     carriage.style.width = `${tile.offsetWidth}px`;
     carriage.style.height = `${tile.offsetHeight}px`;
     carriage.style.opacity = '1';
+    // The compact layouts let the rack scroll as a safety valve on a very short
+    // viewport. Only reach for the scroller when there actually is one — on
+    // every other screen this is a wasted layout read.
+    if (rackGrid && rackGrid.scrollHeight > rackGrid.clientHeight + 1) {
+      tile.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
   }
 
   /** Six frames of glyph noise before the name resolves. Motion, not decoration:
@@ -1028,7 +1097,7 @@ export class MenuSystem {
 
   #confirmSelect(i) {
     const r = this._select;
-    if (r.locked) return;
+    if (r.locked || !ROSTER[i]) return;
     r.locked = true;
 
     r.tiles[this.p1Index]?.classList.remove('kbs-tile--picked');
@@ -1324,7 +1393,20 @@ const KBS_CSS = `
     "rack stage doss"
     "foot foot foot";
   gap: 1.1em 1.4em;
-  padding: 1.8em clamp(1.4em, 2.6vw, 3.2em) 1.2em;
+  /* Safe areas: a notched phone held in landscape puts the sensor housing over
+     one flank and the home indicator under the footer, and this screen pads in
+     em only, so the rack ends up beneath the notch. The four insets are named
+     here rather than called inline so that every breakpoint below reads the
+     same source, and so the capture harness — where env() is always zero and
+     cannot be faked — can force a notch and photograph the result. */
+  --kbs-safe-t: env(safe-area-inset-top, 0px);
+  --kbs-safe-r: env(safe-area-inset-right, 0px);
+  --kbs-safe-b: env(safe-area-inset-bottom, 0px);
+  --kbs-safe-l: env(safe-area-inset-left, 0px);
+  --kbs-pad-x: clamp(1.4em, 2.6vw, 3.2em);
+  padding:
+    calc(1.8em + var(--kbs-safe-t)) calc(var(--kbs-pad-x) + var(--kbs-safe-r))
+    calc(1.2em + var(--kbs-safe-b)) calc(var(--kbs-pad-x) + var(--kbs-safe-l));
 }
 
 /* -- entry ------------------------------------------------------------------ */
@@ -1679,7 +1761,11 @@ const KBS_CSS = `
   text-transform: uppercase;
 }
 .kbs-opponent b { color: var(--kb-text-dim); }
-.kbs-back.mbtn { width: auto; padding: 0 1.8em; }
+.kbs-back.mbtn, .kbs-lock.mbtn { width: auto; padding: 0 1.8em; }
+/* Both only exist for a hover-less device; the pointer legend above is the
+   desktop equivalent and they would only compete with it. */
+.kbs-touch-hint, .kbs-lock.mbtn { display: none; }
+.kbs-lock.mbtn { color: var(--kb-text); box-shadow: inset 0 0 0 1px rgba(255,138,42,0.55); }
 
 /* -- the commit beat --------------------------------------------------------- */
 .kbs-flash {
@@ -1695,6 +1781,167 @@ const KBS_CSS = `
 .kbs-screen--lock .kbs-bracket--br { transform: translate3d(-0.9em, -0.9em, 0); }
 .kbs-screen--lock .kbs-card { animation: kbsLockCard 0.25s ease-out; }
 @keyframes kbsLockCard { 0% { transform: translate3d(0,-0.3em,0); } 100% { transform: none; } }
+
+/* ===========================================================================
+   Compact layouts
+   ---------------------------------------------------------------------------
+   The wide grid has hard em minimums on both flanks — 18em + 17em is 35em,
+   about 455px at this screen's own font-size — so the centre column is squeezed
+   to nothing long before either flank gives up a pixel. Measured on a 390px
+   phone: rack 234px, dossier 221px running 120px off the right edge, and the
+   live preview window exactly 0px wide. The whole reason this screen exists is
+   that middle column, so it is the first thing that has to survive.
+
+   The split is on HEIGHT first, not width, because this is a fighting game and
+   the fight is landscape: 844x390 has width to spare and no height at all, and
+   a stack is the worst possible answer there.
+
+     short   (max-height: 560px)              three columns kept, compressed
+     narrow  (max-width: 760px, and taller)   one column, stacked
+
+   The two conditions are mutually exclusive by construction, so a small
+   landscape phone (667x375) gets the short layout and never a stack it has no
+   room for. Both keep the middle transparent — the machine is drawn there by
+   the game's own renderer and nothing may cover it.
+   =========================================================================== */
+
+/* -- short: landscape phones ------------------------------------------------- */
+@media (max-height: 560px) {
+  /* Height is the scarce axis here, so the type scale comes off vh. */
+  .kbs-screen { font-size: clamp(12px, 3.6vh, 16px); }
+  .kbs {
+    /* Same three columns, but the flanks now shrink with the viewport instead
+       of holding an em floor that eats the preview. */
+    grid-template-columns: clamp(12.5em, 30vw, 22em) minmax(0, 1fr) clamp(11.5em, 25vw, 20em);
+    --kbs-pad-x: clamp(0.8em, 2vw, 1.6em);
+    gap: 0.5em 0.9em;
+    padding:
+      calc(0.6em + var(--kbs-safe-t)) calc(var(--kbs-pad-x) + var(--kbs-safe-r))
+      calc(0.5em + var(--kbs-safe-b)) calc(var(--kbs-pad-x) + var(--kbs-safe-l));
+  }
+  /* Retuned for the narrower flanks: the clear window has moved inward. */
+  .kbs-scrim {
+    background:
+      linear-gradient(180deg, rgba(4,6,10,0.9) 0%, rgba(4,6,10,0.22) 14%, rgba(4,6,10,0) 26%,
+                      rgba(4,6,10,0) 66%, rgba(4,6,10,0.5) 88%, rgba(4,6,10,0.95) 100%),
+      linear-gradient(90deg, rgba(4,6,10,0.96) 0%, rgba(4,6,10,0.9) 27%, rgba(4,6,10,0.38) 34%,
+                      rgba(4,6,10,0.04) 43%, rgba(4,6,10,0) 56%, rgba(4,6,10,0.1) 66%,
+                      rgba(4,6,10,0.55) 73%, rgba(4,6,10,0.94) 79%, rgba(4,6,10,0.97) 100%),
+      radial-gradient(90% 70% at 48% 46%, rgba(255,138,42,0.06), transparent 62%);
+  }
+  .kbs-head { padding-bottom: 0.3em; }
+  .kbs-title { font-size: 1.15em; }
+  .kbs-eyebrow { margin-bottom: 0.3em; }
+  /* Rows in px, not em: 44 is a fingertip and the type scale must not be able
+     to argue with it. Overflow is a safety valve for a viewport short enough
+     that ten of them do not fit — moveCarriage scrolls the focus in. */
+  .kbs-grid {
+    max-height: none;
+    grid-auto-rows: minmax(44px, 1fr);
+    gap: 0.3em;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .kbs-grid::-webkit-scrollbar { display: none; }
+  .kbs-tile { padding: 0.25em 0.4em 0.25em 0.35em; gap: 0.4em; }
+  /* The wide tile lets the silhouette run past the row and relies on the row
+     being tall; at 44px it has to fit instead. */
+  .kbs-sil { max-height: 100%; }
+  .kbs-tile-no { font-size: 0.44em; }
+  .kbs-spark { display: none; }
+  .kbs-card { padding: 0.7em 0.8em 0.8em; gap: 0.4em; overflow-y: auto; }
+  .kbs-name.kb-text { font-size: 1.3em; }
+  /* The one block with no fixed height. Everything else in the dossier is a
+     number the player is comparing machines on; the flavour text is not. */
+  .kbs-bio { display: none; }
+  .kbs-stage-tag { top: 1.4em; }
+  .kbs-bracket { width: 1.1em; height: 1.1em; }
+  .kbs-foot { padding-top: 0.4em; gap: 0.8em; }
+  .kbs-hints { gap: 0.9em; }
+}
+
+/* -- narrow: portrait phones -------------------------------------------------- */
+@media (max-width: 760px) and (min-height: 561px) {
+  /* Width is the scarce axis, and 13px flat left the 0.5em readouts at 6px.
+     Off vw with a 14px floor they land at 15-16px base on a real phone. */
+  .kbs-screen { font-size: clamp(14px, 4.1vw, 19px); }
+  .kbs {
+    grid-template-columns: minmax(0, 1fr);
+    /* The preview keeps a hard floor: it is the reason for the screen, and a
+       stack of auto rows will happily starve it to nothing otherwise. */
+    grid-template-rows: auto minmax(8em, 1fr) auto auto auto;
+    grid-template-areas: "head" "stage" "doss" "rack" "foot";
+    --kbs-pad-x: 1.1em;
+    gap: 0.55em;
+    padding:
+      calc(0.9em + var(--kbs-safe-t)) calc(var(--kbs-pad-x) + var(--kbs-safe-r))
+      calc(0.7em + var(--kbs-safe-b)) calc(var(--kbs-pad-x) + var(--kbs-safe-l));
+  }
+  /* Stacked, so the veil is stacked too: clear across the band the machine
+     stands in, solid under the dossier and rack below it. The horizontal
+     gradient of the wide layout would darken exactly the wrong thing. */
+  .kbs-scrim {
+    background:
+      linear-gradient(180deg, rgba(4,6,10,0.94) 0%, rgba(4,6,10,0.4) 8%, rgba(4,6,10,0.04) 17%,
+                      rgba(4,6,10,0) 30%, rgba(4,6,10,0.3) 42%, rgba(4,6,10,0.82) 52%,
+                      rgba(4,6,10,0.95) 62%, rgba(4,6,10,0.97) 100%),
+      radial-gradient(130% 34% at 50% 26%, rgba(255,138,42,0.07), transparent 68%);
+  }
+  .kbs-head { padding-bottom: 0.4em; }
+  .kbs-title { font-size: 1.2em; }
+  .kbs-head-count { display: none; }
+  /* The rack is full width now, so two columns are wide tiles rather than the
+     squeezed pair the wide layout's flank produced. */
+  .kbs-grid {
+    max-height: none;
+    grid-auto-rows: minmax(46px, auto);
+    gap: 0.35em;
+  }
+  .kbs-tile { padding: 0.3em 0.5em 0.3em 0.4em; }
+  .kbs-sil { max-height: 3.4em; }
+  .kbs-tile-frame { display: none; }
+  /* Sized to its content in the wide layout; here it is a fixed band and the
+     stage above it gets everything left over, so it is trimmed to the readout
+     the player is actually comparing machines on. */
+  .kbs-card {
+    padding: 0.6em 0.75em 0.7em;
+    gap: 0.3em;
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0.9em 100%, 0 calc(100% - 0.9em));
+  }
+  .kbs-name.kb-text { font-size: 1.25em; margin: 0.06em 0 0.04em; }
+  .kbs-arch-note, .kbs-note, .kbs-bio, .kbs-livery { display: none; }
+  .kbs-stats { gap: 0.16em; }
+  .kbs-stat-track { height: 0.7em; }
+  .kbs-spec { grid-template-columns: 1fr 1fr; gap: 0.2em 0.7em; }
+  /* Full-bleed stage, so the corner marks and the feed tag would sit against
+     the screen edge. Inset them instead of losing them. */
+  .kbs-bracket { width: 1.2em; height: 1.2em; }
+  .kbs-stage-tag { top: 0.4em; left: 0.2em; }
+  .kbs-foot { padding-top: 0.5em; gap: 0.7em; }
+  .kbs-opponent { display: none; }
+}
+
+/* -- touch: no hover to browse with ------------------------------------------- */
+/* Keyed on the input device, not the viewport: a small window on a desktop
+   still has a mouse, and a large tablet still has none. */
+@media (hover: none) {
+  .kbs-hints { display: none; }
+  .kbs-touch-hint {
+    display: block;
+    font-size: 0.5em; letter-spacing: 0.16em; color: var(--kb-text-faint);
+    text-transform: uppercase;
+  }
+  .kbs-lock.mbtn { display: flex; }
+  /* 44px is the floor for anything a finger has to land on. The em scale can
+     fall below it on a small phone, so these are pinned in px. */
+  .kbs-tile { min-height: 44px; }
+  .kbs-back.mbtn, .kbs-lock.mbtn { min-height: 44px; padding: 0 1.3em; }
+  /* Nothing here has a hover state worth keeping — on touch it latches on the
+     last tile tapped and reads as a second, wrong highlight next to the
+     carriage. */
+  .kbs-tile:hover { transform: none; background: linear-gradient(100deg, rgba(18,23,32,0.94), rgba(11,14,20,0.9)); }
+  .kbs-tile--focus:hover { transform: translate3d(0.3em, 0, 0); background: linear-gradient(100deg, rgba(30,38,52,0.96), rgba(14,18,26,0.92)); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .kbs-screen *, .kbs-screen *::before, .kbs-screen *::after {

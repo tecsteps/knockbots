@@ -342,10 +342,14 @@ export class Fighter {
     this.emissiveMats = [];
     this.actuators = [];
     this.footState = { L: { y: 1, down: false }, R: { y: 1, down: false } };
-    /** Latched floor contact per foot: where it was put, and how much it holds. */
+    /**
+     * Latched floor contact per foot: where it was put, how much it holds, and
+     * where its ankle stood last tick — the target is consumed one tick after it
+     * is set, so that distance is exactly how stale the target will be.
+     */
     this.plantState = {
-      L: { contact: 0, weight: 0, target: new THREE.Vector3(), sole: [] },
-      R: { contact: 0, weight: 0, target: new THREE.Vector3(), sole: [] },
+      L: { contact: 0, weight: 0, target: new THREE.Vector3(), sole: [], last: new THREE.Vector3(), hasLast: false },
+      R: { contact: 0, weight: 0, target: new THREE.Vector3(), sole: [], last: new THREE.Vector3(), hasLast: false },
     };
     this.legLength = 0.86;
     /** Metres the pelvis is being held above where the clip put it. */
@@ -435,6 +439,7 @@ export class Fighter {
       const st = this.plantState[side];
       st.contact = 0;
       st.weight = 0;
+      st.hasLast = false;
     }
 
     this.animator = new Animator(bundle, CLIPS);
@@ -577,6 +582,7 @@ export class Fighter {
       const st = this.plantState[side];
       st.contact = 0;
       st.weight = 0;
+      st.hasLast = false;
     }
     if (this.animator) this.#play('idle.fight', 0, true);
     this.#drivePose();
@@ -1757,6 +1763,27 @@ export class Fighter {
   }
 
   /**
+   * World height of the lowest point of one boot under the pose the animator is
+   * building RIGHT NOW, read from its own forward kinematics rather than from
+   * the bone matrices. Inside a procedural layer the matrices still hold last
+   * tick's pose, so this is the only reading that is not a frame behind.
+   * @param {Object} ctx the animator's procedural-layer context
+   * @param {'L'|'R'} side
+   * @returns {number} world Y, or Infinity when the boot has not been measured
+   */
+  #soleNow(ctx, side) {
+    let low = Infinity;
+    for (const s of this.plantState[side].sole) {
+      const wp = ctx.worldPos(s.bone.name);
+      const wq = ctx.worldQuat(s.bone.name);
+      if (!wp || !wq) continue;
+      const y = _v3.copy(s.local).applyQuaternion(wq).add(wp).y + this.position.y;
+      if (y < low) low = y;
+    }
+    return low;
+  }
+
+  /**
    * The same height as the CLIPS wanted it, before the planter's own correction.
    * Contact has to be decided on this and not on the posed result, or the plant
    * latches itself shut: holding a foot on the floor keeps it in contact, which
@@ -1775,18 +1802,30 @@ export class Fighter {
 
   #footIk() {
     if (!this.animator?.setIkTarget) return;
+    const A = this.animator;
     const grounded = !this.airborne && this.state !== STATE.KNOCKDOWN && this.state !== STATE.KO;
     for (const side of ['L', 'R']) {
       const chain = side === 'L' ? 'legL' : 'legR';
       const st = this.plantState[side];
       if (!IK_CHAINS[chain]) continue;
-      const ankle = this.boneByName[`ankle_${side}`];
-      const hip = this.boneByName[`hip_${side}`];
-      if (!ankle || !hip) continue;
+      // Both anchors come from the pre-IK pose in MODEL space. Neither the
+      // bone matrices nor world space will do here, and both were wrong for
+      // the same reason: the target is set on one tick and consumed on the
+      // next, so anything the correction itself moved feeds straight back into
+      // the next target, and anything the BODY moved drags the target with it.
+      // On `k.sweep`, which spins the root through 180 degrees while a boot is
+      // planted, the pair of them threw the right boot 915mm off the floor on
+      // alternating frames.
+      if (!A.preIkPos(`ankle_${side}`, _v) || !A.preIkPos(`hip_${side}`, _v2)) continue;
 
-      _v.setFromMatrixPosition(ankle.matrixWorld);
       const intent = this.#soleIntentHeight(side) - this.floorY;
-      const bury = Math.max(0, this.floorY - this.#soleHeight(side));
+      const bury = Math.max(0, -intent);
+      // How far this ankle travelled in the body's own frame since the last
+      // target was set, which is precisely how wrong the next one will be by the
+      // time it is used.
+      const travel = st.hasLast ? _v.distanceTo(st.last) : 0;
+      st.last.copy(_v);
+      st.hasLast = true;
 
       // Contact, decided on what the CLIP wanted rather than on what came out,
       // and held across a small band so a landing is not a switch.
@@ -1806,19 +1845,24 @@ export class Fighter {
       // ankle costs nothing and fixed 40% of those frames on its own, so the
       // solver is held back for the case it is genuinely needed: a landing or a
       // knockdown that drives the whole leg through the floor.
-      if (st.weight > 0.01 && bury > ROLL_CAPACITY) {
+      //
+      // The second gate is `travel`, and it is the one that matters on a fast
+      // clip. A correction of `bury` metres aimed at a point that will be
+      // `travel` metres out of date by the time it is applied only has
+      // `1 - travel/bury` of itself left; past that the solver is not planting a
+      // boot, it is dragging a moving leg back to where it used to be. Fading on
+      // that ratio rather than switching on it keeps the release smooth.
+      if (st.weight > 0.01 && bury > ROLL_CAPACITY && travel < bury) {
         _v.y += bury;
         // Past the end of the leg the solve would straighten the knee, so hand
         // the weight back to the clip rather than snap it.
-        _v2.setFromMatrixPosition(hip.matrixWorld);
         const easy = this.legLength * 0.94;
         const reach = _v.distanceTo(_v2);
-        const w = reach > easy
-          ? st.weight * THREE.MathUtils.clamp(1 - (reach - easy) / (this.legLength * 0.1), 0, 1)
-          : st.weight;
+        let w = st.weight * (1 - travel / bury);
+        if (reach > easy) w *= THREE.MathUtils.clamp(1 - (reach - easy) / (this.legLength * 0.1), 0, 1);
         if (w > 0.01) {
           st.target.copy(_v);
-          this.animator.setIkTarget(chain, st.target, w);
+          this.animator.setIkTarget(chain, st.target, w, { space: 'model' });
           continue;
         }
       }
@@ -1889,16 +1933,8 @@ export class Fighter {
     if (this.airborne || !PELVIS_LIFT_STATES.has(this.state)) return null;
     let shared = Infinity;
     for (const side of ['L', 'R']) {
-      const pts = this.plantState[side].sole;
-      if (!pts.length) return null;
-      let low = Infinity;
-      for (const s of pts) {
-        const wp = ctx.worldPos(s.bone.name);
-        const wq = ctx.worldQuat(s.bone.name);
-        if (!wp || !wq) continue;
-        const y = _v3.copy(s.local).applyQuaternion(wq).add(wp).y + this.position.y;
-        if (y < low) low = y;
-      }
+      if (!this.plantState[side].sole.length) return null;
+      const low = this.#soleNow(ctx, side);
       if (!Number.isFinite(low)) return null;
       const bury = this.floorY - low;
       if (bury < shared) shared = bury;
@@ -1910,6 +1946,12 @@ export class Fighter {
    * Roll a planted foot over its own ball instead of driving it through the
    * floor. Runs as a post-IK layer so it reads the leg the solver actually
    * produced, and writes only the two joints below the ankle.
+   *
+   * It reads that leg out of `ctx`, not out of the bone matrices. The matrices
+   * are only written in `#writePose`, which has not run yet this tick, so a roll
+   * that measured them was correcting the burial the boot had one frame ago —
+   * a servo lagging its own output by exactly the interval it acts over, which
+   * is the recipe for it to alternate rather than settle.
    */
   #installFootRoll() {
     if (!this.animator?.addProceduralLayer) return;
@@ -1918,8 +1960,8 @@ export class Fighter {
         const w = this.plantState[side].weight;
         if (w <= 0.01) continue;
         // How far the boot is buried, and how far down the foot that point sits.
-        const deep = this.#soleHeight(side) - this.floorY;
-        if (deep >= 0) continue;
+        const deep = this.#soleNow(ctx, side) - this.floorY;
+        if (!(deep < 0)) continue;
         const ankle = ctx.worldPos(`ankle_${side}`);
         const toe = ctx.worldPos(`toe_${side}`);
         if (!ankle || !toe) continue;
