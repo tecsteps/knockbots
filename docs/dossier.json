@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.9.1",
-    "commits": "58",
+    "rev": "0.10.0",
+    "commits": "66",
     "modules": 67,
-    "lines": "46k",
+    "lines": "47k",
     "clips": 91,
     "moves": 191,
     "characters": 10
@@ -11,27 +11,27 @@
   "verdicts": [
     {
       "axis": "Stage detail",
-      "score": 74
+      "score": 76
     },
     {
       "axis": "Interface craft",
-      "score": 72
+      "score": 76
     },
     {
       "axis": "Lighting & atmosphere",
-      "score": 66
+      "score": 72
     },
     {
       "axis": "Impact & effects",
-      "score": 64
+      "score": 66
     },
     {
       "axis": "Character rendering",
-      "score": 60
+      "score": 62
     },
     {
       "axis": "Animation quality",
-      "score": 53
+      "score": 57
     }
   ],
   "log": [
@@ -498,11 +498,49 @@
           "state": "run"
         }
       ]
+    },
+    {
+      "phase": "PHASE 15",
+      "when": "Round 9",
+      "rev": "rev 0.10.0",
+      "title": "Ten fighters with no boots",
+      "paras": [
+        "Every axis moved: lighting 66 to 72, interface 72 to 76, animation 53 to 57, stage 74 to 76, impact 64 to 66, character 60 to 62. The average crossed 68.",
+        "The round's find was a console warning nobody had chased. Merging geometry rejects an entire batch when its members disagree about which attributes exist, and the code that called it silently skipped the failure. Soft parts \u2014 cables, boots, grips \u2014 declared one attribute set while rigid parts of the same material declared another, so for the whole life of the project every one of the ten fighters had shipped with no boot soles, no joint boots and no grips at all. One failed batch per character, and the only symptom was a line in the console. The batch key now includes the attribute signature, so the same disagreement costs one extra draw call instead of deleting the geometry.",
+        "A second piece of dead wiring turned up beside it. The builder had been emitting a per-plate panel plan and nothing was reading it, so panel detail ran at a single pitch across the entire roster regardless of what a plate was. It is now driven per plate, and a pitch of zero means the part is not made of panels at all \u2014 so hydraulic rods, rubber boots and frame members stop being divided up as though they were chest decking.",
+        "Silhouette separation was measured rather than judged: each fighter rendered flat black at a fixed pixel height and compared by overlap. The worst pair improved from 0.134 to 0.184 while the median stayed still, which was the intent \u2014 the work was all in the tail, and a median that moves would have meant effort spent on characters that already read."
+      ],
+      "tags": [
+        {
+          "label": "lighting +6",
+          "state": "done"
+        },
+        {
+          "label": "interface +4",
+          "state": "done"
+        },
+        {
+          "label": "animation +4",
+          "state": "done"
+        },
+        {
+          "label": "rubber restored",
+          "state": "done"
+        },
+        {
+          "label": "depth prepass",
+          "state": "done"
+        },
+        {
+          "label": "avg 68",
+          "state": "done"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.9.1",
+    "rev": "0.10.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
