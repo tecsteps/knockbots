@@ -1,37 +1,37 @@
 {
   "status": {
-    "rev": "0.18.0",
-    "commits": "102",
+    "rev": "0.19.0",
+    "commits": "105",
     "modules": 64,
-    "lines": "57k",
+    "lines": "58k",
     "clips": 91,
     "moves": 191,
     "characters": 10
   },
   "verdicts": [
     {
-      "axis": "Interface craft",
+      "axis": "Lighting & atmosphere",
       "score": 76
     },
     {
-      "axis": "Lighting & atmosphere",
-      "score": 71
+      "axis": "Interface craft",
+      "score": 75
     },
     {
       "axis": "Stage detail",
-      "score": 71
+      "score": 73
     },
     {
       "axis": "Character rendering",
-      "score": 68
+      "score": 73
     },
     {
       "axis": "Impact & effects",
-      "score": 60
+      "score": 65
     },
     {
       "axis": "Animation quality",
-      "score": 54
+      "score": 61
     }
   ],
   "log": [
@@ -716,11 +716,26 @@
         "Three harness defects were also closed, all reported by workstreams measuring their own axes rather than by the orchestrator. Every contact frame this project has ever scored had rendered an unretimed clip, because the test harness installed a move’s retime and then discarded it one line later. The animation tick strip’s panels were not on the ticks they were labelled with — two runs put their “+20” panels sixty ticks apart. And a proposed camera fix was measured, found to make cross-run reproducibility worse rather than better, and not shipped; the finding behind it was correct but was about a different measurement.",
         "Eighteen shots, eighteen certified, zero defects, 14.5 milliseconds median at 69fps. Triangles unchanged at 915,870 against a 900,000 ceiling."
       ]
+    },
+    {
+      "phase": "PHASE 24",
+      "when": "Round 18",
+      "rev": "rev 0.19.0",
+      "title": "Five axes up again, and a player finds the deadlock",
+      "paras": [
+        "Lighting 76, character 73, impact 65, animation 61, stage 73, interface 75. The average moved 66.7 to 70.5 — the largest single gain the project has recorded, and the second consecutive round with five axes rising together.",
+        "Animation gained seven on the airborne spiral. Shoulder-plate against pelvis-plate divergence, fit through the real skeleton over each clip’s airborne window, went from about ten degrees to between 34 and 39 across the launched, spinning and knocked-down reactions — against a reference of roughly 35. The grounded window of the knockdown stayed at exactly zero, which is the correct answer there. Elbows stopped being straight sticks and the left-right knee spread more than doubled.",
+        "Its first draft was reverted for a reason worth keeping: the twist was written as a per-bone constant on three spine joints, which are additive over a parent chain, so it delivered nearly twice the intended angle and put the plates 172 degrees apart — the shoulders on backwards.",
+        "The interface round lost a point and was not wasted. The lateral edge-light landed, taking variation across a 22-pixel stroke from under one level out of 255 to ninety-eight. Zooming in then found two sizing bugs: the title logo and the victory headline were sized with height rather than font-size, and the type derives both dimensions from font-size — so “KNOCKBOTS” had been rendering at a computed 21 pixels inside a 155-by-128 box, smaller than the menu items beneath it.",
+        "Its most useful result was a revert. The first shadow penumbra measured far better and took the subject out of the frame entirely: none of three captures contained a banner at all, because the blur chain slowed the frame enough that the harness’s detection landed late in the banner’s hold and the settle overshot into its dismissal. A change can be better by every number that was being watched and still destroy the evidence for itself.",
+        "Separately, a player reported two things with a screenshot, and both were real. The fighters could end up stacked along the camera axis, unable to hit each other. One cause explained all of it: facing is the sign of the opponent’s X offset, not a yaw, so nothing in the rig can point a fighter at an opponent displaced in depth — while sidestep moves purely in depth and nothing ever undid it. Strike capsules lead along the X axis, so an opponent parked off-axis is not in front of anything and every attack whiffs, which is exactly what the screenshot’s move readout said. Once the X gap closes the sign returns zero and facing latches, so the two stop even nominally facing each other, and the camera solver has nothing left to frame.",
+        "Reproduced by forcing the reported state — both fighters on the centre line, 4.8 metres apart in depth. A hard cap at roughly one body width pulls that to 0.83 metres within 250 milliseconds, a soft ease closes it within a second once the evade is over, and a launcher then lands where it had whiffed. The same report also asked for fullscreen on mobile, which now fires on the first touch, since every engine rejects the request outside a user gesture."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.18.0",
+    "rev": "0.19.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
