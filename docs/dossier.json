@@ -1,37 +1,37 @@
 {
   "status": {
-    "rev": "0.20.0",
-    "commits": "108",
+    "rev": "0.21.0",
+    "commits": "127",
     "modules": 64,
-    "lines": "59k",
+    "lines": "60k",
     "clips": 91,
-    "moves": 191,
+    "moves": 195,
     "characters": 10
   },
   "verdicts": [
     {
       "axis": "Lighting & atmosphere",
-      "score": 76
+      "score": 77
     },
     {
       "axis": "Stage detail",
-      "score": 76
+      "score": 74
+    },
+    {
+      "axis": "Interface craft",
+      "score": 74
     },
     {
       "axis": "Character rendering",
       "score": 73
     },
     {
-      "axis": "Interface craft",
-      "score": 73
+      "axis": "Impact & effects",
+      "score": 68
     },
     {
       "axis": "Animation quality",
-      "score": 63
-    },
-    {
-      "axis": "Impact & effects",
-      "score": 63
+      "score": 65
     }
   ],
   "log": [
@@ -746,11 +746,26 @@
         "A new measurement hazard was recorded: one agent found that the shared capture directory had been rewritten mid-round by another agent, with its own changes already live in it, so what it believed was a “before” was nothing of the kind. Concurrent capture into one directory is now its own source of wrong answers.",
         "Separately, a player reported four things from a laptop and a phone. Two are fixed: the camera cut the taller robot’s head off on a wide-short window, because the framing solver used a nominal standing height rather than the chassis the character actually carries — and because the vertical field of view does not grow with aspect, the error only becomes visible past about 2:1. And the training readout was unreadable at 10 pixels and sat directly on top of the near fighter. Two are open: kicks do not connect at any distance, measured as a six-centimetre overshoot at the active frame, and the first hypothesis for it was tested and disproved."
       ]
+    },
+    {
+      "phase": "PHASE 26",
+      "when": "Round 20",
+      "rev": "rev 0.21.0",
+      "title": "Kicks connect, and the cause was nothing anyone had guessed",
+      "paras": [
+        "Impact 68, lighting 77, interface 74, stage 74, character 73, animation 65. Average 70.7 to 71.8. But the round is not about the scores.",
+        "A player reported that kicks never hit, even at point-blank range. Two earlier hypotheses had been tested and disproved, one of them a measurement error of mine: I reported the capsule overshooting by six centimetres, computed centre-to-centre, when the engine tests segment to segment. That figure overstated the gap and localised nothing.",
+        "The real cause is that a clip root track may author a body pivot, and the animator extracts it rather than baking it into the bones, so the only place it is ever applied is the group yaw, which turns the striking limb along with everything else. The mid kick authors a fifty-eight degree pivot at exactly its contact tick. The chassis turns away from the opponent on the frame the blow lands and the foot leaves along the rotated axis: sixty-seven millimetres short, in depth, which is why every attempt to reason about horizontal reach came up empty.",
+        "The pivot itself is innocent. The spin kick pivots two hundred and forty-nine degrees and connects every time, because its leg track comes round with the spin. What breaks a move is a pivot the limb does not compensate for, and the discriminator turned out to be aim error rather than yaw: moves whose striking bone points within twenty-five degrees of the opponent connect ninety-five per cent of the time, and moves outside that, sixty-three per cent.",
+        "The fix is a static per-move solve on the clip own forward kinematics at its declared contact tick, negated and folded into the body yaw over the startup. Proved through a uniform branch on one compiled program: 611 of 744 connections became 696 of 744, eight dead moves became one, and nothing regressed. The two buttons the player named went from zero of thirty-two and one of sixteen, to thirty-two of thirty-two and sixteen of sixteen.",
+        "Two more things in the same round. There was no air attack in the game at all: the flag that gates one had been supported since the code was written and nothing had ever set it. And blocking was bound to holding back, which is why walking backwards was impossible, because the guard branch sat above the walk branch and the walk-backwards clip was wired up and unreachable. Guard moved to its own key and back became a direction again, measured at 0.213 metres of retreat where it had been 0.040 and a block.",
+        "That last change also handed the player something he had asked for by name without knowing it already existed: roundhouse and spin kick live on back-plus-kick, and had been unusable purely because holding back just blocked."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.20.0",
+    "rev": "0.21.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
