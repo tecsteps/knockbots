@@ -463,9 +463,35 @@ repeats them:
 
 Baseline is 24.3. All three were reverted; `tools/capture.mjs` is unchanged on this point.
 
+## Round 16 follow-up: what it is NOT
+
+Three further fixes were tried and measured. None improved on the 24.3 baseline, but together they
+localise the fault, which is worth more than another failed patch:
+
+4. Pin the sim clock to 1/60 for the whole warm-up (so one rendered frame is exactly one tick and
+   springs, FX and TAA all advance deterministically), absolute origin via `startMatch`, then pause
+   — **19–31 / 255**.
+5. Same, but with the wait and the pause in a SINGLE page-side callback, because polling from the
+   driver returns when Playwright *observes* the condition and more ticks run during the round trip
+   — the pin then lands on the exact requested tick, every run — **17–30 / 255**.
+
+**What that rules out.** Camera is identical (`dist` 1.268 to three decimals across runs). Exposure
+is identical (median luma within 1%). The driver round-trip is eliminated. The sim clock is
+deterministic. And the pin provably lands on the same tick.
+
+**What remains, and it is the answer to look for.** At an identical `phaseTick`, with an identical
+camera, the bones are still **13–30 mm apart between runs**. At this framing (~2000 px/m) 30 mm is
+about fifty pixels, which is most of the whole-frame difference. So the pose is not a function of
+the tick — there is per-tick state that `startMatch` does not reset. The two candidates are the
+animator's blend/inertialization history and the eight spring leaves, which integrate with damping
+and carry history from before the restart.
+
+`02-closeup-face` now records a **pose signature** (six bone world positions) in its `verified`
+block. That is measurement only and changes no behaviour, but it means the next attempt can tell
+in a single run whether it fixed the pose or merely moved it.
+
 **It is solvable.** A bespoke probe built by the character workstream reaches **1.65 / 255** on the
-same framing (freeze at a fixed tick, adaptive resolution pinned off, clock frozen). The
-difference between that probe and the shot is where the answer is, and it has not been found yet.
+same framing. Whatever that probe does about animator or spring state is the missing piece.
 
 **Until it is, two rules.** A full-harness A/B across runs cannot resolve anything smaller than
 these numbers — toggle **in-page**, on one frozen frame, so nothing else moves between the pair.

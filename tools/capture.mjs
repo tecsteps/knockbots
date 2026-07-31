@@ -137,8 +137,34 @@ const SHOTS = [
       const hits = ray.intersectObject(f.robot.group, true).filter((h) => h.object.visible);
       const first = hits[0];
       const clear = !first || first.distance > dist - 0.22;
+      // POSE SIGNATURE — measurement only, no behaviour change.
+      //
+      // This shot is not reproducible run to run (docs/PROFILING.md trap 5) and
+      // the signature is what finally localised it. Camera and exposure are
+      // provably identical between runs -- same dist to three decimals, median
+      // luma within 1% -- while whole-frame pixels differ by a mean 24/255. The
+      // variance is entirely in the POSE, and it survives pinning the sim
+      // clock, using an absolute phase origin, and pausing on the exact tick
+      // inside a single page-side callback: 13-30mm of bone drift AT AN
+      // IDENTICAL phaseTick. At this framing (about 2000 px/m) 30mm is fifty
+      // pixels.
+      //
+      // That rules out timing and points at per-tick state that startMatch does
+      // not reset -- animator blend/inertialization history, or the eight
+      // spring leaves, which integrate with damping and carry history from
+      // before the restart. Recording the signature so the next attempt can
+      // tell in one run whether it fixed the pose or merely moved it.
+      const sig = [];
+      for (const bn of ['head', 'chest', 'hand_L', 'hand_R', 'foot_L', 'foot_R']) {
+        let bone = null;
+        f.robot.group.traverse((o) => { if (o.isBone && o.name === bn && !bone) bone = o; });
+        if (bone) {
+          const w = bone.getWorldPosition(new THREE.Vector3());
+          sig.push(+w.x.toFixed(3), +w.y.toFixed(3), +w.z.toFixed(3));
+        }
+      }
       window.__kbCloseup = { clear, blocker: first ? first.object.name || '(unnamed)' : null,
-        gap: first ? +(dist - first.distance).toFixed(3) : null, dist: +dist.toFixed(3) };
+        gap: first ? +(dist - first.distance).toFixed(3) : null, dist: +dist.toFixed(3), pose: sig };
       return window.__kbCloseup;
     })()`,
     // Pausing the sim means the settle window is pure TAA convergence.
