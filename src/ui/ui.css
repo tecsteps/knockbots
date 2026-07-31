@@ -161,6 +161,26 @@
   --kb-mask: none;
   --kb-ink-a: #fffef2;
   --kb-ink-b: #a84e0a;
+  /* How far the edge-light layer's second mask copy is pushed down-right; see
+   * the `::after` rule below. It is a length, not a switch — the switch is the
+   * selector list, because at HUD sizes the layer must not exist at all. */
+  --kb-edge: 0.030em;
+  /* The cast shadow, and the only place it can live.
+   *
+   * `.kb-text__body` used to carry `drop-shadow(0 0.05em 0.1em ...)` and it
+   * drew NOTHING. CSS applies `filter` before `mask` on the same box, so a
+   * masked element's drop-shadow spread is clipped away by the very mask that
+   * defines the shape it was tracing — the same trap already documented on
+   * `.announce-inner`. `.kb-text` is unmasked and wraps the whole stack, so
+   * here the shadow reads the composite alpha and actually reaches the frame.
+   * Measured on 13-announce-fight's stem column, the profile below the glyph
+   * went from a one-pixel step 0 -> 59 to a ten-pixel ramp
+   * 0 / 17 / 33 / 42 / 50 / 55 / 58 / 60 / 61 / 63.
+   *
+   * `.announce-text` opts out (below): inside `.announce-inner` this feeds a
+   * chain of eight hard black stamps, which restamp the soft alpha eight times
+   * and turn the whole neighbourhood opaque. */
+  filter: drop-shadow(0 0.045em 0.06em rgba(0, 0, 0, 0.72));
 }
 .kb-text__shadow, .kb-text__body, .kb-text__gloss {
   position: absolute;
@@ -181,7 +201,6 @@
 }
 .kb-text__body {
   background-image: linear-gradient(180deg, var(--kb-ink-a) 0%, var(--kb-ink-a) 30%, var(--kb-ink-b) 100%);
-  filter: drop-shadow(0 0.05em 0.1em rgba(0, 0, 0, 0.8));
 }
 /*
  * The gloss is offset by moving its GRADIENT, never the layer.
@@ -211,6 +230,64 @@
     rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.62) 16%, rgba(255, 255, 255, 0) 49%);
   opacity: 0.55;
   mix-blend-mode: screen;
+}
+
+/*
+ * THE EDGE LIGHT — the lit chamfer along the top-left of every stroke.
+ *
+ * Everything above this rule varies only VERTICALLY. Measured across the T
+ * stem of "FIGHT" on 13-announce-fight (x 1178-1199, y 600), a 22-pixel stroke
+ * read 112 113 112 113 … for its whole width: one part in 255 of lateral
+ * variation on the single element that is in literally every frame of the
+ * game. Cast metal does not do that. What it does is catch the key on the two
+ * faces that turn toward it, and that band is what tells the eye the stroke has
+ * a cross-section rather than being a fill.
+ *
+ * The band is built by masking this layer with the glyph MINUS a copy of the
+ * glyph pushed down-right by `--kb-edge`. `mask-composite: subtract` is
+ * source-out — the first mask layer is the top one — so what survives is
+ * exactly the sliver of each stroke that the shifted copy does not cover: the
+ * top and left faces, following the true letterform (shoulders, counters, the
+ * insides of the G) rather than a box. The same measurement after: 187 211 211
+ * 211 187 | 113 113 … — 99/255 across the stroke.
+ *
+ * Two things that look like details and are not:
+ *
+ *  - THE SELECTOR LIST IS THE FEATURE. `--kb-edge: 0` does NOT disable this;
+ *    subtracting two nominally identical masks leaves the antialiasing
+ *    residue along every edge, and painted near-white that residue shreds
+ *    small type — photographed at 8x on the 20px nameplate, "VULKAN" came back
+ *    speckled and hollow. A chamfer is a property of DISPLAY type; below about
+ *    40px the band is thinner than the antialiasing and there is nothing to
+ *    light. So the layer is only ever built for the sizes that can hold it.
+ *  - The colour is derived from the ink with `color-mix`, so the K.O. red, the
+ *    TIME UP grey and the PERFECT gold each get their own edge instead of a
+ *    warm-white one pasted over them.
+ */
+.announce-text.kb-text::after,
+.timer-value.kb-text::after,
+.combo-hits.kb-text::after,
+.kbs-name.kb-text::after,
+.results-winner.kb-text::after,
+.title-logo.kb-text::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(180deg,
+    color-mix(in srgb, var(--kb-ink-a) 20%, #ffffff) 0%,
+    var(--kb-ink-a) 30%,
+    color-mix(in srgb, var(--kb-ink-a) 70%, var(--kb-ink-b)) 100%);
+  -webkit-mask-image: var(--kb-mask), var(--kb-mask);
+  -webkit-mask-repeat: no-repeat, no-repeat;
+  -webkit-mask-size: 100% 100%, 100% 100%;
+  -webkit-mask-position: 0 0, var(--kb-edge) calc(var(--kb-edge) * 0.86);
+  -webkit-mask-composite: source-out;
+  mask-image: var(--kb-mask), var(--kb-mask);
+  mask-repeat: no-repeat, no-repeat;
+  mask-size: 100% 100%, 100% 100%;
+  mask-position: 0 0, var(--kb-edge) calc(var(--kb-edge) * 0.86);
+  mask-composite: subtract;
 }
 .kb-text--white { --kb-ink-a: #ffffff; --kb-ink-b: #b6c0d4; }
 .kb-text--danger { --kb-ink-a: #ffb3ba; --kb-ink-b: #a4020f; }
@@ -599,8 +676,12 @@
   height: 1.05em;
   box-sizing: content-box;
 }
-.hp-block--p1 .nameplate-name { border-left: 0.18em solid var(--kb-p1); padding-left: 0.4em; }
-.hp-block--p2 .nameplate-name { border-right: 0.18em solid var(--kb-p2); padding-right: 0.4em; }
+/* 0.62em, up from 0.4em. The mask re-inset below stopped the ink from touching
+ * the identity bar, but measured in the frame the clear space was 8px against a
+ * 20px cap height and a 3px bar, and at 1x an unornamented 3px vertical rule
+ * that close to a V still reads as a letter of the name. 12px is a gutter. */
+.hp-block--p1 .nameplate-name { border-left: 0.18em solid var(--kb-p1); padding-left: 0.62em; }
+.hp-block--p2 .nameplate-name { border-right: 0.18em solid var(--kb-p2); padding-right: 0.62em; }
 /*
  * The three mask layers are `position: absolute; inset: 0`, and an
  * absolutely-positioned box's containing block is its ancestor's *padding*
@@ -616,10 +697,10 @@
  */
 .hp-block--p1 .nameplate-name .kb-text__shadow,
 .hp-block--p1 .nameplate-name .kb-text__body,
-.hp-block--p1 .nameplate-name .kb-text__gloss { left: 0.4em; }
+.hp-block--p1 .nameplate-name .kb-text__gloss { left: 0.62em; }
 .hp-block--p2 .nameplate-name .kb-text__shadow,
 .hp-block--p2 .nameplate-name .kb-text__body,
-.hp-block--p2 .nameplate-name .kb-text__gloss { right: 0.4em; }
+.hp-block--p2 .nameplate-name .kb-text__gloss { right: 0.62em; }
 
 /*
  * Head-and-shoulders portrait, rendered once per match by `HUD#capturePortrait`
@@ -1334,17 +1415,79 @@
    * read the composite alpha — still the true letter silhouette, shoulders and
    * counters included — and are free to spread outside it. */
   filter:
-    drop-shadow(0.05em 0 0 #000) drop-shadow(-0.05em 0 0 #000)
-    drop-shadow(0 0.05em 0 #000) drop-shadow(0 -0.05em 0 #000)
-    drop-shadow(0.05em 0.05em 0 #000) drop-shadow(-0.05em -0.05em 0 #000)
-    drop-shadow(0.05em -0.05em 0 #000) drop-shadow(-0.05em 0.05em 0 #000)
-    /* A soft dark halo outside the hard outline. The eight stamps above give
-     * the letter a milled edge, but a hard edge only separates the glyph from
-     * whatever it happens to abut; this is what keeps the separation when the
-     * scene behind is itself high-frequency (fence mesh, panel lines). */
-    drop-shadow(0 0.03em 0.3em rgba(0, 0, 0, 0.9))
+    drop-shadow(0.020em 0 0 #000) drop-shadow(-0.020em 0 0 #000)
+    drop-shadow(0 0.020em 0 #000) drop-shadow(0 -0.020em 0 #000)
+    drop-shadow(0.020em 0.020em 0 #000) drop-shadow(-0.020em -0.020em 0 #000)
+    drop-shadow(0.020em -0.020em 0 #000) drop-shadow(-0.020em 0.020em 0 #000)
+    /* THE PENUMBRA.
+     *
+     * There used to be one soft halo here, `0 0.03em 0.3em` — a 45px blur at
+     * the FIGHT banner's 150px — and it is so diffuse that it lands under two
+     * units of luminance at the contour. Everything the eye actually reads as
+     * the shadow's edge was made of the eight hard stamps above plus
+     * `.kb-text__shadow`, both zero-blur, and both clipped to a glyph. So the
+     * word sat on a 12-pixel slab of pure black that went 0 -> 59 in ONE pixel,
+     * scanned down the T stem at x=1188. Nothing in a photographed frame has an
+     * edge like that; a real occluder an inch off its backing has a penumbra
+     * several pixels wide, and its absence is most of why masked type reads as
+     * a sticker laid on the picture rather than an object standing off it.
+     *
+     * A penumbra is a RAMP, and a ramp needs more than one scale — one blur
+     * radius gives a soft edge that is still a single edge. Three, each roughly
+     * doubling and each lighter, integrate into a falloff. The hard stamps drop
+     * from 0.05em to 0.020em at the same time: they are there to keep a milled
+     * contour against a high-frequency background (fence mesh, panel lines),
+     * and 7.5px of dead black was doing more than that job needed.
+     *
+     * THREE, AND NO WIDER THAN 0.13em, AND THAT CEILING IS NOT AESTHETIC. The
+     * first version of this ramp had five stamps out to 0.5em — a 75px blur on
+     * a 553x153 box, on top of the 0.6em flare glow — and it cost the frame
+     * this shot is scored on. Every drop-shadow in a chain re-blurs the whole
+     * expanded region, and the harness detects the banner with a
+     * `waitForFunction` polling on rAF: slow the frame down and detection lands
+     * late in the 1.24s hold, after which the shot's own 600ms settle overshoots
+     * into the dismissal. Measured, three runs a side, as "is there any pixel
+     * under 8/255 in the banner's box":
+     *
+     *     five stamps out to 0.5em    banner in frame 0 / 3
+     *     control (this file's parent) 3 / 3
+     *     five stamps, rim reverted    0 / 2   <- so it was not the rim
+     *     rim kept, ramp reverted      2 / 2   <- it was the ramp
+     *
+     * The whole point of the shot is to photograph this word and it was
+     * photographing an empty arena. The ramp below keeps three scales and stops
+     * at 0.15em, which is half the 0.3em halo it replaces, so the chain is
+     * cheaper than the one it came from and still spreads the edge.
+     *
+     * Measured on a FROZEN frame — the scene has to be pinned for this, because
+     * the arena floor under the banner is up to 40 units brighter on some
+     * captures than others and that moves the plateau the ramp climbs to far
+     * more than any of these numbers do. Scanning down the T stem at x=1188,
+     * largest single-pixel step at the shadow's lower edge:
+     *
+     *     as it was, one 0.3em halo             59 and 54/255, two frozen frames
+     *     three stamps, hard contour 0.028em    38 and 54
+     *     three stamps, hard contour 0.020em    38 and 42      <- shipped
+     *     the above, plus .kb-text__shadow at
+     *       0.45 opacity instead of 0.6         42             <- no effect
+     *
+     * That last row is worth keeping. Thinning the CAST layer does nothing,
+     * because the eight hard stamps read its alpha and restamp it back to
+     * opaque either way. The only two knobs on this edge are how far the hard
+     * contour reaches and what the soft chain puts outside it. */
+    drop-shadow(0 0.012em 0.030em rgba(0, 0, 0, 1))
+    drop-shadow(0 0.028em 0.070em rgba(0, 0, 0, 0.92))
+    drop-shadow(0 0.050em 0.150em rgba(0, 0, 0, 0.80))
     drop-shadow(0 0 0.6em var(--flare-glow));
 }
+/*
+ * The banner builds its own shadow in the chain above, out of the composite
+ * alpha of the whole word. `.kb-text`'s generic cast shadow must not also be in
+ * that alpha: eight hard black stamps restamping a soft blur turn the entire
+ * neighbourhood of the word opaque. Photographed, the frame lost every pixel of
+ * background within 40px of "FIGHT".
+ */
+.announce-text.kb-text { filter: none; }
 .announce-banner[data-kind='round'] .announce-text { font-size: clamp(28px, 6vw, 90px); }
 .announce-banner[data-kind='fight'] { --flare: var(--kb-accent); }
 .announce-banner[data-kind='fight'] .announce-text { font-size: clamp(44px, 9.4vw, 150px); }
@@ -1533,11 +1676,30 @@
   justify-content: center;
   gap: 2.4em;
 }
+/*
+ * `font-size`, not `height`, and the difference is the whole logo.
+ *
+ * `.kb-text` is sized by `applyKbText` writing `width: <aspect>em` inline and
+ * by `.kb-text`'s own `height: 1em` — both off FONT-SIZE. Overriding `height`
+ * alone therefore grew the BOX and not the type: this rule made a 128px-tall
+ * box, `applyKbText` made it 155px wide from the inherited 21px font, and the
+ * glyph SVG (default `preserveAspectRatio`) fitted itself to the width and
+ * centred in the leftover height. Measured in the page: `.title-logo` 155x128,
+ * computed font-size 21.12px — "KNOCKBOTS" was rendering at a 21px cap height,
+ * smaller than the ARCADE / TRAINING / OPTIONS list under it, floating in
+ * 107px of empty box. The same fault sized `.results-winner` (72x54 at 21px).
+ * Neither is a subtle miss at 3x; the title screen had no logo on it.
+ *
+ * Setting font-size drives width, height and every em-based layer offset
+ * together, which is the invariant the whole `.kb-text` construction assumes.
+ * The glow comes down from 2.4em with it — 2.4em was 50px against a 21px word
+ * and would be 202px against an 84px one.
+ */
 .title-logo.kb-text {
-  height: clamp(40px, 10vw, 128px);
+  font-size: clamp(24px, 4.6vw, 84px);
   --kb-ink-a: #fefefe;
   --kb-ink-b: #7a3d10;
-  filter: drop-shadow(0 0 2.4em rgba(255, 138, 42, 0.45));
+  filter: drop-shadow(0 0.03em 0.05em rgba(0, 0, 0, 0.7)) drop-shadow(0 0 0.6em rgba(255, 138, 42, 0.45));
 }
 .title-tagline {
   margin-top: 0.5em;
@@ -1857,11 +2019,13 @@
   background: var(--kb-accent);
   box-shadow: var(--kb-glow-accent);
 }
+/* `font-size`, not `height` — see the note on `.title-logo.kb-text`. This rule
+ * was making a 54px box around a 21px word. */
 .results-winner.kb-text {
-  height: clamp(26px, 3.2vw, 54px);
+  font-size: clamp(22px, 2.6vw, 46px);
   --kb-ink-a: #ffffff;
   --kb-ink-b: #a84e0a;
-  filter: drop-shadow(0 0.06em 0.5em rgba(0, 0, 0, 0.8)) drop-shadow(0 0 1.1em rgba(255, 138, 42, 0.45));
+  filter: drop-shadow(0 0.05em 0.09em rgba(0, 0, 0, 0.8)) drop-shadow(0 0 0.55em rgba(255, 138, 42, 0.45));
 }
 .results-epithet {
   font-size: 0.72em; font-weight: 700; letter-spacing: 0.24em;

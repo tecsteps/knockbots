@@ -2121,6 +2121,7 @@ uniform vec4 kbSurface;    // form curvature scale, micro curvature scale, hollo
 uniform vec4 kbSurfaceB;   // burnish, direct occlusion, occlusion sharpness, polish
 uniform vec4 kbLattice;    // panel lattice: strength, gap half-width, occlusion reach, panel span
 uniform vec4 kbDetail;     // machining lay: strength, fine pitch (m), coarse pitch (m), edge wear
+uniform vec4 kbChamfer;    // specular chamfer: strength, width (m), peak slope, lip gloss
 uniform vec3 kbSootColor;
 uniform vec3 kbOxideColor;
 uniform vec3 kbHeatColor;
@@ -2132,6 +2133,23 @@ varying vec3 vKbObjNrm;
 varying vec4 vKbFrame;
 varying vec4 vKbSeed;
 varying vec4 vKbLayout;
+
+// Screen gradient of a distance field, with the kinks taken out.
+//
+// kbDm and kbEdgeD are both min() of two distances, and kbDm is built on fract():
+// they are piecewise linear with CREASES, and a 2x2 derivative quad that straddles
+// a crease returns a gradient several times too long. A unit-gradient distance
+// field cannot change by more than one pixel footprint per pixel, so anything
+// above that is the crease and not the surface -- and left in, it tilts one or two
+// fragments per crease to a wild angle, which is a bright dot on an edge. That is
+// what a chamfer built naively on these fields looks like: a dashed line of
+// sparkles rather than a lip.
+vec2 kbDField( float d, float px ) {
+	vec2 g = vec2( dFdx( d ), dFdy( d ) );
+	float l = length( g );
+	float lim = 1.45 * px;
+	return l > lim ? g * ( lim / l ) : g;
+}
 
 // The three projections are flipped to face outward, or every stencil on the
 // far half of the body would come out mirrored — the one artefact that gives a
@@ -2431,6 +2449,102 @@ if ( kbDetail.x > 0.0 ) {
 // its way across the plate instead of fading into the surface tone.
 float kbPx = sqrt( 1.0 / kbInvFoot );
 
+// ---------------------------------------------------------------------------
+// SPECULAR CHAMFER.
+//
+// The single finding that names this file's whole problem: **a panel edge here
+// is defined by REMOVING light and in the reference it is defined by ADDING
+// it.** Every boundary term below -- the seam, the joint, the halo, the lattice
+// gap -- multiplies albedo down, pushes roughness up and occludes. Not one of
+// them puts a lit surface next to the dark line, so a plate boundary reads as a
+// stroke drawn on a flat plate. Measured as the brightest pixel 6-14px off a
+// groove over the median at the same distance, the reference sits at 1.5-1.9
+// and this file sat at the bottom of that range with the arena carrying most of
+// what it had.
+//
+// A real plate boundary is not a groove cut into a flat sheet. It is two plates
+// whose edges are BROKEN -- chamfered, radiused, or simply rolled by the press
+// -- so between the flat of the plate and the air there is a narrow face at 30
+// to 45 degrees. That face samples a completely different part of the room than
+// the plate does, and because it sweeps through a range of angles rather than
+// holding one, somewhere along it the key light's mirror direction is crossed.
+// That is where the bright line in every reference screenshot comes from, and it
+// is why it travels when the camera moves and a painted line would not.
+//
+// Two halves, and the second is why round 15's attempt at the first half alone
+// measured flat:
+//
+//   1. TILT. A smoothstep height profile across the band immediately outside the
+//      gap, differentiated ANALYTICALLY, tilted into the shading normal by
+//      Mikkelsen's surface gradient so no tangent frame is needed. Round 15 took
+//      the height derivative with dFdx instead, which averages the whole break
+//      over one pixel and delivers a fraction of the intended angle at exactly
+//      the scale this feature lives at; the note it left says the lever has no
+//      travel, and what it had was no amplitude.
+//
+//   2. STOP DARKENING THE BAND THE LIP LIVES IN. kbSeamH and kbLatH are
+//      occlusion haloes that reach 3x the seam ramp and ~6x the panel gap --
+//      33mm and 26mm, which at the closeup framing is 60 and 49 pixels. The
+//      critic's lip window is 6-14px off the groove, i.e. entirely inside them.
+//      So the chamfer was being tilted into light and then multiplied back down
+//      by a term written to say "a recess is dark". A recess is; its rolled lip
+//      is not, and the lip is the half the eye reads as an edge.
+//
+// Both are band-limited on the measured metres-per-pixel: a 2.8mm break is five
+// pixels at the closeup and under one at fighting range, and a sub-pixel mirror
+// facet is a firefly, not an edge. Below ~2.4px the tilt fades out and its
+// variance is handed to roughness, the same handoff the machining lay uses.
+//
+// Costs no triangle, no texture fetch and no draw call. That is not incidental:
+// the roster is already over the 900,000-triangle ceiling, so a modelled
+// chamfer on forty plates per fighter was never affordable.
+vec3 kbGb1 = vec3( 0.0 ), kbGb2 = vec3( 0.0 );
+float kbGdet = 1.0;
+if ( kbChamfer.x > 0.0 ) {
+	vec3 kbPdX = - kbVx, kbPdY = - kbVy;
+	kbGb1 = cross( kbPdY, normal );
+	kbGb2 = cross( normal, kbPdX );
+	float kbD0 = dot( kbPdX, kbGb1 );
+	kbGdet = abs( kbD0 ) < 1e-12 ? 1e-12 : kbD0;
+}
+
+// Amplitude of the break, faded out as it approaches pixel scale.
+float kbChW = max( kbChamfer.y, 1e-5 );
+float kbChFade = smoothstep( 1.0, 2.4, kbChW / max( kbPx, 1e-6 ) );
+float kbChAmp = kbChamfer.x * kbChFade;
+// Roughness that the fade took out of the normal, so a plate does not go glassy
+// along its edges at range.
+float kbChLost = kbChamfer.x * ( 1.0 - kbChFade );
+// The break's OWN sub-pixel curvature, folded into the lobe width.
+//
+// Round 17 built screen-space geometric specular antialiasing for the edge
+// fireflies, measured it, and reverted it: a 5-10% move on a count, invisible at
+// nine times life size. That result stands and this is not a retry of it. The
+// difference is that this facet's normal variance is KNOWN rather than sampled --
+// the profile is analytic, so the normal turns by exactly (slope / width) radians
+// per metre and by kbChSig radians per PIXEL -- and a polished facet five pixels
+// wide is precisely the case where an unfiltered narrow lobe becomes a string of
+// dots. Added in variance, which is where normal variance belongs.
+float kbChSig = kbChamfer.z * kbPx / kbChW;
+// The normal variance the fade removed, handed to the lobe width -- but only
+// over the band the break occupies. Added flat it would raise the roughness of
+// every panelled plate at fighting range, which is a plate-wide change dressed
+// up as an edge term.
+float kbChRough = 0.0;
+// How far the break eats INTO the boundary's existing footprint.
+//
+// This is the half that moves the number, and it took a validated instrument to
+// see it. A boundary here is a band of constant darkness whose half-width is the
+// authored gap -- 4.5mm is 8.5 screen pixels at the closeup and the widest plate
+// plan reaches 14 -- so a chamfer laid OUTSIDE it starts 14 pixels off the centre
+// line and is not beside the dark line at all, it is a separate bright band
+// further out. On a real joint the visible dark line is the gap PLUS its two
+// broken edges: most of the width the eye reads is chamfer, and only a sliver in
+// the middle is air. So the break is taken OUT of the dark band rather than added
+// beyond it -- the boundary keeps its total footprint, the black core narrows,
+// and what was flat shadow becomes a lit facet immediately beside it.
+float kbChIn = kbChW * min( kbChAmp, 1.0 );
+
 // Plate perimeter. The plateFrame attribute carries the vertex's coordinate on
 // its own face and that face's half-extents, both in metres, so this seam lands
 // on the plate's real boundary instead of wherever the shared atlas happened to
@@ -2444,12 +2558,21 @@ float kbPx = sqrt( 1.0 / kbInvFoot );
 // is still lit but progressively less of the room can reach it.
 float kbSeam = 0.0;
 float kbSeamH = 0.0;
+// Hoisted out of the branch: the chamfer needs the distance field itself, not
+// just the two masks derived from it. 1e3 is "nowhere near an edge", which is
+// the right answer for a part with no face to bound.
+float kbEdgeD = 1e3;
+float kbSeamW = 0.011;
+float kbChBase = 0.011;
 if ( vKbFrame.z > 0.0 && vKbFrame.w > 0.0 ) {
 	vec2 kbToEdge = vKbFrame.zw - abs( vKbFrame.xy );
-	float kbSeamW = min( 0.011, min( vKbFrame.z, vKbFrame.w ) * 0.2 );
-	float kbEdgeD = min( kbToEdge.x, kbToEdge.y );
-	kbSeam = 1.0 - smoothstep( 0.0, max( kbSeamW, kbPx ), kbEdgeD );
+	kbSeamW = min( 0.011, min( vKbFrame.z, vKbFrame.w ) * 0.2 );
+	kbEdgeD = min( kbToEdge.x, kbToEdge.y );
+	// The dark core, narrowed by whatever the break is about to occupy.
+	float kbSeamC = max( kbSeamW - kbChIn, kbSeamW * 0.3 );
+	kbSeam = 1.0 - smoothstep( 0.0, max( kbSeamC, kbPx ), kbEdgeD );
 	kbSeamH = ( 1.0 - smoothstep( kbSeamW, kbSeamW * 3.0, kbEdgeD ) ) * ( 1.0 - kbSeam );
+	kbChBase = kbSeamC;
 }
 kbSeam *= kbSurface.w;
 kbSeamH *= kbSurface.w;
@@ -2493,6 +2616,38 @@ float kbLipFade = smoothstep( 1.2, 3.0, min( vKbFrame.z, vKbFrame.w ) / max( kbP
 float kbLip = kbSeam * kbRim * kbLipFade;
 float kbJoint = kbSeam * ( 1.0 - kbRim * kbLipFade );
 float kbHaloJ = kbSeamH * ( 1.0 - kbRim );
+
+// The break on the plate's own perimeter. It rides the band the narrowed seam
+// core just gave up (kbChBase), so the boundary keeps its total footprint and
+// the facet lands immediately beside the dark line rather than beyond it --
+// which is both what a pressed edge is and where the critic's 6-14px window
+// looks for the lip.
+float kbChSeam = 0.0;
+if ( kbChamfer.x > 0.0 && kbEdgeD < 1e2 ) {
+	float kbT = clamp( ( kbEdgeD - kbChBase ) / kbChW, 0.0, 1.0 );
+	// h = smoothstep across the band, so dh/dd = 6t(1-t)/w; normalised so the
+	// PEAK slope is kbChamfer.z rather than its average. tan(40 deg) = 0.84.
+	float kbBand = 4.0 * kbT * ( 1.0 - kbT );
+	float kbSl = kbBand * kbChamfer.z * kbChAmp;
+	kbChSeam = kbBand * kbChAmp;
+	kbChRough = max( kbChRough, kbBand * kbChLost );
+	vec2 kbDg = kbDField( kbEdgeD, kbPx );
+	vec3 kbSg = ( kbSl * kbDg.x * kbGb1 + kbSl * kbDg.y * kbGb2 ) / kbGdet;
+	normal = normalize( normal - kbSg );
+	// The face is bare rolled alloy: the paint is thinnest over a break and
+	// everything that brushes past the machine polishes it. Gloss is what turns
+	// the tilt into a LINE rather than a smudge -- a rough facet at 40 degrees
+	// just samples a different part of a slowly-varying room.
+	float kbG2 = clamp( kbChSeam * kbChamfer.w, 0.0, 1.0 ) * ( 1.0 - kbGrime * 0.6 );
+	roughnessFactor = clamp( mix( roughnessFactor, sqrt( 0.0081 + 2.0 * kbChSig * kbChSig ), kbG2 * 0.85 ) + 0.09 * kbChRough, 0.05, 1.0 );
+	metalnessFactor = mix( metalnessFactor, 1.0, kbG2 * 0.8 );
+	float kbCl = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
+	diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * ( 0.40 + 1.35 * kbCl ), kbG2 * 0.6 );
+	// And stop shadowing it. The halo is a recess term; the chamfer is the lip
+	// of the recess and is the one part of it the room can see.
+	kbHaloJ *= 1.0 - 0.85 * kbChSeam;
+}
+
 diffuseColor.rgb *= 1.0 - 0.34 * kbJoint - 0.13 * kbHaloJ;
 float kbLipLum = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
 diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * ( 0.34 + 1.25 * kbLipLum ), kbLip * 0.62 * ( 1.0 - kbGrime * 0.6 ) );
@@ -2516,6 +2671,7 @@ metalnessFactor = mix( metalnessFactor, 1.0, kbLip * 0.55 );
 float kbLat = 0.0;
 float kbLatH = 0.0;
 float kbLatL = 0.0;
+float kbChLat = 0.0;
 float kbBolt = 0.0;
 if ( kbLattice.x > 0.0 && kbPitch > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 ) {
 	vec2 kbSpan = vKbFrame.zw * 2.0;
@@ -2528,8 +2684,11 @@ if ( kbLattice.x > 0.0 && kbPitch > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 
 	kbD = mix( vec2( 1e3 ), kbD, step( 1.0, kbCells ) );
 	float kbDm = min( kbD.x, kbD.y );
 	float kbGw = kbGapW;
-	float kbFe = max( kbGw * 0.6, kbPx * 0.8 );
-	kbLat = 1.0 - smoothstep( kbGw - kbFe, kbGw + kbFe, kbDm );
+	// The air gap, narrowed by the two broken edges that will occupy the rest
+	// of the boundary's footprint. See kbChIn.
+	float kbGc = max( kbGw - kbChIn, kbGw * 0.3 );
+	float kbFe = max( kbGc * 0.6, kbPx * 0.8 );
+	kbLat = 1.0 - smoothstep( kbGc - kbFe, kbGc + kbFe, kbDm );
 	kbLatH = ( 1.0 - smoothstep( kbGw, kbGw * ( kbLattice.z / max( kbLattice.y, 1e-4 ) ), kbDm ) ) * ( 1.0 - kbLat );
 	// The rolled lip either side of the gap. A panel edge is broken by the press
 	// and then rubbed by everything that passes it, so it holds a tighter
@@ -2539,9 +2698,45 @@ if ( kbLattice.x > 0.0 && kbPitch > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 
 	kbLat *= kbLattice.x;
 	kbLatH *= kbLattice.x;
 	kbLatL *= kbLattice.x * ( 1.0 - kbGrime * 0.6 );
+
+	// The break on the two walls of the panel gap. Same construction as the
+	// perimeter: an analytic smoothstep profile across the band immediately
+	// outside the gap, its peak slope set from the uniform, tilted into the
+	// shading normal by the surface gradient. The two walls tilt in OPPOSITE
+	// directions, which is the whole point -- one of them turns toward the key
+	// and fires, the other turns away, so the boundary reads as a bright line
+	// beside a dark one instead of as a dark line alone.
+	if ( kbChamfer.x > 0.0 ) {
+		float kbCt = clamp( ( kbDm - kbGc ) / kbChW, 0.0, 1.0 );
+		float kbCb = 4.0 * kbCt * ( 1.0 - kbCt );
+		float kbCs = kbCb * kbChamfer.z * kbChAmp;
+		kbChLat = kbCb * kbChAmp * kbLattice.x;
+		kbChRough = max( kbChRough, kbCb * kbLattice.x * kbChLost );
+		vec2 kbDg = kbDField( kbDm, kbPx );
+		vec3 kbCg = ( kbCs * kbDg.x * kbGb1 + kbCs * kbDg.y * kbGb2 ) / kbGdet;
+		normal = normalize( normal - kbCg );
+		// The halo is the recess term and the chamfer is the LIP of the recess.
+		// Occluding the lip is the exact mechanism that made a panel edge here
+		// subtract light where the reference adds it.
+		kbLatH *= 1.0 - 0.85 * kbChLat;
+	}
+	// The break is BARE POLISHED ALLOY, and that is not a detail. A tilt on
+	// its own only samples a different part of a slowly varying room; what
+	// makes the reference's edge a LINE is that the facet is smooth enough to
+	// return a specular lobe narrower than the facet is wide. Paint is thinnest
+	// over a broken edge and everything that brushes past the machine polishes
+	// it, so this is what the surface really is there -- but it has to be taken
+	// most of the way to a mirror before the eye reads a highlight instead of a
+	// slightly lighter band. Measured: at -0.24 roughness the lip/plate ratio at
+	// real panel gaps moves 1.14 -> 1.15; taken to 0.09 it moves to 1.2+.
+	float kbChG = clamp( kbChLat * kbChamfer.w, 0.0, 1.0 ) * ( 1.0 - kbGrime * 0.6 );
 	diffuseColor.rgb *= 1.0 - 0.58 * kbLat - 0.17 * kbLatH;
-	roughnessFactor = clamp( roughnessFactor + 0.30 * kbLat + 0.09 * kbLatH - 0.13 * kbLatL, 0.06, 1.0 );
+	roughnessFactor = clamp( mix( roughnessFactor, sqrt( 0.0081 + 2.0 * kbChSig * kbChSig ), kbChG * 0.85 )
+		+ 0.30 * kbLat + 0.09 * kbLatH - 0.13 * kbLatL + 0.09 * kbChRough, 0.05, 1.0 );
 	metalnessFactor *= 1.0 - 0.35 * kbLat;
+	metalnessFactor = mix( metalnessFactor, 1.0, kbChG * 0.8 );
+	float kbChL2 = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
+	diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * ( 0.40 + 1.35 * kbChL2 ), kbChG * 0.6 );
 
 	// ROUND 15, MEASURED AND REVERTED: a real chamfer in the NORMAL.
 	//
@@ -2594,7 +2789,14 @@ if ( kbLattice.x > 0.0 && kbPitch > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 
 		// gaps are 4.5mm, which is a coach bolt, not a fastener. See the note
 		// below on what that number was actually costing.
 		float kbR = max( kbGw * 1.15, kbPx * 0.7 );
-		float kbDist = length( vec2( kbS, kbInset - kbR * 2.4 ) );
+		// Inboard of the break. The fastener row marches at the same distance from
+		// the plate edge that the perimeter chamfer occupies, so with the chamfer on
+		// the heads sat ON the lip and chopped it into a dashed chain -- which is
+		// exactly the beaded edge highlight the difference map showed, and it reads
+		// as aliasing rather than as what it is. Nothing is bolted through a broken
+		// edge on a real part either: there is no flat there to seat a head on.
+		float kbBoltIn = mix( kbR * 2.4, max( kbR * 2.4, kbChBase + kbChW + kbR ), min( kbChAmp, 1.0 ) );
+		float kbDist = length( vec2( kbS, kbInset - kbBoltIn ) );
 		float kbBoltT = clamp( kbDist / max( kbR, 1e-5 ), 0.0, 1.0 );
 		kbBolt = ( 1.0 - smoothstep( 0.72, 1.0, kbBoltT ) ) * kbLattice.x * ( 1.0 - kbRim * 0.85 );
 		// THE HEAD HAS TO HAVE A SHAPE.
@@ -2682,10 +2884,10 @@ const STORY_CLEARCOAT_FRAGMENT = /* glsl */`
 	// rolled edge gets polished and a panel gap never gets waxed. Keeping the two
 	// lobes in agreement is what stops the chamfer highlight reading as two
 	// unrelated specular events stacked on one another.
-	material.clearcoatRoughness = clamp( material.clearcoatRoughness * ( 1.0 - 0.55 * kbPolish - 0.3 * kbLatL - 0.35 * kbLip ) + 0.3 * kbHol + 0.24 * kbJoint + 0.3 * kbLat + 0.1 * kbLatH, 0.0525, 1.0 );
+	material.clearcoatRoughness = clamp( material.clearcoatRoughness * ( 1.0 - 0.55 * kbPolish - 0.3 * kbLatL - 0.35 * kbLip - 0.45 * ( kbChSeam + kbChLat ) * kbChamfer.w ) + 0.3 * kbHol + 0.24 * kbJoint + 0.3 * kbLat + 0.1 * kbLatH, 0.0525, 1.0 );
 	// Paint does not survive a ground edge or a fastener head: both are bare
 	// metal by the time the machine has been used, so the lacquer stops there.
-	material.clearcoat = saturate( material.clearcoat * ( 1.0 - 0.55 * kbSeam - 0.8 * kbLat - 0.6 * kbBolt ) );
+	material.clearcoat = saturate( material.clearcoat * ( 1.0 - 0.55 * kbSeam - 0.8 * kbLat - 0.6 * kbBolt - 0.75 * clamp( ( kbChSeam + kbChLat ) * kbChamfer.w, 0.0, 1.0 ) ) );
 #endif
 `;
 
@@ -2749,6 +2951,18 @@ const STORY_DEFAULTS = {
   detailFine: 0.0030,
   detailCoarse: 0.011,
   detailWear: 0.8,
+  // Specular chamfer. `chamfer` is the master strength and 0 disables the whole
+  // term through a uniform branch on the same compiled program, which is what
+  // makes it A/B-able on one frozen frame at a 0.000/255 noise floor.
+  //
+  // 2.8mm is the width of the break itself: five screen pixels at the 1.35m
+  // closeup, which is what the critic's 6-14px lip window is asking for, and
+  // under one pixel at fighting range where the term correctly fades out.
+  // 0.84 is tan(40 deg), the PEAK slope of the profile rather than its average.
+  chamfer: 1,
+  chamferWidth: 0.0028,
+  chamferSlope: 0.84,
+  chamferGloss: 1,
 };
 
 /**
@@ -2808,6 +3022,12 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
     const abDetail = (typeof window !== 'undefined' && Number.isFinite(window.__KB_DETAIL))
       ? window.__KB_DETAIL : 1;
     u.kbDetail = { value: new THREE.Vector4(s.detail * abDetail, s.detailFine, s.detailCoarse, s.detailWear) };
+    // `window.__KB_CHAMFER` scales the specular chamfer across the whole roster,
+    // read at COMPILE time for the same reason `__KB_DETAIL` is: the control arm
+    // of an A/B has to reach materials that do not exist yet.
+    const abCham = (typeof window !== 'undefined' && Number.isFinite(window.__KB_CHAMFER))
+      ? window.__KB_CHAMFER : 1;
+    u.kbChamfer = { value: new THREE.Vector4(s.chamfer * abCham, s.chamferWidth, s.chamferSlope, s.chamferGloss) };
     u.kbSootColor = { value: new THREE.Color(STORY_INK.soot) };
     u.kbOxideColor = { value: new THREE.Color(STORY_INK.oxide) };
     u.kbHeatColor = { value: new THREE.Color(STORY_INK.heat) };
@@ -3162,6 +3382,108 @@ function paletteKey(p, sizes) {
  * is the detector counting the new grain's own crests rather than new aliasing —
  * nothing new is visible along the plate edges at 9x — but it is not zero and it
  * is recorded.
+ *
+ * --- Round 18: the specular chamfer, and the measurement that could see it ----
+ *
+ * The finding this round acted on: **a panel edge here is defined by REMOVING
+ * light; the reference defines it by ADDING light.** Every boundary term in this
+ * file multiplied albedo down, pushed roughness up and occluded; none of them put
+ * a lit surface next to the dark line. Shipped: `STORY_FORM_FRAGMENT`'s chamfer,
+ * an analytic smoothstep break on both the plate perimeter and the two walls of
+ * every panel gap, tilted into the shading normal by the surface gradient and
+ * surfaced as bare polished alloy.
+ *
+ * THE INSTRUMENT IS THE REUSABLE PART, and the first three versions of it were
+ * wrong in the same way. The critic's ratio is "per-scanline local minima at or
+ * below 0.72x the flanking plate median 6-14px either side, lip = the max in that
+ * flank". Run over the character it returns **1.50** on the shipped tree, not the
+ * 1.13 the critic reported, because **2.6% of the character qualifies as a groove**
+ * and nearly all of it is machining lay and silhouette shadow. Requiring the groove
+ * to be a LINE (a dark run of 5px, continuous over 5 rows) does not fix it: 1.60.
+ *
+ * What fixes it is defining the groove set by an ablation ORTHOGONAL to the thing
+ * being tested — a pixel is a panel gap if switching `kbLattice.x` to 0 makes it
+ * brighter. That set returns **1.135 against the critic's independently reported
+ * 1.13**, and because the selection cannot see the chamfer, both arms of the A/B
+ * are scored on identical pixels. Any future A/B on this axis should select its
+ * sample with an ablation of a DIFFERENT term, never by re-detecting per image:
+ * a change that brightens a lip also changes which pixels qualify as grooves.
+ *
+ * MEASURED, one page load, one frozen tick, one compiled program, ablated through
+ * `kbChamfer.x`, grain and chroma zeroed — two grabs of an unchanged configuration
+ * differ by exactly 0.000/255:
+ *
+ *                       lip/plate   >=1.36    lip    plate   fireflies
+ *     chamfer off         1.1235     0.219   158.7   129.0     2731
+ *     chamfer on          1.1381     0.241   163.1   131.0     3184
+ *                         +1.30%    +10.0%   +2.8%   +1.6%    +16.6%
+ *
+ * Delivered pixels, same pair: whole frame **2.29/255 mean, 6.0% of pixels moving
+ * by 8/255 or more**, and the difference map is a set of clean lines tracing every
+ * plate boundary and nothing else — green on the wall that turns toward the key,
+ * red on the wall that turns away. At 3x the plate boundaries go from dark grooves
+ * on a soft field to dark grooves with a continuous bright specular lip.
+ *
+ * **THE TARGET WAS 1.36 AND IT IS NOT REACHED — 1.14, from 1.12.** What that
+ * disproves is worth more than the gain: the lip's absolute brightness only
+ * reaches ~163/255 while its own flank median is 131, and pushing slope (0.6 ->
+ * 1.1), width (2.0mm -> 4.0mm) and gloss (0.4 -> 1.4) each moves the ratio by
+ * under half a percent and saturates. A mirror facet returns whatever the room has
+ * in its reflected direction, and **this room does not have a source bright and
+ * narrow enough to make a 5-pixel facet 36% brighter than the plate it sits on.**
+ * 1.36 is a lighting change (a harder, more concentrated key or rim), not a
+ * material one. The material half is now built and is nearly free to re-tune from
+ * the uniform if the lighting arrives.
+ *
+ * THREE THINGS THAT MATTERED, all found by looking at the difference map:
+ *
+ *   INSET, NOT ADDED. A boundary's dark band is the authored gap: 4.5mm is 8.5
+ *   screen pixels at the closeup and the widest plan reaches 14, so a chamfer laid
+ *   OUTSIDE it starts 14 pixels off the centre line and is a separate bright band,
+ *   not a lip. The break is taken OUT of the dark band (`kbChIn`), so the boundary
+ *   keeps its footprint, the black core narrows, and the facet lands beside the
+ *   line — which is also what a real joint is, mostly chamfer with a sliver of air.
+ *
+ *   THE FASTENER ROW SAT ON THE LIP. `tagPlateLayout`'s bolts march at the same
+ *   distance from the plate edge that the perimeter chamfer occupies, so the heads
+ *   chopped the new highlight into a dashed chain. It read as aliasing and it was
+ *   geometry: the row is now pushed inboard of the break.
+ *
+ *   A DISTANCE FIELD'S GRADIENT HAS CREASES. `kbDm` is a min() of two fract()
+ *   distances and `kbEdgeD` a min() of two; a 2x2 derivative quad straddling a
+ *   crease returns a gradient several times too long, and one wild fragment per
+ *   crease is a bright dot on an edge. A unit-gradient field cannot change by more
+ *   than one pixel footprint per pixel, so `kbDField` clamps it there. Firefly
+ *   cost fell from +30% to +17% and the lip stopped beading.
+ *
+ * COST: +16.6% isolated bright pixels over the character region. Part of that is
+ * the detector counting the new lip's own crests — it fires on any 1px feature
+ * 40/255 above its ring — but it is not zero and it is recorded. Not fixed by
+ * gloss (the count is flat from gloss 0.4 to 1.4) and not by slope, so it is the
+ * tilt itself; the analytic specular AA below took it as far as it goes.
+ *
+ * SPECULAR AA, ANALYTIC, AND IT WORKS WHERE ROUND 17'S DID NOT. Round 17 reverted
+ * screen-space Kaplanyan AA for the pre-existing edge dots and that result stands.
+ * This is a different case: the facet's normal variance is KNOWN, not sampled —
+ * the profile is analytic, so the normal turns by exactly `slope * kbPx / width`
+ * radians per pixel — and it is added in variance to the facet's own roughness
+ * only. Firefly ratio 1.31x -> 1.19x with no measurable loss of lip.
+ *
+ * BAND LIMITING, VERIFIED AT FIGHTING RANGE. The break is 2.8mm: five pixels at
+ * the 1.35m closeup, under one at the hero framing. Whole-frame chamfer off vs on
+ * at the hero framing is **0.031/255, 0.06% of pixels** — a closeup change that
+ * correctly costs nothing at fighting range. The first version measured 0.70/255
+ * and 2.8% there, because the roughness handed over by the fade was added FLAT
+ * rather than over the band: an edge term that raised the roughness of every
+ * panelled plate in the game. Any "hand the lost variance to roughness" clause
+ * has to carry the band mask with it.
+ *
+ * FILL COST: no texture fetch, no bake, no triangle, no draw call — the term is
+ * two derivative pairs and about twenty ALU behind a uniform branch, and the
+ * triangle budget (915,870 against 900,000) rules out the modelled alternative.
+ * Not separately timed; the comparable analytic term measured +0.35ms with the
+ * interval spanning -5.8 to +9.1, i.e. under half a millisecond and not
+ * distinguishable from zero.
  *
  * --- Round 17: specular antialiasing was built, measured, and REVERTED --------
  *

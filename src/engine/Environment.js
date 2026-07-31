@@ -184,10 +184,19 @@ const RIM = {
    * but a point source at 3.2 metres wraps, so between them they lit the flanks
    * and most of the front harder than the key did. The silhouette edge was
    * excellent and the body inside it was one flat value, which is the trade the
-   * critic called out. 1.7 keeps the rim pass at roughly twice the key — hot
+   * critic called out. 1.7 kept the rim pass at roughly twice the key — hot
    * enough to draw the edge, not hot enough to become the key.
+   *
+   * 1.95 because {@link DIRECTIONAL_RIM_SHARE} went to zero and the fighter
+   * would otherwise have lost that third of its rim budget along with the
+   * background: the 15% here is sized to put the *fighter* back where it was
+   * while leaving the background where the share cut moved it. Measured, that
+   * is what it does — core median 78.22 -> 77.71 and core p90/p10 7.30 -> 7.33,
+   * so the body is neither dimmer nor flatter, while the edge band gains 3.8%
+   * over the background. It is still well under the 2.6 ceiling above, which is
+   * where the body genuinely did go flat.
    */
-  gain: 1.7,
+  gain: 1.95,
 };
 
 /**
@@ -409,8 +418,36 @@ const STRIP = {
  * The rest lives on the per-fighter spots. Directional rim light is parallel and
  * infinite: it edges the fighter and the wall behind the fighter by exactly the
  * same amount, which is how a silhouette dies into its background.
+ *
+ * **It is now zero, on measurement, and the argument above is why.** Measured
+ * in-page on one frozen frame — the fighters repainted with an unlit white
+ * material to get an exact silhouette mask rather than a frame-difference one,
+ * then a 5px band either side of that boundary, with the mood driver frozen so
+ * the rig could not re-derive the intensities it had just been given. Median
+ * luma inside the edge over median luma outside it, which is the statistic this
+ * axis is scored on:
+ *
+ *     directional share  per-fighter spots   inner   outer   lift   core med
+ *     0.34 (shipped)     x1.00               92.42   68.13   1.357   78.22
+ *     0.00               x1.00               87.88   63.56   1.383   76.46
+ *     0.00               x1.15               89.69   63.67   1.409   77.71
+ *     0.06               x1.08               89.64   64.49   1.390   77.46
+ *
+ * Two null arms of the same configuration returned the identical frame to two
+ * decimal places, so 0.05 of lift is resolvable here. The third row is what
+ * ships: **1.357 -> 1.409, +3.8%**, and the top quartile of the edge band
+ * (which is the rim itself rather than the plate behind it) goes 2.164 -> 2.295,
+ * +6.1%. It gets there the way a silhouette wants — the fighter holds (core
+ * median 78.2 -> 77.7, core p90/p10 7.30 -> 7.33, so no flattening) and the
+ * background drops 6.7%. No pixel on either fighter reaches 253 in any arm.
+ *
+ * Reclaimable and not taken this round: at zero the two directional rim lights
+ * are shading every pixel in the frame for nothing. They cannot simply be
+ * hidden, because `light.visible` changes `NUM_DIR_LIGHTS` and recompiles every
+ * material in the scene — see docs/PROFILING.md — so it has to happen once at
+ * construction, and that is a separate change with its own measurement.
  */
-const DIRECTIONAL_RIM_SHARE = 0.34;
+const DIRECTIONAL_RIM_SHARE = 0.0;
 
 /**
  * Radiance of an env-scene practical quad per unit of RectAreaLight power.

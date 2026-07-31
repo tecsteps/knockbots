@@ -1754,10 +1754,31 @@ function buildGradeLut() {
  *
  * There is also no sharpen pass in this file to cut, and never has been.
  *
- * So the aberration stays. Whole-frame it is 2.6 code values of mean absolute
- * difference; on the fighter's interior edges it is 5.4, which is why it is
- * visible in panel gaps and why it looked like a suspect. Removing it would be
- * a change with no measured benefit.
+ * **The aberration is nevertheless gone, and both halves of that are worth
+ * keeping.** The attribution above survives — with `uChroma` at zero the cyan
+ * edge on a fighter is still there, which is the rim lamp, exactly as measured.
+ * What does not survive is keeping a lens effect the reference does not have on
+ * the grounds that it is small. The reference stills ship about 0.01px of
+ * lateral separation; this shipped 0.82px.
+ *
+ * That 0.82 is measured rather than derived, and the derivation is wrong by 6x,
+ * which matters for anyone tuning it. Fitting the shader's own model to the
+ * capture — regress observed R-B on 2 * (per-pixel radial offset . grad luma)
+ * over ~330k edge pixels, calibrated by injecting a known aberration into a
+ * chroma-free frame and recovering it to within 1% — gives **0.875 / 0.781 /
+ * 0.815 px of corner R-B separation across three runs before, and 0.069 / 0.114
+ * / 0.073 px after**. Non-overlapping, on a shot whose whole-frame pixel delta
+ * is useless (same-configuration runs differ by 19-40/255). The nominal value
+ * predicts 4.66px: the pass applies the split to *scene-referred* radiance and
+ * AgX then compresses it and mixes it back across channels through the inset
+ * matrix, so most of it never reaches the display. Read the number off a frame,
+ * not off the uniform.
+ *
+ * Two related traps, both hit this round. The live value was `look.chroma`
+ * (0.0009), not this constructor default, which a brief had read as 0.0016 and
+ * quoted a 5.37px figure from. And `tools/capture.mjs` already zeroes chroma at
+ * the freeze for `02-closeup-face`, so nothing about this was ever visible on
+ * the character axis. Both are now zero.
  */
 class GradePass extends Pass {
   constructor(lut) {
@@ -1772,7 +1793,7 @@ class GradePass extends Pass {
       uLatitude: { value: 1.25 },
       uLookFalloff: { value: 0.90 },
       uDistortion: { value: 0.028 },
-      uChroma: { value: 0.0016 },
+      uChroma: { value: 0.0 },
       uGrain: { value: 0.032 },
       uVignette: { value: 0.42 },
       uSaturation: { value: 1.0 },
@@ -2163,7 +2184,7 @@ export class RenderPipeline {
     this.look = {
       exposure: 0.95, shoulder: 0.90, latitude: 1.25, lookFalloff: 0.90,
       lutStrength: 1.0, saturation: 1.0,
-      chroma: 0.0009, distortion: 0.018, grain: 0.02, vignette: 0.3,
+      chroma: 0.0, distortion: 0.018, grain: 0.02, vignette: 0.3,
       bloomStrength: 0.22, bloomRadius: 0.35, bloomThreshold: 5.5,
       bloomKnee: 0.35, bloomClamp: 2.0,
       aoIntensity: 0.92, dofStrength: 0.9, motionBlur: 0.45,

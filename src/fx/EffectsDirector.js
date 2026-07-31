@@ -110,13 +110,68 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
  * frames. Anything that survives long enough to be seen expanding has already
  * stopped being an impact.
  *
- * `light` is the one number here measured against the struck robot rather than
- * against the effect. It is a point light half a metre off the armour, so it is
- * the second-largest contributor to blown-out pixels on the contact frame after
- * the overlay's heat spill — and unlike the spill it blows out the one surface
- * the hit is supposed to be revealing. Cut by a third across the table: the
- * contact still reads as lit from inside the blow, and the panel lines under it
- * survive the frame.
+ * `light` and `impact` are the two numbers here measured against the struck
+ * robot rather than against the effect, and between them they were the ENTIRE
+ * over-exposure of the contact frame. Measured by in-page ablation on one
+ * frozen `04-impact` contact frame — launcher, +1 rendered frame, camera
+ * stubbed, grain and chroma off, so nothing whatever moves between grabs —
+ * over a 340 px-radius disc on the contact point, counting pixels at
+ * luma >= 250/255:
+ *
+ *     everything on                     8.27 %
+ *     impact light silenced             3.94 %      -4.34 pp
+ *     ...and the overlay impact frame   0.54 %      -3.40 pp
+ *     ...and the flare/heat core        0.43 %      -0.11 pp
+ *     ...and every spark                0.428 %     -0.001 pp
+ *     ...and the shockwave              0.428 %      0.00 pp
+ *
+ * The stage alone delivers 0.43 %. Tekken 8's own contact frame, measured
+ * identically, is 0.74 %. So the arena was never the problem and neither were
+ * the particles: **97 % of the excess is the impact point light plus the
+ * screen-space impact frame**, in roughly a 56/44 split. The sparks, the flare,
+ * the heat core and the shockwave together move the number by one part in a
+ * thousand — which is the whole argument for cutting the light rather than the
+ * counts. A spark field inside a white blob is not a spark field.
+ *
+ * Two things were disproved on the way and are recorded so nobody re-tries them:
+ *
+ *  - **The flare is not the flashbulb.** Hiding the entire `FlashSystem` —
+ *    flare and heat core, the elements this file's own comments call "the
+ *    brightest thing in the game" — changes the clipped fraction by 0.11 pp out
+ *    of 7.85. It is bright, but it is small and it is not what covers the plate.
+ *  - **Tightening the light's falloff does nothing.** `impactLight.distance`
+ *    taken from 6.5 m to 4.0 m and to 3.0 m changed the frame by 0.001 pp and
+ *    0.002 pp — identical to three decimal places. The struck plate is a few
+ *    tens of centimetres from the light, far inside the window, so `distance`
+ *    only trims a periphery that was never clipping. Amplitude is the only
+ *    lever the light has.
+ *
+ * `light` is therefore compressed at the TOP of the ladder and left alone at the
+ * bottom. The over-exposure is entirely a heavy/launcher/ultra problem — the jab
+ * frame `15-impact-light` carries 30 clipped pixels in the whole image — and the
+ * bottom two rungs were raised once already, on measurement, because a landed
+ * jab was indistinguishable from no jab. So LIGHT moves 3.6 -> 3.4 and ULTRA
+ * moves 17.0 -> 6.8, and the ladder stays strictly monotonic.
+ *
+ * `impact` — the amplitude of `OverlayPass`'s radial smear and its heat spill —
+ * is cut to about a quarter. It costs nothing at the bottom of the ladder
+ * because the two light tiers never fired one, and it is the single largest
+ * contributor to the *shape* of the defect rather than just its size: the smear
+ * is a seven-tap zoom blur toward the contact, so it takes the compact hot core
+ * and drags it across the plate as one continuous mass. That is why the frame
+ * read as "a few huge white blobs" against the reference's many small ones.
+ * The largest connected clipped blob falls 23,736 px -> 3,384 px on the same
+ * frozen frame with the smear at 0.30 and the light at 0.40.
+ *
+ * The speed lines were measured separately and are NOT touched: zeroing
+ * `impact.lines` on the same frozen frame changed the clipped fraction by
+ * 0.000 pp. They are additive white, but they live at 0.28-0.58 of the frame
+ * height from the contact and never overlap the blown region.
+ *
+ * The other `#flashLight` call sites — block, parry, armour, part break, super
+ * — are deliberately left alone. They fire on frames this was not measured on,
+ * at different framings and distances, and a number changed without a frame to
+ * check it against is not a fix.
  */
 const HIT_FX = {
   /**
@@ -153,35 +208,35 @@ const HIT_FX = {
     ring: 0.33, ringLife: 0.13, thick: 0.095, ringHeat: 2.6,
     flash: 0.35, flashHeat: 3.9, flashLife: 0.075,
     core: 0.13, coreHeat: 3.1, coreLife: 0.42, ember: 14,
-    debris: 0, fluid: 0, light: 3.6, impact: 0, dust: 0,
+    debris: 0, fluid: 0, light: 3.4, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
     sparks: 400, jet: 130, speed: 9.3, size: 0.035, heat: 3.2, sparkLife: 0.20,
     ring: 0.44, ringLife: 0.15, thick: 0.10, ringHeat: 3.0,
     flash: 0.44, flashHeat: 4.3, flashLife: 0.09,
     core: 0.16, coreHeat: 3.7, coreLife: 0.55, ember: 20,
-    debris: 0, fluid: 5, light: 5.2, impact: 0, dust: 2,
+    debris: 0, fluid: 5, light: 4.0, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
     sparks: 680, jet: 200, speed: 10.4, size: 0.038, heat: 3.4, sparkLife: 0.24,
     ring: 0.62, ringLife: 0.19, thick: 0.11, ringHeat: 3.4,
     flash: 0.56, flashHeat: 4.6, flashLife: 0.11,
     core: 0.19, coreHeat: 4.4, coreLife: 0.72, ember: 26,
-    debris: 8, fluid: 12, light: 8.0, impact: 0.55, dust: 6,
+    debris: 8, fluid: 12, light: 4.7, impact: 0.15, dust: 6,
   },
   [WEIGHT.LAUNCHER]: {
     sparks: 780, jet: 225, speed: 11.4, size: 0.04, heat: 3.5, sparkLife: 0.26,
     ring: 0.72, ringLife: 0.21, thick: 0.115, ringHeat: 3.6,
     flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
     core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 30,
-    debris: 10, fluid: 14, light: 9.3, impact: 0.62, dust: 8,
+    debris: 10, fluid: 14, light: 5.1, impact: 0.17, dust: 8,
   },
   [WEIGHT.ULTRA]: {
     sparks: 1150, jet: 330, speed: 14.5, size: 0.048, heat: 4.0, sparkLife: 0.30,
     ring: 1.20, ringLife: 0.28, thick: 0.135, ringHeat: 4.2,
     flash: 0.7, flashHeat: 6.0, flashLife: 0.16,
     core: 0.28, coreHeat: 5.6, coreLife: 0.9, ember: 42,
-    debris: 18, fluid: 26, light: 17.0, impact: 1.0, dust: 14,
+    debris: 18, fluid: 26, light: 6.8, impact: 0.30, dust: 14,
   },
 };
 

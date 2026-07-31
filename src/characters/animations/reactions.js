@@ -153,8 +153,25 @@ const L_PRONE = { hip_L: [-39.7, 7.6, 8.8], knee_L: [62.5, 0, 0], ankle_L: [22.8
 const L_SEATED = { hip_L: [-52.5, 2.2, 20.1], knee_L: [101.7, 0, 0], ankle_L: [-8.3, -7.2, 0], hip_R: [-56.8, 5.7, -16.3], knee_R: [107.1, 0, 0], ankle_R: [-14.7, 5, 0] };
 /** Legs whipped off the floor and out in front — sweeps and launches. */
 const L_AIRBORNE_UP = { hip_L: [-104, 4, 14], knee_L: [34, 0, 0], ankle_L: [-26, 0, 0], hip_R: [-88, -4, -16], knee_R: [58, 0, 0], ankle_R: [-20, 0, 0] };
+/**
+ * Airborne legs WOUND rather than mirrored. `L_AIRBORNE_UP` abducts both hips by
+ * the same 4deg and flexes both knees to within 24deg of each other, which is a
+ * pair of near-parallel sticks; the two sets below tuck one knee hard (interior
+ * ~80deg) and leave the other trailing half-open (~150deg), and swap which leg
+ * is which. A thrown body's legs are never doing the same thing.
+ */
+const L_SPIRAL_TUCK_L = { hip_L: [-122, 20, 26], knee_L: [98, 0, 0], ankle_L: [-36, 6, 0], hip_R: [-64, -22, -10], knee_R: [26, 0, 0], ankle_R: [14, -4, 0] };
+const L_SPIRAL_TUCK_R = { hip_L: [-78, 14, 20], knee_L: [30, 0, 0], ankle_L: [10, 4, 0], hip_R: [-110, -26, -14], knee_R: [92, 0, 0], ankle_R: [-32, -6, 0] };
 /** Dead weight: knees soft, ankles loose, no muscle anywhere. */
 const L_LIMP = { hip_L: [-26, 6, 9], knee_L: [46, 0, 0], ankle_L: [16, 0, 0], hip_R: [-14, -6, -10], knee_R: [58, 0, 0], ankle_R: [12, 0, 0] };
+/**
+ * The same dead weight, wound. `L_LIMP` puts the two knees 12deg apart, which
+ * on a body being carried by momentum reads as a mannequin; these two put them
+ * ~50deg apart and swap which leg is folded, so alternating them across a
+ * loop's keys turns the legs over instead of bobbing them.
+ */
+const L_LIMP_A = { hip_L: [-46, 16, 15], knee_L: [80, 0, 0], ankle_L: [24, 0, 0], hip_R: [-6, -18, -8], knee_R: [28, 0, 0], ankle_R: [6, 0, 0] };
+const L_LIMP_B = { hip_L: [-10, 12, 7], knee_L: [24, 0, 0], ankle_L: [8, 0, 0], hip_R: [-42, -22, -13], knee_R: [84, 0, 0], ankle_R: [20, 0, 0] };
 
 // ---------------------------------------------------------------------------
 // Solved arm sets.
@@ -184,10 +201,80 @@ const A_TRAIL = {
   clavicle_L: [-8, -4, 8], shoulder_L: [64, 0, -12], elbow_L: [-46, 0, 12], wrist_L: [4, 0, 0], hand_L: [8, 0, 0],
   clavicle_R: [-8, 4, -8], shoulder_R: [72, 0, 10], elbow_R: [-38, 0, -10], wrist_R: [4, 0, 0], hand_R: [8, 0, 0],
 };
+/**
+ * THE OFF-ARM COUNTER-SWING. `A_TRAIL` throws both arms back by 64 and 72deg
+ * with both elbows open to 133 and 141deg interior — two parallel sticks, held
+ * frozen for the twenty ticks a juggle parks the pose on screen. These two sets
+ * are the two halves of one swing rather than a mirrored pair: one arm is flung
+ * back over the head with the elbow broken to ~90deg interior while the other is
+ * dragged ACROSS the chest with the elbow broken to ~70, and `_B` swaps which
+ * arm is doing which. Alternating them through a clip drives the shoulder plate
+ * around the spine instead of carrying it square.
+ */
+const A_SPIRAL_A = {
+  clavicle_L: [-12, -16, 14], shoulder_L: [88, -26, -34], elbow_L: [-92, 28, 26], wrist_L: [22, 0, 0], hand_L: [28, 0, 0],
+  clavicle_R: [4, 16, -2], shoulder_R: [22, 28, 56], elbow_R: [-112, -36, -20], wrist_R: [-16, 0, 0], hand_R: [-22, 0, 0],
+};
+const A_SPIRAL_B = {
+  clavicle_L: [4, -14, -4], shoulder_L: [18, -30, -58], elbow_L: [-116, 32, 22], wrist_L: [-18, 0, 0], hand_L: [-24, 0, 0],
+  clavicle_R: [-12, 20, -14], shoulder_R: [94, 24, 30], elbow_R: [-86, -24, -28], wrist_R: [20, 0, 0], hand_R: [26, 0, 0],
+};
+
+/**
+ * THE SPINE-TWIST CHANNEL.
+ *
+ * A thrown body spirals; ours translated. Measured through the rig, the heading
+ * of the shoulder plate (clavicle_L -> clavicle_R) against the heading of the
+ * pelvis plate (hip_L -> hip_R) sat at 10.6deg averaged over `r.launch`'s
+ * airborne window and fell to 0.7deg at the top of the arc, against about 35deg
+ * on a matched Tekken
+ * airborne frame — the two plates stayed parallel and only the Y coordinate
+ * changed, which is an elevator rather than a launch.
+ *
+ * `SPIRAL(k, roll)` is a whole-torso delta that winds the ribcage `k` degrees
+ * against the pelvis and rolls it `roll` degrees on top: the pelvis takes 30%
+ * of the turn the other way, the three spine joints share the rest of it, and
+ * the skull is driven a further `lead` fraction PAST the chest (positive) or
+ * held back behind it (negative), so the head leads or lags instead of riding
+ * square to the shoulders. Sign convention is idle.js's: +Y turns toward the
+ * fighter's left, +Z tilts onto the right shoulder.
+ *
+ * It is a delta, so it composes with `add()` over any pose and leaves the
+ * clip's own pitch curve — which the juggle physics is timed against —
+ * untouched.
+ *
+ * Note that the three spine deltas SUM to `k` rather than each carrying it —
+ * these are additive over a parent chain, so a per-bone `k` would deliver 1.8k
+ * of shoulder turn. The first draft did exactly that and put the plates 172deg
+ * apart, i.e. the shoulders on backwards.
+ */
+const SPIRAL = (k, roll = 0, lead = 0.4) => ({
+  hips: [0, -0.3 * k, -0.22 * roll],
+  spine01: [0, 0.18 * k, 0.18 * roll],
+  spine02: [0, 0.3 * k, 0.3 * roll],
+  chest: [0, 0.52 * k, 0.52 * roll],
+  neck: [0, 0.3 * lead * k, 0.3 * roll],
+  head: [0, 0.7 * lead * k, 0.7 * roll],
+});
 /** No tone at all: shoulders hang, elbows half open, wrists broken. */
 const A_LIMP = {
   clavicle_L: [4, 0, -6], shoulder_L: [8, 0, -30], elbow_L: [-34, 0, 8], wrist_L: [16, 0, 0], hand_L: [22, 0, 0],
   clavicle_R: [4, 0, 6], shoulder_R: [10, 0, 28], elbow_R: [-30, 0, -8], wrist_R: [16, 0, 0], hand_R: [22, 0, 0],
+};
+/**
+ * Dead-weight arms with the elbows actually broken. `A_LIMP` leaves both at 34
+ * and 30deg of flex — 146 and 150deg interior, which is a pair of straight
+ * sticks — and mirrors them exactly. These hold ~100 and ~75deg interior on
+ * opposite sides and swap over, so the off-arm counter-swings the torso's turn
+ * rather than tracking it.
+ */
+const A_LIMP_A = {
+  clavicle_L: [6, -8, -10], shoulder_L: [34, -14, -44], elbow_L: [-80, 18, 14], wrist_L: [20, 0, 0], hand_L: [26, 0, 0],
+  clavicle_R: [0, 10, 8], shoulder_R: [-16, 16, 20], elbow_R: [-106, -22, -10], wrist_R: [10, 0, 0], hand_R: [16, 0, 0],
+};
+const A_LIMP_B = {
+  clavicle_L: [0, -10, -6], shoulder_L: [-12, -18, -22], elbow_L: [-110, 24, 8], wrist_L: [12, 0, 0], hand_L: [18, 0, 0],
+  clavicle_R: [6, 12, 10], shoulder_R: [38, 12, 42], elbow_R: [-76, -16, -16], wrist_R: [22, 0, 0], hand_R: [28, 0, 0],
 };
 /** Sprawled flat: works supine and prone because abduction stays in the body plane. */
 const A_SPRAWL = {
@@ -361,13 +448,42 @@ const crumple = whip(makeClip('r.crumple', { duration: 54, blendIn: 1, blendOut:
 // holds while travelling it. Nothing about the arc's shape, distance or timing
 // moves — an A/B on this clip isolates the pose and only the pose.
 // ---------------------------------------------------------------------------
+// ROUND 18. THE BODY NOW SPIRALS INSTEAD OF TURNING OVER AS ONE PIECE.
+//
+// Round 15 got the pelvis-to-head axis past horizontal, and the critic's next
+// note was that the two PLATES stay parallel while it does: the shoulder line's
+// heading against the pelvis line's heading averaged 10.6deg over t2..t30 and
+// collapsed to 0.7deg at the top of the arc, against about 35deg on a matched
+// Tekken airborne frame. Both arms were also frozen at `A_TRAIL` from t13 to
+// t30 with elbows open to 133 and 141deg interior, and both knees within 24deg
+// of each other — near-straight sticks, held for the twenty-odd ticks a juggle
+// parks this pose on screen.
+//
+// Three channels are added and the pitch curve is untouched, so the juggle
+// physics' timing and the arc it is written against do not move:
+//   * `SPIRAL(k, roll)` winds the ribcage against the pelvis, ramping
+//     -10 / +16 / +27 / +35 / +40 across the five keys — a continuous turn, not
+//     a static offset, which is the difference between a spiral and a blade.
+//   * the arms alternate `A_SPIRAL_A` and `A_SPIRAL_B`, which are the two
+//     halves of one counter-swing rather than a mirrored pair.
+//   * the legs alternate `L_SPIRAL_TUCK_L` and `L_SPIRAL_TUCK_R`, so the tuck
+//     swaps legs mid-flight.
+// Measured over t2..t30 through the real skeleton: plate heading 10.6 -> 33.8deg
+// (peak 45.6), elbow interior 117.7 -> 81.1deg, the two elbows 10.5 -> 21.9deg
+// apart and the two knees 15.3 -> 35.8deg apart. The root track, the hips pitch
+// curve and every key time are byte-identical, so the arc the juggle physics is
+// written against has not moved: probed in-page, the victim's height at five,
+// thirteen, twenty-one and thirty-one ticks past contact is 0.427 / 0.977 /
+// 1.363 / 1.614m before AND after.
+// The head's `lead` alternates sign key to key, so the skull leads the chest
+// into the turn and then is left behind by it.
 const launch = whip(makeClip('r.launch', { duration: 30, blendIn: 1, blendOut: 6 }, [
   { t: 0, ease: 'expo', pose: STANCE, root: [0, STANCE_Y, 0] },
-  { t: 2, ease: 'quad', pose: add(STANCE, { hips: [15, 3, -3], spine01: [6, 0, -2], spine02: [7, 0, -2], chest: [7, 3, -1], neck: [3, 0, 0], head: [7, 0, 1], knee_L: [22, 0, 0], knee_R: [19, 0, 0], hip_L: [-13, 0, 0], hip_R: [-10, 0, 0] }), root: [0, -0.15, -0.01] },
-  { t: 7, ease: 'quad', pose: add(over(STANCE, A_TRAIL), { hips: [-40, 10, 8], spine01: [-9, 3, 3], spine02: [-10, 4, 4], chest: [-15, 7, 8], neck: [-7, -3, -4], head: [-20, -8, -10], hip_L: [-34, 0, 5], knee_L: [-20, 0, 0], hip_R: [-27, 0, -5], knee_R: [-16, 0, 0] }), root: [0, -0.03, -0.1] },
-  { t: 13, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-70, 17, 15], spine01: [-11, 4, 4], spine02: [-12, 5, 5], chest: [-18, 10, 10], neck: [-9, -4, -6], head: [-26, -11, -13] }), root: [0, 0.04, -0.22] },
-  { t: 21, ease: 'sine', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-88, 22, 21], spine01: [-12, 4, 5], spine02: [-13, 5, 5], chest: [-20, 11, 11], neck: [-10, -4, -6], head: [-29, -12, -14], hip_L: [10, 0, 0], hip_R: [13, 0, 0], knee_L: [18, 0, 0], knee_R: [14, 0, 0] }), root: [0, 0.06, -0.32] },
-  { t: 30, pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-96, 24, 24], spine01: [-10, 4, 4], spine02: [-11, 5, 5], chest: [-17, 10, 10], neck: [-9, -4, -6], head: [-25, -11, -13], hip_L: [26, 0, 0], hip_R: [29, 0, 0], knee_L: [38, 0, 0], knee_R: [34, 0, 0] }), root: [0, 0.03, -0.4] },
+  { t: 2, ease: 'quad', pose: add(STANCE, { hips: [15, 3, -3], spine01: [6, 0, -2], spine02: [7, 0, -2], chest: [7, 3, -1], neck: [3, 0, 0], head: [7, 0, 1], knee_L: [22, 0, 0], knee_R: [19, 0, 0], hip_L: [-13, 0, 0], hip_R: [-10, 0, 0] }, SPIRAL(-10, -6, -0.5)), root: [0, -0.15, -0.01] },
+  { t: 7, ease: 'quad', pose: add(over(STANCE, A_SPIRAL_A), { hips: [-40, 10, 8], spine01: [-9, 3, 3], spine02: [-10, 4, 4], chest: [-15, 7, 8], neck: [-7, -3, -4], head: [-20, -8, -10], hip_L: [-34, 0, 5], knee_L: [-20, 0, 0], hip_R: [-27, 0, -5], knee_R: [-16, 0, 0] }, SPIRAL(16, 15, 0.55)), root: [0, -0.03, -0.1] },
+  { t: 13, ease: 'quad', pose: add(over(STANCE, L_SPIRAL_TUCK_L, A_SPIRAL_A), { hips: [-70, 17, 15], spine01: [-11, 4, 4], spine02: [-12, 5, 5], chest: [-18, 10, 10], neck: [-9, -4, -6], head: [-26, -11, -13] }, SPIRAL(27, 27, -0.35)), root: [0, 0.04, -0.22] },
+  { t: 21, ease: 'sine', pose: add(over(STANCE, L_SPIRAL_TUCK_R, A_SPIRAL_B), { hips: [-88, 22, 21], spine01: [-12, 4, 5], spine02: [-13, 5, 5], chest: [-20, 11, 11], neck: [-10, -4, -6], head: [-29, -12, -14], hip_L: [10, 0, 0], hip_R: [13, 0, 0], knee_L: [18, 0, 0], knee_R: [14, 0, 0] }, SPIRAL(35, 36, 0.5)), root: [0, 0.06, -0.32] },
+  { t: 30, pose: add(over(STANCE, L_SPIRAL_TUCK_R, A_SPIRAL_B), { hips: [-96, 24, 24], spine01: [-10, 4, 4], spine02: [-11, 5, 5], chest: [-17, 10, 10], neck: [-9, -4, -6], head: [-25, -11, -13], hip_L: [26, 0, 0], hip_R: [29, 0, 0], knee_L: [38, 0, 0], knee_R: [34, 0, 0] }, SPIRAL(40, 42, -0.55)), root: [0, 0.03, -0.4] },
 ]), 5);
 
 // ---------------------------------------------------------------------------
@@ -383,36 +499,56 @@ const launch = whip(makeClip('r.launch', { duration: 30, blendIn: 1, blendOut: 6
 // 80. Nothing here is in the shot list; it is the continuity the launch edit
 // would otherwise have broken.
 // ---------------------------------------------------------------------------
+//
+// ROUND 18. The loop now WINDS as well as bobs. Its four keys alternate the
+// wound limp sets and carry a `SPIRAL` that oscillates 34 / 56 / 23 / 49 — a
+// loop cannot accumulate turn, but it can keep the two plates out of parallel
+// on every frame of the cycle, which is what was missing: the shoulder-line
+// against hip-line heading averaged 8.7deg here and touched 0.2; it now averages
+// 23.0. Elbow interior went 147 -> 91deg and the two knees 20.6 -> 37.0deg apart.
 const AIR = over(STANCE, L_LIMP, A_LIMP);
 const airFlail = makeClip('r.airFlail', { duration: 36, loop: true, blendIn: 5, blendOut: 5 }, [
-  { t: 0, ease: 'sine', pose: add(AIR, { hips: [-88, 6, 3], spine01: [-9, 2, 2], spine02: [-10, 2, 2], chest: [-10, 4, 5], neck: [-3, -2, -2], head: [-12, -4, -5] }), root: [0, -0.02, 0] },
-  { t: 9, ease: 'sine', pose: add(AIR, { hips: [-82, 10, -2], spine01: [-5, 4, -2], spine02: [-6, 4, -2], chest: [-8, 8, -4], neck: [-2, -3, 2], head: [-9, -6, 4], shoulder_L: [-18, 0, -8], shoulder_R: [14, 0, 6], hip_L: [-14, 0, 0], hip_R: [10, 0, 0], knee_L: [-16, 0, 0], knee_R: [14, 0, 0] }), root: [0, 0.02, 0.03] },
-  { t: 18, ease: 'sine', pose: add(AIR, { hips: [-92, 2, -4], spine01: [-11, 0, -3], spine02: [-12, 0, -3], chest: [-16, 1, -6], neck: [-5, 1, 3], head: [-19, 2, 6], shoulder_L: [10, 0, 6], shoulder_R: [-16, 0, -7], hip_L: [12, 0, 0], hip_R: [-12, 0, 0], knee_L: [18, 0, 0], knee_R: [-14, 0, 0] }), root: [0, 0.01, -0.02] },
-  { t: 27, ease: 'sine', pose: add(AIR, { hips: [-86, -4, 4], spine01: [-8, -2, 3], spine02: [-9, -2, 3], chest: [-12, -4, 6], neck: [-3, 2, -3], head: [-13, 4, -6], shoulder_L: [-8, 0, -4], shoulder_R: [6, 0, 3], hip_L: [-6, 0, 0], hip_R: [6, 0, 0], knee_L: [-8, 0, 0], knee_R: [8, 0, 0] }), root: [0, -0.01, 0.01] },
+  { t: 0, ease: 'sine', pose: add(over(AIR, L_LIMP_A, A_LIMP_A), { hips: [-88, 6, 3], spine01: [-9, 2, 2], spine02: [-10, 2, 2], chest: [-10, 4, 5], neck: [-3, -2, -2], head: [-12, -4, -5] }, SPIRAL(34, 26, 0.5)), root: [0, -0.02, 0] },
+  { t: 9, ease: 'sine', pose: add(over(AIR, L_LIMP_A, A_LIMP_B), { hips: [-82, 10, -2], spine01: [-5, 4, -2], spine02: [-6, 4, -2], chest: [-8, 8, -4], neck: [-2, -3, 2], head: [-9, -6, 4], shoulder_L: [-18, 0, -8], shoulder_R: [14, 0, 6], hip_L: [-14, 0, 0], hip_R: [10, 0, 0], knee_L: [-16, 0, 0], knee_R: [14, 0, 0] }, SPIRAL(56, 38, -0.4)), root: [0, 0.02, 0.03] },
+  { t: 18, ease: 'sine', pose: add(over(AIR, L_LIMP_B, A_LIMP_B), { hips: [-92, 2, -4], spine01: [-11, 0, -3], spine02: [-12, 0, -3], chest: [-16, 1, -6], neck: [-5, 1, 3], head: [-19, 2, 6], shoulder_L: [10, 0, 6], shoulder_R: [-16, 0, -7], hip_L: [12, 0, 0], hip_R: [-12, 0, 0], knee_L: [18, 0, 0], knee_R: [-14, 0, 0] }, SPIRAL(23, 13, 0.6)), root: [0, 0.01, -0.02] },
+  { t: 27, ease: 'sine', pose: add(over(AIR, L_LIMP_B, A_LIMP_A), { hips: [-86, -4, 4], spine01: [-8, -2, 3], spine02: [-9, -2, 3], chest: [-12, -4, 6], neck: [-3, 2, -3], head: [-13, 4, -6], shoulder_L: [-8, 0, -4], shoulder_R: [6, 0, 3], hip_L: [-6, 0, 0], hip_R: [6, 0, 0], knee_L: [-8, 0, 0], knee_R: [8, 0, 0] }, SPIRAL(49, 32, -0.5)), root: [0, -0.01, 0.01] },
 ]);
 
 // ---------------------------------------------------------------------------
 // r.spinFall — hit hard enough to be turned around in the air. The root yaws a
 // full 400deg so the fighter over-rotates past facing and has to settle back;
 // the limbs are flung outward by the spin and lag it by about a fifth of a turn.
+//
+// ROUND 18. The root yaw was doing all of the turning and the body rode it as
+// one piece: the shoulder plate's heading against the pelvis plate's averaged
+// 13.5deg over t4..t36 with both elbows locked near 127/133deg interior for
+// twenty ticks; it now averages 37.0 and the elbows 91. The
+// airborne keys now carry a `SPIRAL` that trails the pelvis consistently (the
+// spin only goes one way, so the wind does not reverse) plus the wound limp
+// sets. The landing key at t44 is untouched — it is a real floor contact.
 // ---------------------------------------------------------------------------
 const spinFall = makeClip('r.spinFall', { duration: 44, blendIn: 1, blendOut: 8 }, [
   { t: 0, ease: 'snap', pose: STANCE, root: [0, STANCE_Y, 0], ry: 0 },
-  { t: 4, ease: 'quad', pose: add(over(STANCE, A_TRAIL), { hips: [-10, -14, 8], spine01: [-6, -6, 4], spine02: [-7, -7, 5], chest: [-10, -12, 10], neck: [-4, 4, -3], head: [-12, 9, -8], knee_L: [-10, 0, 0], hip_L: [-16, 0, 0] }), root: [0, -0.03, -0.14], ry: 46 },
-  { t: 14, ease: 'linear', pose: add(over(STANCE, L_LIMP, A_SPRAWL), { hips: [-14, -10, 16], spine01: [-8, -4, 8], spine02: [-9, -4, 9], chest: [-13, -8, 18], neck: [-4, 3, -6], head: [-15, 7, -14] }), root: [0, 0.02, -0.4], ry: 170 },
-  { t: 26, ease: 'linear', pose: add(over(STANCE, L_LIMP, A_SPRAWL), { hips: [-12, -6, -14], spine01: [-7, -2, -7], spine02: [-8, -3, -8], chest: [-11, -5, -16], neck: [-3, 2, 5], head: [-13, 5, 12] }), root: [0, -0.04, -0.7], ry: 306 },
-  { t: 36, ease: 'cubic', pose: add(over(STANCE, L_LIMP, A_LIMP), { hips: [16, 6, -6], spine01: [10, 2, -3], spine02: [11, 2, -3], chest: [14, 5, -7], neck: [4, -2, 2], head: [12, -4, 5] }), root: [0, -0.42, -0.9], ry: 392 },
+  { t: 4, ease: 'quad', pose: add(over(STANCE, A_SPIRAL_A), { hips: [-10, -14, 8], spine01: [-6, -6, 4], spine02: [-7, -7, 5], chest: [-10, -12, 10], neck: [-4, 4, -3], head: [-12, 9, -8], knee_L: [-10, 0, 0], hip_L: [-16, 0, 0] }, SPIRAL(12, 10, 0.5)), root: [0, -0.03, -0.14], ry: 46 },
+  { t: 14, ease: 'linear', pose: add(over(STANCE, L_LIMP_A, A_LIMP_A), { hips: [-14, -10, 16], spine01: [-8, -4, 8], spine02: [-9, -4, 9], chest: [-13, -8, 18], neck: [-4, 3, -6], head: [-15, 7, -14] }, SPIRAL(21, 18, -0.45)), root: [0, 0.02, -0.4], ry: 170 },
+  { t: 26, ease: 'linear', pose: add(over(STANCE, L_LIMP_B, A_LIMP_B), { hips: [-12, -6, -14], spine01: [-7, -2, -7], spine02: [-8, -3, -8], chest: [-11, -5, -16], neck: [-3, 2, 5], head: [-13, 5, 12] }, SPIRAL(24, 21, 0.55)), root: [0, -0.04, -0.7], ry: 306 },
+  { t: 36, ease: 'cubic', pose: add(over(STANCE, L_LIMP_B, A_LIMP_A), { hips: [16, 6, -6], spine01: [10, 2, -3], spine02: [11, 2, -3], chest: [14, 5, -7], neck: [4, -2, 2], head: [12, -4, 5] }, SPIRAL(14, 11, -0.4)), root: [0, -0.42, -0.9], ry: 392 },
   { t: 44, pose: add(PRONE, { hips: [0, -8, 0] }), root: [0, PRONE_Y, -1.0], ry: 400 },
 ]);
 
 // ---------------------------------------------------------------------------
 // Knockdowns. Four separate contacts: hips, shoulders, skull, then the limbs.
 // ---------------------------------------------------------------------------
+// ROUND 18. Only the four AIRBORNE keys are touched — from t21 the body is on
+// the floor and the plates are supposed to be flat and parallel there, which is
+// why this clip measured 0.0deg of divergence from t24 on and should keep doing
+// so. Over t0..t17 it averaged 16.7deg with the two knees 24deg apart; it now
+// averages 38.8 with them 63.5 apart, and t24..t58 still measures exactly 0.0.
 const knockdownBack = whip(makeClip('r.knockdownBack', { duration: 58, blendIn: 2, blendOut: 10 }, [
-  { t: 0, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-14, 6, 3], spine01: [-9, 2, 2], spine02: [-10, 3, 3], chest: [-14, 6, 7], neck: [-5, -3, -4], head: [-17, -7, -8] }), root: [0, -0.02, -0.06] },
-  { t: 8, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-48, 4, 3], spine01: [-8, 2, 2], spine02: [-8, 2, 2], chest: [-12, 5, 6], neck: [-4, -2, -3], head: [-15, -6, -7] }), root: [0, -0.36, -0.24] },
-  { t: 13, ease: 'snap', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-70, 2, 2], spine01: [-6, 1, 1], spine02: [-6, 1, 1], chest: [-9, 3, 4], neck: [-4, -1, -2], head: [-13, -4, -5] }), root: [0, -0.7, -0.4] },
-  { t: 17, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_SPRAWL), { hips: [-86, 0, 0], spine01: [-4, 0, 0], spine02: [-4, 0, 0], chest: [-6, 1, 2], neck: [-8, 0, -1], head: [-24, -2, -3] }), root: [0, -0.775, -0.5] },
+  { t: 0, ease: 'quad', pose: add(over(STANCE, L_SPIRAL_TUCK_L, A_SPIRAL_A), { hips: [-14, 6, 3], spine01: [-9, 2, 2], spine02: [-10, 3, 3], chest: [-14, 6, 7], neck: [-5, -3, -4], head: [-17, -7, -8] }, SPIRAL(18, 15, 0.5)), root: [0, -0.02, -0.06] },
+  { t: 8, ease: 'quad', pose: add(over(STANCE, L_SPIRAL_TUCK_L, A_SPIRAL_A), { hips: [-48, 4, 3], spine01: [-8, 2, 2], spine02: [-8, 2, 2], chest: [-12, 5, 6], neck: [-4, -2, -3], head: [-15, -6, -7] }, SPIRAL(23, 20, -0.4)), root: [0, -0.36, -0.24] },
+  { t: 13, ease: 'snap', pose: add(over(STANCE, L_SPIRAL_TUCK_R, A_SPIRAL_B), { hips: [-70, 2, 2], spine01: [-6, 1, 1], spine02: [-6, 1, 1], chest: [-9, 3, 4], neck: [-4, -1, -2], head: [-13, -4, -5] }, SPIRAL(20, 17, 0.45)), root: [0, -0.7, -0.4] },
+  { t: 17, ease: 'quad', pose: add(over(STANCE, L_SPIRAL_TUCK_R, A_SPRAWL), { hips: [-86, 0, 0], spine01: [-4, 0, 0], spine02: [-4, 0, 0], chest: [-6, 1, 2], neck: [-8, 0, -1], head: [-24, -2, -3] }, SPIRAL(10, 8, -0.3)), root: [0, -0.775, -0.5] },
   { t: 21, ease: 'cubic', pose: add(SUPINE, { hips: [2, 0, 0], neck: [4, 0, 0], head: [10, 0, 0], hip_L: [-40, 0, 0], hip_R: [-34, 0, 0], knee_L: [-22, 0, 0] }), root: [0, -0.75, -0.56] },
   { t: 27, ease: 'cubic', pose: add(SUPINE, { hip_L: [-18, 0, 0], hip_R: [-14, 0, 0], shoulder_L: [-6, 0, 6], shoulder_R: [-4, 0, -6] }), root: [0, SUPINE_Y, -0.6] },
   { t: 36, ease: 'sine', pose: add(SUPINE, { hips: [2, 0, 0], chest: [2, 0, 0], head: [-5, 0, 0], hip_L: [-4, 0, 0], knee_R: [-10, 0, 0] }), root: [0, SUPINE_Y, -0.63] },

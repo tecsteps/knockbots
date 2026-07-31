@@ -1013,6 +1013,27 @@ export class MenuSystem {
     // draining, not that the queue was never started. Adding a second arming
     // point buys nothing and only risks ten robot builds landing on top of the
     // select screen's own live preview.
+    //
+    // ALSO DISPROVED, one round later: PACING it faster does nothing either.
+    // The obvious follow-on to the above is that if the queue is mid-drain when
+    // the shutter opens, it should sprint while the grid is the thing being
+    // looked at — `setTimeout(0)` between machines instead of a
+    // `requestIdleCallback` with a 900 ms timeout. Built, and A/B'd inside one
+    // build by clearing the flag straight after `show('select')`, four runs a
+    // side, counting `.kbs-por--on`:
+    //
+    //     rush  200ms 7/5/5/4   1400ms 7/5/5/5   3400ms 10/5/7/5
+    //     idle  200ms 5/6/4/6   1400ms 5/6/4/7   3400ms  5/6/9/10
+    //
+    // Indistinguishable, and both arms sit on the same count for seconds at a
+    // stretch — which is the tell. The queue is not waiting to be scheduled, it
+    // is busy: `RosterPortraits#capture` is 230-755 ms per machine and its own
+    // comment says so, nearly all of it `buildRobot` plus the first draw with
+    // eight new materials. Ten of those is 2.3-7.5 s no matter who asks for
+    // them. Removing the wait between units of work that large is arithmetic
+    // that never mattered. If the tiles are to be full at 1400 ms, the capture
+    // has to get cheaper or the portraits have to outlive the session — the
+    // scheduler is not where the time is.
     const r = this._select;
     r.locked = false;
     r.focus = -1;

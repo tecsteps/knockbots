@@ -165,6 +165,41 @@ function bakeFloorMaps(size) {
   ];
   const oilMask = new Uint8Array(n);
 
+  /**
+   * Tie-down anchor plates, and they are here because of where the camera
+   * looks rather than because a test cell needs them.
+   *
+   * Raycast through the hero framing onto the deck: the bottom edge of the
+   * frame is world z = +0.95 with x from -2.8 to +1.3, a quarter of the way up
+   * is z = -1.3, and screen centre is already z = -10.7. So roughly a quarter
+   * of `01-hero-idle` -- the single largest contiguous region in the shot -- is
+   * a 5m x 2.3m patch of deck immediately in front of the fight plane, and that
+   * patch was blank. Every painted marking this floor had was outside it: the
+   * stencils sit at z = -7.4 to +11.4 and |x| up to 13.2, the hazard bands are
+   * against the combat walls, and the test ring only crosses the frame in the
+   * far distance.
+   *
+   * What goes there is chosen from what the reference actually does. Measured
+   * with the same window statistic used to score this axis, Tekken 8's arena
+   * deck (`tekken8_08`) reads 0.298 median local contrast against this floor's
+   * 0.118, and the crop shows where it comes from: a huge painted logo, a
+   * specular strip and a hard architectural edge. It is NOT aggregate detail --
+   * their deck is as smooth as this one between the graphics. Contrast at the
+   * scale the eye reads comes from big hard-edged high-value-difference
+   * objects, so that is what this is: half-metre steel plates, flush in the
+   * slab, on a 2.4m grid offset off the joint grid, roughly a third of them
+   * missing so it does not read as wallpaper.
+   */
+  const plateTone = new Uint8Array(n);   // 0 = none, else steel value
+  const plateMask = new Uint8Array(n);   // coverage, incl. recess
+  const plateRec = new Uint8Array(n);    // recess groove only
+  const PLATE_P = 2.0, PLATE_R = 0.30, PLATE_GAP = 0.038;
+  const plateHash = (i, j) => {
+    let h = (i * 374761393 + j * 668265263) | 0;
+    h = (h ^ (h >>> 13)) * 1274126177;
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+  };
+
   for (const p of patches) { p.c = Math.cos(p.rot); p.s = Math.sin(p.rot); }
 
   for (let j = 0; j < size; j++) {
@@ -210,6 +245,48 @@ function bakeFloorMaps(size) {
         ol = Math.max(ol, s.gain * (0.45 * (1 - smoothstep(0.15, 1.3, d)) + 0.55 * (1 - smoothstep(0.0, 0.65, d))));
       }
       oilMask[k] = Math.round(clamp01(ol) * 255);
+
+      // --- tie-down anchor plates -----------------------------------------
+      // The anchor field is the test bay itself, not the whole deck. Bounding
+      // it matters: covering all 32x28m put a plate in nearly every tile and
+      // the wide framing read as wallpaper -- uniform detail density, which is
+      // the failure mode this axis is explicitly marked down for. A bounded
+      // bay with two thirds of its slots filled gives the wide shot an object
+      // with edges and leaves the outer deck plain.
+      if (Math.abs(wx) < 7.2 && wz > -6.6 && wz < 3.4) {
+        // One per 2m tile, on the tile centre, so a plate is never bolted
+        // across an expansion joint and the two grids stay in phase.
+        const gi = Math.round((wx - 1) / PLATE_P);
+        const gj = Math.round((wz - 1) / PLATE_P);
+        const cxp = gi * PLATE_P + 1;
+        const czp = gj * PLATE_P + 1;
+        const hsh = plateHash(gi, gj);
+        // Roughly a third of the slots were never fitted or have been plated
+        // over since, so the field has holes in it.
+        if (hsh > 0.36) {
+          const dx = Math.abs(wx - cxp);
+          const dz = Math.abs(wz - czp);
+          // Sizes vary by a third across the bay: an anchor field that is one
+          // stamp repeated is a texture, an anchor field of different fittings
+          // is a place.
+          const rad = PLATE_R * (0.78 + hsh * 0.42);
+          // Square with the corners knocked off, which is how a bolted plate
+          // is actually cut and what stops four of them reading as one blob.
+          const sd = Math.max(dx, dz, (dx + dz) * 0.74) - rad;
+          if (sd < PLATE_GAP + 0.03) {
+            const face = 1 - smoothstep(-0.012, 0.004, sd);
+            const rec = (1 - smoothstep(PLATE_GAP * 0.55, PLATE_GAP, Math.abs(sd - PLATE_GAP * 0.4))) * (1 - face);
+            // Four bolts, and a plate's own age, so the grid is not uniform.
+            const bx = Math.abs(dx - rad * 0.55);
+            const bz = Math.abs(dz - rad * 0.55);
+            const bolt = (1 - smoothstep(0.022, 0.034, Math.hypot(bx, bz))) * face;
+            const age = 0.45 + hsh * 0.55;
+            plateMask[k] = Math.round(clamp01(Math.max(face, rec)) * 255);
+            plateRec[k] = Math.round(clamp01(rec + bolt * 0.75) * 255);
+            plateTone[k] = Math.round(clamp01(face * age) * 255);
+          }
+        }
+      }
 
       let cov = 0;
       let kind = 0;
@@ -261,6 +338,8 @@ function bakeFloorMaps(size) {
   const rubber = hexToLinear(0x131315);
   const concWarm = hexToLinear(0x3b352e);  // an older, greyer-brown pour
   const concFresh = hexToLinear(0x4a4c52); // a newer, colder one
+  const steel = hexToLinear(0xa9a49b);     // galvanised anchor plate
+  const steelRust = hexToLinear(0x6a4b32);
   const oilBase = new Float32Array(n);     // reused by the ORM pass
 
   for (let j = 0; j < size; j++) {
@@ -288,6 +367,9 @@ function bakeFloorMaps(size) {
       const sc = scuff[k] / 255;
       const tone = patchTone[k] / 127.5 - 1;
       const seam = patchJoint[k] / 255;
+      const plF = plateTone[k] / 255;      // steel face, 0 where absent
+      const plR = plateRec[k] / 255;       // recess groove and bolt heads
+      const plA = plateMask[k] / 255;      // whole footprint
 
       // Slab: expansion joints on a 4m grid, aggregate popping through, a
       // long-wavelength dish so water has somewhere to collect.
@@ -318,8 +400,16 @@ function bakeFloorMaps(size) {
       const dish = (mac - 0.5) * 0.5 + (reg - 0.5) * 0.9;
 
       let h = fine * 0.22 + smoothstep(0.14, 0, agg) * 0.11 + dish;
-      h -= joint * 0.9 + crack * 0.5;
+      // The 4m/2m grid's relief is now analytic in the shader (see
+      // FRAG_NORMAL_HOOK) so it stays crisp under magnification; the baked
+      // height keeps only enough to seat it, plus the patch cold joints, which
+      // are not on the grid and so have no analytic counterpart.
+      h -= joint * 0.35 + seam * 0.5 + crack * 0.5;
       h += tone * 0.06;
+      // The plate sits a few millimetres proud of the pour with a grouted
+      // recess round it: that pair is what makes it a fitting rather than a
+      // sticker, and it is the edge that catches the key.
+      h = lerp(h, 0.16, plF) - plR * 0.55;
       height[k] = h;
 
       // Oil finds the edges of a working floor: plant stands round the rim, and
@@ -342,7 +432,11 @@ function bakeFloorMaps(size) {
       // whole deck carrying the same sheen.
       const damp = clamp01(0.13 + stn * 0.4 + smoothstep(0.34, 0.78, reg) * 0.5 - Math.abs(wz - 1) * 0.01);
       const puddle = clamp01(pool * 2.05 + joint * 0.35 * puddleCell);
-      const shed = clamp01(smoothstep(0.54, 0.88, dry) * 0.6 + sc * 0.55 + oily * 0.5 + clamp01(tone) * 0.28);
+      // A plate stands proud of the pour, so water runs off it and collects in
+      // the grout line instead. Without this the wet multiplier below crushes
+      // the steel back to the value of the concrete it is meant to read against.
+      const shed = clamp01(smoothstep(0.54, 0.88, dry) * 0.6 + sc * 0.55 + oily * 0.5
+        + clamp01(tone) * 0.28 + plF * 0.9);
       wet[k] = clamp01((damp * 0.55 + puddle) * (1 - shed * 0.62));
 
       // Water surface is flat: flatten the height that feeds the normal map.
@@ -371,6 +465,13 @@ function bakeFloorMaps(size) {
         v *= 1 - crack * 0.55 - joint * 0.45;
         v = lerp(v, paint[ch] * (0.72 + fine * 0.55), cov);
         v = lerp(v, rubber[ch] * (0.8 + fine * 0.5), sc * 0.82);
+        // Plate: galvanised face going to rust at the older ones, a near-black
+        // grout line round it, and dark bolt heads.
+        if (plA > 0.002) {
+          const st = lerp(steelRust[ch], steel[ch], clamp01(plF * 1.25)) * (0.7 + fine * 0.6);
+          v = lerp(v, st, plF);
+          v = lerp(v, concDark[ch] * 0.55, clamp01(plR));
+        }
         // Wet concrete is darker concrete. This is the single most convincing
         // cue that a floor is wet, ahead of the reflection itself.
         v *= lerp(1, 0.32, clamp01(wet[k] * 1.35));
@@ -406,10 +507,20 @@ function bakeFloorMaps(size) {
       rough = lerp(rough, 0.14, clamp01(oilBase[k]) * 0.8);
       // A fresh pour is a rougher pour; an old one is polished by traffic.
       rough = clamp01(rough + (patchTone[k] / 127.5 - 1) * 0.09);
+      // Anchor plates are the only real metal on the deck. They are what turns
+      // the key into a hard highlight down here instead of another matte patch.
+      const pf = plateTone[k] / 255;
+      const pr = plateRec[k] / 255;
+      rough = lerp(rough, 0.36, pf);
+      rough = lerp(rough, 0.88, clamp01(pr));
       const o = k * 4;
       ormData[o] = Math.round(clamp01(ao) * 255);
       ormData[o + 1] = Math.round(rough * 255);
-      ormData[o + 2] = Math.round(clamp01(mark[k] * 0.08) * 255);
+      // Partly metallic, not fully: at full metalness the plate has no diffuse
+      // term at all, and against this room's dark IBL it rendered as a black
+      // octagon with a bright rim -- the first version of it did exactly that.
+      // Galvanising that has been walked on for a decade is oxidised anyway.
+      ormData[o + 2] = Math.round(clamp01(mark[k] * 0.08 + pf * 0.42) * 255);
       ormData[o + 3] = 255;
     }
   }
@@ -419,6 +530,75 @@ function bakeFloorMaps(size) {
     normal: makeTexture(normalData, size, { clamp: true }),
     orm: makeTexture(ormData, size, { clamp: true }),
   };
+}
+
+/**
+ * Tiling deck-history map, sampled in world space so it stays sharp however
+ * close the camera gets.
+ *
+ * The macro map above is 2048px over a 32m slab — 64 texels per metre. At the
+ * hero framing the deck runs about 160 screen pixels per metre, so that map is
+ * *magnified* 2.5x and everything in it arrives soft. Measured on the hero
+ * frame, median local RMS contrast over 24px windows on the floor band was
+ * 0.118 against a Tekken-8 reference band of 0.30+, and the 10th percentile was
+ * 0.04 — i.e. most of the deck carries no variation at all at the scale the eye
+ * reads, and what contrast the band does have is concentrated in the wet
+ * streaks (p90:median 2.75 against the reference's 1.7).
+ *
+ * The fix has to put structure at **10-40cm**, because that is 16-64 screen
+ * pixels at this framing: smaller than that averages away inside one window and
+ * larger than that is a gradient rather than a contrast. So this map carries,
+ * at a 1.3m world tile:
+ *
+ *   R  tone — exposed aggregate against the darker paste around it, 5-6cm
+ *   G  cavity — spalled patches where the laitance has broken away, 25-40cm,
+ *      plus the crack net; used as occlusion *and* as dirt in albedo
+ *   B  roughness offset — a broken surface is rougher than a trowelled one
+ *
+ * One fetch. It is deliberately not a normal map: a normal perturbation on a
+ * dark, largely ambient-lit deck moves almost nothing (the existing detail
+ * normal is proof — it is already there and the band still measures 0.118),
+ * whereas albedo and cavity read under any lighting.
+ */
+function deckDetail(size = 512) {
+  const n = size * size;
+  // 5-6cm aggregate at the 1.3m world tile: 24 cells across.
+  const agg = worley(size, 24, 211, 0.95);
+  // Spall: broad cells, only some of them broken open.
+  const spall = worley(size, 7, 223, 0.9);
+  const fine = fbm(size, 96, { octaves: 3, seed: 227 });
+  const grime = fbm(size, 11, { octaves: 4, seed: 229 });
+  const crk = fbm(size, 23, { octaves: 4, seed: 233, ridged: true });
+  const data = new Uint8Array(n * 4);
+  let cavSum = 0;
+  for (let k = 0; k < n; k++) {
+    // Stones sit proud and pale; the paste between them is darker and duller.
+    const stone = smoothstep(0.30, 0.05, agg.f1[k]);
+    const grit = fine[k] - 0.5;
+    // A spalled patch: the cell is chosen by id, its depth by distance from the
+    // cell edge, so the break has a shape instead of being a disc.
+    const broken = smoothstep(0.62, 0.78, agg.id[k] * 0.35 + spall.id[k] * 0.65);
+    const pit = broken * (1 - smoothstep(0.10, 0.52, spall.f1[k]));
+    const crack = smoothstep(0.88, 0.985, crk[k]);
+    const cav = clamp01(pit * 0.9 + crack * 0.7 + (1 - stone) * 0.16);
+    const tone = clamp01(0.5 + stone * 0.34 + grit * 0.30 - pit * 0.22 - (grime[k] - 0.5) * 0.30);
+    const rough = clamp01(0.5 + pit * 0.34 + crack * 0.22 - stone * 0.16);
+    const o = k * 4;
+    data[o] = Math.round(tone * 255);
+    data[o + 1] = Math.round(clamp01(1 - cav) * 255);
+    data[o + 2] = Math.round(rough * 255);
+    data[o + 3] = 255;
+    cavSum += clamp01(1 - cav);
+  }
+  const tex = makeTexture(data, size);
+  // Occlusion has to redistribute value, not remove it. The first version of
+  // this multiplied the deck by (1 - cav) and took 19% off the floor band's
+  // median luma along the way -- a real gain in local contrast bought partly
+  // with a darker floor, which is not a gain at all when the same statistic is
+  // normalised by the mean. The shader divides by this so the cavity term's
+  // average is exactly one and only its variance reaches the frame.
+  tex.userData.cavMean = cavSum / n;
+  return tex;
 }
 
 /** Tiling water-ripple normal map, scrolled in two directions by the shader. */
@@ -457,6 +637,56 @@ const FRAG_NORMAL_HOOK = /* glsl */ `
     vec2 r2 = vKbWorld.xz * uRippleScale * 1.73 - vec2( uTime * 0.016, - uTime * 0.024 );
     vec3 rip = ( texture2D( uRippleMap, r1 ).xyz + texture2D( uRippleMap, r2 ).xyz ) - 2.0;
     perturb += rip.xy * uRippleAmp * kbWetness * kbWetness;
+
+    // --- deck history, world-space and therefore sharp at any magnification --
+    float kbDry = 1.0 - kbWetness * 0.72;
+    vec3 hist = texture2D( uDeckDetail, vKbWorld.xz * uDeckTile ).rgb;
+    // Level compensation. The deck lost 16% of its band median between the
+    // joint grooves, the cavity term and the rim budget moving off the
+    // scene-wide directional -- and floor luminance was already at parity with
+    // the reference, so buying contrast with it is buying the same statistic
+    // twice. This puts the level back without touching the variance.
+    diffuseColor.rgb *= uDeckGain;
+    diffuseColor.rgb *= 1.0 + ( hist.r - 0.5 ) * 2.0 * uDeckTone * kbDry;
+    diffuseColor.rgb *= mix( 1.0, hist.g * uDeckCavNorm, uDeckCav * kbDry );
+    roughnessFactor = clamp( roughnessFactor + ( hist.b - 0.5 ) * 2.0 * uDeckRough * kbDry, 0.04, 1.0 );
+
+    // --- expansion-joint relief -------------------------------------------
+    //
+    // The joints were painted into the macro map as a dark line and nothing
+    // else: no lip, so the near edge caught no key and the far edge held no
+    // occlusion, and at 2.5x magnification even the line arrived soft. This is
+    // the same 4m formed grid and 2m sawn half-grid the bake uses, evaluated
+    // analytically from world position, so the chamfer stays one pixel crisp
+    // however close the camera gets and costs no texture and no triangle.
+    //
+    // Signed offset from the nearest centreline, in metres. A chamfer is two
+    // faces sloping toward each other, so the tilt points at the joint from
+    // both sides -- which is exactly what makes one side catch the key while
+    // the other holds shadow.
+    vec2 s4 = ( fract( vKbWorld.xz * 0.25 + 0.5 ) - 0.5 ) * 4.0;
+    vec2 s2 = ( fract( vKbWorld.xz * 0.5 + 0.5 ) - 0.5 ) * 2.0;
+    vec2 d4 = abs( s4 );
+    vec2 d2 = abs( s2 );
+    float w0 = uJoint.x;              // groove half-width
+    float w1 = uJoint.y;              // outer edge of the chamfer
+    float sawn = uJoint.z;            // size of the sawn joint vs the formed one
+    vec2 face4 = smoothstep( w0, w0 + 0.006, d4 ) * ( 1.0 - smoothstep( w1 - 0.008, w1, d4 ) );
+    vec2 face2 = smoothstep( w0 * sawn, w0 * sawn + 0.005, d2 )
+               * ( 1.0 - smoothstep( w1 * sawn - 0.006, w1 * sawn, d2 ) );
+    // Where a sawn line lands on a formed one, only the formed joint exists.
+    vec2 solo = smoothstep( w1 * 0.9, w1 * 2.2, d4 );
+    vec2 tilt = -sign( s4 ) * face4 * uJointSlope
+              - sign( s2 ) * face2 * solo * uJointSlope * sawn;
+    perturb += tilt;
+
+    // Groove interior: dark, dirty, rough, and it must not mirror.
+    vec2 core4 = 1.0 - smoothstep( w0 * 0.75, w0 * 1.3, d4 );
+    vec2 core2 = ( 1.0 - smoothstep( w0 * sawn * 0.75, w0 * sawn * 1.3, d2 ) ) * solo;
+    float core = clamp( max( max( core4.x, core4.y ), max( core2.x, core2.y ) * sawn ), 0.0, 1.0 );
+    diffuseColor.rgb *= mix( 1.0, uJointDark, core );
+    roughnessFactor = clamp( roughnessFactor + core * 0.30, 0.04, 1.0 );
+    kbWetness *= 1.0 - core * 0.75;
 
     kbWorldN.xz += perturb;
     kbWorldN = normalize( kbWorldN );
@@ -524,6 +754,16 @@ uniform sampler2D uReflection;
 uniform sampler2D uDetailNormal;
 uniform sampler2D uRippleMap;
 uniform sampler2D uWetMap;
+uniform sampler2D uDeckDetail;
+uniform float uDeckTile;
+uniform float uDeckTone;
+uniform float uDeckCav;
+uniform float uDeckCavNorm;
+uniform float uDeckGain;
+uniform float uDeckRough;
+uniform vec3 uJoint;
+uniform float uJointSlope;
+uniform float uJointDark;
 uniform float uReflStrength;
 uniform float uReflDistort;
 uniform float uReflBlur;
@@ -565,6 +805,7 @@ export class StageFloor {
     const maps = bakeFloorMaps(res);
     this.maps = maps;
     this.ripple = rippleNormal(quality === 'low' ? 128 : 256);
+    this.deckDetail = deckDetail(quality === 'low' ? 256 : 512);
 
     this.uniforms = {
       uReflection: { value: reflector.texture },
@@ -572,6 +813,18 @@ export class StageFloor {
       uDetailNormal: { value: textures.concreteNormal },
       uRippleMap: { value: this.ripple },
       uWetMap: { value: maps.normal },
+      uDeckDetail: { value: this.deckDetail },
+      // 1 / tile size in metres.
+      uDeckTile: { value: 1 / 1.3 },
+      uDeckTone: { value: 1.0 },
+      uDeckCav: { value: 0.85 },
+      uDeckCavNorm: { value: 1 / Math.max(1e-3, this.deckDetail.userData.cavMean) },
+      uDeckGain: { value: 1.14 },
+      uDeckRough: { value: 0.35 },
+      // groove half-width, chamfer outer edge (metres), sawn-joint scale
+      uJoint: { value: new THREE.Vector3(0.016, 0.090, 0.6) },
+      uJointSlope: { value: 0.95 },
+      uJointDark: { value: 0.20 },
       uReflStrength: { value: 0.62 },
       uReflDistort: { value: 0.028 },
       uReflBlur: { value: 0.075 },
@@ -1030,6 +1283,7 @@ export class StageFloor {
     this.maps.normal.dispose();
     this.maps.orm.dispose();
     this.ripple.dispose();
+    this.deckDetail.dispose();
     this.decals.geometry.dispose();
     this.decals.material.dispose();
     this.contacts.geometry.dispose();
