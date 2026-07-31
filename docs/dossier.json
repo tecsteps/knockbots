@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.15.0",
-    "commits": "86",
+    "rev": "0.16.0",
+    "commits": "92",
     "modules": 64,
-    "lines": "54k",
+    "lines": "55k",
     "clips": 91,
     "moves": 191,
     "characters": 10
@@ -11,27 +11,27 @@
   "verdicts": [
     {
       "axis": "Interface craft",
-      "score": 74
+      "score": 76
     },
     {
       "axis": "Stage detail",
       "score": 70
     },
     {
+      "axis": "Character rendering",
+      "score": 64
+    },
+    {
       "axis": "Lighting & atmosphere",
-      "score": 68
+      "score": 63
     },
     {
       "axis": "Impact & effects",
-      "score": 58
-    },
-    {
-      "axis": "Character rendering",
-      "score": 62
+      "score": 54
     },
     {
       "axis": "Animation quality",
-      "score": 52
+      "score": 51
     }
   ],
   "log": [
@@ -665,11 +665,28 @@
         "It also photographed the shockwave at 2x and found an opaque salmon tube occluding the arena signage, traced to the profile living in both colour and alpha with the alpha widened to a near-1.0 Gaussian. A wide envelope at 0.95 alpha is a ring of paint. And it disproved its own brief’s second claim — the impact flash does light adjacent geometry, +21% on both torsos against −1% on a far-crowd control — after throwing out its own first measurement, which had returned a confident number that was pure temporal-antialiasing noise on crowd twenty metres outside the light’s range.",
         "The character agent disproved the round’s headline lever using the brief’s own arithmetic: if the armour atlas really put single-pixel detail out of reach by construction, ablating grain from the plate normal could not move the fine band. It moves it between eight and eighteen per cent."
       ]
+    },
+    {
+      "phase": "PHASE 21",
+      "when": "Round 15",
+      "rev": "rev 0.16.0",
+      "title": "Four of six critics saw none of the work",
+      "paras": [
+        "Interface 76, stage 70, character 64, lighting 63, impact 54, animation 51. Average 64.0 to 63.0. Character and interface each gained two points; lighting lost five and impact four.",
+        "Four of the six critics reported, independently, that nothing on their axis had visibly changed. That is the finding of the round, and it is a targeting failure rather than an execution one — which makes it mine, because I write the briefs.",
+        "The clearest case is the stage. A new fourteen-segment emissive ribbon board was built, and it is placed on the side walls at a height and depth that neither frame the axis is judged on can see. The critic put the risk better than I would have: it will read as shipped in the dossier while contributing no pixels to either frame the axis is scored on. The animation work has the same shape for a different reason — a re-time changes when bones arrive, and the axis is scored on frozen stills, where nothing arrives at all.",
+        "The engineering underneath was the opposite of weak, and two agents did the best instrument work this project has seen.",
+        "The impact agent found three separate defects in its own measuring rig, each of which had already produced a confident and wrong conclusion. Vite was serving the live repository, so another agent saving a file reloaded the page mid-run and destroyed the game object. Adaptive resolution meant two screenshots of the same frozen frame differed by a quarter, because the ablation stalls made the resolution scaler react. And the effects director re-derives light intensity from its stored peak every frame, which silently undid the agent’s light ablation one frame later — it came within an inch of filing “the impact light is inert” as a finding, and caught it only because a control light added to the scene root moved the region of interest from 104 to 198 mean luma.",
+        "It then disproved its own brief. The authored effect lifetimes are delivered correctly: the heat core sits at an eighth of its life eight frames after contact, with the shader still feeding it seventy-nine per cent of peak radiance. The real cause of the vanishing impact is that the core is inside the robot — the contact point is a capsule intersection, and the flash puts essentially all its energy in a pinpoint at that spot.",
+        "The animation agent rebuilt the metric it had been handed after finding it degenerate. Peak angular speed picks the argmax, which hops between events on any clip with two of them: one reaction clip swung from −1.9 to +8.9 to −0.0 across a single tick of editing. It replaced that with an angular-speed centroid and a cross-correlation lag, both provably monotone under a delay, computed on world quaternions because a bone with no track of its own still swings when its parent rotates. Head-lag went from 0.48 to 1.07 ticks across ninety-one clips with no clip regressing. It then shipped sixteen of thirty-three attack clips rather than twenty-three, because its own guard caught that follow-through and chain order pull directly against each other.",
+        "One of the round’s findings was a hole in this project’s own instrument, and a critic found it. The juggle shot accepted the airborne flag as proof that the victim was off the ground — but that flag can be true on the very tick the launch is applied, before any height exists. So the shot certified a frame in which the victim stood with both feet planted and ground dust at his foot. It now requires real height, and three consecutive runs give 1.51, 1.52 and 1.52 metres. The launch itself was never broken; I checked that before changing anything.",
+        "Seventeen shots, seventeen certified, zero defects, 13.8 milliseconds median at 72.5fps. The instrument is now trustworthy and the scores are not moving. After four rounds of that, the honest conclusion is that the briefs are aiming at work the scored frames cannot show."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.15.0",
+    "rev": "0.16.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
