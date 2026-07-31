@@ -854,6 +854,15 @@ async function main() {
                 if (r.effects) r.effects.adaptiveResolution = false;
                 r.renderScale = 1;
                 if (typeof r.resize === 'function') r.resize();
+                // Kill film grain and chroma. This is the last of the residual
+                // noise and it took several attempts to find: the grade pass
+                // hashes uGrain on gl_FragCoord PLUS uTime, so it re-rolls
+                // every rendered frame even with the sim clock at zero -- a
+                // per-pixel dither no amount of pose pinning can touch. Found
+                // by the character workstream, which measured a 1.44/255 floor
+                // between two grabs of an identical frozen configuration and
+                // traced it here.
+                if (typeof r.setGrade === 'function') r.setGrade({ grain: 0, chroma: 0 });
               }
               res({ phaseTicks: KB.phaseTicks });
             } else requestAnimationFrame(step);

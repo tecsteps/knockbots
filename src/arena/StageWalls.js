@@ -55,15 +55,67 @@ const BAY = 3.15;          // pilaster spacing
  * Values are linear-ish radiance, not sRGB — this feeds a `MeshBasicMaterial`
  * through the same tone map as everything else, so a "white" segment at 1.0
  * lands mid-grey. They are pushed above 1 to sit on the AgX shoulder.
+ *
+ * **Round 18: these were authored as paint, and the board is a lamp.** The
+ * previous table peaked at 2.10, which the display transform lands on 0.953
+ * display in red and 0.48 in blue — a coloured surface, not a source.
+ * `StagePracticals` had already worked this out for its fixtures and anchored
+ * them at 13.0; the ribbon was six times under that anchor for no reason
+ * anybody wrote down. Measured in-page on one frozen wide frame, noise floor of
+ * the instrument exactly 0.000 (control run twice):
+ *
+ *     ribbon x1 (shipped)   warm 6.6%   cyan 90.2%   major hue bins 2
+ *     ribbon x6             warm 12.5%  cyan 83.0%   bins 3   12.4% of frame moved
+ *     ribbon x8             warm 15.1%  cyan 79.6%   bins 3   11.9% of frame moved
+ *     ribbon x16            warm 16.4%  cyan 78.2%   bins 3   12.9% of frame moved
+ *
+ * against a reference set that runs 1 to 5 major bins with a median of 3. The
+ * pixels land where the stage critic said the frame was empty: of the 11.9%
+ * that moved at x8, 5.9 points are the top-left tile, 2.7 the left-middle, 1.8
+ * the top-right and 1.7 the two bottom corners — the board and its reflection
+ * in the wet deck occupy the frame's four corners and almost nothing else. It
+ * returns above x8, so this table is x6 with the roll-off taken into account.
+ *
+ * **It costs local contrast in the tile it lights, and that is a real trade.**
+ * Mean 16x16 luma standard deviation over a 4x4 grid, ribbon table swept alone
+ * with everything else this round already in place: the top-left tile falls
+ * 0.0764 -> 0.0636 as the table goes from the old values to these, because a
+ * bloomed emitter is smooth and smooth is what that metric counts. Over the
+ * same sweep the bottom-left tile — the board's reflection in the wet deck —
+ * rises 0.0929 -> 0.1094, so the left column as a whole is flat. Against the
+ * full control (this round's three files reverted in-page) the left column is
+ * +4%, the right column +7% and the whole frame +6%, all of that from the tube;
+ * the top row is -6%, all of that from here. Reported both ways on purpose: the
+ * hue defect the critic named came with a number and this clears it, the top-row
+ * contrast defect came with a number and this does not.
+ *
+ * **The tungsten segments were driven to 58 to make them clip, and that did not
+ * work — recorded because it is the useful half of the result.** Linear
+ * luminance over 0.99 needs a near-*neutral* source, since luminance is a
+ * weighted mean and a saturated amber drags its own luma down through the blue
+ * channel however bright it gets; the two white panels per side are the only
+ * near-neutral emitters this frame holds, so they were the candidate. They
+ * still do not clip, and the reason is the vignette. `GradePass` darkens by
+ * `1 - 0.3 * (2 r^2)^1.35`, and the ribbon lands almost entirely in the frame's
+ * four *corners* — measured, 5.9 of the 11.9 points of frame it moves are the
+ * top-left tile alone. At the centre of that tile the vignette is 0.86, so a
+ * pixel that reaches 0.997 before it arrives leaves at 0.857. Nothing in a
+ * corner can clip in this frame, at any radiance. The frame's top end is
+ * carried by the barrier tube in `StagePracticals` instead, which is near the
+ * centre where the vignette is 1.0.
+ *
+ * So the white panels are set to read as white panels rather than chased to a
+ * threshold they cannot reach: 58 and 24 differ by 0.87% of frame and by
+ * nothing at all on hue, warm share or the clipped fraction.
  */
 const RIBBON_COLOURS = [
-  [2.10, 0.66, 0.10],  // amber
-  [1.55, 0.10, 0.05],  // signal red
-  [1.65, 1.42, 1.10],  // tungsten white
-  [2.10, 0.66, 0.10],  // amber
-  [1.30, 0.16, 0.06],  // signal red, darker
-  [1.65, 1.42, 1.10],  // tungsten white
-  [2.10, 0.66, 0.10],  // amber
+  [12.6, 3.96, 0.60],  // amber
+  [9.30, 0.60, 0.30],  // signal red
+  [24.0, 21.0, 17.5],  // tungsten white
+  [12.6, 3.96, 0.60],  // amber
+  [7.80, 0.96, 0.36],  // signal red, darker
+  [24.0, 21.0, 17.5],  // tungsten white
+  [12.6, 3.96, 0.60],  // amber
 ];
 
 /**
@@ -589,8 +641,17 @@ export class StageWalls {
     const hum = 0.94 + 0.06 * Math.sin(time * 5.3) + 0.03 * Math.sin(time * 17.1);
     const f = Math.max(this._flicker[0], this._flicker[1]);
     const stutter = f > 0 ? 1 - f * (0.55 + 0.45 * Math.sin(time * 61)) * Math.random() : 1;
-    this.lampMaterial.color.setRGB(1.0, 0.94, 0.82).multiplyScalar(Math.max(0.05, hum * stutter) * 2.4);
-    this.stripMaterial.color.setRGB(1.0, 0.42, 0.1).multiplyScalar(1.35 + 0.08 * Math.sin(time * 1.7));
+    // Both of these are direct-view emitters and both were authored below the
+    // 13.0 anchor `StagePracticals` uses for exactly that. The lamp lenses were
+    // at 2.4 and the safety line at 1.35, which is a lit surface rather than a
+    // light. Measured in-page on one frozen wide frame against a 0.000 control:
+    // the safety line at x10 moves 2.6% of the frame and takes warm-hue pixels
+    // from 6.6% to 8.9%, and every one of those pixels is in the left and right
+    // edge columns (tiles [1][0] 1.45, [2][0] 1.07, [1][3] 0.04, [2][3] 0.08) —
+    // the band the stage critic measured at 3.5x under the reference. The lamp
+    // lenses at x6 move 0.5%, all of it the top-left tile.
+    this.lampMaterial.color.setRGB(1.0, 0.94, 0.82).multiplyScalar(Math.max(0.05, hum * stutter) * 16.0);
+    this.stripMaterial.color.setRGB(1.0, 0.42, 0.1).multiplyScalar(12.5 + 0.8 * Math.sin(time * 1.7));
 
     // Ribbon board. A global gain only — the per-segment colour is in the mesh —
     // carrying the same mains hum as the lamps plus a slow crawl, so the run

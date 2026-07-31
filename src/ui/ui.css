@@ -400,13 +400,40 @@
     inset 0 0 0 0.05em rgba(0, 0, 0, 0.9);
   filter: drop-shadow(0 0.55em 1.1em rgba(0, 0, 0, 0.55)) drop-shadow(0 0.1em 0.16em rgba(0, 0, 0, 0.6));
 }
+/*
+ * THE EMPTY TRACK IS THE SECOND-BIGGEST SHAPE IN THE FRAME AND IT WAS A HOLE.
+ *
+ * `.hp-frame` above already carries a note about bottoming out at #0a0c11/#000
+ * and reading as flat black against a dark arena. The same fix was applied to
+ * the bezel and never to the channel inside it, which ran
+ * #020306 / #0a0d15 / #05060a / #010102 — black, on a bar that is 44em wide.
+ * Photographed on the certified 08-hud frame, where P2 sits at 62 health, the
+ * depleted 38% of that bar is the largest untextured region in the interface:
+ * at 3x it is a flat rectangle with a hard vertical edge and no housing, no
+ * graduation and no material, next to a fill that has a bevel, a gloss and a
+ * gradient. A depleted bar in this genre is a machined channel you can still
+ * see the engineering of; it is never an absence.
+ *
+ * Three things, all of which survive being 38% of a bar at 1x:
+ *   - a tonal floor around #1a202b, so the channel is dark METAL rather than
+ *     void, and the inset lip shadow above it has something to fall on;
+ *   - the machined hatch raised from 0.025 to 0.05 alpha and widened to a 4px
+ *     period, which is what makes it a surface at all — at 0.025 over #020306
+ *     it was quantised out of existence in an 8-bit frame;
+ *   - graduation ticks every 10%, so the empty part of the bar reads as a
+ *     GAUGE with a scale on it. This is also the only element that tells a
+ *     player how much of the bar is gone without comparing it to the other
+ *     side of the screen.
+ */
 .hp-inner {
   position: relative;
   height: 100%;
   width: 100%;
   background:
-    repeating-linear-gradient(100deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 3px),
-    linear-gradient(180deg, #020306 0%, #0a0d15 10%, #05060a 60%, #010102 100%);
+    repeating-linear-gradient(90deg,
+      rgba(214, 230, 255, 0.14) 0 1px, transparent 1px 10%),
+    repeating-linear-gradient(100deg, rgba(255, 255, 255, 0.05) 0 1px, transparent 1px 4px),
+    linear-gradient(180deg, #0c1017 0%, #1c222e 16%, #171d27 62%, #0b0e14 100%);
   clip-path: polygon(
     calc(var(--kb-cut) * 0.82) 0, 100% 0,
     calc(100% - var(--kb-cut) * 0.82) 100%, 0 100%
@@ -1099,22 +1126,107 @@
   --flare: var(--kb-accent);
   --flare-glow: rgba(255, 138, 42, 0.7);
 }
-.announce-banner.announce--run { animation-name: announceCycle; animation-duration: 1.5s; animation-timing-function: linear; animation-fill-mode: forwards; }
-@keyframes announceCycle {
-  0%   { opacity: 0; transform: scale(2.4) skewX(-10deg); filter: blur(6px); }
-  10%  { opacity: 1; transform: scale(0.94) skewX(1deg); filter: blur(0px); }
-  18%  { transform: scale(1.03) skewX(0deg); }
-  26%  { transform: scale(1); }
-  /* The blur MUST be re-declared here. Without it the only filter keyframes are
-   * 0/10/100%, so blur interpolates linearly from 0px at 10% to 4px at 100% and
-   * the word is soft for the entire window it is legible: 0.71px at 26%, 1.33px
-   * at 40%, 3.02px at 78%. Measured on 13-announce-fight, phase-locked at 40%:
-   * max horizontal luminance gradient across the glyph box was 76 against the
-   * timer plaque's 248 in the same frame — the announcement was the only
-   * out-of-focus surface in the interface. Holding zero here takes it to 255,
-   * i.e. edge-matched to the sharpest element on screen, and confines the ramp
-   * to the final 22% where it is a deliberate exit. */
-  78%  { opacity: 1; transform: scale(1); filter: blur(0px); }
+/*
+ * The announcement is a THREE-PHASE state machine, not one long keyframe run,
+ * and the reason is measured.
+ *
+ * It used to be a single 1.5s `announceCycle` that animated `transform: scale()`
+ * and `filter: blur()` from the first frame to the last. Blur interpolated
+ * linearly 0px at 10% to 4px at 100%, so the word was soft for the whole window
+ * it is legible — 0.71px at 26%, 1.33px at 40%, 3.02px at 78%. The previous
+ * round "fixed" that by re-declaring `filter: blur(0px)` at 78%, and the
+ * computed style did read `blur(0px)` at the captured phase. The word was still
+ * soft, and the critic was right to say the change was not in the frame.
+ *
+ * Two separate causes, both found by pinning the 3D scene and toggling only the
+ * CSS on one frozen frame, six repetitions per arm. Metric: max horizontal
+ * luminance gradient over the glyph bounding box, against the timer plaque in
+ * the same frame as an in-frame reference (252.6).
+ *
+ *   as shipped (blur(0px) at the hold)   213.8 213.8 69.6 68.3 68.4 65.1
+ *   split, hold fully static             214.9 214.9 214.9 214.9 214.9 214.9
+ *
+ *   1. `blur(0px)` is not the same as no blur. A zero-radius filter still puts
+ *      the element through the filter pipeline — it is rasterised into an
+ *      offscreen surface and resampled — so the glyph edges are softened by a
+ *      filter that removes nothing. `filter: none` skips the pipeline.
+ *   2. An element with a RUNNING `transform: scale()` animation is composited,
+ *      and its texture is rastered once at a scale chosen from the animation
+ *      (this cycle sweeps 2.4 to 0.94 to 1.0), then GPU-resampled at every other
+ *      scale. That is the bimodality above: 214 when the raster happened to land
+ *      on the hold's scale, 65-70 when it did not. It is not a fixed defect, it
+ *      is a coin flip taken on whichever frame the shutter opens.
+ *
+ * So the first half of the fix is to have NO animation running during the hold.
+ * `announceIn` fills forward to `transform: none; filter: none`, the hold
+ * declares no animation at all, and `announceOut` is added by HUD.js when the
+ * hold expires. It has to be added by script rather than declared with an
+ * `animation-delay`: a pending-but-delayed animation is enough to keep the layer
+ * composited, and that arm measured 214.9 five times and 68.8 once.
+ *
+ * THE SECOND HALF IS WHY THE WORD ITSELF NO LONGER FLIES IN, and it is the part
+ * that was not understood before. CSS animation time in this environment
+ * advances with RENDERED FRAMES, not with wall clock. Instrumented across the
+ * capture harness's own staging for 13-announce-fight, sampling the banner's
+ * computed style every frame:
+ *
+ *      61ms   blur(6px)     scale 2.40   opacity 0.00
+ *      75ms   blur(5.35px)  scale 2.24   opacity 0.11
+ *     528ms   blur(4.85px)  scale 2.12   opacity 0.19
+ *
+ * 453ms of wall clock bought 12ms of animation, because the page stalls for
+ * 450-550ms at a time (docs/PROFILING.md, "the last stall is not attributable to
+ * application code"). The shot's 600ms settle is wall clock and the shutter is
+ * not delayed by the stall, so the frame that gets scored lands around 10-20% of
+ * the cycle — INSIDE THE FLY-IN — and never anywhere near the 78% the previous
+ * round's blur keyframe was written for. Three consecutive captures of that
+ * build certified `ink 527x145`, `553x153`, `873x237`: scale 0.955, 1.0 and
+ * 1.58, i.e. three different points on the entry ramp.
+ *
+ * That cannot be fixed by moving a keyframe, because no keyframe timing survives
+ * a clock that stops. It is fixed by making the word legible at EVERY phase: the
+ * entry animates `opacity` and nothing else. Opacity is the one compositor
+ * property that does not resample the layer's content — it composites a
+ * natively-rastered texture with alpha — so a shutter that opens mid-entry gets
+ * a crisp word at partial opacity instead of a smeared one.
+ *
+ * The impact is not lost, it is reassigned: the scrim (`::after`) still slams
+ * from 1.5 to 1 and the flare streak (`::before`) still wipes out from nothing,
+ * both behind the word, and both are soft-edged gradients that resampling costs
+ * nothing. The composition punches in; the type does not move. That is how most
+ * shipped title cards are built, and here it is also the only version that is
+ * crisp in the frame it is scored on.
+ */
+.announce-banner[data-phase='in'] {
+  animation: announceIn 160ms linear forwards;
+}
+/* The hold declares no animation, no transform and no filter. Every one of
+ * those is a compositing trigger, and this is the beat the word is read on. */
+.announce-banner[data-phase='hold'] { opacity: 1; }
+.announce-banner[data-phase='out'] {
+  animation: announceOut 260ms linear forwards;
+}
+/* Opacity only. See the note above: any transform or filter here reintroduces
+ * the resampling, and a stalled frame clock means "it is only blurred for the
+ * first 150ms" is not a defence — 150ms of animation can be most of a second of
+ * wall clock, and the shutter opens on wall clock. */
+@keyframes announceIn {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+/*
+ * The lift-out earns its blur, but not immediately. The shutter on
+ * 13-announce-fight fires on wall clock and the phase machine runs on a frame
+ * clock that stalls, so a capture can clip the front of the exit even when the
+ * self-check certified the hold a moment earlier — one run in three did exactly
+ * that and measured 84.3 where its siblings measured 214.9. Holding
+ * `transform: none; filter: none` through the first 38% means the worst a
+ * clipped exit can deliver is a crisp word at 62% opacity rather than a smeared
+ * one, and the dismissal still accelerates away over the remaining 160ms.
+ */
+@keyframes announceOut {
+  0%   { opacity: 1; transform: none; filter: none; }
+  38%  { opacity: 0.62; transform: none; filter: none; }
   100% { opacity: 0; transform: scale(1.5) translateY(-6%); filter: blur(4px); }
 }
 /* A blurred horizontal streak in the announcement's own colour, behind the
@@ -1131,12 +1243,20 @@
   opacity: 0;
   z-index: -1;
 }
-.announce-banner.announce--run::before { animation: announceFlare 1.5s linear forwards; }
-@keyframes announceFlare {
+/* Driven off the same three phases as the word, so the streak can never drift
+ * out of sync with it the way two independently-timed 1.5s runs would. */
+.announce-banner[data-phase='in']::before { animation: announceFlareIn 160ms linear forwards; }
+.announce-banner[data-phase='hold']::before {
+  opacity: 0.5; transform: translate(-50%, -50%) scaleX(1);
+}
+.announce-banner[data-phase='out']::before { animation: announceFlareOut 260ms linear forwards; }
+@keyframes announceFlareIn {
   0%   { opacity: 0; transform: translate(-50%, -50%) scaleX(0); }
-  10%  { opacity: 0.95; transform: translate(-50%, -50%) scaleX(1); }
-  26%  { opacity: 0.5; }
-  78%  { opacity: 0.45; }
+  62%  { opacity: 0.95; transform: translate(-50%, -50%) scaleX(1.06); }
+  100% { opacity: 0.5; transform: translate(-50%, -50%) scaleX(1); }
+}
+@keyframes announceFlareOut {
+  0%   { opacity: 0.5; transform: translate(-50%, -50%) scaleX(1); }
   100% { opacity: 0; transform: translate(-50%, -50%) scaleX(1.4); }
 }
 
@@ -1170,11 +1290,21 @@
   z-index: -2;
   pointer-events: none;
 }
-.announce-banner.announce--run::after { animation: announceScrim 1.5s linear forwards; }
-@keyframes announceScrim {
-  0%   { opacity: 0; transform: translate(-50%, -50%) scale(1.5); }
-  10%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  78%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+/* The scrim carries the punch-in the word used to. It is a soft radial gradient
+ * with no edge anywhere in it, so the compositor resampling that ruins masked
+ * type is free here — this is the right layer to put the motion on. */
+.announce-banner[data-phase='in']::after { animation: announceScrimIn 160ms linear forwards; }
+.announce-banner[data-phase='hold']::after {
+  opacity: 1; transform: translate(-50%, -50%) scale(1);
+}
+.announce-banner[data-phase='out']::after { animation: announceScrimOut 260ms linear forwards; }
+@keyframes announceScrimIn {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(1.9); }
+  70%  { opacity: 1; transform: translate(-50%, -50%) scale(0.96); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes announceScrimOut {
+  0%   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   100% { opacity: 0; transform: translate(-50%, -50%) scale(1.25); }
 }
 

@@ -523,3 +523,29 @@ added variance instead of removing it. It is left unpinned and sits at 2.6–4.9
 still the same order as the material changes being measured on that frame. Treat a single-pair
 closeup comparison as unproven; use three runs a side and compare medians, or toggle in-page on
 one frozen frame.
+## Round 17: the closeup is now reproducible when the pose matches, and you can tell
+
+Two further causes found, the second by the character workstream:
+
+6. **The film grain re-rolls every rendered frame.** The grade pass hashes `uGrain` on
+   `gl_FragCoord` **plus `uTime`**, so it is a fresh per-pixel dither on every frame even with the
+   sim clock at zero. No amount of pose pinning touches it. `setGrade({ grain: 0, chroma: 0 })` at
+   the freeze removes it.
+
+7. **The pose still diverges intermittently, and the pose signature detects it exactly.** Three
+   runs, pairwise:
+
+   | pair | worst bone delta | frame delta |
+   |---|---|---|
+   | 53 vs 55 | **0.0000 m** | **0.235 / 255** |
+   | 53 vs 54 | 0.0060 m | 15.78 / 255 |
+   | 54 vs 55 | 0.0060 m | 15.78 / 255 |
+
+   When the pose matches the frame matches — 0.235/255 against a 24–29 baseline is a **hundredfold
+   improvement**, and it is bit-near-identical. When it is 6 mm out (about twelve pixels at this
+   framing) the frame is 15.8/255 out. Roughly one run in three diverges, cause not yet found.
+
+**So the working method is: capture three times, read `verified["02-closeup-face"].pose` from each
+manifest, and only difference frames whose signatures match.** That turns a frame nobody could
+measure on into one that is exact when it is valid and self-declaring when it is not. Do not
+average across runs with different signatures — you will be averaging poses.

@@ -2363,13 +2363,26 @@ if ( kbDetail.x > 0.0 ) {
 	// Slope across the lay, dimensionless. Written as a gradient rather than as
 	// a height because the height itself is never needed and a slope is what the
 	// surface-gradient construction below consumes.
+	//
+	// AMPLITUDE. These two numbers were 0.068 and 0.039 for one round and the
+	// critic could not find the lay at 5x, with a directional FFT, looking for it
+	// specifically. They are 2.6x that now, and the multiplier is not a guess: it
+	// was swept in-page on ONE frozen closeup frame through this uniform, with the
+	// grain and the chromatic aberration zeroed so two grabs of an unchanged
+	// configuration differ by EXACTLY zero code values, and the sweep was read by
+	// eye at 5x rather than off the band metric. 1.0 is invisible against 0. 2.0
+	// is where the linishing marks first read. 2.6 reads as a ground face. 4.0 and
+	// above the plate starts reading as corrugated sheet — the same ceiling
+	// {@link GRAIN} hit at 0.020, from the other direction, and it is the eye that
+	// finds it, not the number, which is monotone all the way past the point where
+	// the surface stops being metal.
 	float kbWF = 6.2831853 / kbLamF;
 	float kbWC = 6.2831853 / kbLamC;
 	float kbChat = 0.62 + 0.38 * sin( kbAlong * ( 2.3271 / kbLamC ) + kbPhase );
-	float kbSlope = kbFadeF * kbChat * 0.068 * (
+	float kbSlope = kbFadeF * kbChat * 0.1768 * (
 			sin( kbAcross * kbWF + kbPhase )
 			+ 0.5 * sin( kbAcross * kbWF * 1.87 + kbPhase * 2.3 ) )
-		+ kbFadeC * 0.039 * sin( kbAcross * kbWC + kbPhase * 0.7 );
+		+ kbFadeC * 0.1014 * sin( kbAcross * kbWC + kbPhase * 0.7 );
 	// A rolled lip is polished smooth; a hollow keeps its tooling.
 	kbSlope *= kbDetail.x * ( 1.0 - 0.70 * kbPolish + 0.35 * kbHol );
 
@@ -2386,8 +2399,12 @@ if ( kbDetail.x > 0.0 ) {
 
 	// The octave that fell under Nyquist, handed to the lobe width instead of
 	// being dropped. This is what keeps the plate from going glassy at range.
+	// Scaled by the same 2.6 as the slope above, so the handoff still carries the
+	// energy the fade took out; checked at the fighting framing, where the whole
+	// sweep from 0 to 4.0 is indistinguishable at 4.5x on the chest plate, so
+	// nothing here goes matte at range.
 	roughnessFactor = clamp( roughnessFactor + kbDetail.x
-		* ( 0.040 * ( 1.0 - kbFadeF ) + 0.018 * ( 1.0 - kbFadeC ) ), 0.04, 1.0 );
+		* ( 0.104 * ( 1.0 - kbFadeF ) + 0.0468 * ( 1.0 - kbFadeC ) ), 0.04, 1.0 );
 
 	// Abrasion, running along the lay, only where the form rolls.
 	float kbWearAmt = kbDetail.w * kbPolish;
@@ -3077,6 +3094,111 @@ function paletteKey(p, sizes) {
  * three runs) overlaps the treatment completely. Round-to-round comparison of
  * these captures is therefore mostly comparing poses, and the fix is the one
  * `17-anim-strip` already uses: freeze on an exact tick count, not on a delay.
+ *
+ * --- Round 17: the same lay, 2.6x louder, and a ZERO-noise instrument --------
+ *
+ * Round 16's verdict was not "wrong mechanism", it was "right mechanism, too
+ * quiet": +5.4% on the 1px band, and the critic then went to 5x on four plate
+ * faces, ran a directional FFT looking for the lay specifically, and could not
+ * find it. So this round moved amplitude and nothing else.
+ *
+ * **First, the instrument, because it is the reusable part.** Toggling in-page on
+ * one frozen frame (round 16's technique) still left a 1.44/255 floor between two
+ * grabs of an IDENTICAL configuration. That floor is the grade pass: `uGrain` is
+ * hashed on `gl_FragCoord` and `uTime`, so it re-rolls every rendered frame even
+ * with the sim clock at zero. Pin the pose exactly as `02-closeup-face` does,
+ * then add
+ *
+ *     KB.renderer.setGrade({ grain: 0, chroma: 0 })
+ *
+ * and two grabs of an unchanged configuration differ by **exactly 0.000/255, max
+ * 0** — not "below the floor", identically zero, every pixel. Every number below
+ * is against that. Anyone measuring a material on this frame again should start
+ * here; it is 14.7/255 cheaper than the harness and it is free.
+ *
+ * MEASURED, one page load, one frozen tick, one compiled program, ablated through
+ * `kbDetail.x` — as a MULTIPLIER on each material's own `detail`, not as an
+ * absolute, because `rubber`, `hose` and one plate override it to 0.9 / 0.55 /
+ * 0.3 and flattening them all to one value measures a roster nobody ships. "old"
+ * is the round-16 amplitude (x 0.3846), "new" is what ships, and they differ only
+ * in the four constants in STORY_FORM_FRAGMENT:
+ *
+ *                       1px      2px      4px    1+2 sum    1px:4px
+ *     lay off          2.982    5.531    9.624    8.513      0.310
+ *     old (1.0x)       3.199    5.822    9.930    9.021      0.322
+ *     new (2.6x)       3.713    6.539   10.517   10.252      0.353
+ *     old -> new       +16.1%   +12.3%   +5.9%   +13.6%
+ *
+ * Head crop 480x480. On the chest crop old -> new is 1px +15.1%, 1+2 +14.1%.
+ * Against the lay being off entirely, the new amplitude is 1px **+24.5%** where
+ * the old one was +7.3%.
+ *
+ * Delivered pixels, old vs new, **against a 0.000/255 noise floor**: head crop
+ * mean 4.05/255 with **11.9% of pixels moving by 8/255 or more**; chest crop 2.97
+ * and 8.2%; whole frame 2.84 and 8.4%. Round 16's equivalent number was 18.9% of
+ * the head crop for lay-off vs lay-on, i.e. this one change is about two thirds
+ * of the whole term's original effect again.
+ *
+ * And it is visible: at 4x on the three highest-delta plate faces the surface
+ * goes from a soft isotropic mottle to unmistakable parallel linishing running
+ * one way across the plate.
+ *
+ * HOW 2.6 WAS CHOSEN — by eye, on the sweep, not by extrapolating the band.
+ * 1.0 invisible against 0. 2.0 the marks first read. 2.6 reads as a ground face.
+ * 3.2 stronger and still metal. 4.0 the plate reads as corrugated sheet. The band
+ * metric is monotone through all of it (1px 2.92 / 3.16 / 3.45 / 3.64 / 3.84 /
+ * 4.08 at 0 / 1 / 2 / 2.6 / 3.2 / 4), which is exactly the trap {@link GRAIN}
+ * documents at 0.020: **the metric does not know where the surface stops being
+ * metal.** The most foreshortened panels are where 2.6 is loudest and they are
+ * the reason 3.2 was not taken.
+ *
+ * CHECKED AT FIGHTING RANGE, because the coarse octave is 4px there: the whole
+ * sweep 0 -> 4.0 is indistinguishable at 4.5x on the hero framing's chest plate,
+ * and whole-frame old vs new is 1.08/255. The analytic band-limiting does what it
+ * claims; this is a closeup change and it correctly is not a fighting-range one.
+ *
+ * COST, honestly: isolated bright pixels (a pixel more than 40/255 above the
+ * median of its 3x3 ring) over the character region go 1821 -> 2401. Most of that
+ * is the detector counting the new grain's own crests rather than new aliasing —
+ * nothing new is visible along the plate edges at 9x — but it is not zero and it
+ * is recorded.
+ *
+ * --- Round 17: specular antialiasing was built, measured, and REVERTED --------
+ *
+ * The edge fireflies — a string of single-pixel dots along every plate edge in
+ * the closeup, on record for two rounds and never owned — were assumed to be a
+ * lobe-filtering problem: `kbPolish` drives roughness to its 0.06 floor exactly on
+ * a rolled chamfer, and the clearcoat floor is 0.0525, so a highlight narrower
+ * than a pixel gets point-sampled. The standard fix was written: Tokuyoshi &
+ * Kaplanyan geometric specular antialiasing, screen-space normal variance added
+ * to GGX alpha, one filter per lobe against its own normal (the base lobe against
+ * the perturbed normal, the coat against `nonPerturbedNormal`, which is what
+ * three derives `clearcoatNormal` from).
+ *
+ * **It fires exactly where intended and it cannot be seen.** The difference map
+ * traces every chamfer and nothing else, so the term is live. Isolated bright
+ * pixels over the character region, sweeping the variance gain on one frozen
+ * frame at the new amplitude:
+ *
+ *     gain 0 (off)          2664
+ *     gain 0.5, clamp 0.18  2544   -4.5%   (the box-filter value, physical)
+ *     gain 2,   clamp 0.5   2409   -9.6%
+ *     gain 8,   clamp 1.0   2394   -10.1%, and the 1px band goes UP
+ *
+ * At 9x on the densest firefly cluster in the frame the three settings are
+ * indistinguishable. A 5-10% move on a count, invisible at nine times life size,
+ * is not a fix, so it was reverted rather than shipped at zero strength.
+ *
+ * **What that disproves, and it is the useful half:** the edge dots are NOT a
+ * specular-lobe-width problem. Widening the lobe by the measured screen-space
+ * normal variance — up to alpha +1.0, which takes a chamfer from mirror to matte
+ * — does not remove them. They also survive the lay being switched off entirely
+ * (1305 of them with `kbDetail.x = 0`), so they are not the machining lay either.
+ * What is left, for whoever takes this next: they are 1-2px lines rather than
+ * dots, they follow the plate perimeter, and the perimeter is where this file
+ * deliberately draws the brightest line on the part (see the free-ground-edge
+ * half of `kbSeam`). Test that, and the bloom threshold sitting on top of it,
+ * before testing anything about roughness.
  */
 function resolveSizes(scale) {
   const q = (n) => Math.max(128, Math.round((n * scale) / 128) * 128);

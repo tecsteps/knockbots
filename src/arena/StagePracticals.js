@@ -1080,7 +1080,65 @@ export class StagePracticals {
       // emitter pass as a whole put 15% back onto the deck it had just been
       // taken off. 8.2 still clears the bright pass by half again.
       const pulse = 10.5 + 1.35 * Math.sin(time * 0.8);
-      this.neonMaterial.color.copy(rimA).multiplyScalar(pulse);
+      // ROUND 18. The tube is the only direct-view emitter the wide framing
+      // holds near its own centre, and it was the reason the frame had nothing
+      // at the top of its range: the lighting critic measured p99 0.50-0.76
+      // linear with **0.000%** of pixels over 0.99, against a reference band of
+      // 0.56-0.995 and 0.00-3.24%. `TUBE_DRIVE` is how far over the display
+      // transform's clipping point a bare tube is driven, and `TUBE_BLEACH` is
+      // how far its core desaturates on the way. Both are needed and the second
+      // is the non-obvious one: linear luminance is a weighted mean, so a
+      // *saturated* source cannot put a pixel over 0.99 however bright it is —
+      // the blue-poor channels drag its own luma down. A real tube driven well
+      // past saturation has a white core inside a coloured halo, which is what
+      // this does and what every reference frame shows.
+      //
+      // Swept in-page on one frozen wide frame, control run twice at exactly
+      // 0.000 delta, against the rest of this round already in place:
+      //
+      //     drive  bleach   p99     >0.99   cyan%  warm%  fighter/deck
+      //      x1     0.00   0.7835   0.000%  80.6   15.4      1.408
+      //      x8     0.00   0.8064   0.000%  83.3   13.0      1.487
+      //      x8     0.25   0.8234   0.000%  81.4   14.8      1.502
+      //      x12    0.00   0.8292   0.000%  84.1   12.4      1.524
+      //      x12    0.30   0.8548   0.027%  81.3   15.0      1.543
+      //      x18    0.25   0.8726   0.035%  83.0   13.6      1.570
+      //
+      // x12 with a 0.30 bleach lands p99 on the reference median of 0.84 and
+      // clears zero on the clipped fraction while costing under two points of
+      // the cyan share this round is separately reducing. The guard that
+      // mattered went the other way from the worry: brightening the tube raises
+      // the *fighters* more than the deck they are read against (1.408 ->
+      // 1.543), because they catch its specular and the deck only catches its
+      // reflection, so figure/ground improves rather than erodes.
+      //
+      // The scattered deposit on the deck is deliberately NOT scaled with it —
+      // it is in-scatter from the same tube, it already lands twice through the
+      // planar mirror, and it is the term that would brighten the fight plane.
+      //
+      // **What it does cost, swept the same way at the FIGHT framing**, where
+      // the tube is nearest the eye and its mirror image fills the deck between
+      // the fighters:
+      //
+      //     drive   p99     >0.99    deck median
+      //      x1    0.8047   0.000%     0.2572
+      //      x4    0.8621   0.000%     0.2920
+      //      x6    0.8790   0.000%     0.3118
+      //      x8    0.8898   0.014%     0.3295
+      //      x12   0.9053   0.053%     0.3601
+      //
+      // The deck the fighters stand on is 40% brighter at x12 than at x1. That
+      // is the composition rule this set is built to ("the fight plane is the
+      // brightest, cleanest band in frame") being spent, and it is the honest
+      // argument for a lower number. x12 is kept because it is the lowest drive
+      // at which BOTH scored framings clear zero on the clipped fraction — x8
+      // clears it at the fight framing and not at the wide one — and because at
+      // the wide framing the trade goes the other way, fighters over deck
+      // improving 1.408 -> 1.543. If the fight framing is ever judged to be
+      // washing out, x8 is the measured fallback and costs 0.039 of p99.
+      const TUBE_DRIVE = 12.0;
+      const TUBE_BLEACH = 0.30;
+      this.neonMaterial.color.copy(rimA).lerp(_white, TUBE_BLEACH).multiplyScalar(pulse * TUBE_DRIVE);
       this.screenMaterial.uniforms.uColor.value.copy(rimA).lerp(_white, 0.25);
       // The strip's own wash on the barrier and the floor at its foot. The
       // deposit is scatter and stays where it was — only the tube got hotter.

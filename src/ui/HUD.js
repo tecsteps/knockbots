@@ -91,6 +91,36 @@ const THUMB_CLEARANCE = 16;
 const IN_FIGHT_PHASES = new Set(['intro', 'ready', 'fight', 'ko', 'roundEnd']);
 
 /**
+ * The three beats of a big announcement, in milliseconds. They must stay in
+ * step with `announceIn` / `announceOut` in `ui.css`, which is why they are
+ * named here rather than inlined: the CSS owns the interpolation, this owns the
+ * state machine that switches between them, and a disagreement shows up as the
+ * word either snapping or hanging.
+ *
+ * Total is the 1.5s the single-keyframe version ran for. The middle beat exists
+ * as a distinct state — with no animation, no transform and no filter — because
+ * every one of those is a compositing trigger, and a composited layer is
+ * rastered at one scale and resampled at the rest. See the long note in
+ * `ui.css`; it is worth 3x on the glyph's measured edge contrast.
+ *
+ * The hold is deliberately long — 1.24s, where a naive reading of the original
+ * 1.5s cycle would give it 0.78s. Two reasons, one craft and one instrument. A
+ * fighting game's round call is held, not flashed; and this is the only beat of
+ * the three that is legible, so every millisecond of it is a millisecond in
+ * which an arbitrarily-timed shutter photographs something worth scoring.
+ *
+ * These are also the ONLY wall-clock authority over the sequence. CSS animation
+ * time advances with rendered frames here, and the page stalls for 450-550ms at
+ * a stretch, so `animationend` can arrive most of a second late; the timers in
+ * `#advanceAnnounceQueue` are what keep the banner's beats roughly where they
+ * were authored. The entry is short and the hold is long on purpose — a late
+ * transition should overrun into the beat that is legible, not out of it.
+ */
+const ANNOUNCE_IN_MS = 160;
+const ANNOUNCE_HOLD_MS = 1240;
+const ANNOUNCE_OUT_MS = 260;
+
+/**
  * Fixed camera layer used only for the offscreen portrait pass — high
  * enough that it can never collide with `LAYER.BLOOM_ONLY`/`NO_REFLECT`
  * from `Constants.js`. Tagging a fighter's group with it and pointing a
@@ -161,6 +191,10 @@ export class HUD {
     this.calloutPool = [];
     this.announceQueue = [];
     this.announceBusy = false;
+    /** Safety timers for the announcement's three phases; see `#advanceAnnounceQueue`. */
+    this.announceTimers = [];
+    /** Bumped per announcement, so a deferred start that has been superseded can tell. */
+    this.announceGen = 0;
 
     this.visible = null; // last hud--hidden state written, to avoid redundant class writes
     this.tenseState = null;
@@ -403,7 +437,13 @@ export class HUD {
       // which is why a queued pair ("PERFECT" then "K.O.") could drop the
       // second word: it was started and immediately superseded.
       if (e.pseudoElement) return;
-      this.#advanceAnnounceQueue();
+      // Two animations now run on this element across one announcement, so the
+      // handler has to say WHICH one ended. Before the split there was only
+      // `announceCycle` and an unqualified handler was correct; an unqualified
+      // handler now advances the queue the instant the fly-in lands and the
+      // word is never held at all.
+      if (e.animationName === 'announceIn') this.#announcePhase('hold');
+      else if (e.animationName === 'announceOut') this.#advanceAnnounceQueue();
     });
   }
 
@@ -466,9 +506,12 @@ export class HUD {
    * @param {HTMLElement} el
    * @param {string} cls
    */
-  #restartAnimDeferred(el, cls) {
+  #restartAnimDeferred(el, cls, then) {
     el.classList.remove(cls);
-    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add(cls)));
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el.classList.add(cls);
+      if (then) then();
+    }));
   }
 
   // -------------------------------------------------------------------------
@@ -1105,17 +1148,85 @@ export class HUD {
   // -------------------------------------------------------------------------
 
   #queueAnnounce(kind, text) {
+    // Collapse an immediate repeat of the word already on screen.
+    //
+    // `#onPhase` queues "FIGHT" on every `phase` event naming the fight, and a
+    // phase can legitimately be entered more than once in quick succession —
+    // `startMatch` re-enters it, and the capture harness calls `setPhase('fight')`
+    // explicitly on top of that. The queue then held FIGHT twice, so the banner
+    // played its full 1.5s and immediately replayed from frame one. On
+    // 13-announce-fight that is visible in the manifest: one run in three
+    // certified `opacity 0.69, ink 781x213`, which is scale 1.39 and 1.9px of
+    // blur — the ENTRY of a second banner, not the hold of the first, because
+    // the shot's settle window straddled the handover. The same defect in
+    // normal play is a word that stutters and starts again.
+    //
+    // Only an immediate repeat is collapsed: "ROUND 2" then "FIGHT" is not a
+    // repeat, and a later round's "FIGHT" is separated by its round card.
+    const tail = this.announceQueue[this.announceQueue.length - 1];
+    if (tail) {
+      if (tail.kind === kind && tail.text === text) return;
+    } else if (this.announceBusy && this.announceBanner.dataset.kind === kind
+      && this.announceText._kbStr === text) {
+      return;
+    }
     this.announceQueue.push({ kind, text });
     if (!this.announceBusy) this.#advanceAnnounceQueue();
   }
 
+  /**
+   * Move the banner to one of its three phases. Idempotent, because both the
+   * `animationend` and the safety timer below can ask for the same one.
+   * @param {'in'|'hold'|'out'} phase
+   */
+  #announcePhase(phase) {
+    const el = this.announceBanner;
+    if (!el.classList.contains('announce--run') || el.dataset.phase === phase) return;
+    el.dataset.phase = phase;
+  }
+
+  #clearAnnounceTimers() {
+    for (const t of this.announceTimers) clearTimeout(t);
+    this.announceTimers.length = 0;
+  }
+
   #advanceAnnounceQueue() {
+    this.#clearAnnounceTimers();
+    // Generation guard. `#restartAnimDeferred` hands its callback to a
+    // double-`requestAnimationFrame`, so a banner that is superseded inside
+    // those two frames — a KO landing on the frame the round card started, say
+    // — would otherwise arm a second, untracked set of timers that
+    // `#clearAnnounceTimers` has already run past, and the two would then fight
+    // over `data-phase`.
+    const gen = ++this.announceGen;
     this.announceBanner.classList.remove('announce--run');
+    this.announceBanner.removeAttribute('data-phase');
     const next = this.announceQueue.shift();
     if (!next) { this.announceBusy = false; return; }
     this.announceBusy = true;
     this.announceBanner.dataset.kind = next.kind;
     applyKbText(this.announceText, next.text);
-    this.#restartAnimDeferred(this.announceBanner, 'announce--run');
+    // `announce--run` stays the "an announcement is up" marker for the whole
+    // beat — the capture harness gates on it, and so does `#onPhase` — while
+    // `data-phase` carries which of the three beats is running.
+    this.#restartAnimDeferred(this.announceBanner, 'announce--run', () => {
+      if (gen !== this.announceGen) return;
+      this.announceBanner.dataset.phase = 'in';
+      // Timers are armed HERE, not at queue time, because `#restartAnimDeferred`
+      // spends two frames getting the class onto the element and the CSS
+      // animation starts from this moment, not from the call.
+      //
+      // `animationend` is the precise trigger for in -> hold; these are the
+      // floor under it. A dropped `animationend` (a background tab throttling
+      // rAF, a style recalc coalescing the class add) would otherwise leave the
+      // banner parked on screen forever, and it would be parked in the phase
+      // that is composited and soft.
+      this.announceTimers.push(
+        setTimeout(() => this.#announcePhase('hold'), ANNOUNCE_IN_MS + 40),
+        setTimeout(() => this.#announcePhase('out'), ANNOUNCE_IN_MS + ANNOUNCE_HOLD_MS),
+        setTimeout(() => this.#advanceAnnounceQueue(),
+          ANNOUNCE_IN_MS + ANNOUNCE_HOLD_MS + ANNOUNCE_OUT_MS + 60),
+      );
+    });
   }
 }

@@ -248,6 +248,106 @@ const MAX_BEATS = 128;
 const DUST = new THREE.Color(0.46, 0.42, 0.37);
 
 /**
+ * The contact front — the pressure front ON the frame of contact.
+ *
+ * `docs/CRITIC.md` names "a shockwave with real expansion easing" as one of the
+ * four things a 90 on this axis looks like. There is one, and until this it was
+ * not in any of the frames the axis is scored on. Measured by hiding
+ * `fx.shockwaves` on a genuinely frozen contact frame — one page session, one
+ * frame, nothing else moving, control-shot noise floor 0.012-0.055 / 255 (the
+ * camera has to be neutered to get that; see the report):
+ *
+ *                                          before          after
+ *     04-impact       (launcher, +1 f)   0.000 / 255    1.564 / 255   3.5 % of ROI >= 8
+ *     15-impact-light (jab,      +1 f)   0.000 / 255    2.311 / 255   5.2 % of ROI >= 8
+ *
+ * Zero before. Not "small" — the shockwave system was contributing no pixels at all to
+ * two of the three certified contact frames. The cause is structural rather
+ * than a tuning miss: `MoveSchema`'s beat tables put `RING` two to three ticks
+ * after contact, and the shutter on those shots is ~1.2 ticks of FX time past
+ * it, so the ring is still a pending beat when the frame is taken. The one ring
+ * alive on `04-impact` belongs to the launch, not to the hit.
+ *
+ * The answer is not to move the authored beat. A front that has expanded away
+ * from the flare is a *different* element from the front at the moment of
+ * contact, and a real shock has both: an instantaneous compression at the
+ * contact patch, and the ring that runs outward from it. So this fires on the
+ * `FLASH` beat, which is tick 0 in every table in the game and is therefore the
+ * one beat guaranteed to be on the money frame, and the authored `RING` is left
+ * exactly where it is.
+ *
+ * Two of these numbers are load-bearing:
+ *
+ *  - **`RADIUS_FLOOR` is the contact patch, and it is deliberately almost
+ *    weight-independent.** A fist is a fist. Scaling the front's radius off the
+ *    weight recipe the way the expanded ring does reproduces the ladder's worst
+ *    failure — at `15-impact-light`'s spacing a proportional front resolves to
+ *    an 18-pixel smudge, which is the same "a jab landing is indistinguishable
+ *    from no jab landing" the light tier was already corrected for once. The
+ *    weight is carried by radiance and by how long the front lives, which is
+ *    what actually differs between a jab and a launcher hitting the same plate.
+ *  - **`LIFE_SHARE` is 0.6 of the authored ring's life**, which puts the front
+ *    at 60-90% of its final radius on the money frame and gone within three to
+ *    five rendered frames of the freeze. Anything that survives longer stops
+ *    being a compression front and starts being the smoke ring this file's
+ *    header warns about.
+ *
+ * **`FRONT_BAND_M` is the one that decides whether any of this is on screen at
+ * all, and the first attempt got it wrong.** `ShockwaveSystem.thickness` is a
+ * *fraction of the radius*, and the shader's razor front occupies about an
+ * eighth of that band — so the front's world width is `0.04 * thickness *
+ * radius` and shrinks with the ring. Passed the same 0.1-ish thickness the
+ * expanded rings use, a 0.27 m contact front resolves to a razor **half a pixel
+ * wide** at this framing. It rasterised, it was in the right place, it was
+ * elongated along the blow, and it measured **0.109/255** over the contact ROI
+ * because the only part of it wide enough to sample was the 0.17-amplitude
+ * shoulder. Expressing the band as a width in metres and dividing by the radius
+ * is what puts it back: it is the same correction the shader already applies
+ * across a single ring's expansion, applied across rings of different size.
+ *
+ * **`FRONT_LIFT_M` is the second thing that decides whether it is on screen,
+ * and it is the same defect this file has now fixed three times.** `e.point` is
+ * a capsule intersection: it is inside the armour, and the armour plates stand
+ * well proud of the capsule. The ring is depth-tested and has no soft-particle
+ * fade, so at the flare's 0.2-0.28 m lift the front came out as a handful of
+ * disconnected slivers where it happened to clear a plate edge — measured
+ * **0.625/255**, and at 3x it read as speckle rather than as a front. Lifted
+ * 0.6 m along the view ray, which is about half the body's depth plus the
+ * plates, it clears the whole silhouette and measures **1.520/255**. The lift
+ * is along the view ray, so it moves the front not one pixel sideways and grows
+ * its projected size by about a tenth.
+ *
+ * `ringAspect` is taken as a **square root** here. The shader's anisotropy is
+ * area-preserving — `vec2(a, 1/a)` — so the 2.3-3.1 the shape table hands the
+ * expanded ring is a 5:1 to 10:1 sliver. That is right for a front that has run
+ * a metre outward along the blow and wrong for the compression at the contact
+ * patch, which is barely elongated at all. The square root keeps the direction
+ * of the blow legible at about 2.5:1 and roughly doubles the pixels the front
+ * covers: 1.520 -> 2.311 on the jab frame, and it is the step at which the
+ * front stopped reading as a bright line and started reading as a front.
+ *
+ * The four steps, all on the same ROI and the same shot (jab, `15-impact-light`
+ * geometry), because the order they were found in is the useful part:
+ *
+ *     nothing at all                                    0.000 / 255
+ *     front spawned, expanded-ring thickness            0.109      razor sub-pixel
+ *     band expressed in metres, radiance up             0.625      still occluded
+ *     lifted 0.6 m clear of the armour                  1.520      visible at 3x
+ *     aspect softened to sqrt                           2.311      reads as a front
+ *
+ * `distort` is 0 on purpose: the screen-space refraction stays on the authored
+ * ring so that hiding `fx.shockwaves` removes exactly this element and nothing
+ * else, which is what makes the before/after above a measurement rather than an
+ * assertion.
+ */
+const FRONT_RADIUS_FLOOR = 0.16;
+const FRONT_RADIUS_SHARE = 0.22;
+const FRONT_LIFE_SHARE = 0.6;
+const FRONT_HEAT_GAIN = 3.2;
+const FRONT_BAND_M = 0.10;
+const FRONT_LIFT_M = 0.60;
+
+/**
  * How fast the impact light's envelope runs, in 1/seconds of FX time. 18 is a
  * 56ms window, which the 0.6 hitstop FX clock delivers in four to five rendered
  * frames — the 2-4 frame screen event `docs/CRITIC.md` asks for, with one frame
@@ -739,13 +839,32 @@ export class EffectsDirector {
       // Half its own radius, capped: the lift is along the VIEW RAY, so it
       // moves the flare not one pixel sideways and changes its projected size
       // by a few percent. All it changes is which side of the plate it is on.
-      case FX_PART.FLASH:
+      case FX_PART.FLASH: {
         this.#towardCamera(c.point, Math.max(0.2, Math.min(0.28, r.flash * 0.55 * k)), _v3);
         this.flashes.pop(_v3, {
           size: r.flash * k, life: r.flashLife, heat: r.flashHeat * k,
           roll: c.roll, tint: c.hot,
         });
+        // The compression at the contact patch, on the frame of contact. See
+        // FRONT_* above: this is the beat the money frames are actually taken
+        // on, and until this fired there was no shockwave in any of them.
+        // Lifted FURTHER than the flare: the ring is depth-tested with no
+        // soft-particle fade, so anything short of clearing the armour plates
+        // outright comes back as disconnected slivers. `_v3` is rewritten here
+        // after the flare has already consumed it.
+        const frontR = FRONT_RADIUS_FLOOR + r.ring * s.ringScale * k * FRONT_RADIUS_SHARE;
+        this.#towardCamera(c.point, FRONT_LIFT_M, _v3);
+        this.shock.spawn(_v3, {
+          mode: 'facing', tilt: c.roll, aspect: Math.sqrt(s.ringAspect),
+          radius: frontR,
+          life: r.ringLife * FRONT_LIFE_SHARE,
+          thickness: Math.min(1, FRONT_BAND_M / (0.3 * frontR)),
+          heat: r.ringHeat * FRONT_HEAT_GAIN * k,
+          tint: c.ring,
+          distort: 0,
+        });
         break;
+      }
 
       // The heat the flare leaves behind. Without it the contact point is dark
       // again four frames in, while the reaction animation is still playing.

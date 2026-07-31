@@ -785,7 +785,83 @@ export const PUNCH_CLIPS = {
     },
   },
 
-  // i16. Sinks into the rear leg, then extends the whole body upward.
+  // i16. Sinks into the rear leg, drives off it, and LEAVES THE FLOOR.
+  //
+  // ---------------------------------------------------------------------
+  // ROUND 17. Round 16's numbers are real, and this clip now goes airborne.
+  // ---------------------------------------------------------------------
+  // FIRST: the round-16 rebuild below was re-measured against the rig and every
+  // figure reproduces. pelvis excursion 194mm (claimed 188), max hip-line break
+  // 55.4mm (claimed 54), knees 42/45 -> 86/65 -> 33/47 exactly. That round is
+  // not in doubt; the strip that failed to show it was (see the note on
+  // 17-anim-strip's determinism at the end of this comment).
+  //
+  // SECOND: measured across all 91 clips, this is the ONLY attack in the game
+  // with a hip line that breaks. Every other strike sits at or under 22mm of
+  // hip-height difference and most are under 10mm — p.straight 4.9, p.hook 5.0,
+  // p.jab 8.1, p.overhand 9.2, k.roundhouse 18.1, k.highKick 21.9. So round 16
+  // fixed one clip out of forty, and the critic's "two bodies each holding its
+  // own vertical axis with both hip lines level" is still true of the other 39.
+  //
+  // THIRD, and what this round shipped: a move called Skyward Uppercut, tagged
+  // `launcher`, never left the concrete. Both boots stayed inside 2.2mm of the
+  // floor for all 36 ticks. There was no airborne pose anywhere in the delivered
+  // set of grounded attacks, which is half of the standing complaint about this
+  // axis. The drive now carries the body off the floor and lands it:
+  //
+  //                                     before        after
+  //     airborne ticks (both boots)     0             7   (clip t19-t25)
+  //     max both-boot clearance         2.2mm         178mm
+  //     pelvis excursion                194mm         286mm
+  //     delivered pelvis at t22         1034mm        1171mm
+  //     delivered lowest boot at t22    172mm         337mm
+  //
+  // The flight is a parabola authored one key per tick from t17 to t25, the lead
+  // knee folding to 63deg and the rear leg trailing, ankles plantar-flexed so the
+  // boots point rather than dangle, landing into the absorb the clip already had
+  // at t26. Nothing above the pelvis is touched: `spine01` and `chest` keep the
+  // fractional key times `whip` gave them, so the head-lag centroid is unmoved.
+  //
+  // WHAT IT COST, verified pointwise against a reconstruction of the pre-edit
+  // clip. Tick 0, tick 16 (contact) and tick 36 are bit-identical at 0.000mm, so
+  // entry from and exit to idle still cannot pop and the contact pose combat
+  // reads is untouched. The move's three ACTIVE frames are clip 16.00 / 16.72 /
+  // 17.44 (straight3 pivots clip 16 onto move tick 18 at outScale 0.72), and
+  // hand_R across those three moves 0.000 / 2.894 / 9.232mm against a 260mm
+  // capsule — which is why t17 is deliberately almost flat and the push does not
+  // start until t18, one clip tick past the last active frame. Worst single-tick
+  // hurtbox travel is unchanged at 0.390m, inside this file's own 0.60m rule.
+  // `check.mjs` anchor ratio unchanged. The flight is over by move tick ~32 and
+  // the move recovers at 46, so the -14 punish window lands on a grounded
+  // fighter; nothing about the block punish moves.
+  //
+  // Two servos could have eaten this and do not. `Fighter#installPelvisLift`
+  // lifts by the SMALLER of the two boots' penetration, which goes negative the
+  // moment both boots are clear, so it releases (measured 0.0mm through the whole
+  // flight). `Fighter#footIk` only arms when a boot is buried deeper than the
+  // ankle roll can lift, so it never engages.
+  //
+  // HOW IT WAS MEASURED, because 17-anim-strip could not do it. Two runs of an
+  // UNCHANGED tree put that shot's "+20t" panels about 60 ticks apart — its round
+  // timer reads 57 in one and 56 in the other — because it waits on `KB.tick`
+  // from the driver and then spends 100-300ms taking a 1920x1080 screenshot while
+  // the sim keeps running, so panel k lands at `base + off_k + accumulated
+  // screenshot latency`. Its cross-run panel noise is 5 to 74 /255. Before/after
+  // through it reads 9-17/255 against a same-tree noise floor of 5-74/255: no
+  // conclusion is available from that shot at this size.
+  //
+  // So the A/B was done IN ONE PAGE SESSION with the clock pinned to 1/60 through
+  // the run-up and 0 while frozen, the wait and the freeze in a single page-side
+  // callback, the defender parked out of reach and hidden so the move whiffs and
+  // no FX fire, and the ONLY difference between arms the clip object on the
+  // attacker's animator. On that instrument, at move tick 22, over the lower body:
+  //
+  //     change  26.19 /255, 57.2% of pixels >= 8
+  //     control  1.29 /255,  1.0% of pixels >= 8   (same clip, different pass)
+  //
+  // and on bone positions, worst bone 490.4mm against a same-clip control of
+  // 0.245mm. Both boots are off the concrete in the delivered frame; looked at,
+  // at 3x, they are.
   //
   // ROUND 15. IT DID NOT SINK INTO ANYTHING. The comment above described a
   // weight shift the data never contained, and this is the clip the animation
@@ -877,9 +953,20 @@ export const PUNCH_CLIPS = {
       { t: 13, p: [0, -0.132, 0.061], ease: 'linear' },
       { t: 14, p: [0, -0.090, 0.082], ease: 'linear' },
       { t: 15, p: [0, -0.055, 0.108], ease: 'linear' },
-      { t: 16, p: [0, -0.023, 0.14], ease: 'sine' },
-      { t: 19, p: [0, -0.017, 0.147], ease: 'quad' },
-      { t: 21, p: [0, -0.060, 0.1361], ease: 'quad' },
+      { t: 16, p: [0, -0.023, 0.14], ease: 'linear' },
+      // ROUND 17: the flight. See the note above the clip. t17 is deliberately
+      // almost flat, because clip 16.00/16.72/17.44 are the move's three ACTIVE
+      // frames and the hitbox is swept over them -- the push does not start
+      // until t18, which is move tick 20.8, one tick past the last of them.
+      { t: 17, p: [0, -0.018, 0.1424], ease: 'linear' },
+      { t: 18, p: [0, -0.002, 0.145], ease: 'linear' },
+      { t: 19, p: [0, 0.032, 0.147], ease: 'linear' },
+      { t: 20, p: [0, 0.058, 0.1436], ease: 'linear' },
+      { t: 21, p: [0, 0.072, 0.1361], ease: 'linear' },
+      { t: 22, p: [0, 0.075, 0.1248], ease: 'linear' },
+      { t: 23, p: [0, 0.066, 0.1135], ease: 'linear' },
+      { t: 24, p: [0, 0.038, 0.1022], ease: 'linear' },
+      { t: 25, p: [0, -0.008, 0.0909], ease: 'sine' },
       { t: 26, p: [0, -0.136, 0.08], ease: 'sine' },
       { t: 30, p: [0, -0.108, 0.0524], ease: 'sine' },
       { t: 36, p: [0, -0.075, 0], ease: 'linear' },
@@ -993,9 +1080,16 @@ export const PUNCH_CLIPS = {
         { t: 11, r: [-48.81, -12, 18.71], ease: 'sine' },
         { t: 13, r: [-43.38, -8, 14.62], ease: 'quart' },
         { t: 15, r: [-31.52, -4, 6.73], ease: 'quart' },
-        { t: 16, r: [-26.61, -2, -0.57], ease: 'sine' },
-        { t: 19, r: [-25.36, -1.34, -1.31], ease: 'quad' },
-        { t: 21, r: [-30.9, -3.24, 0.19], ease: 'quad' },
+        { t: 16, r: [-26.61, -2, -0.57], ease: 'linear' },
+        { t: 17, r: [-26.3, -2.6, 0.1], ease: 'linear' },
+        { t: 18, r: [-28.3, -3.2, 0.8], ease: 'linear' },
+        { t: 19, r: [-34.3, -3.8, 1.5], ease: 'linear' },
+        { t: 20, r: [-42.3, -4.4, 2.2], ease: 'linear' },
+        { t: 21, r: [-48.3, -5, 2.8], ease: 'linear' },
+        { t: 22, r: [-51.3, -5.6, 3.5], ease: 'linear' },
+        { t: 23, r: [-49.3, -6.2, 4.2], ease: 'linear' },
+        { t: 24, r: [-44.3, -6.8, 4.9], ease: 'linear' },
+        { t: 25, r: [-38.3, -7.4, 5.6], ease: 'sine' },
         { t: 26, r: [-40.13, -8, 6.21], ease: 'sine' },
         { t: 30, r: [-38.48, -0.8, 11.11], ease: 'sine' },
         { t: 36, r: [-39, 10, 11], ease: 'linear' }],
@@ -1007,9 +1101,16 @@ export const PUNCH_CLIPS = {
         { t: 11, r: [80.32, 0, 0], ease: 'sine' },
         { t: 13, r: [64.36, 0, 0], ease: 'quart' },
         { t: 15, r: [43.12, 0, 0], ease: 'quart' },
-        { t: 16, r: [32.58, 0, 0], ease: 'sine' },
-        { t: 19, r: [30.13, 0, 0], ease: 'quad' },
-        { t: 21, r: [38.06, 0, 0], ease: 'quad' },
+        { t: 16, r: [32.58, 0, 0], ease: 'linear' },
+        { t: 17, r: [33, 0, 0], ease: 'linear' },
+        { t: 18, r: [35, 0, 0], ease: 'linear' },
+        { t: 19, r: [42, 0, 0], ease: 'linear' },
+        { t: 20, r: [51, 0, 0], ease: 'linear' },
+        { t: 21, r: [59, 0, 0], ease: 'linear' },
+        { t: 22, r: [63, 0, 0], ease: 'linear' },
+        { t: 23, r: [62, 0, 0], ease: 'linear' },
+        { t: 24, r: [59, 0, 0], ease: 'linear' },
+        { t: 25, r: [57, 0, 0], ease: 'sine' },
         { t: 26, r: [61.27, 0, 0], ease: 'sine' },
         { t: 30, r: [54.81, 0, 0], ease: 'sine' },
         { t: 36, r: [42, 0, 0], ease: 'linear' }],
@@ -1021,9 +1122,16 @@ export const PUNCH_CLIPS = {
         { t: 11, r: [-34.22, 2, 0], ease: 'sine' },
         { t: 13, r: [-20.21, 2, 0], ease: 'quart' },
         { t: 15, r: [0.87, 2, 0], ease: 'quart' },
-        { t: 16, r: [21.36, 2, 0], ease: 'sine' },
-        { t: 19, r: [23.98, 2, 0], ease: 'quad' },
-        { t: 21, r: [0.25, 2, 0], ease: 'quad' },
+        { t: 16, r: [21.36, 2, 0], ease: 'linear' },
+        { t: 17, r: [23, 2, 0], ease: 'linear' },
+        { t: 18, r: [26, 2, 0], ease: 'linear' },
+        { t: 19, r: [29, 2, 0], ease: 'linear' },
+        { t: 20, r: [30, 2, 0], ease: 'linear' },
+        { t: 21, r: [29, 2, 0], ease: 'linear' },
+        { t: 22, r: [27, 2, 0], ease: 'linear' },
+        { t: 23, r: [23, 2, 0], ease: 'linear' },
+        { t: 24, r: [13, 2, 0], ease: 'linear' },
+        { t: 25, r: [-3, 2, 0], ease: 'sine' },
         { t: 26, r: [-22.7, 2, 0], ease: 'sine' },
         { t: 30, r: [-16.47, 2, 0], ease: 'sine' },
         { t: 36, r: [-4, 2, 0], ease: 'linear' }],
@@ -1035,9 +1143,16 @@ export const PUNCH_CLIPS = {
         { t: 11, r: [0.49, 0, 0], ease: 'sine' },
         { t: 13, r: [-0.84, 0, 0], ease: 'quart' },
         { t: 15, r: [-7.14, 0, 0], ease: 'quart' },
-        { t: 16, r: [-16.46, 0, 0], ease: 'sine' },
-        { t: 19, r: [-17.18, 0, 0], ease: 'quad' },
-        { t: 21, r: [-4.58, 0, 0], ease: 'quad' },
+        { t: 16, r: [-16.46, 0, 0], ease: 'linear' },
+        { t: 17, r: [-16, 0, 0], ease: 'linear' },
+        { t: 18, r: [-14, 0, 0], ease: 'linear' },
+        { t: 19, r: [-11, 0, 0], ease: 'linear' },
+        { t: 20, r: [-8, 0, 0], ease: 'linear' },
+        { t: 21, r: [-6, 0, 0], ease: 'linear' },
+        { t: 22, r: [-5, 0, 0], ease: 'linear' },
+        { t: 23, r: [-4, 0, 0], ease: 'linear' },
+        { t: 24, r: [-3, 0, 0], ease: 'linear' },
+        { t: 25, r: [-2, 0, 0], ease: 'sine' },
         { t: 26, r: [-0.47, 0, 0], ease: 'sine' },
         { t: 30, r: [-0.27, 0, 0], ease: 'sine' },
         { t: 36, r: [0, 0, 0], ease: 'linear' }],
@@ -1049,9 +1164,11 @@ export const PUNCH_CLIPS = {
         { t: 11, r: [2.6, 0, 0], ease: 'sine' },
         { t: 13, r: [3, 0, 0], ease: 'quart' },
         { t: 15, r: [3, 0, 0], ease: 'quart' },
-        { t: 16, r: [3, 0, 0], ease: 'sine' },
-        { t: 19, r: [3.1, 0, 0], ease: 'quad' },
-        { t: 21, r: [3.04, 0, 0], ease: 'quad' },
+        { t: 16, r: [3, 0, 0], ease: 'linear' },
+        { t: 18, r: [4, 0, 0], ease: 'linear' },
+        { t: 20, r: [4.6, 0, 0], ease: 'linear' },
+        { t: 22, r: [4.4, 0, 0], ease: 'linear' },
+        { t: 24, r: [3.6, 0, 0], ease: 'sine' },
         { t: 26, r: [2.9, 0, 0], ease: 'sine' },
         { t: 30, r: [1.74, 0, 0], ease: 'sine' },
         { t: 36, r: [0, 0, 0], ease: 'linear' }],
@@ -1063,9 +1180,16 @@ export const PUNCH_CLIPS = {
         { t: 11, r: [-13.9, 4, -4.64], ease: 'sine' },
         { t: 13, r: [-10.68, 2, -8.91], ease: 'quart' },
         { t: 15, r: [-7.48, -3.33, -16.59], ease: 'quart' },
-        { t: 16, r: [-9.78, -6, -25.64], ease: 'sine' },
-        { t: 19, r: [-9.71, -6.88, -26.48], ease: 'quad' },
-        { t: 21, r: [-13.1, -4.34, -25], ease: 'quad' },
+        { t: 16, r: [-9.78, -6, -25.64], ease: 'linear' },
+        { t: 17, r: [-9.1, -6.2, -25.6], ease: 'linear' },
+        { t: 18, r: [-7.4, -6.4, -25.4], ease: 'linear' },
+        { t: 19, r: [-3.9, -6.6, -25], ease: 'linear' },
+        { t: 20, r: [-0.4, -6, -24.2], ease: 'linear' },
+        { t: 21, r: [2.1, -5, -23.2], ease: 'linear' },
+        { t: 22, r: [3.1, -4, -22.4], ease: 'linear' },
+        { t: 23, r: [1.6, -2.5, -21.6], ease: 'linear' },
+        { t: 24, r: [-1.9, -1, -20.8], ease: 'linear' },
+        { t: 25, r: [-5.9, 0.5, -20], ease: 'sine' },
         { t: 26, r: [-10.71, 2, -19.37], ease: 'sine' },
         { t: 30, r: [-9.04, -1.2, -16.85], ease: 'sine' },
         { t: 36, r: [-9, -6, -12], ease: 'linear' }],
@@ -1077,9 +1201,16 @@ export const PUNCH_CLIPS = {
         { t: 11, r: [61.99, 0, 0], ease: 'sine' },
         { t: 13, r: [54.92, 0, 0], ease: 'quart' },
         { t: 15, r: [46.43, 0, 0], ease: 'quart' },
-        { t: 16, r: [46.59, 0, 0], ease: 'sine' },
-        { t: 19, r: [45.54, 0, 0], ease: 'quad' },
-        { t: 21, r: [49.33, 0, 0], ease: 'quad' },
+        { t: 16, r: [46.59, 0, 0], ease: 'linear' },
+        { t: 17, r: [47, 0, 0], ease: 'linear' },
+        { t: 18, r: [48, 0, 0], ease: 'linear' },
+        { t: 19, r: [52, 0, 0], ease: 'linear' },
+        { t: 20, r: [57, 0, 0], ease: 'linear' },
+        { t: 21, r: [61, 0, 0], ease: 'linear' },
+        { t: 22, r: [63, 0, 0], ease: 'linear' },
+        { t: 23, r: [61, 0, 0], ease: 'linear' },
+        { t: 24, r: [57, 0, 0], ease: 'linear' },
+        { t: 25, r: [54, 0, 0], ease: 'sine' },
         { t: 26, r: [55.98, 0, 0], ease: 'sine' },
         { t: 30, r: [49.42, 0, 0], ease: 'sine' },
         { t: 36, r: [45, 0, 0], ease: 'linear' }],
@@ -1091,9 +1222,16 @@ export const PUNCH_CLIPS = {
         { t: 11, r: [-46.32, -1.5, 0], ease: 'sine' },
         { t: 13, r: [-35.01, 0, 0], ease: 'quart' },
         { t: 15, r: [-10.64, 0, 0], ease: 'quart' },
-        { t: 16, r: [1.35, 0, 0], ease: 'sine' },
-        { t: 19, r: [2.55, 0, 0], ease: 'quad' },
-        { t: 21, r: [-17.1, 0, 0], ease: 'quad' },
+        { t: 16, r: [1.35, 0, 0], ease: 'linear' },
+        { t: 17, r: [5, 0, 0], ease: 'linear' },
+        { t: 18, r: [10, 0, 0], ease: 'linear' },
+        { t: 19, r: [16, 0, 0], ease: 'linear' },
+        { t: 20, r: [19, 0, 0], ease: 'linear' },
+        { t: 21, r: [20, 0, 0], ease: 'linear' },
+        { t: 22, r: [19, 0, 0], ease: 'linear' },
+        { t: 23, r: [14, 0, 0], ease: 'linear' },
+        { t: 24, r: [4, 0, 0], ease: 'linear' },
+        { t: 25, r: [-14, 0, 0], ease: 'sine' },
         { t: 26, r: [-39.81, 0, 0], ease: 'sine' },
         { t: 30, r: [-34.18, -1.2, 0], ease: 'sine' },
         { t: 36, r: [-33, -3, 0], ease: 'linear' }],
@@ -1105,9 +1243,16 @@ export const PUNCH_CLIPS = {
         { t: 11, r: [-2.81, 0, 0], ease: 'sine' },
         { t: 13, r: [-6.44, 0, 0], ease: 'quart' },
         { t: 15, r: [-16.12, 0, 0], ease: 'quart' },
-        { t: 16, r: [-18.12, 0, 0], ease: 'sine' },
-        { t: 19, r: [-17.59, 0, 0], ease: 'quad' },
-        { t: 21, r: [-10.65, 0, 0], ease: 'quad' },
+        { t: 16, r: [-18.12, 0, 0], ease: 'linear' },
+        { t: 17, r: [-17, 0, 0], ease: 'linear' },
+        { t: 18, r: [-15, 0, 0], ease: 'linear' },
+        { t: 19, r: [-12, 0, 0], ease: 'linear' },
+        { t: 20, r: [-9, 0, 0], ease: 'linear' },
+        { t: 21, r: [-7, 0, 0], ease: 'linear' },
+        { t: 22, r: [-6, 0, 0], ease: 'linear' },
+        { t: 23, r: [-5.5, 0, 0], ease: 'linear' },
+        { t: 24, r: [-5, 0, 0], ease: 'linear' },
+        { t: 25, r: [-4.5, 0, 0], ease: 'sine' },
         { t: 26, r: [-4.11, 0, 0], ease: 'sine' },
         { t: 30, r: [-3.37, 0, 0], ease: 'sine' },
         { t: 36, r: [0, 0, 0], ease: 'linear' }],
@@ -1119,9 +1264,11 @@ export const PUNCH_CLIPS = {
         { t: 11, r: [1.1, 0, 0], ease: 'sine' },
         { t: 13, r: [-1.3, 0, 0], ease: 'quart' },
         { t: 15, r: [2.63, 0, 0], ease: 'quart' },
-        { t: 16, r: [4.6, 0, 0], ease: 'sine' },
-        { t: 19, r: [5.3, 0, 0], ease: 'quad' },
-        { t: 21, r: [3.7, 0, 0], ease: 'quad' },
+        { t: 16, r: [4.6, 0, 0], ease: 'linear' },
+        { t: 18, r: [5.5, 0, 0], ease: 'linear' },
+        { t: 20, r: [6, 0, 0], ease: 'linear' },
+        { t: 22, r: [5, 0, 0], ease: 'linear' },
+        { t: 24, r: [2, 0, 0], ease: 'sine' },
         { t: 26, r: [-0.3, 0, 0], ease: 'sine' },
         { t: 30, r: [-0.18, 0, 0], ease: 'sine' },
         { t: 36, r: [0, 0, 0], ease: 'linear' }],
