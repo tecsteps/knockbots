@@ -111,7 +111,6 @@ const SHOTS = [
       // bottom half of a shot that is supposed to be about the head.
       const pos = new THREE.Vector3(t.x + face * D * 0.70, t.y + D * 0.30, t.z + D * 0.55);
       const dist = pos.distanceTo(t);
-      KB.paused = true;
       // The HUD is not the subject here, and at this crop it covers the head.
       const hud = document.getElementById('ui');
       if (hud) { window.__kbCloseupHud = hud.style.visibility; hud.style.visibility = 'hidden'; }
@@ -167,8 +166,8 @@ const SHOTS = [
         gap: first ? +(dist - first.distance).toFixed(3) : null, dist: +dist.toFixed(3), pose: sig };
       return window.__kbCloseup;
     })()`,
-    // Pausing the sim means the settle window is pure TAA convergence.
-    settle: 3200,
+    pinTicks: 150,
+    settle: 2500,
     teardown: `(() => {
       const r = window.__kbCloseupRestore;
       if (r) { window.KB.fightCamera.render = r.render; window.KB.fightCamera.simulate = r.simulate; }
@@ -307,6 +306,10 @@ const SHOTS = [
       const hud = document.getElementById('ui');
       if (hud) hud.style.visibility = window.__kbRosterHud || '';
     })()`,
+    // NOT pose-pinned. Measured: the pin makes this shot WORSE, 3.2/255 -> 8.6-13.4,
+    // because rosterLineup builds its own animators and warms each by a fixed tick
+    // count, so the lineup was already deterministic -- and the pin's startMatch
+    // resets the fighters, not the lineup, adding variance instead of removing it.
     // Prove no fighter is standing in the rig's rest pose.
     verify: `(() => {
       const KB = window.KB, THREE = KB.THREE;
@@ -807,6 +810,40 @@ async function main() {
           window.__kbShotHit.hits = window.__kbHitCount;
         });
       })()`);
+      // POSE PIN. See docs/PROFILING.md trap 5. Two clock states, and both matter:
+      //   1/60 through the WARM-UP so one rendered frame is exactly one tick and
+      //   the pose is a function of the tick count; then 0 once paused, because
+      //   the settle window is wall-clock and anything that advances per RENDER
+      //   frame (springs, breathing, procedural modifiers) otherwise accumulates
+      //   a different amount depending on how loaded the machine is.
+      // The wait and the pause run in one page-side callback: polling from the
+      // driver returns when Playwright OBSERVES the tick, and more ticks pass
+      // during the round trip, so "pause at 150" was pausing at 152, 157, 163.
+      if (shot.pinTicks) {
+        await page.evaluate(`(() => { ${PIN_CLOCK} })()`);
+        await page.evaluate(`window.KB.paused = false; window.KB.startMatch(0, 1); window.KB.setPhase('fight');`);
+        const pinned = await page.evaluate(`(() => new Promise((res) => {
+          const KB = window.KB, target = ${shot.pinTicks};
+          const step = () => {
+            if (KB.phaseTicks >= target) {
+              KB.paused = true;
+              KB.clock.getDelta = () => 0;
+              const r = KB.renderer;
+              if (r) {
+                if (r.effects) r.effects.adaptiveResolution = false;
+                r.renderScale = 1;
+                if (typeof r.resize === 'function') r.resize();
+              }
+              res({ phaseTicks: KB.phaseTicks });
+            } else requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        }))()`).catch(() => null);
+        if (!pinned) flaw(shot.name, `pose pin failed at phaseTicks ${shot.pinTicks}`);
+        else if (pinned.phaseTicks !== shot.pinTicks) {
+          flaw(shot.name, `pose pin landed on tick ${pinned.phaseTicks}, wanted ${shot.pinTicks}`);
+        }
+      }
       if (shot.prep) await page.evaluate(`(() => { try { ${shot.prep} } catch (e) { console.error('prep', e); } })()`);
       await page.evaluate(`(() => { try { ${shot.setup} } catch (e) { console.error('shot setup', e); } })()`);
       if (shot.waitFor) {
@@ -992,6 +1029,9 @@ async function main() {
     }
     // A shot that overrode the camera rig has to hand it back, or every shot
     // after it inherits the override and quietly photographs the wrong framing.
+    if (shot.pinTicks) {
+      await page.evaluate(`(() => { ${RESTORE_CLOCK} window.KB.paused = false; })()`).catch(() => {});
+    }
     if (shot.teardown) {
       await page.evaluate(`(() => { try { ${shot.teardown} } catch (e) { console.error('teardown', e); } })()`)
         .catch((e) => console.warn(`[capture] teardown failed for ${shot.name}: ${e.message}`));

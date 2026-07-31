@@ -496,3 +496,30 @@ same framing. Whatever that probe does about animator or spring state is the mis
 **Until it is, two rules.** A full-harness A/B across runs cannot resolve anything smaller than
 these numbers — toggle **in-page**, on one frozen frame, so nothing else moves between the pair.
 And treat any cross-round still comparison on the character axis as unproven.
+
+
+## Round 16 resolution: partly fixed, and the shape of the residual
+
+**Shipped, and it measures better.** `02-closeup-face` pairwise deltas fell from a 24–29 / 255
+baseline to **6.1 / 18.7 / 19.4 (mean 14.7)** — about a 43 % reduction. Two clock states are
+needed and both matter:
+
+- **1/60 through the warm-up**, so one rendered frame is exactly one tick and the pose is a
+  function of the tick count rather than of wall-clock.
+- **0 once paused**, because the settle window is wall-clock: anything that advances per *render*
+  frame accumulates a different amount depending on machine load, and the number of frames in a
+  2.5 s settle is not fixed.
+
+Plus: the wait and the pause must happen in **one page-side callback**. Polling from the driver
+returns when Playwright *observes* the tick, and more ticks pass during the round trip — "pause at
+150" was pausing at 152, 157, 163.
+
+**Not applied to `09-roster`, on evidence.** The same pin made that shot WORSE, 3.2 → 8.6–13.4,
+because `rosterLineup` builds its own animators and warms each by a fixed tick count, so the
+lineup was already deterministic; the pin's `startMatch` resets the fighters, not the lineup, and
+added variance instead of removing it. It is left unpinned and sits at 2.6–4.9.
+
+**The residual is still real.** 14.7 / 255 is far from the 1.65 a bespoke probe reaches, and it is
+still the same order as the material changes being measured on that frame. Treat a single-pair
+closeup comparison as unproven; use three runs a side and compare medians, or toggle in-page on
+one frozen frame.
