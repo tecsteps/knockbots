@@ -1310,6 +1310,42 @@ class BokehDofPass extends Pass {
  * a 4x one bloom to the same peak; what still separates them is how many pixels
  * are lit, which is exactly the physical cue — a bigger light has a bigger
  * halo, a brighter one does not.
+ *
+ * **Do not reach for this pass to buy the top of the range. It was measured and
+ * it cannot.** The premise looks sound — "highlights bloom naturally" is one of
+ * the two 90+ criteria on the lighting axis, and the gate at 5.5 sits above the
+ * frame's own 99.9th percentile radiance, so almost nothing currently blooms at
+ * all. Every way of opening it up was swept, headless at 1080p with the frame
+ * clock stopped so the null control between two grabs is exactly zero, on the
+ * hero and closeup framings. Whole-frame linear luminance percentiles:
+ *
+ *                                p10      p99   |  Tekken 8 ten-ref median
+ *     bloom off                0.0049   0.5685  |  p10 0.0091, p99 0.84
+ *     as shipped (5.5 / 2.0)   0.0091   0.5804
+ *     clamp 2 -> 10            0.0124   0.5935
+ *     threshold 5.5 -> 3.0     0.0181   0.6122
+ *     threshold 5.5 -> 1.2     0.0254   0.6624
+ *     clamp 10, strength 0.9   0.0257   0.6727
+ *     ...and radius 0.35->0.02 0.0235   0.6851
+ *
+ * Read the first two rows first: the shipped bloom already nearly **doubles**
+ * the darkest decile of the frame and adds two percent to the 99th percentile.
+ * It is, by measurement, almost entirely a pedestal — the "bloom applied as a
+ * uniform haze" the critic protocol names as a failure mode — and it survives
+ * only because at this strength the pedestal is small enough to leave the floor
+ * on the reference median. Every knob that makes it bloom harder makes the
+ * pedestal grow faster than the highlight: the contrast ratio p99/p10 is 116
+ * with the pass off, 64 as shipped, and 35 at the strongest setting tried.
+ * Radius barely matters (0.35 to 0.02 moves the floor by 12%), because the
+ * pedestal is `UnrealBloomPass`'s coarse mips and those are weighted by
+ * strength, not by radius.
+ *
+ * The reference is what settles it. The ten Tekken 8 stills run p10 from 0.0035
+ * to 0.0417 with a median of 0.0091 — this frame's floor is **already correct**
+ * — while their p99 median is 0.84. They get a bright top over a black floor,
+ * which is contrast, not glow. So the top end was bought in the display
+ * transform instead (see `buildGradeLut` and `look.exposure`) and this pass was
+ * left exactly where it was.
  */
 class HighlightBloomPass extends UnrealBloomPass {
   /**
@@ -1557,6 +1593,33 @@ const smoothstep01 = (e0, e1, x) => {
  * slope, so the same range of radiance arrives spread over ~15 code values
  * instead of 3 and a specular keeps its shape.
  *
+ * **`contrast` and `SHOULDER` move together, and the constraint is arithmetic
+ * rather than taste.** The roll-off is a cubic Hermite from `(SHOULDER,
+ * shoulderY)` carrying the contrast slope to `(1, 1)` carrying `END_SLOPE`;
+ * Fritsch-Carlson keeps it monotone only while both tangents stay under three
+ * times the chord slope `(1 - shoulderY) / (1 - SHOULDER)`. Raising `contrast`
+ * raises `shoulderY`, which shortens the chord, which tightens the bound — so
+ * the two are not independent and the failure is silent. Taking `contrast` from
+ * 1.18 to 1.45 with `SHOULDER` left at 0.78 puts the start tangent at **5.5x**
+ * the chord: sampled at 400 points the curve rises to 1.0028 and then folds
+ * back over 152 of them, and `clamp01` renders the fold as a flat plateau at
+ * 255 spanning input 0.85 to 0.97. It measures *better* than the correct curve
+ * — that pairing reported p999 0.9829 and 0.254% saturated against 0.9548 and
+ * 0.000% for the monotone one — because a plateau at white is indistinguishable
+ * from range in a histogram. It is the same artefact the paragraph above
+ * describes, reintroduced by the knob that was supposed to fix it.
+ *
+ * At 1.45 the bound requires `SHOULDER <= 0.730`. It is 0.68, which puts the
+ * start tangent at 2.29x the chord and the end tangent at 0.47x, and a
+ * 400-sample walk of the curve finds zero decreasing steps and a peak of
+ * exactly 1.0. Anything that touches either constant should re-run that walk.
+ *
+ * Why 1.45 at all: against the ten Tekken 8 references the frame was not flat,
+ * it was *low-contrast* — the shadow floor sat above the reference median while
+ * every upper percentile sat below it. See the note on `look.exposure` for the
+ * three-framing table. 1.18 to 1.45 with exposure carrying the mid-tone back up
+ * lands p50 on the reference median and p99 within 6% of it.
+ *
  * @returns {THREE.DataTexture}
  */
 function buildGradeLut() {
@@ -1568,8 +1631,8 @@ function buildGradeLut() {
   const highTint = [0.019, 0.004, -0.014];   // warm amber
   const lift = 0.002;
   const pivot = 0.42;
-  const contrast = 1.18;
-  const SHOULDER = 0.78;   // where contrast hands over to the roll-off
+  const contrast = 1.45;
+  const SHOULDER = 0.68;   // where contrast hands over to the roll-off
   const END_SLOPE = 0.30;  // slope arriving at white; > 0 keeps it monotone
 
   // Hermite endpoint: the contrast line evaluated at the hand-over point.
@@ -1661,6 +1724,40 @@ function buildGradeLut() {
  * fringing and barely a vignette; they read as clean because the render is
  * clean, not because a filter was laid over it. A lens effect strong enough to
  * spot is a lens effect strong enough to date the image.
+ *
+ * **`uChroma` is not what draws the edge on the fighters, and it was worth
+ * proving.** A critic read the coloured separation at the silhouette as a
+ * post-process halo rather than a lamp, on the evidence that it flips hue across
+ * the boundary and appears in interior panel gaps a rim light cannot reach.
+ * Both observations are correct. The attribution is not.
+ *
+ * Measured on the hero framing at 1080p with the frame clock stopped and the
+ * grain zeroed — two grabs with nothing changed differ by exactly zero code
+ * values, so the deltas are real — sampling luminance and red-minus-blue in
+ * one-pixel bands either side of a fighter mask built by frame differencing:
+ *
+ *     band (px)      -3     -2     -1     +1     +2     +4
+ *     R-B, shipped  +5.4   +0.7   -8.4  -15.0  -16.7  -17.5
+ *     R-B, uChroma=0 +5.4  +0.9   -8.7  -14.6  -16.8  -17.6
+ *     R-B, per-fighter rim spots off
+ *                  +12.7   +7.9   -2.2  -12.9  -16.5  -17.5
+ *     luma, shipped  74.8   72.2   63.8   56.5   57.5   59.9
+ *     luma, rims off 65.6   63.3   57.5   55.0   57.2   59.7
+ *
+ * Turning the chromatic aberration off moves the boundary by **0.3 of a code
+ * value** in chroma and nothing measurable in luminance. Turning the
+ * per-fighter rim spots off moves it by **7 code values** in chroma and **9**
+ * in luminance, and — the part that identifies it as a lamp — leaves the
+ * background two pixels away untouched (57.5 -> 57.2). Twenty-odd times the
+ * effect, on the fighter side only. The hue flip is the correct signature of a
+ * cool rim on a warm-keyed robot in front of a cool set, not of a filter.
+ *
+ * There is also no sharpen pass in this file to cut, and never has been.
+ *
+ * So the aberration stays. Whole-frame it is 2.6 code values of mean absolute
+ * difference; on the fighter's interior edges it is 5.4, which is why it is
+ * visible in panel gaps and why it looked like a suspect. Removing it would be
+ * a change with no measured benefit.
  */
 class GradePass extends Pass {
   constructor(lut) {
@@ -1961,9 +2058,75 @@ export class RenderPipeline {
     /**
      * The look. Survives quality changes and composer rebuilds; other modules
      * may push mood-specific values here through `setGrade` / `setBloom`.
+     *
+     * **`exposure` and `shoulder` are the top of the range, and they were the
+     * two things holding it down.** The frame was not flat; it was
+     * *low-contrast*. Against the ten Tekken 8 references its shadow floor sat
+     * **above** the reference median while every upper percentile sat below it,
+     * which is the combination that reads as "everything the same brightness"
+     * without any single value being wrong.
+     *
+     * A/B'd through `tools/capture.mjs`, three runs a side, identical seven-shot
+     * list, both sides driven by the same in-page rebuild of the grade LUT so
+     * the only difference between them is three constants. Luminance
+     * percentiles in *linear* light off the delivered PNG; ranges are across
+     * the three runs and do not overlap on p50, p95 or p99 for any shot:
+     *
+     *                      p10      p50      p95      p99    sat%
+     *     01-hero    A   0.0088   0.0439   0.4016   0.7589   1.91
+     *                B   0.0096   0.0682   0.5606   0.8286   1.91
+     *     03-body    A   0.0126   0.0564   0.4731   0.7568   1.89
+     *                B   0.0151   0.0850   0.6382   0.8602   1.96
+     *     06-wide    A   0.0073   0.0396   0.3111   0.7952   1.80
+     *                B   0.0079   0.0607   0.4520   0.8268   1.76
+     *     10-ko      A   0.0109   0.0500   0.3516   0.6827   0.60
+     *                B   0.0145   0.0796   0.5381   0.8106   0.66
+     *     04-impact  A   0.0145   0.0563   0.5920   0.9017   2.93
+     *                B   0.0179   0.0835   0.7359   0.9788   3.96
+     *     tekken8  med    0.0091   0.0900   0.6500   0.8400   1.66
+     *              range  0.0035-  0.0307-  0.3036-  0.5591-  0.11-
+     *                     0.0417   0.5244   0.9810   0.9950   32.0
+     *
+     * `sat%` is the fraction of pixels with any channel at 253 or above. The
+     * floor stays inside the reference range, the mid-tone lands on the
+     * reference median and p99 lands within 6% of it. Two guards were checked
+     * because this is the kind of change that buys a histogram and loses a
+     * picture: all 32 code values in the top eighth of the range are occupied
+     * on both sides of every shot (no plateau), and the figure/ground ratio —
+     * fighter median over set median, over a mask built by frame differencing —
+     * went 1.087 -> 1.101 on the hero framing and 1.608 -> 1.696 on the wide,
+     * so the fighters gained slightly more than the set did.
+     *
+     * `shoulder` is where AgX's normalised log hands over to the soft
+     * compression that keeps very bright radiance monotone instead of clamped.
+     * It was 0.68, which put the hand-over below the frame's own 99th
+     * percentile and spent most of the highlight range compressing values that
+     * had nothing above them to make room for. Isolated, at 0.90 the bottom
+     * ninety percent of the frame is **bit-identical** — p10, p50 and p90 equal
+     * to four decimals on both framings, against a null control of exactly zero
+     * — and only the top moves: fighter p99 +3.3%, p999 +6.2%, brightest pixel
+     * +5%. It is the one change measured this round that cost nothing at all.
+     *
+     * **Perf: no measurable cost, and the obvious measurement of it is wrong.**
+     * Sequential capture runs said the new grade cost 5-15 ms; reversing the
+     * order of the pair moved the penalty to the other side, because five other
+     * agents were driving GPU work and whichever run went second lost. Measured
+     * properly — both sides alternating inside one page session in short holds,
+     * with a third arm that is a byte-for-byte rebuild of side A — the null arm
+     * and the test arm are the same size: over two runs of 8 and 15 paired
+     * blocks the null (A vs A) median was +1.10 and +2.30 ms and the test
+     * (B vs A) median was +0.40 and +2.90 ms, inside a noise band of +/-30 ms.
+     * Which is what the mechanism predicts: the two sides differ in two float
+     * uniforms and the contents of a 1024x32 texture, with identical shaders,
+     * passes, draws and target sizes.
+     *
+     * Two things that look like the same lever and are not, both swept and both
+     * rejected: `HighlightBloomPass` (bloom cannot raise the top without
+     * raising the floor faster) and `GradePass` (the coloured silhouette is a
+     * lamp, not the chromatic aberration).
      */
     this.look = {
-      exposure: 0.64, shoulder: 0.68, lutStrength: 1.0, saturation: 1.0,
+      exposure: 0.95, shoulder: 0.90, lutStrength: 1.0, saturation: 1.0,
       chroma: 0.0009, distortion: 0.018, grain: 0.02, vignette: 0.3,
       bloomStrength: 0.22, bloomRadius: 0.35, bloomThreshold: 5.5,
       bloomKnee: 0.35, bloomClamp: 2.0,

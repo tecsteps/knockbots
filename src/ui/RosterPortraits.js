@@ -34,9 +34,29 @@ import * as THREE from 'three';
 const _clear = new THREE.Color();
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
+const _box = new THREE.Box3();
 
 const SIZE = 256;           // square target; the tile crops to its own aspect
-const FOV = 30;
+
+/**
+ * A portrait lens, not a scene lens.
+ *
+ * This was 30 degrees, and because the distance is derived from the framing,
+ * a wide angle also means a CLOSE camera: at 30 degrees the lens sat 1.11-1.27 m
+ * from the head on the whole cast. Photographed at that range a machine's near
+ * shoulder is roughly half as far from the lens as its far one, so it projects
+ * about twice the size, and every capture came back as a wall of near-side
+ * pauldron with the head peering out from behind it. The three the previous
+ * round could not fix — Anvil, Bastion, Volta — were the three with the largest
+ * pauldrons and the one with a tower shield, which is exactly the population a
+ * perspective error of that shape would select.
+ *
+ * 20 degrees puts the same frame at 1.7-2.0 m, which is a short telephoto on a
+ * head-and-shoulders subject and the reason portrait lenses are long: it
+ * compresses the near-far ratio to about 1.2 and the shoulders stop competing
+ * with the face for area.
+ */
+const FOV = 20;
 
 /**
  * The frame is derived from the rig, not from a constant.
@@ -66,19 +86,61 @@ const FOV = 30;
 /**
  * Frame height as a multiple of the headTop..chest span.
  *
- * Also measured. At 1.75 spans (~0.83 m) the frame is filled by shoulder: the
- * cast's shoulder-to-shoulder width is 0.89-1.45 m against a head roughly
- * 0.30 m across, so a frame wide enough to hold the shoulders makes the head a
- * fifth of the picture — which looked, at 63 px, exactly like the full-body
- * render it replaced. 1.30 spans crops the shoulders at the frame edge, which
- * is what a portrait is supposed to do, and puts the head across the upper
- * 23-61% of the frame.
+ * Also measured. At 1.75 spans (~0.83 m) with the old 30-degree lens the frame
+ * was filled by shoulder: the cast's shoulder-to-shoulder width is 0.89-1.45 m
+ * against a head roughly 0.30 m across, so a frame wide enough to hold the
+ * shoulders made the head a fifth of the picture. 1.30 spans fixed that and
+ * introduced the opposite fault — on a contact sheet of all ten, every crest,
+ * antenna and helmet crown was clipped by the top edge (Vulkan, Kestrel,
+ * Ronin, Seraph and Nyx all lost the top of the head), because the headroom
+ * budget is measured from the `headTop` BONE and the geometry hung above it is
+ * not in the skeleton.
+ *
+ * 1.62 spans on the 20-degree lens is the setting that holds both: the long
+ * lens keeps the shoulders from filling it and the extra height clears the
+ * crown hardware. Note the tile crops this square to 3:4 and throws away 12.5%
+ * of each side, so surplus WIDTH is free and only the height is being spent.
  */
-const FRAME_SPANS = 1.30;
+const FRAME_SPANS = 1.62;
 
 /** Headroom above `headTop`, as a multiple of that same span. Armour, crests
- *  and antennae live above the bone, so this is deliberately generous. */
-const HEADROOM_SPANS = 0.30;
+ *  and antennae live above the bone, so this is deliberately generous — it is
+ *  the term that was too small when the contact sheet came back with five
+ *  clipped crowns. */
+const HEADROOM_SPANS = 0.46;
+
+/**
+ * Bulk correction: how much wider the frame gets on a squat machine.
+ *
+ * The head-and-neck span does not predict how much frame a machine needs,
+ * because on some builds the head is not the thing you have to fit — the
+ * hardware wrapped around it is. Rendered at 1x, 1.8x, 3.2x and 5x the
+ * span-derived frame, the three that failed all failed the same way: Anvil's
+ * head sits inside a C-shaped shoulder collar that arcs OVER it, Volta's inside
+ * a horizontal coil disc at shoulder height, and Bastion's behind a slab that
+ * is most of its upper body. At 1x you photograph the hardware; at 1.8x you
+ * photograph a machine with a head in it.
+ *
+ * The measurable that separates them is squatness — bounding-box width over
+ * height — not the shoulder multiplier and not width alone:
+ *
+ *     anvil 0.665  bastion 0.648  ronin 0.522  volta 0.485  kestrel 0.478
+ *     seraph 0.393  axiom 0.393   nyx 0.377    vulkan 0.346  mantis 0.333
+ *
+ * The two that need the most correction are the top two by a clear margin, and
+ * the seven that already frame correctly sit at or below 0.52. So the frame is
+ * scaled by how far past `BULK_BASE` a machine is, which leaves the slim half of
+ * the cast untouched (their term clamps to zero) and opens Anvil and Bastion by
+ * about 1.75x. It is a continuous rule off measured geometry, not a table of
+ * character names, so a new machine is framed without being special-cased.
+ *
+ * The box is `Box3.setFromObject`, which for a skinned mesh is the BIND pose
+ * transformed by the world matrix — the pose applied below does not move it.
+ * That is wanted here: this is a measure of how the machine is BUILT, and it
+ * must not change with what the rig happens to be doing.
+ */
+const BULK_BASE = 0.42;
+const BULK_GAIN = 3.2;
 
 /** Floor for the span, so a degenerate rig cannot put the lens inside the mesh. */
 const MIN_SPAN = 0.22;
@@ -101,18 +163,73 @@ const DIR = (() => {
   // the occlusion is geometric and no amount of zoom fixes it. Swinging the
   // lens toward the centre line clears the pauldron and still shows two planes.
   //
-  // Elevation was raised to 0.45 (26 degrees) to look OVER the pauldrons, and
-  // measured worse on the whole cast: at that angle Anvil and Nyx are the top
-  // of a bald dome, Axiom loses its face entirely, and Bastion's shields still
-  // occlude because they are raised in FRONT of the chest rather than beside
-  // it. Reverted to 8.6 degrees. Bastion, Volta and Anvil still photograph
-  // their armour rather than their heads; `frames` records that the head bone
-  // projects to (0.50, 0.51) on all three, so this is occlusion by the rest
-  // pose, not a framing error, and no camera placement in this file can fix
-  // it — it needs a portrait pose from the animation side.
-  const v = new THREE.Vector3(0.33, 0.15, 0.94);
+  // Elevation, 17 degrees, and it is the term that was wrong.
+  //
+  // 26 degrees was tried on the old 30-degree lens and measured worse on the
+  // whole cast, so it went back to 8.6 — which is a camera at chest height on a
+  // machine whose head is a small part of its mass, and on the three brutes it
+  // photographed the chest. A seven-azimuth by two-elevation sweep of Anvil,
+  // Bastion and Volta (rendered through this exact framing) settles it: across
+  // the whole azimuth range from -55 to +55 degrees NOTHING changes at 4
+  // degrees elevation — all seven frames are chest — while at 16 degrees Anvil
+  // and Volta both show a complete head with clearance above it. Azimuth was
+  // never the variable; the sweep is what proves it rather than asserting it.
+  const v = new THREE.Vector3(0.33, 0.305, 0.90);
   return v.normalize();
 })();
+
+const D = Math.PI / 180;
+
+/**
+ * The portrait pose, in degrees added to each bone's REST rotation.
+ *
+ * The rest pose is a relaxed A-pose built for animation, not for a photograph:
+ * `Skeleton.js` sets `shoulder_*` 50 degrees out from vertical, and
+ * `RobotBuilder` hangs the pauldron off `clavicle_*` and the forearm armour off
+ * `elbow_*`. On a wide chassis that puts a plate between the lens and the face
+ * — Anvil, Bastion and Volta all came back as a wall of armour with the head
+ * bone projecting to dead centre behind it.
+ *
+ * So the machine is posed the way a subject is posed for a portrait: shoulders
+ * dropped and rolled back, arms brought in toward the body and swept behind the
+ * torso plane, forearms hanging. That is four bones per side and it clears the
+ * face on every chassis without touching the camera, which the other seven
+ * machines were already framed correctly by.
+ *
+ * Signs, because they are not guessable from the numbers and one of them was
+ * wrong for a whole revision. +X is the machine's left and +Z is its front
+ * (`FRONT` in RobotBuilder). A rotation about +Z carries +X toward +Y, so a
+ * NEGATIVE z drops the left shoulder and a POSITIVE z drops the right one, and
+ * a POSITIVE z on `shoulder_L` rotates its 50-degree splay back toward
+ * vertical. A rotation about +X carries +Y toward +Z — and the arm bones point
+ * along -Y, so a POSITIVE x sweeps a limb BACKWARD and a negative one swings it
+ * forward across the chest. The first version of this table had -26 on both
+ * shoulders, which is the opposite of what its own comment claimed and threw
+ * Bastion's shield across the frame it was written to clear.
+ *
+ * Applied additively and restored in `capture`'s `finally`, so a caller that
+ * reuses the robot afterwards gets it back untouched.
+ */
+const POSE = {
+  // Pauldrons down and rolled back, off the head's sight line. Anvil's is
+  // 1.24x the cast's base width and three lames deep, and it is the single
+  // largest occluder in the roster.
+  clavicle_L: [-6, 0, -20],
+  clavicle_R: [-6, 0, 20],
+  // Upper arms in from the 50-degree rest splay to about 16 degrees off
+  // vertical, and swept BEHIND the chest plane. Everything below the shoulder
+  // is outside a head-and-shoulders frame, so there is no cost to dropping the
+  // arms and a large benefit: `markTowerShield` hangs Bastion's shield off
+  // `elbow_L` at 1.34x the whole arm's length, which keeps its top edge at head
+  // height for as long as the arm is held out in front.
+  shoulder_L: [26, 0, 34],
+  shoulder_R: [26, 0, -34],
+  // Forearms hanging back, which carries that shield down and behind the hip.
+  elbow_L: [26, 0, 6],
+  elbow_R: [26, 0, -6],
+  // A touch of chin, so the visor faces the lens rather than the floor.
+  head: [-5, 0, 0],
+};
 
 export class RosterPortraits {
   /**
@@ -195,9 +312,12 @@ export class RosterPortraits {
     const prevParent = group.parent;
     this.renderer.getClearColor(_clear);
     const prevClearAlpha = this.renderer.getClearAlpha();
+    /** @type {?Array<{bone: THREE.Object3D, x: number, y: number, z: number}>} */
+    let posed = null;
 
     try {
       this._scene.add(group);
+      posed = this.#pose(robot);
       group.updateMatrixWorld(true);
 
       // Frame off the RIG, not the bounding box.
@@ -210,17 +330,22 @@ export class RosterPortraits {
       const bones = robot.parts?.byName;
       const headTop = bones?.headTop ?? bones?.head;
       const chest = bones?.chest ?? bones?.spine02;
+      const box = _box.setFromObject(group);
+      const bulk = 1 + BULK_GAIN * Math.max(0,
+        (box.max.x - box.min.x) / Math.max(box.max.y - box.min.y, 1e-3) - BULK_BASE);
       let frameH;
       if (headTop && chest) {
         headTop.getWorldPosition(_a);
         chest.getWorldPosition(_b);
         const span = Math.max(_a.y - _b.y, MIN_SPAN);
-        frameH = span * FRAME_SPANS;
+        frameH = span * FRAME_SPANS * bulk;
         // The head sits in the upper band of the frame, the way a portrait
-        // photographer would place it, rather than dead centre.
+        // photographer would place it, rather than dead centre. Measured from
+        // `headTop` and not from the frame, so opening the frame for a bulky
+        // machine drops the extra room BELOW the head rather than around it —
+        // which is where its hardware actually is.
         this._aim.set(_a.x, _a.y + span * HEADROOM_SPANS - frameH * 0.5, _a.z);
       } else {
-        const box = new THREE.Box3().setFromObject(group);
         box.getCenter(this._aim);
         this._aim.y = box.max.y - CROWN_DROP;
         frameH = Math.max(box.max.y - box.min.y, 1) * 0.42;
@@ -249,8 +374,34 @@ export class RosterPortraits {
         headUV = { x: +((_a.x * 0.5 + 0.5)).toFixed(3), y: +((-_a.y * 0.5 + 0.5)).toFixed(3) };
       }
       this.frames.set(id, {
-        frameH: +frameH.toFixed(3), dist: +dist.toFixed(3), rigged: !!(headTop && chest), headUV,
+        frameH: +frameH.toFixed(3), dist: +dist.toFixed(3), bulk: +bulk.toFixed(2),
+        rigged: !!(headTop && chest), headUV,
       });
+
+      // Compile this machine's programs BEFORE drawing with them.
+      //
+      // This is the whole stall, and it was not the readback. Measured per
+      // capture on a fresh boot, timing the synchronous span of this method
+      // against the awaited one: sync 155-608 ms, total 230-755 ms. The
+      // synchronous part is `renderer.render` below and nothing else of size —
+      // a freshly built robot brings ~8 new materials and their procedural map
+      // set, and the first draw with them pays `compileShader` + `linkProgram`
+      // + the texture uploads on the main thread. Worst whole frame across the
+      // sequence was 785 ms with 22 frames over 100 ms.
+      //
+      // `compileAsync` issues the same work and then resolves off
+      // `KHR_parallel_shader_compile`, so the driver compiles on its own
+      // threads and the main thread only picks the results up. It is awaited
+      // here rather than fired and forgotten because the point is that
+      // `render` finds every program already linked.
+      //
+      // Guarded: `compileAsync` is r152+, and a context without the parallel
+      // extension resolves it by polling instead, which is slower but never
+      // wrong. If it is missing entirely we simply draw and pay what we paid
+      // before — a portrait is still not allowed to be a hard dependency.
+      if (typeof this.renderer.compileAsync === 'function') {
+        await this.renderer.compileAsync(this._scene, this._camera).catch(() => {});
+      }
 
       // Transparent background.
       //
@@ -291,12 +442,39 @@ export class RosterPortraits {
     } finally {
       // Always hand the robot back exactly as we found it, or the caller's
       // dispose() runs against a group we have reparented.
+      if (posed) for (const r of posed) r.bone.rotation.set(r.x, r.y, r.z);
       if (prevParent) prevParent.add(group);
       else this._scene.remove(group);
       this.renderer.setRenderTarget(prevTarget);
       this.renderer.setClearColor(_clear, prevClearAlpha);
       this._busy = false;
     }
+  }
+
+  /**
+   * Applies `POSE` to the rig and returns what to put back.
+   *
+   * Nothing here forces a skinning update: `WebGLRenderer` calls
+   * `Skeleton#update` itself once per skinned mesh per render, so moving the
+   * bones and then rendering is enough. The armour plates are rigid single-bone
+   * binds (see the charter's RobotBuilder entry), so they travel with the joint
+   * exactly and there is no soft deformation to go wrong at a 28-degree swing.
+   *
+   * @param {{ parts?: { byName?: Record<string, THREE.Object3D> } }} robot
+   * @returns {?Array<{bone: THREE.Object3D, x: number, y: number, z: number}>}
+   */
+  #pose(robot) {
+    const bones = robot?.parts?.byName;
+    if (!bones) return null;
+    const restored = [];
+    for (const [name, [rx, ry, rz]] of Object.entries(POSE)) {
+      const bone = bones[name];
+      if (!bone?.rotation) continue;
+      const { x, y, z } = bone.rotation;
+      restored.push({ bone, x, y, z });
+      bone.rotation.set(x + rx * D, y + ry * D, z + rz * D);
+    }
+    return restored.length ? restored : null;
   }
 
   dispose() {

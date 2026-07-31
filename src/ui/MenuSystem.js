@@ -88,6 +88,7 @@
  */
 
 import { bus } from '../core/Bus.js';
+import { ROUNDS_TO_WIN } from '../core/Constants.js';
 import { ROSTER, ARCHETYPES, chassisOf, massOf } from '../characters/roster.js';
 import { QUALITY_TIERS } from '../engine/RenderPipeline.js';
 import { CPU } from '../ai/CPU.js';
@@ -303,189 +304,6 @@ function metaCell(label, value) {
   const cell = el('span', 'kbg-meta-cell');
   cell.append(el('i', null, label), el('b', null, value));
   return cell;
-}
-
-// ---------------------------------------------------------------------------
-// Chassis silhouettes
-// ---------------------------------------------------------------------------
-
-/**
- * Draws a roster tile's silhouette from the character's own `silhouette` and
- * `proportions` blocks, so the shape on the tile is derived from the same
- * numbers RobotBuilder grows the body out of. Shoulder span, waist taper, head
- * style, leg articulation, dorsal unit and spike count all change the outline —
- * which is what makes ten tiles read as ten machines instead of ten swatches.
- *
- * @param {import('../characters/roster.js').CharacterDef} def
- * @returns {string} inner SVG markup for a `0 0 64 100` viewBox
- */
-function silhouetteMarkup(def) {
-  const s = def.silhouette || {};
-  const p = def.proportions || {};
-  const cx = 32;
-  const sw = 13 * (s.shoulders ?? 1);                 // half shoulder span
-  const ww = Math.max(4, 8.5 * (s.waist ?? 0.8));     // half waist
-  const taper = s.limbTaper ?? 0.6;
-
-  const headH = 15 * (p.head ?? 1);
-  const headTop = 7;
-  const headBot = headTop + headH;
-  const shoulderY = headBot + 3.5;
-  const waistY = shoulderY + 27 * (p.torso ?? 1);
-  const hipY = waistY + 4;
-  const footY = 95;
-  const legSpan = footY - hipY;
-
-  const body = [];
-  const accent = [];
-  const poly = (into, pts) => into.push(`<polygon points="${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}"/>`);
-  const rect = (into, x, y, w, h) => poly(into, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]);
-
-  // -- dorsal unit, behind everything ---------------------------------------
-  const back = [];
-  const bx = cx + sw * 0.35;
-  switch (s.backpack) {
-    case 'reactor':
-      back.push(`<circle cx="${(cx).toFixed(1)}" cy="${(shoulderY + 9).toFixed(1)}" r="${(sw * 0.72).toFixed(1)}"/>`);
-      break;
-    case 'thrusters':
-      poly(back, [[bx, shoulderY - 3], [bx + 13, shoulderY - 9], [bx + 16, shoulderY - 2], [bx + 4, shoulderY + 6]]);
-      poly(back, [[cx - sw * 0.35, shoulderY - 3], [cx - sw * 0.35 - 13, shoulderY - 9], [cx - sw * 0.35 - 16, shoulderY - 2], [cx - sw * 0.35 - 4, shoulderY + 6]]);
-      break;
-    case 'coil':
-      for (let i = 0; i < 3; i++) rect(back, cx - sw * 0.8, shoulderY + 2 + i * 6, sw * 1.6, 4);
-      break;
-    case 'tank':
-      rect(back, cx - sw * 0.85, shoulderY - 1, sw * 1.7, 17);
-      break;
-    case 'wings':
-      poly(back, [[cx - 2, shoulderY], [cx - sw - 17, shoulderY - 24], [cx - sw - 6, shoulderY + 2]]);
-      poly(back, [[cx + 2, shoulderY], [cx + sw + 17, shoulderY - 24], [cx + sw + 6, shoulderY + 2]]);
-      break;
-    case 'drum':
-      back.push(`<circle cx="${cx.toFixed(1)}" cy="${(shoulderY + 11).toFixed(1)}" r="${(sw * 0.9).toFixed(1)}"/>`);
-      break;
-    case 'spine':
-      for (let i = 0; i < 4; i++) {
-        const y = shoulderY + 2 + i * 6;
-        poly(back, [[cx + sw * 0.6, y], [cx + sw * 0.6 + 9, y + 2.5], [cx + sw * 0.6, y + 5]]);
-      }
-      break;
-    default:
-      break;
-  }
-
-  // -- torso ----------------------------------------------------------------
-  poly(body, [
-    [cx - sw, shoulderY], [cx + sw, shoulderY],
-    [cx + ww, waistY], [cx - ww, waistY],
-  ]);
-  // chest plate, in the character's accent
-  poly(accent, [
-    [cx - sw * 0.42, shoulderY + 3], [cx + sw * 0.42, shoulderY + 3],
-    [cx + ww * 0.5, waistY - 5], [cx - ww * 0.5, waistY - 5],
-  ]);
-
-  // -- pauldrons ------------------------------------------------------------
-  const pw = sw * 0.46;
-  poly(body, [[cx - sw - 2, shoulderY - 2], [cx - sw + pw, shoulderY - 3], [cx - sw + pw * 0.9, shoulderY + 8], [cx - sw - 3, shoulderY + 7]]);
-  poly(body, [[cx + sw + 2, shoulderY - 2], [cx + sw - pw, shoulderY - 3], [cx + sw - pw * 0.9, shoulderY + 8], [cx + sw + 3, shoulderY + 7]]);
-
-  // -- spikes ---------------------------------------------------------------
-  const spikes = Math.min(6, s.spikes ?? 0);
-  for (let i = 0; i < spikes; i++) {
-    const side = i % 2 ? 1 : -1;
-    const t = Math.floor(i / 2);
-    const x = cx + side * (sw + 1);
-    const y = shoulderY - 1 + t * 4.5;
-    poly(accent, [[x, y], [x + side * (9 - t * 1.6), y - 5 - t], [x, y + 4]]);
-  }
-
-  // -- arms -----------------------------------------------------------------
-  const armLen = 30 * (p.arms ?? 1);
-  const upper = 4.6 * (1 + (1 - taper) * 0.4);
-  const lower = upper * (0.45 + taper * 0.5);
-  for (const side of [-1, 1]) {
-    const ax = cx + side * (sw * 0.86);
-    const elbowY = shoulderY + armLen * 0.5;
-    const handY = shoulderY + armLen;
-    const ex = ax + side * 2.5;
-    poly(body, [[ax - upper, shoulderY + 3], [ax + upper, shoulderY + 3], [ex + lower, elbowY], [ex - lower, elbowY]]);
-    poly(body, [[ex - lower, elbowY], [ex + lower, elbowY], [ex + side * 1.5 + lower * 1.25, handY], [ex + side * 1.5 - lower * 1.25, handY]]);
-  }
-
-  // -- legs -----------------------------------------------------------------
-  const hipX = ww * 0.72;
-  const thigh = 5.4 * (0.7 + (1 - taper) * 0.6);
-  const shin = thigh * (0.5 + taper * 0.5);
-  for (const side of [-1, 1]) {
-    const hx = cx + side * hipX;
-    if (s.legs === 'digitigrade') {
-      const kneeY = hipY + legSpan * 0.42;
-      const ankleY = hipY + legSpan * 0.80;
-      const kx = hx + side * 4;
-      const axk = hx - side * 2.5;
-      poly(body, [[hx - thigh, hipY], [hx + thigh, hipY], [kx + shin, kneeY], [kx - shin, kneeY]]);
-      poly(body, [[kx - shin, kneeY], [kx + shin, kneeY], [axk + shin * 0.8, ankleY], [axk - shin * 0.8, ankleY]]);
-      poly(body, [[axk - shin * 0.8, ankleY], [axk + shin * 0.8, ankleY], [axk + shin + 5, footY], [axk - shin * 0.6, footY]]);
-    } else if (s.legs === 'piston') {
-      const kneeY = hipY + legSpan * 0.5;
-      rect(body, hx - thigh, hipY, thigh * 2, kneeY - hipY);
-      rect(body, hx - thigh * 1.15, kneeY - 2.5, thigh * 2.3, 5);
-      rect(body, hx - shin, kneeY + 2, shin * 2, footY - kneeY - 5);
-      rect(body, hx - shin * 1.5, footY - 4, shin * 3, 4);
-    } else {
-      const kneeY = hipY + legSpan * 0.48;
-      poly(body, [[hx - thigh, hipY], [hx + thigh, hipY], [hx + shin, kneeY], [hx - shin, kneeY]]);
-      poly(body, [[hx - shin, kneeY], [hx + shin, kneeY], [hx + shin * 0.95, footY - 4], [hx - shin * 0.95, footY - 4]]);
-      poly(body, [[hx - shin * 1.1, footY - 4], [hx + shin * 1.5, footY - 4], [hx + shin * 1.7, footY], [hx - shin * 1.2, footY]]);
-    }
-  }
-
-  // -- head -----------------------------------------------------------------
-  const hw = 6.2 * (p.head ?? 1);
-  const neck = shoulderY - 1;
-  switch (s.head) {
-    case 'visor':
-      rect(body, cx - hw, headTop, hw * 2, headBot - headTop);
-      rect(accent, cx - hw * 0.92, headTop + headH * 0.34, hw * 1.84, 3.2);
-      break;
-    case 'mono':
-      rect(body, cx - hw * 0.8, headTop, hw * 1.6, headBot - headTop);
-      accent.push(`<circle cx="${cx}" cy="${(headTop + headH * 0.45).toFixed(1)}" r="2.2"/>`);
-      break;
-    case 'crest':
-      rect(body, cx - hw, headTop + 2, hw * 2, headBot - headTop - 2);
-      poly(body, [[cx - 1.6, headTop + 2], [cx + 1.6, headTop + 2], [cx + 1, headTop - 6], [cx - 1, headTop - 6]]);
-      rect(accent, cx - hw * 0.85, headTop + headH * 0.5, hw * 1.7, 2.6);
-      break;
-    case 'dome':
-      body.push(`<path d="M${(cx - hw).toFixed(1)},${headBot.toFixed(1)} L${(cx - hw).toFixed(1)},${(headTop + hw).toFixed(1)} A${hw.toFixed(1)},${hw.toFixed(1)} 0 0 1 ${(cx + hw).toFixed(1)},${(headTop + hw).toFixed(1)} L${(cx + hw).toFixed(1)},${headBot.toFixed(1)} Z"/>`);
-      rect(accent, cx - hw * 0.7, headTop + headH * 0.52, hw * 1.4, 2.6);
-      break;
-    case 'crown':
-      rect(body, cx - hw, headTop + 4, hw * 2, headBot - headTop - 4);
-      for (let i = -1; i <= 1; i++) poly(accent, [[cx + i * hw * 0.72 - 1.4, headTop + 4], [cx + i * hw * 0.72 + 1.4, headTop + 4], [cx + i * hw * 0.72, headTop - 5]]);
-      break;
-    case 'mandible':
-      poly(body, [[cx - hw, headTop], [cx + hw, headTop], [cx + hw * 0.62, headBot], [cx - hw * 0.62, headBot]]);
-      poly(accent, [[cx - hw * 0.6, headBot - 2], [cx - hw * 0.1, headBot - 2], [cx - hw * 1.1, headBot + 7]]);
-      poly(accent, [[cx + hw * 0.6, headBot - 2], [cx + hw * 0.1, headBot - 2], [cx + hw * 1.1, headBot + 7]]);
-      break;
-    case 'lantern':
-      rect(body, cx - hw * 1.15, headTop + 2, hw * 2.3, headBot - headTop - 3);
-      accent.push(`<circle cx="${cx}" cy="${(headTop + headH * 0.5).toFixed(1)}" r="${(hw * 0.55).toFixed(1)}"/>`);
-      break;
-    default: // mask
-      poly(body, [[cx - hw, headTop], [cx + hw, headTop], [cx + hw * 0.8, headBot - 3], [cx, headBot + 2], [cx - hw * 0.8, headBot - 3]]);
-      rect(accent, cx - hw * 0.75, headTop + headH * 0.36, hw * 1.5, 2.8);
-      break;
-  }
-  rect(body, cx - 2.6, neck - 4, 5.2, 5);
-
-  return `<g class="kbs-sil-back">${back.join('')}</g>`
-    + `<g class="kbs-sil-body">${body.join('')}</g>`
-    + `<g class="kbs-sil-accent">${accent.join('')}</g>`;
 }
 
 export class MenuSystem {
@@ -823,9 +641,23 @@ export class MenuSystem {
     const idle = window.requestIdleCallback
       ? (fn) => window.requestIdleCallback(fn, { timeout: 900 })
       : (fn) => setTimeout(fn, 220);
+    // The next machine is scheduled off the END of the previous capture, not
+    // alongside it.
+    //
+    // `RosterPortraits#capture` holds a single render target and a single
+    // readback buffer and refuses re-entry while a readback is in flight — it
+    // returns null rather than queueing. The previous version fired the next
+    // idle slice immediately after issuing a capture, so whenever a build
+    // landed inside a readback window that machine was declined, and its robot
+    // was disposed in the same `finally`, so there was nothing left to
+    // photograph and the tile kept its monogram for the rest of the session.
+    // Measured on a fresh boot: nine of ten portraits arrived and Volta never
+    // did. Serialising costs nothing — the whole sequence is idle-paced anyway
+    // — and makes the tenth deterministic.
     const step = () => {
       if (!queue.length || this.game.phase === 'fight') return;
       const def = queue.shift();
+      const next = () => idle(step);
       try {
         const robot = buildRobot(def, createSkeleton(def.proportions), this.game.environment);
         // The build is already being paid for; photograph it on the way to the
@@ -834,9 +666,15 @@ export class MenuSystem {
         this.#portraits().capture(def.id, robot)
           .then((url) => { if (url) this.#applyPortrait(def.id, url); })
           .catch(() => {})
-          .finally(() => { try { robot.dispose(); } catch { /* already gone */ } });
-      } catch { /* a warm-up is an optimisation; it never gets to be a failure */ }
-      idle(step);
+          .finally(() => {
+            try { robot.dispose(); } catch { /* already gone */ }
+            next();
+          });
+      } catch {
+        // A warm-up is an optimisation; it never gets to be a failure — but it
+        // does have to keep walking the queue past the machine that threw.
+        next();
+      }
     };
     idle(step);
   }
@@ -899,7 +737,12 @@ export class MenuSystem {
       const tile = el('button', 'kbs-tile');
       tile.type = 'button';
       tile.setAttribute('role', 'option');
-      tile.setAttribute('aria-label', `${def.name}, ${def.archetype}, ${chassisOf(def).label}`);
+      // The stats are drawn as five unlabelled columns for the eye and spelled
+      // out here for a screen reader, because a bar chart four glyphs wide is
+      // not something a label can be attached to one cell at a time.
+      const spoken = STAT_KEYS.map((k) => `${k} ${def.stats?.[k] ?? 0}`).join(', ');
+      tile.setAttribute('aria-label',
+        `${def.name}, ${def.archetype}, ${chassisOf(def).label}, ${massOf(def)} kilograms. ${spoken}, out of 10.`);
       tile.style.setProperty('--kbs-c', def.palette.accent);
       tile.style.setProperty('--kbs-e', def.palette.emissive);
       tile.style.setProperty('--kbs-glow', hexToRgba(def.palette.emissive, 0.42));
@@ -907,6 +750,12 @@ export class MenuSystem {
       // A rendered bust of the actual machine, or its initial until the render
       // arrives. The old hand-drawn silhouettes were ten near-identical grey
       // humanoids and were the reason the cast was unreadable from the tiles.
+      //
+      // It is the tallest thing in the tile on purpose. The first version of
+      // this frame was 2.4em in a 3.4em column — 39x52 px inside a 273x137 px
+      // tile at 1080p, five percent of its area — so the screen still read as a
+      // list of names with a stamp beside each one. A portrait that does not
+      // dominate is not doing the job the render was paid for.
       const sil = el('div', 'kbs-por');
       sil.dataset.id = def.id;
       sil.setAttribute('aria-hidden', 'true');
@@ -918,22 +767,29 @@ export class MenuSystem {
       const cached = this._portraits?.get(def.id);
       if (cached) { img.src = cached; sil.classList.add('kbs-por--on'); }
 
-      const text = el('div', 'kbs-tile-text');
-      text.append(
-        el('div', 'kbs-tile-name', def.name),
-        el('div', 'kbs-tile-arch', def.archetype),
-        el('div', 'kbs-tile-frame', `${chassisOf(def).label} · ${massOf(def)} kg`),
-      );
-
+      // Reading order, top to bottom: archetype (what it does), name (which one
+      // it is, and the strongest type in the tile), stats, chassis and mass.
+      // The archetype leads as an eyebrow rather than trailing the name so the
+      // name has nothing above it competing for the same weight.
       const spark = el('div', 'kbs-spark');
+      spark.setAttribute('aria-hidden', 'true');
       for (const key of STAT_KEYS) {
         const cell = el('i', 'kbs-spark-b');
         cell.style.setProperty('--v', String((def.stats?.[key] ?? 0) / 10));
-        cell.title = key;
+        cell.title = `${key} ${def.stats?.[key] ?? 0} / 10`;
+        cell.append(el('span', 'kbs-spark-t'), el('b', 'kbs-spark-k', key[0].toUpperCase()));
         spark.appendChild(cell);
       }
 
-      tile.append(el('span', 'kbs-tile-no', String(i + 1).padStart(2, '0')), sil, text, spark, el('span', 'kbs-tile-lock', 'LOADED'));
+      const text = el('div', 'kbs-tile-text');
+      text.append(
+        el('div', 'kbs-tile-arch', def.archetype),
+        el('div', 'kbs-tile-name', def.name),
+        spark,
+        el('div', 'kbs-tile-frame', `${chassisOf(def).label} · ${massOf(def)} kg`),
+      );
+
+      tile.append(el('span', 'kbs-tile-no', String(i + 1).padStart(2, '0')), sil, text, el('span', 'kbs-tile-lock', 'LOADED'));
       rackGrid.appendChild(tile);
 
       const idx = items.length;
@@ -1110,6 +966,26 @@ export class MenuSystem {
   }
 
   #selectShow() {
+    // DISPROVED, recorded so nobody re-derives it: `#warmRoster()` does NOT
+    // belong here.
+    //
+    // The `12-select-screen` capture shows 2 of 10 tiles with a rendered
+    // portrait and 8 with a monogram, and the obvious diagnosis is that the
+    // warm-up is armed only by the TITLE screen's `onShow`, so a route that
+    // skips the title (a direct `setPhase('select')`, the results screen's
+    // CHARACTER SELECT button, that capture) never fills the grid. Arming it
+    // from here as well was measured against a control, three runs a side,
+    // counting `.kbs-por--on` over time:
+    //
+    //     armed here   1400ms 1/2/3   3000ms 2/3/5   6000ms 6/6/10  10s 10/10/10
+    //     control      1400ms 3/4/2   3000ms 4/5/3   6000ms 10/8/5  10s 10/10/7
+    //
+    // The control fills too, and is if anything marginally ahead early. The
+    // grid is already being filled by another path; the shortfall in the
+    // capture is that its 1400 ms settle shutters while the queue is still
+    // draining, not that the queue was never started. Adding a second arming
+    // point buys nothing and only risks ten robot builds landing on top of the
+    // select screen's own live preview.
     const r = this._select;
     r.locked = false;
     r.focus = -1;
@@ -1823,17 +1699,61 @@ export class MenuSystem {
   // Results
   // -------------------------------------------------------------------------
 
+  /**
+   * The match-end card.
+   *
+   * Rebuilt from a stack of centred floating text. What it was: `WINS`
+   * headline, a `MATCH COMPLETE` caption in `--kb-text-faint`, a monospace
+   * score line and a row of three buttons, all centred in the viewport with no
+   * surface behind any of it. Three things went wrong with that, all visible in
+   * the `14-victory` capture at 1x:
+   *
+   *   - It composited straight onto the arena. "VULKAN WINS" landed exactly on
+   *     the stage's own "KEEP BEHIND THE LINE" signage and the two sets of
+   *     letterforms interleaved; the caption under it, at `--kb-text-faint`
+   *     over a lit floor, was close to unreadable.
+   *   - The button row was ragged: "CHARACTER SELECT" wrapped to two lines
+   *     inside a fixed 12em box while its neighbours stayed on one, so the row
+   *     had three different heights and no shared baseline.
+   *   - Everything was centred on both axes, which docs/CRITIC.md names as an
+   *     anti-pattern on this axis in as many words.
+   *
+   * What it is now: the same chamfered dossier panel the character-select
+   * screen already uses, anchored to one edge, with a left-aligned type
+   * hierarchy (eyebrow rule, display headline, epithet, a scoreboard of two
+   * rows with round pips, then a vertical action stack). The arena keeps the
+   * other two thirds of the frame, so the winner's pose is still the picture
+   * and the card is the caption — which is the composition every fighting game
+   * results screen actually uses.
+   */
   #buildResults() {
     const screen = el('div', 'menu-screen');
-    const bg = el('div', 'menu-bg');
+    const bg = el('div', 'menu-bg menu-bg--results');
     const wrap = el('div', 'results-wrap');
+    const panel = el('div', 'results-panel');
+
+    const eyebrow = el('div', 'results-eyebrow');
+    eyebrow.append(el('i', 'results-eyebrow-rule'), el('span', null, 'MATCH COMPLETE'));
 
     const winnerEl = el('div', 'results-winner');
-    const subEl = el('div', 'results-sub', 'MATCH COMPLETE');
+    const epithetEl = el('div', 'results-epithet');
+
     const scoreEl = el('div', 'results-score');
-    const s1 = document.createElement('span');
-    const s2 = document.createElement('span');
-    scoreEl.append(s1, document.createTextNode(' — '), s2);
+    const rows = [0, 1].map(() => {
+      const row = el('div', 'results-row');
+      const name = el('span', 'results-row-name');
+      const pips = el('span', 'results-row-pips');
+      const pipEls = [];
+      for (let i = 0; i < ROUNDS_TO_WIN; i++) {
+        const pip = el('i', 'results-pip');
+        pips.appendChild(pip);
+        pipEls.push(pip);
+      }
+      const count = el('b', 'results-row-count');
+      row.append(name, pips, count);
+      scoreEl.appendChild(row);
+      return { row, name, count, pipEls };
+    });
 
     const actions = el('div', 'results-actions');
     const items = [];
@@ -1841,25 +1761,41 @@ export class MenuSystem {
     actions.appendChild(this.#addNavButton(items, 'CHARACTER SELECT', () => this.game.setPhase('select')));
     actions.appendChild(this.#addNavButton(items, 'MAIN MENU', () => this.game.setPhase('menu')));
 
-    wrap.append(winnerEl, subEl, scoreEl, actions);
+    panel.append(eyebrow, winnerEl, epithetEl, scoreEl, actions);
+    wrap.append(panel);
     screen.append(bg, wrap);
     this.root.appendChild(screen);
 
     this.screens.results = {
       el: screen, nav: items, cols: 1,
-      onShow: () => this.#refreshResults(winnerEl, s1, s2),
+      onShow: () => this.#refreshResults(winnerEl, epithetEl, rows),
     };
   }
 
-  #refreshResults(winnerEl, s1, s2) {
-    const names = this.game.fighters?.map((f) => f.def?.name || '???') ?? ['P1', 'P2'];
+  /**
+   * @param {HTMLElement} winnerEl
+   * @param {HTMLElement} epithetEl
+   * @param {{row: HTMLElement, name: HTMLElement, count: HTMLElement, pipEls: HTMLElement[]}[]} rows
+   */
+  #refreshResults(winnerEl, epithetEl, rows) {
+    const defs = this.game.fighters?.map((f) => f.def) ?? [];
+    const names = defs.map((d) => d?.name || '???');
     const wins = this.game.wins || [0, 0];
     const w = this._lastWinner;
-    applyKbText(winnerEl, w === 0 || w === 1 ? `${names[w]} WINS` : 'DRAW');
-    s1.textContent = `${names[0]} ${wins[0]}`;
-    s2.textContent = `${names[1]} ${wins[1]}`;
-    s1.classList.toggle('win', w === 0);
-    s2.classList.toggle('win', w === 1);
+    const drawn = w !== 0 && w !== 1;
+    applyKbText(winnerEl, drawn ? 'DRAW' : `${names[w]} WINS`);
+    // The roster already writes every machine an epithet; the results card is
+    // the one screen with room to use it as a subhead rather than a tooltip.
+    epithetEl.textContent = drawn ? 'NO VICTOR' : (defs[w]?.subtitle || '').toUpperCase();
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      r.name.textContent = names[i] ?? '???';
+      r.count.textContent = String(wins[i] ?? 0);
+      for (let p = 0; p < r.pipEls.length; p++) {
+        r.pipEls[p].classList.toggle('results-pip--won', p < (wins[i] ?? 0));
+      }
+      r.row.classList.toggle('results-row--win', w === i);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -2417,17 +2353,29 @@ const KBS_CSS = `
 .kbs-carriage::before { left: -2px; top: -2px; border-right: 0; border-bottom: 0; }
 .kbs-carriage::after { right: -2px; bottom: -2px; border-left: 0; border-top: 0; }
 
+/* The tile is two columns and the left one is the picture. \`auto\` rather than a
+   fixed em: the portrait is sized off the ROW HEIGHT (below), which the rack
+   sets from how much vertical room it was given, so the picture grows and
+   shrinks with the rack instead of holding a constant stamp size inside rows
+   that vary from 44px to 138px. No left padding — the portrait runs to the
+   tile's own edge and the accent spine is drawn over it. */
 .kbs-tile {
   position: relative;
   display: grid;
-  grid-template-columns: 3.4em minmax(0, 1fr);
-  align-items: center;
-  gap: 0.5em;
+  grid-template-columns: var(--kbs-por-w, 34%) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0.55em;
   min-height: 0;
-  padding: 0.35em 0.55em 0.35em 0.4em;
+  padding: 0 0.5em 0 0.18em;
   text-align: left;
   overflow: hidden;
-  background: linear-gradient(100deg, rgba(18,23,32,0.94), rgba(11,14,20,0.9));
+  /* Nearly opaque, and it has to be. The rack's second column sits over the
+     part of the scrim that is deliberately clear (0.42 alpha at 31% of the
+     width, so the live render can breathe), so at 0.94 the arena's brickwork
+     came through the right-hand tiles strongly enough to read behind the type —
+     the five machines in that column were measurably harder to read than the
+     five in the first. A tile is a card, not a filter. */
+  background: linear-gradient(100deg, rgba(16,21,29,0.985), rgba(9,12,18,0.975));
   box-shadow: inset 0 0 0 1px var(--kb-line);
   clip-path: polygon(0 0, 100% 0, 100% calc(100% - 0.55em), calc(100% - 0.55em) 100%, 0 100%);
   transition: transform 0.13s cubic-bezier(.2,1.3,.4,1), background 0.13s ease, box-shadow 0.13s ease;
@@ -2436,6 +2384,7 @@ const KBS_CSS = `
   content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 0.18em;
   background: var(--kbs-c);
   opacity: 0.85;
+  z-index: 2;
 }
 .kbs-tile::after {
   content: ''; position: absolute; inset: 0;
@@ -2447,75 +2396,125 @@ const KBS_CSS = `
   position: absolute; right: 0.45em; top: 0.2em;
   font-family: var(--kb-font-mono); font-size: 0.5em;
   color: var(--kb-text-faint); letter-spacing: 0.08em;
+  transition: opacity 0.16s ease;
 }
-.kbs-sil {
-  position: relative;
-  width: 100%; height: 100%; max-height: 4.6em;
-  overflow: visible;
-}
-/* Portrait frame. Sized from the same variable the old silhouette used so the
-   rack's row height is unchanged. The monogram sits underneath and is simply
-   covered once the render lands, which means no layout shift and no empty box
-   during the idle-time capture. */
+/* Portrait frame — the tallest element in the tile, running the full row.
+
+   Sized as a PERCENTAGE OF THE TILE, not by \`aspect-ratio\` off \`height: 100%\`
+   in an \`auto\` column. That was the first attempt and it does not work: the
+   column width would depend on the item's height, which depends on the row,
+   which the column sizing has not resolved yet, so the browser falls back to the
+   in-flow content — one monogram glyph — and every portrait came out about 50px
+   wide inside a 273px tile. A percentage column has no such cycle; the height
+   comes from \`align-self: stretch\` and the picture is \`cover\`, so the frame's
+   own ratio can be whatever the row height makes it.
+
+   The tile's own diagonal accent wash (\`::after\`) is strongest exactly where
+   the picture is, so the frame is lifted above it — a portrait tinted by a
+   layer that turns up to 0.26 on focus is a portrait that changes colour when
+   you look at it. The accent spine (\`::before\`) stays above both. */
 .kbs-por {
-  position: relative; display: grid; place-items: center;
-  height: var(--kbs-sil-h, 2.4em); aspect-ratio: 3 / 4;
-  border-radius: 3px; overflow: hidden;
+  position: relative; z-index: 1;
+  display: grid; place-items: center;
+  align-self: stretch;
+  width: 100%; height: 100%;
+  overflow: hidden;
   background:
-    radial-gradient(115% 90% at 50% 18%, color-mix(in srgb, var(--kbs-c) 22%, transparent), transparent 68%),
-    linear-gradient(180deg, rgba(18,26,40,.92), rgba(8,12,20,.96));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--kbs-c) 30%, transparent);
+    radial-gradient(120% 78% at 50% 12%, color-mix(in srgb, var(--kbs-c) 26%, transparent), transparent 70%),
+    linear-gradient(180deg, rgba(20,29,44,.95), rgba(7,10,17,.98));
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--kbs-c) 26%, transparent);
+}
+/* Seats the cut-out bust into the tile instead of leaving it floating on a
+   gradient, and puts the accent back under it as a floor line. */
+.kbs-por::after {
+  content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background:
+    linear-gradient(180deg, transparent 58%, rgba(6,9,15,.72) 92%, rgba(6,9,15,.9) 100%),
+    linear-gradient(0deg, color-mix(in srgb, var(--kbs-c) 55%, transparent) 0 2px, transparent 2px);
 }
 .kbs-por-mono {
-  font: 700 1.35em/1 var(--kb-font-display, inherit);
+  font: 700 2.1em/1 var(--kb-font-display, inherit);
   color: color-mix(in srgb, var(--kbs-c) 70%, #dbeaff);
-  opacity: .55; letter-spacing: .02em; transition: opacity .28s ease;
+  opacity: .5; letter-spacing: .02em; transition: opacity .28s ease;
 }
 .kbs-por img {
   position: absolute; inset: 0; width: 100%; height: 100%;
-  object-fit: cover; object-position: 50% 22%;
+  object-fit: cover; object-position: 50% 26%;
   opacity: 0; transition: opacity .32s ease;
 }
 .kbs-por--on img { opacity: 1; }
 .kbs-por--on .kbs-por-mono { opacity: 0; }
 
-.kbs-sil-back { fill: var(--kbs-c); opacity: 0.35; }
-.kbs-sil-body { fill: #cfd8e6; opacity: 0.62; }
-.kbs-sil-accent { fill: var(--kbs-e); opacity: 0.95; }
-.kbs-tile-text { position: relative; min-width: 0; }
+.kbs-tile-text {
+  position: relative; min-width: 0;
+  display: flex; flex-direction: column; justify-content: center;
+  gap: 0.1em;
+  padding: 0.4em 0;
+}
+/* Hierarchy, loudest to quietest: name, archetype, stats, spec line. The name
+   is the only thing here at full size and full weight. */
 .kbs-tile-name {
-  font-size: 0.88em; font-weight: 900; letter-spacing: 0.05em; color: var(--kb-text-dim);
+  font-size: 1.02em; font-weight: 900; letter-spacing: 0.02em; line-height: 1;
+  color: var(--kb-text-dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   transition: color 0.13s ease;
 }
 .kbs-tile-arch {
-  font-size: 0.54em; letter-spacing: 0.18em; text-transform: uppercase;
+  font-size: 0.46em; letter-spacing: 0.26em; text-transform: uppercase;
+  line-height: 1;
   color: var(--kbs-c);
-  opacity: 0.85;
+  opacity: 0.9;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .kbs-tile-frame {
-  margin-top: 0.35em;
+  margin-top: 0.15em;
   font-family: var(--kb-font-mono);
-  font-size: 0.48em; letter-spacing: 0.06em; text-transform: uppercase;
+  font-size: 0.44em; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--kb-text-faint);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* Five stats, labelled.
+   ---------------------------------------------------------------------------
+   What was here: five 4px-wide bars with no labels and no scale, absolutely
+   positioned in the bottom-right corner. They were decoration — a player could
+   not have said which bar was speed, and two tiles could not be compared.
+   Now each column carries the stat's initial (P S R W D, all distinct across
+   the five keys) on a shared baseline, so the same stat sits in the same
+   position on every tile in the rack and the comparison is a horizontal glance.
+   \`title\` carries the exact value on hover; the tile's \`aria-label\` speaks all
+   five, because a bar chart cannot be labelled cell by cell for a reader. */
 .kbs-spark {
-  position: absolute; right: 0.55em; bottom: 0.55em;
-  display: flex; align-items: flex-end; gap: 0.14em;
-  height: 1.3em;
-}
-.kbs-spark-b {
-  display: block; width: 0.24em; height: 100%;
-  background: linear-gradient(180deg, var(--kbs-c), var(--kb-grey-dim));
-  transform: scaleY(var(--v, 0.4));
-  transform-origin: bottom center;
-  opacity: 0.55;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.26em;
+  width: min(100%, 7em);
+  margin-top: 0.42em;
   transition: opacity 0.13s ease;
 }
+.kbs-spark-b { display: grid; grid-template-rows: 1fr auto; gap: 0.14em; min-width: 0; }
+/* Track and fill in one box: the fill is a background layer sized to \`--v\` and
+   anchored to the bottom, so there is no second element to keep in sync. */
+.kbs-spark-t {
+  height: 1em;
+  background:
+    linear-gradient(180deg, var(--kbs-c), color-mix(in srgb, var(--kbs-c) 42%, #080b12))
+      bottom / 100% calc(var(--v, 0.4) * 100%) no-repeat,
+    linear-gradient(180deg, rgba(220,236,255,.11), rgba(220,236,255,.045));
+  opacity: 0.72;
+  transition: opacity 0.13s ease;
+}
+.kbs-spark-k {
+  font: 700 0.42em/1 var(--kb-font-mono);
+  letter-spacing: 0.02em; text-align: center;
+  color: var(--kb-text-faint);
+  transition: color 0.13s ease;
+}
+/* Takes the number's corner when the machine is committed — the two never need
+   to be on screen together, and stacking a badge over the stats was what forced
+   them to be hidden on the picked tile. */
 .kbs-tile-lock {
-  position: absolute; right: 0.5em; top: 50%;
-  transform: translate(0.6em, -50%) scale(0.9);
+  position: absolute; right: 0.45em; top: 0.2em;
+  transform: translate(0.6em, 0) scale(0.9);
   font-size: 0.5em; font-weight: 900; letter-spacing: 0.2em;
   color: var(--kb-good);
   opacity: 0; pointer-events: none;
@@ -2524,12 +2523,13 @@ const KBS_CSS = `
 
 .kbs-tile:hover, .kbs-tile--focus {
   transform: translate3d(0.3em, 0, 0);
-  background: linear-gradient(100deg, rgba(30,38,52,0.96), rgba(14,18,26,0.92));
+  background: linear-gradient(100deg, rgba(30,38,52,0.985), rgba(14,18,26,0.975));
 }
 .kbs-tile--focus::after { opacity: 0.26; }
 .kbs-tile--focus .kbs-tile-name { color: var(--kb-text); }
-.kbs-tile--focus .kbs-sil-body { opacity: 0.95; fill: #eef4ff; }
-.kbs-tile--focus .kbs-spark-b { opacity: 1; }
+.kbs-tile--focus .kbs-spark-t { opacity: 1; }
+.kbs-tile--focus .kbs-spark-k { color: var(--kb-text-dim); }
+.kbs-tile--focus .kbs-por { box-shadow: inset -1px 0 0 color-mix(in srgb, var(--kbs-c) 60%, transparent); }
 /* The screen's own highlight is the carriage, driven identically by mouse and
    arrow keys. This is only for a player who tabs in with the browser's focus
    ring, so that never lands on an invisible control. */
@@ -2538,8 +2538,8 @@ const KBS_CSS = `
   outline-offset: 2px;
 }
 .kbs-tile--picked { box-shadow: inset 0 0 0 1px rgba(51,255,180,0.55); }
-.kbs-tile--picked .kbs-tile-lock { opacity: 1; transform: translate(0, -50%) scale(1); }
-.kbs-tile--picked .kbs-spark { opacity: 0; }
+.kbs-tile--picked .kbs-tile-lock { opacity: 1; transform: translate(0, 0) scale(1); }
+.kbs-tile--picked .kbs-tile-no { opacity: 0; }
 
 /* -- live preview window ----------------------------------------------------- */
 .kbs-stage { grid-area: stage; position: relative; pointer-events: none; }
@@ -2811,10 +2811,15 @@ const KBS_CSS = `
     scrollbar-width: none;
   }
   .kbs-grid::-webkit-scrollbar { display: none; }
-  .kbs-tile { padding: 0.25em 0.4em 0.25em 0.35em; gap: 0.4em; }
-  /* The wide tile lets the silhouette run past the row and relies on the row
-     being tall; at 44px it has to fit instead. */
-  .kbs-sil { max-height: 100%; }
+  .kbs-tile { padding: 0 0.4em 0 0.16em; gap: 0.4em; --kbs-por-w: 30%; }
+  /* 44px rows. The portrait still runs the full height — it is the only thing
+     that tells the machines apart at this size — but the text beside it is down
+     to two lines, so the name comes off the wide layout's display size.
+     The stats go: five labelled columns need ~7em of width and the whole tile
+     is 124px at 844x390. The docked dossier carries them for the focused
+     machine instead, labelled and with the cast average marked. */
+  .kbs-tile-name { font-size: 0.8em; }
+  .kbs-tile-arch { font-size: 0.42em; letter-spacing: 0.2em; }
   .kbs-tile-no { font-size: 0.44em; }
   .kbs-spark { display: none; }
   .kbs-card { padding: 0.7em 0.8em 0.8em; gap: 0.4em; overflow-y: auto; }
@@ -2906,9 +2911,17 @@ const KBS_CSS = `
     scrollbar-width: none;
   }
   .kbs-grid::-webkit-scrollbar { display: none; }
-  .kbs-tile { padding: 0.24em 0.5em 0.24em 0.4em; }
-  .kbs-sil { max-height: 2.4em; }
+  .kbs-tile { padding: 0 0.5em 0 0.16em; --kbs-por-w: 26%; }
+  .kbs-tile-name { font-size: 0.88em; }
+  .kbs-tile-arch { font-size: 0.44em; letter-spacing: 0.2em; }
   .kbs-tile-frame { display: none; }
+  /* The rack row here is \`auto\`, not \`1fr\` — see the grid comment above — so
+     anything added inside a tile lengthens the rack and takes the pixels
+     straight out of the preview window, which the arithmetic there has already
+     spent. Five stat columns are ~20px a row, 100px across the rack, and the
+     window cannot pay it. Same trade as the landscape case: the dossier docked
+     over the preview carries the stats, labelled. */
+  .kbs-spark { display: none; }
   /* Sized to its content in the wide layout; here it is the docked panel over
      the foot of the preview, so it is trimmed to the readout the player is
      actually comparing machines on and its own eyebrow goes — the card leads
@@ -2965,8 +2978,8 @@ const KBS_CSS = `
   /* Nothing here has a hover state worth keeping — on touch it latches on the
      last tile tapped and reads as a second, wrong highlight next to the
      carriage. */
-  .kbs-tile:hover { transform: none; background: linear-gradient(100deg, rgba(18,23,32,0.94), rgba(11,14,20,0.9)); }
-  .kbs-tile--focus:hover { transform: translate3d(0.3em, 0, 0); background: linear-gradient(100deg, rgba(30,38,52,0.96), rgba(14,18,26,0.92)); }
+  .kbs-tile:hover { transform: none; background: linear-gradient(100deg, rgba(16,21,29,0.985), rgba(9,12,18,0.975)); }
+  .kbs-tile--focus:hover { transform: translate3d(0.3em, 0, 0); background: linear-gradient(100deg, rgba(30,38,52,0.985), rgba(14,18,26,0.975)); }
 }
 
 @media (prefers-reduced-motion: reduce) {

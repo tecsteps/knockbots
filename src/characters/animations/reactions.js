@@ -17,7 +17,127 @@
  * Axis conventions and the pose helpers live in ./idle.js.
  */
 
+import { ease } from '../AnimationFormat.js';
 import { STANCE, STANCE_Y, CROUCH, add, over, makeClip } from './idle.js';
+
+// ---------------------------------------------------------------------------
+// OVERLAPPING ACTION — `whip`.
+//
+// `makeClip` transposes whole-body keyframes, so every bone in a clip comes out
+// keyed on ONE SHARED TIME GRID: the head's key times are exactly the hips'.
+// That is why the whole library moved as one rigid jointed object — the head
+// arrives with the chest and the fist arrives with the hips, because the format
+// gives them no way not to. Authoring whole poses is worth keeping (it is what
+// makes "never move a limb in isolation" enforceable); what it cannot express
+// is that the pelvis gets there FIRST.
+//
+// `whip` fixes that after the fact by re-timing, not re-posing. Each track is
+// pushed later by a delay proportional to how far down the kinetic chain the
+// bone sits — hips 0, spine01 0.20W, chest 0.50W, head 1.00W, and the same
+// walk out each arm and leg. The delay tapers to zero at the clip's end, so
+// the pose at t=0 and at t=duration is bit-for-bit what it was: this changes
+// WHEN a joint does its moving, never where it ends up.
+//
+// While a distal track is still holding its opening value its bone is simply
+// carried by its parent — dragged, not driven — and then has to cover its own
+// rotation in a shorter window, which is the snap. Both halves of "the hips
+// lead, the head lags" fall out of the one operation.
+//
+// An ATTACK cannot be re-timed that loosely: its `impact.tick` is load-bearing,
+// pinned to a move's first active frame, and the hitbox capsule rides a bone
+// whose position on that exact tick is what `tools/check.mjs` measures. So an
+// attack passes `pivot: clip.impact.tick`. `whip` then splits the taper in two —
+// full delay at t=0 falling to zero at the pivot, full delay again just past it
+// falling to zero at the end — and PINS the pivot by first inserting a real key
+// there at the value the track already interpolated to. Contact frame out is
+// bit-identical to contact frame in; measured at 0.00mm across all 33 striking
+// clips, against 87mm for the naive version that shifted keys without pinning.
+//
+// MEASURED, not asserted. The metric is the head's angular-speed centroid
+// minus the hips', sampled through the real skeleton in world space (a bone
+// with no track of its own still swings when its parent rotates, so this is a
+// world question and reading the authored Euler tracks answers the wrong one).
+// Per-clip W was swept and kept only where the lag and the chain's monotonicity
+// improved and NOTHING regressed — not contact-frame speed ratio, not
+// follow-through past contact, not single-tick hurtbox travel. Eleven of the
+// twenty-one reactions here are whipped; the ten that are not (r.blockLow,
+// r.stagger, r.airFlail, r.spinFall, r.knockdownFace, r.wallSlide, r.getUp,
+// r.getUpRoll, r.groundBounce, r.koSlump) failed that test at every W and ship
+// unchanged. r.airFlail could not be whipped at all — it loops. Across the
+// whole library the head-lag centroid went 0.48 -> 1.07 ticks and chain
+// monotonicity 0.47 -> 0.57, with zero clips regressing on either.
+//
+// TWO THINGS THIS IS NOT. It is not a substitute for authoring the recovery of
+// an attack, which is where the remaining negative lag lives — k.roundhouse
+// (-3.7), p.overhand (-3.3), sp.chargeShoulder (-3.5) and k.highKick (-2.1)
+// hold their contact pose and then unwind the whole chain on one grid, and no
+// re-time reaches that. They need re-posing. And this function belongs next to
+// `makeClip` in idle.js rather than here — it is general authoring machinery
+// that reactions.js merely happens to own this round.
+// ---------------------------------------------------------------------------
+
+/** Fraction of the whip budget each joint is delayed by, walking distally. */
+const CHAIN = (() => {
+  const f = { spine01: 0.20, spine02: 0.35, chest: 0.50, neck: 0.78, head: 1.0 };
+  for (const s of ['L', 'R']) {
+    f[`clavicle_${s}`] = 0.28; f[`shoulder_${s}`] = 0.50; f[`elbow_${s}`] = 0.74;
+    f[`wrist_${s}`] = 0.90; f[`hand_${s}`] = 1.0;
+    f[`hip_${s}`] = 0.22; f[`knee_${s}`] = 0.52; f[`ankle_${s}`] = 0.80; f[`foot_${s}`] = 1.0;
+  }
+  return f;
+})();
+
+/**
+ * Split a track at `T`, giving it a real key holding the value it was already
+ * interpolating to there. Returns a new key array. The new key inherits the
+ * ease of the segment it splits so both halves keep that segment's shape.
+ */
+function pinAt(keys, T) {
+  if (T <= keys[0].t || T >= keys[keys.length - 1].t) return keys;
+  let i = 0;
+  while (i < keys.length - 1 && keys[i + 1].t <= T) i++;
+  const a = keys[i], b = keys[i + 1];
+  if (Math.abs(a.t - T) < 1e-9 || Math.abs(b.t - T) < 1e-9) return keys;
+  const u = ease(a.ease)((T - a.t) / (b.t - a.t));
+  const r = [0, 1, 2].map((j) => a.r[j] + (b.r[j] - a.r[j]) * u);
+  return [...keys.slice(0, i + 1), { t: T, r, ease: a.ease }, ...keys.slice(i + 1)];
+}
+
+/**
+ * Push each track later down the kinetic chain. Mutates and returns `clip`.
+ * @param {import('../AnimationFormat.js').Clip} clip
+ * @param {number} W whip budget in ticks — the delay applied to the chain tips
+ * @param {{ pivot?: number, only?: Record<string, number> }} [opts]
+ *   `pivot` is a tick whose pose must survive the re-time untouched (an
+ *   attack's `impact.tick`); `only` overrides the per-bone chain fractions.
+ */
+export function whip(clip, W, opts = {}) {
+  // A looping clip cannot be whipped this way: holding a track's opening value
+  // for the first `d` ticks would hitch once per cycle rather than read as lag.
+  if (!(W > 0) || clip.loop) return clip;
+  const D = clip.duration;
+  const { pivot, only } = opts;
+  const T = pivot > 0 && pivot < D ? pivot : null;
+  for (const bone in clip.tracks) {
+    // A single-key track is a bone that holds one value all clip; there is
+    // nothing to delay, and a loop's re-stamped closing key must not drift.
+    if (clip.tracks[bone].length < 2) continue;
+    const frac = (only && bone in only) ? only[bone] : CHAIN[bone];
+    const d = (frac || 0) * W;
+    if (!(d > 0)) continue;
+    const keys = T === null ? clip.tracks[bone] : pinAt(clip.tracks[bone], T);
+    for (const k of keys) {
+      if (T === null) k.t = Math.min(D, k.t + d * (1 - k.t / D));
+      else if (k.t < T) k.t += d * (1 - k.t / T);
+      else if (k.t > T) k.t = Math.min(D, k.t + d * (1 - (k.t - T) / (D - T)));
+    }
+    // The taper keeps times ascending for any W < duration, but clamping at D
+    // can still collide two keys at the very end. Nudge rather than reorder.
+    for (let i = 1; i < keys.length; i++) if (keys[i].t <= keys[i - 1].t) keys[i].t = keys[i - 1].t + 1e-3;
+    clip.tracks[bone] = keys;
+  }
+  return clip;
+}
 
 // ---------------------------------------------------------------------------
 // Solved leg sets.
@@ -112,13 +232,13 @@ const PRONE_Y = -0.76;
 // ---------------------------------------------------------------------------
 // Guard
 // ---------------------------------------------------------------------------
-const blockHigh = makeClip('r.blockHigh', { duration: 20, blendIn: 2, blendOut: 4 }, [
+const blockHigh = whip(makeClip('r.blockHigh', { duration: 20, blendIn: 2, blendOut: 4 }, [
   { t: 0, ease: 'snap', pose: STANCE, root: [0, STANCE_Y, 0] },
   { t: 3, ease: 'cubic', pose: add(GUARD_HIGH, { chest: [3, 0, 0], head: [4, 0, 0], elbow_L: [-6, 0, 0], elbow_R: [-4, 0, 0], knee_L: [6, 0, 0], knee_R: [6, 0, 0] }), root: [0, GUARD_HIGH_Y - 0.02, -0.05] },
   { t: 7, ease: 'sine', pose: GUARD_HIGH, root: [0, GUARD_HIGH_Y, -0.04] },
   { t: 14, ease: 'sine', pose: add(GUARD_HIGH, { spine02: [-1, 0, 0], chest: [-1.5, 0, 0], clavicle_L: [0, 0, 1.5], clavicle_R: [0, 0, -1.5] }), root: [0, GUARD_HIGH_Y + 0.006, -0.04] },
   { t: 20, pose: GUARD_HIGH, root: [0, GUARD_HIGH_Y, -0.04] },
-]);
+]), 5);
 
 const GUARD_LOW_POSE = add(over(CROUCH, A_GUARD_LOW), { hips: [0, 4, 0], chest: [2, 2, 0], head: [4, 2, 0] });
 const blockLow = makeClip('r.blockLow', { duration: 20, blendIn: 2, blendOut: 4 }, [
@@ -131,13 +251,13 @@ const blockLow = makeClip('r.blockLow', { duration: 20, blendIn: 2, blendOut: 4 
 
 // The blocked hit itself: the guard is driven into the face for two ticks, the
 // feet are pushed 22cm and the fighter has to re-set the elbows afterwards.
-const blockImpact = makeClip('r.blockImpact', { duration: 18, blendIn: 1, blendOut: 5 }, [
+const blockImpact = whip(makeClip('r.blockImpact', { duration: 18, blendIn: 1, blendOut: 5 }, [
   { t: 0, ease: 'snap', pose: GUARD_HIGH, root: [0, GUARD_HIGH_Y, -0.04] },
   { t: 2, ease: 'quad', pose: add(GUARD_HIGH, { hips: [-4, 3, 0], spine01: [-5, 0, 0], spine02: [-6, 0, 0], chest: [-7, 2, 2], neck: [-4, 0, 0], head: [-9, 2, 2], clavicle_L: [4, 0, -6], clavicle_R: [4, 0, 6], shoulder_L: [12, 0, 8], shoulder_R: [10, 0, -8], elbow_L: [8, 0, 0], elbow_R: [6, 0, 0], knee_L: [12, 0, 0], knee_R: [10, 0, 0] }), root: [0, GUARD_HIGH_Y - 0.035, -0.14] },
   { t: 6, ease: 'cubic', pose: add(GUARD_HIGH, { hips: [-2, 1, 0], chest: [-3, 1, 1], head: [-4, 1, 1], shoulder_L: [5, 0, 3], shoulder_R: [4, 0, -3], knee_L: [6, 0, 0], knee_R: [5, 0, 0] }), root: [0, GUARD_HIGH_Y - 0.02, -0.24] },
   { t: 11, ease: 'sine', pose: add(GUARD_HIGH, { chest: [2, 0, 0], head: [2, 0, 0], elbow_L: [-5, 0, 0], elbow_R: [-4, 0, 0] }), root: [0, GUARD_HIGH_Y, -0.26] },
   { t: 18, pose: GUARD_HIGH, root: [0, GUARD_HIGH_Y, -0.26] },
-]);
+]), 5);
 
 // ---------------------------------------------------------------------------
 // Flinches — the whip chain
@@ -151,7 +271,7 @@ const blockImpact = makeClip('r.blockImpact', { duration: 18, blendIn: 1, blendO
 // part the blow is arriving at snaps on its segment while everything else keeps
 // the frame's own curve.
 // ---------------------------------------------------------------------------
-const flinchHigh = makeClip('r.flinchHigh', { duration: 18, blendIn: 1, blendOut: 5 }, [
+const flinchHigh = whip(makeClip('r.flinchHigh', { duration: 18, blendIn: 1, blendOut: 5 }, [
   { t: 0, ease: 'snap', pose: STANCE, root: [0, STANCE_Y, 0] },
   { t: 2, ease: 'quad', easeBy: { head: 'snap', neck: 'snap' }, pose: add(STANCE, { neck: [-15, -5, -5], head: [-27, -11, -9], clavicle_L: [0, 0, 3], shoulder_L: [-4, 0, 0] }), root: [0, STANCE_Y, -0.025] },
   { t: 4, ease: 'quad', easeBy: { spine01: 'snap', spine02: 'snap', chest: 'snap', hips: 'snap', head: 'sine', neck: 'sine' }, pose: add(STANCE, { spine02: [-7, 2, 2], chest: [-13, 5, 4], neck: [-16, -4, -5], head: [-30, -10, -9], clavicle_L: [-3, 0, 6], clavicle_R: [-3, 0, -4], shoulder_L: [8, 0, 6], shoulder_R: [6, 0, -5], elbow_L: [10, 0, 0] }), root: [0, STANCE_Y - 0.008, -0.075] },
@@ -159,25 +279,25 @@ const flinchHigh = makeClip('r.flinchHigh', { duration: 18, blendIn: 1, blendOut
   { t: 10, ease: 'cubic', pose: add(over(STANCE, L_SKATE), { hips: [2, 1, 0], chest: [4, -2, -2], neck: [3, 1, 1], head: [9, 3, 3], shoulder_L: [-6, 0, -4], shoulder_R: [-4, 0, 3] }), root: [0, STANCE_Y - 0.004, -0.13] },
   { t: 13, ease: 'sine', pose: add(STANCE, { chest: [-2, 0, 0], head: [-4, -1, -1], shoulder_L: [2, 0, 2] }), root: [0, STANCE_Y, -0.135] },
   { t: 18, pose: STANCE, root: [0, STANCE_Y, -0.135] },
-]);
+]), 6);
 
-const flinchMid = makeClip('r.flinchMid', { duration: 18, blendIn: 1, blendOut: 5 }, [
+const flinchMid = whip(makeClip('r.flinchMid', { duration: 18, blendIn: 1, blendOut: 5 }, [
   { t: 0, ease: 'snap', pose: STANCE, root: [0, STANCE_Y, 0] },
   { t: 2, ease: 'quad', easeBy: { hips: 'snap', spine01: 'snap', spine02: 'snap', chest: 'snap' }, pose: add(STANCE, { hips: [6, 2, 0], spine01: [7, 0, 0], spine02: [8, 0, 0], chest: [7, 2, 0], neck: [4, 0, 0], head: [7, 0, 0], clavicle_L: [4, 0, -4], clavicle_R: [4, 0, 4], elbow_L: [-8, 0, 0], elbow_R: [-4, 0, 0] }), root: [0, STANCE_Y - 0.03, -0.045] },
   { t: 5, ease: 'cubic', pose: add(over(STANCE, L_BUCKLE, A_CLUTCH), T_FOLDED), root: [0, -0.14, -0.1] },
   { t: 9, ease: 'cubic', pose: add(over(STANCE, L_BUCKLE, A_CLUTCH), add(T_FOLDED, { hips: [-4, 0, 0], spine01: [-4, 0, 0], spine02: [-5, 0, 0], chest: [-5, 0, 0], head: [-5, 0, 0] })), root: [0, -0.115, -0.125] },
   { t: 13, ease: 'sine', pose: add(STANCE, { hips: [4, 2, 0], spine01: [4, 0, 0], chest: [4, 1, 0], head: [3, 0, 0], elbow_L: [-6, 0, 0] }), root: [0, STANCE_Y - 0.02, -0.13] },
   { t: 18, pose: STANCE, root: [0, STANCE_Y, -0.13] },
-]);
+]), 6);
 
-const flinchLow = makeClip('r.flinchLow', { duration: 16, blendIn: 1, blendOut: 5 }, [
+const flinchLow = whip(makeClip('r.flinchLow', { duration: 16, blendIn: 1, blendOut: 5 }, [
   { t: 0, ease: 'snap', pose: STANCE, root: [0, STANCE_Y, 0] },
   { t: 2, ease: 'quad', easeBy: { hip_L: 'snap', knee_L: 'snap', ankle_L: 'snap' }, pose: add(STANCE, { hip_L: [-8, 0, -6], knee_L: [12, 0, 0], hips: [3, 0, 4], chest: [3, 0, -2], head: [4, 0, -2] }), root: [0, STANCE_Y - 0.045, -0.02] },
   { t: 4, ease: 'cubic', pose: add(over(STANCE, L_BUCKLE), { hips: [9, 4, 7], spine01: [7, 0, -2], spine02: [8, 0, -3], chest: [9, 2, -5], neck: [4, 0, 0], head: [10, 0, -4], clavicle_L: [5, 0, -4], shoulder_L: [10, 0, 6], elbow_L: [12, 0, 0], shoulder_R: [6, 0, -5] }), root: [0, -0.15, -0.055] },
   { t: 8, ease: 'cubic', pose: add(over(STANCE, L_BUCKLE), { hips: [4, 2, 3], spine01: [3, 0, -1], chest: [4, 1, -2], head: [4, 0, -2], shoulder_L: [4, 0, 2] }), root: [0, -0.105, -0.07] },
   { t: 12, ease: 'sine', pose: add(STANCE, { hips: [-2, 0, 0], chest: [-2, 0, 0], head: [-3, 0, 0], knee_L: [-4, 0, 0] }), root: [0, STANCE_Y - 0.008, -0.075] },
   { t: 16, pose: STANCE, root: [0, STANCE_Y, -0.075] },
-]);
+]), 5);
 
 // ---------------------------------------------------------------------------
 // r.stagger — two stumbled steps backwards. The torso oscillates twice against
@@ -200,7 +320,7 @@ const stagger = makeClip('r.stagger', { duration: 42, blendIn: 2, blendOut: 8 },
 // the fighter is already folded in half by the time the knees stop holding him,
 // and the hands arrive at the floor after the head does.
 // ---------------------------------------------------------------------------
-const crumple = makeClip('r.crumple', { duration: 54, blendIn: 1, blendOut: 8 }, [
+const crumple = whip(makeClip('r.crumple', { duration: 54, blendIn: 1, blendOut: 8 }, [
   { t: 0, ease: 'snap', pose: STANCE, root: [0, STANCE_Y, 0] },
   { t: 4, ease: 'quad', pose: add(over(STANCE, A_CLUTCH), { hips: [6, 4, 0], spine01: [10, 0, 0], spine02: [11, 0, 0], chest: [12, 3, -2], neck: [6, 2, 0], head: [12, 2, 0], knee_L: [14, 0, 0], knee_R: [12, 0, 0], hip_L: [-10, 0, 0], hip_R: [-8, 0, 0] }), root: [0, -0.155, -0.05] },
   { t: 13, ease: 'cubic', pose: add(over(STANCE, A_PAW), { hips: [8, 6, -3], spine01: [14, 1, -2], spine02: [15, 2, -2], chest: [16, 4, -5], neck: [8, 2, 0], head: [14, 2, -2], hip_L: [-24, 0, 4], knee_L: [40, 0, 0], hip_R: [-20, 0, -4], knee_R: [38, 0, 0], ankle_L: [-12, 0, 0], ankle_R: [-10, 0, 0] }), root: [0, -0.32, -0.09] },
@@ -208,7 +328,7 @@ const crumple = makeClip('r.crumple', { duration: 54, blendIn: 1, blendOut: 8 },
   { t: 36, ease: 'sine', pose: add(over(STANCE, L_KNEEL, A_PAW), { hips: [8, 5, -5], spine01: [18, 1, -4], spine02: [19, 2, -4], chest: [20, 3, -8], neck: [10, 2, 0], head: [18, 1, -4], shoulder_L: [-14, 0, 0], shoulder_R: [-12, 0, 0], elbow_L: [16, 0, 0], elbow_R: [16, 0, 0] }), root: [0, -0.51, -0.14] },
   { t: 46, ease: 'sine', pose: add(over(STANCE, L_KNEEL, A_PAW), { hips: [8, 5, -6], spine01: [19, 1, -4], spine02: [20, 2, -5], chest: [22, 3, -9], neck: [11, 2, 0], head: [20, 1, -5], shoulder_L: [-18, 0, 0], shoulder_R: [-16, 0, 0], elbow_L: [22, 0, 0], elbow_R: [22, 0, 0] }), root: [0, -0.535, -0.15] },
   { t: 54, pose: add(over(STANCE, L_KNEEL, A_PAW), { hips: [8, 5, -6], spine01: [20, 1, -4], spine02: [21, 2, -5], chest: [23, 3, -9], neck: [12, 2, 0], head: [21, 1, -5], shoulder_L: [-19, 0, 0], shoulder_R: [-17, 0, 0], elbow_L: [23, 0, 0], elbow_R: [23, 0, 0] }), root: [0, -0.54, -0.15] },
-]);
+]), 5);
 
 // ---------------------------------------------------------------------------
 // r.launch — the whole body bent into a backward C. Two ticks of compression,
@@ -217,14 +337,14 @@ const crumple = makeClip('r.crumple', { duration: 54, blendIn: 1, blendOut: 8 },
 // NOT in the root track — the juggle physics owns the height, and doubling it
 // here would put the fighter through the ceiling.
 // ---------------------------------------------------------------------------
-const launch = makeClip('r.launch', { duration: 30, blendIn: 1, blendOut: 6 }, [
+const launch = whip(makeClip('r.launch', { duration: 30, blendIn: 1, blendOut: 6 }, [
   { t: 0, ease: 'expo', pose: STANCE, root: [0, STANCE_Y, 0] },
   { t: 2, ease: 'quad', pose: add(STANCE, { hips: [8, 2, 0], spine01: [6, 0, 0], chest: [6, 2, 0], neck: [3, 0, 0], head: [6, 0, 0], knee_L: [14, 0, 0], knee_R: [12, 0, 0], hip_L: [-8, 0, 0], hip_R: [-6, 0, 0] }), root: [0, -0.15, -0.01] },
   { t: 7, ease: 'quad', pose: add(over(STANCE, A_TRAIL), { hips: [-10, 6, 2], spine01: [-7, 2, 2], spine02: [-8, 3, 3], chest: [-12, 6, 6], neck: [-5, -2, -3], head: [-14, -6, -7], hip_L: [-30, 0, 4], knee_L: [-18, 0, 0], hip_R: [-24, 0, -4], knee_R: [-14, 0, 0] }), root: [0, -0.03, -0.1] },
   { t: 13, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-14, 8, 3], spine01: [-9, 3, 3], spine02: [-10, 4, 4], chest: [-15, 8, 8], neck: [-6, -3, -4], head: [-18, -8, -9] }), root: [0, 0.04, -0.22] },
   { t: 21, ease: 'sine', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-17, 9, 4], spine01: [-10, 3, 4], spine02: [-11, 4, 4], chest: [-17, 9, 9], neck: [-7, -3, -4], head: [-20, -9, -10], hip_L: [8, 0, 0], hip_R: [10, 0, 0], knee_L: [16, 0, 0], knee_R: [12, 0, 0] }), root: [0, 0.06, -0.32] },
   { t: 30, pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-13, 8, 4], spine01: [-8, 3, 3], spine02: [-9, 4, 4], chest: [-14, 8, 8], neck: [-6, -3, -4], head: [-16, -8, -9], hip_L: [22, 0, 0], hip_R: [24, 0, 0], knee_L: [34, 0, 0], knee_R: [30, 0, 0] }), root: [0, 0.03, -0.4] },
-]);
+]), 5);
 
 // ---------------------------------------------------------------------------
 // r.airFlail — the juggle hold. Everything is dead weight being carried by
@@ -255,7 +375,7 @@ const spinFall = makeClip('r.spinFall', { duration: 44, blendIn: 1, blendOut: 8 
 // ---------------------------------------------------------------------------
 // Knockdowns. Four separate contacts: hips, shoulders, skull, then the limbs.
 // ---------------------------------------------------------------------------
-const knockdownBack = makeClip('r.knockdownBack', { duration: 58, blendIn: 2, blendOut: 10 }, [
+const knockdownBack = whip(makeClip('r.knockdownBack', { duration: 58, blendIn: 2, blendOut: 10 }, [
   { t: 0, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-14, 6, 3], spine01: [-9, 2, 2], spine02: [-10, 3, 3], chest: [-14, 6, 7], neck: [-5, -3, -4], head: [-17, -7, -8] }), root: [0, -0.02, -0.06] },
   { t: 8, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-48, 4, 3], spine01: [-8, 2, 2], spine02: [-8, 2, 2], chest: [-12, 5, 6], neck: [-4, -2, -3], head: [-15, -6, -7] }), root: [0, -0.36, -0.24] },
   { t: 13, ease: 'snap', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-70, 2, 2], spine01: [-6, 1, 1], spine02: [-6, 1, 1], chest: [-9, 3, 4], neck: [-4, -1, -2], head: [-13, -4, -5] }), root: [0, -0.7, -0.4] },
@@ -265,7 +385,7 @@ const knockdownBack = makeClip('r.knockdownBack', { duration: 58, blendIn: 2, bl
   { t: 36, ease: 'sine', pose: add(SUPINE, { hips: [2, 0, 0], chest: [2, 0, 0], head: [-5, 0, 0], hip_L: [-4, 0, 0], knee_R: [-10, 0, 0] }), root: [0, SUPINE_Y, -0.63] },
   { t: 44, ease: 'sine', pose: add(SUPINE, { head: [3, 0, 2], shoulder_L: [3, 0, -3], knee_R: [6, 0, 0] }), root: [0, SUPINE_Y + 0.006, -0.64] },
   { t: 58, pose: SUPINE, root: [0, SUPINE_Y, -0.64] },
-]);
+]), 5);
 
 const knockdownFace = makeClip('r.knockdownFace', { duration: 58, blendIn: 2, blendOut: 10 }, [
   { t: 0, ease: 'quad', pose: add(over(STANCE, A_TRAIL), { hips: [24, -6, -4], spine01: [16, -2, -2], spine02: [17, -2, -2], chest: [22, -5, -6], neck: [-8, 2, 3], head: [-14, 5, 6], hip_L: [16, 0, 0], hip_R: [20, 0, 0], knee_L: [26, 0, 0], knee_R: [22, 0, 0] }), root: [0, -0.06, 0.02] },
@@ -281,7 +401,7 @@ const knockdownFace = makeClip('r.knockdownFace', { duration: 58, blendIn: 2, bl
 // r.sweepFall — the floor arrives before anything else does. No arc, no air
 // time: the feet go out from under the pelvis, the pelvis drops straight down
 // and the shoulders catch up three ticks later.
-const sweepFall = makeClip('r.sweepFall', { duration: 40, blendIn: 1, blendOut: 8 }, [
+const sweepFall = whip(makeClip('r.sweepFall', { duration: 40, blendIn: 1, blendOut: 8 }, [
   { t: 0, ease: 'snap', pose: STANCE, root: [0, STANCE_Y, 0] },
   { t: 3, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP), { hips: [-16, 4, 4], spine01: [-8, 2, 2], spine02: [-9, 2, 2], chest: [-12, 4, 5], neck: [4, -2, -2], head: [10, -5, -5], clavicle_L: [-4, 0, 6], shoulder_L: [24, 0, 6], shoulder_R: [26, 0, -6], elbow_L: [30, 0, 0], elbow_R: [40, 0, 0] }), root: [0, -0.32, -0.06] },
   { t: 7, ease: 'snap', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-58, 2, 2], spine01: [-8, 1, 1], spine02: [-9, 1, 1], chest: [-12, 2, 3], neck: [-4, -1, -1], head: [-14, -3, -3] }), root: [0, -0.68, -0.16] },
@@ -290,20 +410,20 @@ const sweepFall = makeClip('r.sweepFall', { duration: 40, blendIn: 1, blendOut: 
   { t: 24, ease: 'cubic', pose: add(SUPINE, { hip_L: [-14, 0, 0], hip_R: [-10, 0, 0] }), root: [0, SUPINE_Y, -0.32] },
   { t: 32, ease: 'sine', pose: add(SUPINE, { head: [-4, 0, 0], knee_R: [-8, 0, 0], shoulder_L: [-4, 0, 4] }), root: [0, SUPINE_Y, -0.34] },
   { t: 40, pose: SUPINE, root: [0, SUPINE_Y, -0.34] },
-]);
+]), 5);
 
 // ---------------------------------------------------------------------------
 // Wall
 // ---------------------------------------------------------------------------
 const SPLAT = add(over(STANCE, L_SPLAT, A_SPREAD), T_SPLAT);
-const wallSplat = makeClip('r.wallSplat', { duration: 34, blendIn: 1, blendOut: 8 }, [
+const wallSplat = whip(makeClip('r.wallSplat', { duration: 34, blendIn: 1, blendOut: 8 }, [
   { t: 0, ease: 'snap', pose: add(over(STANCE, A_TRAIL), { hips: [-12, 4, 2], spine01: [-8, 2, 1], chest: [-14, 5, 4], neck: [-6, -2, -2], head: [-18, -5, -5], hip_L: [-14, 0, 0], hip_R: [-10, 0, 0] }), root: [0, -0.06, 0.1] },
   { t: 3, ease: 'quad', pose: add(SPLAT, { hips: [-6, 0, 0], spine01: [-5, 0, 0], spine02: [-6, 0, 0], chest: [-8, 0, 0], neck: [-6, 0, 0], head: [-16, 0, 0], shoulder_L: [-6, 0, 8], shoulder_R: [-6, 0, -8], knee_L: [16, 0, 0], knee_R: [14, 0, 0] }), root: [0, -0.19, -0.06] },
   { t: 7, ease: 'cubic', pose: SPLAT, root: [0, -0.13, -0.04] },
   { t: 13, ease: 'sine', pose: add(SPLAT, { chest: [3, 0, 0], neck: [4, 0, 0], head: [12, 0, 0], shoulder_L: [4, 0, -6], shoulder_R: [4, 0, 6], elbow_L: [-10, 0, 0], elbow_R: [-10, 0, 0] }), root: [0, -0.15, -0.04] },
   { t: 22, ease: 'sine', pose: add(SPLAT, { hips: [6, 0, 0], spine01: [5, 0, 0], spine02: [5, 0, 0], chest: [8, 0, 0], neck: [6, 0, 0], head: [20, 0, 0], shoulder_L: [10, 0, -14], shoulder_R: [10, 0, 14], elbow_L: [-24, 0, 0], elbow_R: [-24, 0, 0], knee_L: [10, 0, 0], knee_R: [10, 0, 0] }), root: [0, -0.21, -0.02] },
   { t: 34, pose: add(SPLAT, { hips: [10, 0, 0], spine01: [8, 0, 0], spine02: [8, 0, 0], chest: [12, 0, 0], neck: [8, 0, 0], head: [24, 0, 0], shoulder_L: [16, 0, -20], shoulder_R: [16, 0, 20], elbow_L: [-34, 0, 0], elbow_R: [-34, 0, 0], knee_L: [18, 0, 0], knee_R: [18, 0, 0] }), root: [0, -0.28, -0.02] },
-]);
+]), 6);
 
 const SEATED = add(over(STANCE, L_SEATED, A_LIMP), T_SEATED);
 const wallSlide = makeClip('r.wallSlide', { duration: 50, blendIn: 3, blendOut: 10 }, [
@@ -358,7 +478,7 @@ const groundBounce = makeClip('r.groundBounce', { duration: 30, blendIn: 1, blen
 // running out of power, so the timing is loose, the eases are all sine, and the
 // limbs arrive whenever gravity gets to them.
 // ---------------------------------------------------------------------------
-const koFall = makeClip('r.koFall', { duration: 80, blendIn: 2, blendOut: 12 }, [
+const koFall = whip(makeClip('r.koFall', { duration: 80, blendIn: 2, blendOut: 12 }, [
   { t: 0, ease: 'quad', pose: STANCE, root: [0, STANCE_Y, 0] },
   { t: 5, ease: 'sine', pose: add(over(STANCE, A_LIMP), { hips: [4, 2, 0], spine01: [4, 0, 0], spine02: [4, 0, 0], chest: [3, 2, -2], neck: [6, 0, 0], head: [12, 1, -2], knee_L: [10, 0, 0], knee_R: [8, 0, 0] }), root: [0, -0.13, -0.02] },
   { t: 14, ease: 'sine', pose: add(over(STANCE, A_LIMP), { hips: [-8, 3, 2], spine01: [-4, 1, 1], spine02: [-5, 1, 1], chest: [-8, 3, 3], neck: [2, -1, -1], head: [4, -3, -3], knee_L: [18, 0, 0], knee_R: [16, 0, 0], hip_L: [-12, 0, 0], hip_R: [-8, 0, 0] }), root: [0, -0.22, -0.08] },
@@ -370,7 +490,7 @@ const koFall = makeClip('r.koFall', { duration: 80, blendIn: 2, blendOut: 12 }, 
   { t: 66, ease: 'sine', pose: add(SUPINE, { chest: [2, 0, 0], head: [-6, 0, 1], knee_R: [-12, 0, 0], shoulder_L: [4, 0, -4] }), root: [0, SUPINE_Y, -0.66] },
   { t: 73, ease: 'sine', pose: add(SUPINE, { head: [2, 0, 2], knee_R: [4, 0, 0] }), root: [0, SUPINE_Y + 0.004, -0.67] },
   { t: 80, pose: SUPINE, root: [0, SUPINE_Y, -0.67] },
-]);
+]), 5);
 
 const koSlump = makeClip('r.koSlump', { duration: 70, blendIn: 2, blendOut: 12 }, [
   { t: 0, ease: 'quad', pose: STANCE, root: [0, STANCE_Y, 0] },

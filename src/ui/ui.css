@@ -183,9 +183,32 @@
   background-image: linear-gradient(180deg, var(--kb-ink-a) 0%, var(--kb-ink-a) 30%, var(--kb-ink-b) 100%);
   filter: drop-shadow(0 0.05em 0.1em rgba(0, 0, 0, 0.8));
 }
+/*
+ * The gloss is offset by moving its GRADIENT, never the layer.
+ *
+ * This used to carry `transform: translate(0, -6%)`, and that is a bug with a
+ * very visible consequence: the layer shares the glyph mask, so translating it
+ * translates the mask too, and the top 6% of every letterform was painted 6%
+ * ABOVE the letter it belongs to — white, screen-blended, on whatever was
+ * behind. On a flat dark panel at a 54px cap height that reads as a second,
+ * ghosted copy of the word floating over the real one; photographed on the
+ * results card it was unmistakable at 3x. Measured side by side in a three-way
+ * lab strip (as shipped / gloss hidden / gloss untranslated with the gradient
+ * pulled up): the ghost is present in the first, absent in the other two, and
+ * only the third keeps the bright top edge the gloss exists for.
+ *
+ * Every headline in the game routes through `.kb-text` — nameplates, the timer,
+ * the combo tally, "FIGHT" and "K.O." — so this was on screen constantly and
+ * was only invisible because at HUD sizes 6% is under a pixel and the arena
+ * behind it is busy.
+ *
+ * So: no transform, and the highlight band is biased upward by starting the
+ * gradient above the box and ending it sooner. Same weighting, no ink outside
+ * the letter.
+ */
 .kb-text__gloss {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 55%);
-  transform: translate(0, -6%);
+  background: linear-gradient(180deg,
+    rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.62) 16%, rgba(255, 255, 255, 0) 49%);
   opacity: 0.55;
   mix-blend-mode: screen;
 }
@@ -877,13 +900,31 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 0;
+  /*
+   * Resting state, and — because the entry is driven by the `combo--punch`
+   * keyframes rather than by this rule — also the EXIT target. The readout
+   * used to have no transition at all: measured on the live HUD, opacity went
+   * 1 -> 0 inside a single frame the moment `combo--show` came off, so a combo
+   * that had just been slammed in with a spring curve left by a jump cut.
+   * It now lifts and fades over 180ms, which is the same direction the damage
+   * callouts travel, so the whole cluster clears the frame the same way.
+   */
   opacity: 0;
-  transform: scale(0.7);
+  transform: scale(0.88) translateY(-0.34em);
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
   pointer-events: none;
 }
 .combo--p0 { left: calc(5% + var(--kb-sa-l)); align-items: flex-start; }
 .combo--p1 { right: calc(5% + var(--kb-sa-r)); align-items: flex-end; }
-.combo.combo--show { opacity: 1; transform: scale(1); }
+/* Asymmetric: the entry is a slam and must not be softened by a fade, so it
+ * gets an almost-instant opacity ramp and leaves the 180ms to the exit rule
+ * above. `transform` keeps its duration for the tier-3 scale-up, which is a
+ * state change during the readout's life rather than part of the slam. */
+.combo.combo--show {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  transition: opacity 0.05s linear, transform 0.18s ease-out;
+}
 /* Double-buffered animation name, same technique and reason as
  * `.hp-flash--go-a/-b` above: the slam replays on every hit of a combo, so
  * the restart cannot afford a synchronous reflow. Keep the pair in sync. */
@@ -967,7 +1008,7 @@
   --kb-ink-b: #ff8a2a;
   filter: drop-shadow(0 0 0.55em rgba(255, 89, 42, 0.75));
 }
-.combo.combo--show[data-tier='3'] { transform: scale(1.08); }
+.combo.combo--show[data-tier='3'] { transform: scale(1.08) translateY(0); }
 .combo-tag {
   font-size: max(11px, 0.9em);
   font-weight: 900;
@@ -1091,11 +1132,49 @@
 }
 
 /*
- * No backing slab. `.announce-inner` sizes itself to the text (an
- * explicit-width `.kb-text`); legibility against a bright, moving 3D scene
- * comes entirely from the letterforms — weight and size from the glyph
- * grid itself (see Typeface.js), plus a hard silhouette outline stamped
- * here in CSS.
+ * The scrim: a soft dark plate the word sits on.
+ *
+ * The design note below this block argues for no backing slab, and it is still
+ * right that a hard rectangle would read as a sticker. But "no plate at all"
+ * was measured and it does not hold up. On the certified KO frame the word is
+ * dark red type (`--kb-ink-b` was #7a020c) over a lit robot and a lit fence,
+ * and the letters against the scene immediately around them came in at
+ * 3.6:1 / 3.4:1 median across runs, 2.9:1 for the dimmest tenth of the ink
+ * against the brightest tenth of its own backdrop — under the 4.5:1 the rest
+ * of this interface holds itself to, on the one word the whole frame is about.
+ *
+ * So: not a slab, a vignette. `closest-side` on an ellipse means it has no
+ * edge to read as a rectangle — it is dense behind the letterforms and gone
+ * before it reaches anything else — and it sits at `z-index: -2`, BEHIND the
+ * flare streak (`::before`, at -1), so the streak still reads as a lit object
+ * in front of it rather than being muddied.
+ */
+.announce-banner::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 190%; height: 340%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(closest-side ellipse at 50% 50%,
+    rgba(3, 5, 9, 0.82) 0%, rgba(3, 5, 9, 0.7) 38%, rgba(3, 5, 9, 0.36) 66%, rgba(3, 5, 9, 0) 100%);
+  opacity: 0;
+  z-index: -2;
+  pointer-events: none;
+}
+.announce-banner.announce--run::after { animation: announceScrim 1.5s linear forwards; }
+@keyframes announceScrim {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(1.5); }
+  10%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  78%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.25); }
+}
+
+/*
+ * `.announce-inner` sizes itself to the text (an explicit-width `.kb-text`);
+ * most of its legibility against a bright, moving 3D scene comes from the
+ * letterforms — weight and size from the glyph grid itself (see Typeface.js),
+ * plus a hard silhouette outline stamped here in CSS. The scrim above is the
+ * floor under that, not a replacement for it.
  *
  * The outline is `.announce-text::before`, a solid copy of the same glyph
  * mask (custom properties like `--kb-mask` inherit onto pseudo-elements the
@@ -1120,6 +1199,11 @@
     drop-shadow(0 0.05em 0 #000) drop-shadow(0 -0.05em 0 #000)
     drop-shadow(0.05em 0.05em 0 #000) drop-shadow(-0.05em -0.05em 0 #000)
     drop-shadow(0.05em -0.05em 0 #000) drop-shadow(-0.05em 0.05em 0 #000)
+    /* A soft dark halo outside the hard outline. The eight stamps above give
+     * the letter a milled edge, but a hard edge only separates the glyph from
+     * whatever it happens to abut; this is what keeps the separation when the
+     * scene behind is itself high-frequency (fence mesh, panel lines). */
+    drop-shadow(0 0.03em 0.3em rgba(0, 0, 0, 0.9))
     drop-shadow(0 0 0.6em var(--flare-glow));
 }
 .announce-banner[data-kind='round'] .announce-text { font-size: clamp(28px, 6vw, 90px); }
@@ -1128,7 +1212,12 @@
 .announce-banner[data-kind='ko'] { --flare: var(--kb-danger); --flare-glow: rgba(255, 59, 78, 0.75); }
 .announce-banner[data-kind='ko'] .announce-text {
   font-size: clamp(48px, 10.4vw, 164px);
-  --kb-ink-a: #ffb3ba; --kb-ink-b: #7a020c;
+  /* The old bottom stop was #7a020c, and `.kb-text__body` runs the gradient
+   * from `--kb-ink-a` at 30% to `--kb-ink-b` at 100% — so the lower half of
+   * every letter was near-black red, which is what pulled the dimmest tenth of
+   * the ink down to 2.9:1 against its own backdrop. Raised to a saturated
+   * signal red that still reads as danger and still darkens toward the base. */
+  --kb-ink-a: #ffd3d7; --kb-ink-b: #c8101f;
 }
 .announce-banner[data-kind='perfect'] { --flare: var(--kb-gold); --flare-glow: rgba(255, 207, 74, 0.75); }
 .announce-banner[data-kind='perfect'] .announce-text {
@@ -1336,20 +1425,58 @@
   color: var(--kb-text-dim);
   transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
+/*
+ * Every button in the game was drawn as two disconnected horizontal rules, and
+ * the focus accent as a 4px triangle. Both are the same defect the portrait
+ * chip already carries a note about: `clip-path` clips an element's own
+ * `box-shadow`, so an `inset ... 1px` keyline survives only on the edges the
+ * clip does not cut. `.mbtn`'s clip is a parallelogram, so the two SLANTED
+ * edges lost their keyline entirely — photographed at 3x on the results card,
+ * the focused REMATCH button is an orange line at the top, an orange line at
+ * the bottom, and nothing joining them.
+ *
+ * The spine had the matching geometry bug. It was a full-height 0.22em bar at
+ * `left: 0`, but at the top of the box the shape does not start until `1em`
+ * in, so all but the bottom few pixels of it were clipped away.
+ *
+ * Fixed by giving both the same skew the cut has. The cut runs 1em across
+ * 2.6em of height, so its angle is atan(1 / 2.6) = 21.04deg; a box skewed by
+ * that lands its vertical edges exactly along the clip boundary, at every
+ * height, and stays there if the em size changes because both are in em.
+ */
 .mbtn::before {
   content: '';
-  position: absolute; left: 0; top: 0; bottom: 0; width: 0.22em;
+  position: absolute; top: 0; bottom: 0; left: calc(1em + 1px); width: 0.22em;
   background: var(--kb-accent);
-  transform: scaleY(0);
+  transform-origin: top left;
+  transform: skewX(-21.04deg) scaleY(0);
   transition: transform 0.18s ease;
+}
+/* The two cut edges the inset keyline below cannot reach. One skewed box, its
+ * left and right borders sitting 1px inside the clip so they are not eaten by
+ * their own boundary. */
+.mbtn::after {
+  content: '';
+  position: absolute; top: 0; bottom: 0; left: calc(1em + 1px); right: 1px;
+  transform-origin: top left;
+  transform: skewX(-21.04deg);
+  border-left: 1px solid var(--kb-line);
+  border-right: 1px solid var(--kb-line);
+  transition: border-color 0.15s ease;
+  pointer-events: none;
 }
 .mbtn:hover, .mbtn.mbtn--focus {
   color: var(--kb-text);
   background: linear-gradient(90deg, rgba(255,138,42,0.16), rgba(255,138,42,0.02));
-  box-shadow: inset 0 0 0 1px rgba(255,138,42,0.5), var(--kb-glow-accent);
+  /* The outer `--kb-glow-accent` that used to ride along here rendered nothing:
+   * an OUTSET box-shadow is clipped away by `clip-path` just as thoroughly as
+   * an inset one is cut. Dropping it is a no-op; the accent keyline and spine
+   * are what actually signal focus. */
+  box-shadow: inset 0 0 0 1px rgba(255,138,42,0.5);
   transform: translateX(0.2em);
 }
-.mbtn:hover::before, .mbtn.mbtn--focus::before { transform: scaleY(1); }
+.mbtn:hover::before, .mbtn.mbtn--focus::before { transform: skewX(-21.04deg) scaleY(1); }
+.mbtn:hover::after, .mbtn.mbtn--focus::after { border-left-color: rgba(255,138,42,0.5); border-right-color: rgba(255,138,42,0.5); }
 .mbtn:active { transform: translateX(0.2em) scale(0.98); }
 .mbtn[disabled] { opacity: 0.35; pointer-events: none; }
 
@@ -1546,18 +1673,156 @@
 
 /* -- results ---------------------------------------------------------------- */
 
+/*
+ * The card is anchored to one edge, not centred, and the reason is in
+ * MenuSystem's `#buildResults` note: the old layout put the headline over the
+ * stage signage and centred four things on both axes. Hanging it right leaves
+ * the winner's pose — the actual subject of the frame — the left two thirds,
+ * and gives the type a surface instead of a lit floor to sit on.
+ *
+ * `.menu-bg` is dialled back here: on every other menu it is the whole
+ * background, but this screen is looking AT something, so the scrim only has
+ * to lift the panel's side of the frame.
+ */
+.menu-bg--results {
+  background:
+    radial-gradient(90% 120% at 100% 50%, rgba(3, 4, 7, 0.86) 0%, rgba(3, 4, 7, 0.34) 46%, transparent 72%),
+    linear-gradient(180deg, rgba(5, 7, 12, 0.5) 0%, rgba(5, 7, 12, 0.18) 40%, rgba(3, 4, 6, 0.6) 100%);
+}
 .results-wrap {
   position: relative; height: 100%;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.6em;
+  display: flex; align-items: center; justify-content: flex-end;
+  padding: 0 clamp(1.2em, 4vw, 3.4em);
+}
+.results-panel {
+  width: min(30em, 46vw);
+  display: flex; flex-direction: column;
+  gap: 0.85em;
+  padding: 1.9em 1.8em 1.7em;
+  background: linear-gradient(160deg, var(--kb-panel-2) 0%, var(--kb-panel) 42%, #0a0d14 100%);
+  clip-path: polygon(1.5em 0, 100% 0, 100% 100%, 0 100%, 0 1.5em);
+  box-shadow: var(--kb-shadow-panel);
+}
+/* Eyebrow: a short accent rule then the label, the same "system heading"
+ * pattern the select screen's ROSTER / UNIT DOSSIER captions use, so the two
+ * screens read as one interface. */
+.results-eyebrow {
+  display: flex; align-items: center; gap: 0.7em;
+  font-family: var(--kb-font-label);
+  font-size: 0.62em; font-weight: 800; letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--kb-accent);
+}
+.results-eyebrow-rule {
+  width: 2.2em; height: 0.18em; flex: none;
+  background: var(--kb-accent);
+  box-shadow: var(--kb-glow-accent);
 }
 .results-winner.kb-text {
-  height: clamp(30px, 6vw, 88px);
+  height: clamp(26px, 3.2vw, 54px);
   --kb-ink-a: #ffffff;
   --kb-ink-b: #a84e0a;
-  filter: drop-shadow(0 0 1.8em rgba(255, 138, 42, 0.55));
+  filter: drop-shadow(0 0.06em 0.5em rgba(0, 0, 0, 0.8)) drop-shadow(0 0 1.1em rgba(255, 138, 42, 0.45));
 }
-.results-sub { font-size: 0.8em; letter-spacing: 0.3em; text-transform: uppercase; color: var(--kb-text-faint); }
-.results-score { display: flex; gap: 1.2em; align-items: center; font-family: var(--kb-font-mono); font-size: 1.8em; font-weight: 700; }
-.results-score .win { color: var(--kb-good); text-shadow: 0 0 0.6em rgba(51,255,180,0.5); }
-.results-actions { display: flex; gap: 0.8em; margin-top: 0.6em; }
-.results-actions .mbtn { width: 12em; justify-content: center; }
+.results-epithet {
+  font-size: 0.72em; font-weight: 700; letter-spacing: 0.24em;
+  text-transform: uppercase;
+  /* Was `--kb-text-faint` over a lit arena floor. On a panel it can afford to
+   * be the dim tone rather than the faint one and actually be read. */
+  color: var(--kb-text-dim);
+}
+.results-score {
+  display: flex; flex-direction: column;
+  margin-top: 0.35em;
+  border-top: 1px solid var(--kb-line);
+}
+.results-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.9em;
+  padding: 0.62em 0.1em;
+  border-bottom: 1px solid var(--kb-line);
+}
+.results-row-name {
+  font-family: var(--kb-font-label);
+  font-size: 0.92em; font-weight: 800; letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--kb-text-dim);
+}
+.results-row-pips { display: flex; gap: 0.32em; }
+.results-pip {
+  width: 0.62em; height: 0.62em;
+  transform: rotate(45deg);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--kb-line-strong);
+}
+.results-pip--won { background: var(--kb-grey); box-shadow: none; }
+.results-row-count {
+  font-family: var(--kb-font-mono);
+  font-size: 1.35em; font-weight: 700; font-variant-numeric: tabular-nums;
+  min-width: 1.2em; text-align: right;
+  color: var(--kb-text-dim);
+}
+/* The winning row is the only coloured thing in the block, so the eye lands on
+ * it without having to read either number. */
+.results-row--win .results-row-name { color: var(--kb-text); }
+.results-row--win .results-row-count { color: var(--kb-good); text-shadow: 0 0 0.6em rgba(51, 255, 180, 0.5); }
+.results-row--win .results-pip--won { background: var(--kb-good); box-shadow: 0 0 0.5em rgba(51, 255, 180, 0.55); }
+
+/*
+ * Vertical, one action per row: `.mbtn` is built as a left-aligned bar with an
+ * accent keyline that grows from its left edge, which only reads in a stack.
+ * The old horizontal row also boxed every label at a fixed 12em, and "CHARACTER
+ * SELECT" wrapped inside it while its neighbours did not.
+ *
+ * Full-bleed, and two details that only showed up at 3x on the capture:
+ *
+ *  - The default `.mbtn` carries `padding: 0 1.4em` at its own 0.85em font, so
+ *    its labels sat 26 px right of the spine every other line in the panel is
+ *    aligned to — close enough to read as a mistake rather than as an indent.
+ *    Cancelling the panel's padding and putting the same distance back inside
+ *    the button lands the labels exactly on that spine.
+ *  - `.mbtn`'s parallelogram `clip-path` cuts its own focus keyline. The
+ *    keyline is a 0.22em bar at `left: 0`, and the chamfer removes the corner
+ *    it lives in, so the focused row showed a small orange TRIANGLE instead of
+ *    a bar — the same failure mode as the portrait chip's clipped inset
+ *    box-shadow. A stacked list wants square rows anyway.
+ */
+.results-actions {
+  display: flex; flex-direction: column; gap: 0;
+  margin: 1.05em -1.8em -1.7em;
+}
+.results-actions .mbtn {
+  width: 100%;
+  height: 3.1em;
+  clip-path: none;
+  padding: 0 2.1em;
+  background: transparent;
+  box-shadow: inset 0 1px 0 var(--kb-line);
+}
+/*
+ * These rows are square (`clip-path: none` above), and the base `.mbtn` spine
+ * and keyline are skewed by 21.04deg to trace the parallelogram they normally
+ * sit in — see the note on `.mbtn::before`. Left alone they cut diagonally
+ * across a rectangular row: photographed on the results card, the focused
+ * REMATCH row carried a slash down its left edge and a stray diagonal rule
+ * down its right. Square them off here; the cut geometry belongs to the
+ * chamfered variant only.
+ */
+.results-actions .mbtn::before {
+  width: 0.3em;
+  left: 0;
+  transform: skewX(0deg) scaleY(0);
+}
+.results-actions .mbtn:hover::before,
+.results-actions .mbtn.mbtn--focus::before { transform: skewX(0deg) scaleY(1); }
+.results-actions .mbtn::after { display: none; }
+.results-actions .mbtn:hover,
+.results-actions .mbtn.mbtn--focus {
+  background: linear-gradient(90deg, rgba(255, 138, 42, 0.18), rgba(255, 138, 42, 0));
+  box-shadow: inset 0 1px 0 rgba(255, 138, 42, 0.45);
+  /* A full-bleed row sliding 0.2em right would expose the panel edge behind it. */
+  transform: none;
+}
+.results-actions .mbtn:active { transform: none; }

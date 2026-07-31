@@ -74,6 +74,7 @@ const _c = new THREE.Color();
 const _c2 = new THREE.Color();
 const _c3 = new THREE.Color();
 const _size = new THREE.Vector2();
+const _eye = new THREE.Vector3();
 const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
 
 /**
@@ -224,6 +225,32 @@ const DUST = new THREE.Color(0.46, 0.42, 0.37);
  * of grace because a light on geometry has to be seen falling, not just seen.
  */
 const IMPACT_LIGHT_RATE = 18.0;
+
+/**
+ * The impact light's second term, and the answer to "there is no warm spill on
+ * the armour" rather than to "the flash is too short".
+ *
+ * The flash above is a 2-4 frame screen event and it should stay one. But a hit
+ * leaves a patch of metal at a few thousand kelvin, and that patch goes on
+ * lighting everything within half a metre of it for as long as it glows — which
+ * is `coreLife`, 0.42s to 0.9s, an order of magnitude longer than the flash.
+ * Nothing in the frame was doing that: measured by ablation on a frozen contact
+ * frame, the entire FlashSystem delivered 18 blown pixels at +4 rendered frames
+ * against a scene-only 58, so four frames after contact the impact was leaving
+ * no trace at the contact point at all.
+ *
+ * This is the one element of that glow that cannot be occluded by the plate it
+ * sits on, and it is free: the light is already in the scene and permanently
+ * visible (see the note on `impactLight`), so this is an intensity ramp on an
+ * object that is billed whether it is lit or not. Creating or toggling a light
+ * costs 437-831ms of material recompiles; modulating one costs nothing.
+ *
+ * `EMBER_SHARE` is a fraction of the same peak, so it scales with weight for
+ * free. `EMBER_LIGHT_RATE` is 1/0.7s, the middle of the `coreLife` band, so the
+ * spill dies with the heat that justifies it rather than outstaying it.
+ */
+const EMBER_SHARE = 0.085;
+const EMBER_LIGHT_RATE = 1.45;
 
 /** Bones that can carry a trail, with the joint that forms the ribbon's inner edge. */
 const TRAIL_BONES = [
@@ -376,6 +403,8 @@ export class EffectsDirector {
     this.impactLight = new THREE.PointLight(0xffd9a8, 0, 9, 2);
     this.impactLight.castShadow = false;
     this.impactLight.userData.decay = 0;
+    this.impactLight.userData.ember = 0;
+    this.impactLight.userData.hot = 0;
     this.group.add(this.impactLight);
 
     this.scene.add(this.group);
@@ -640,11 +669,42 @@ export class EffectsDirector {
 
       // The heat the flare leaves behind. Without it the contact point is dark
       // again four frames in, while the reaction animation is still playing.
-      case FX_PART.CORE:
-        this.flashes.pop(c.point, {
+      //
+      // It has to be lifted off the surface it was struck on, and that is not a
+      // fudge — it is the difference between a sphere *centred* on the contact
+      // and a sphere *tangent* to it. `e.point` is the capsule intersection, so
+      // a core spawned there is half inside opaque armour by construction, and
+      // the half that is buried is the half that matters: `FlashSystem`'s cool
+      // mode puts essentially all of its energy in a `exp(-56 r^2)` pinpoint
+      // occupying the innermost fifth of the quad. The depth test discards it
+      // and the soft-particle fade kills the halo around it.
+      //
+      // Measured by ablation on a frozen contact frame (launcher, fight
+      // framing, ROI 220px on the projected contact, blown = L>240):
+      //
+      //                          +1f    +4f    +8f   +16f
+      //     scene only          6777     58     52      0
+      //     + whole FlashSystem 6863     18     53    112   <- delivers nothing
+      //     + depthTest off     7062    223    204    113
+      //     + origin pulled     7360    370    354    152
+      //
+      // while the shader was feeding that same core 89% and 79% of its peak
+      // radiance at +4 and +8. The lifetimes were never the problem; the core
+      // was inside the robot. Lifting it along the view ray by its own radius
+      // both passes the depth test and lets the halo fade in against the plate,
+      // which is what puts warm light back on the armour under the reaction.
+      case FX_PART.CORE: {
+        _eye.setFromMatrixPosition(this.camera ? this.camera.matrixWorld : this.scene.matrixWorld);
+        _v3.copy(_eye).sub(c.point);
+        const len = _v3.length();
+        if (len > 1e-4) _v3.multiplyScalar(Math.min(0.4, Math.max(0.11, r.core * 1.7 * k)) / len);
+        else _v3.set(0, 0, 0);
+        _v3.add(c.point);
+        this.flashes.pop(_v3, {
           size: r.core * k, life: r.coreLife, heat: r.coreHeat * k, cool: true,
         });
         break;
+      }
 
       // The tight lance straight down the line of travel. This is what makes the
       // direction readable in a single frame instead of leaving an isotropic ball.
@@ -1129,13 +1189,18 @@ export class EffectsDirector {
     const l = this.impactLight;
     if (!l || !this.lightsEnabled) return;
     const want = intensity * (this.lightScale ?? 1);
-    if (want < l.intensity) return;
+    // Contention is decided on the FLASH term alone. The ember tail deliberately
+    // keeps a little intensity alive for most of a second, and comparing against
+    // the total would let a dead hit's afterglow lock out the next live one.
+    if (want < (l.userData.hot || 0)) return;
     l.position.copy(at);
     l.color.setHex(hex);
     l.intensity = want;
     l.userData.peak = want;
+    l.userData.hot = want;
     l.distance = 6.5;
     l.userData.decay = 1;
+    l.userData.ember = 1;
     // Born this frame, so it has not aged yet. `#runBeats` fires the flash and
     // `#updateLights` runs later in the same `update()`, which was charging the
     // contact frame — the one frame the whole effect exists for — a full step
@@ -1304,12 +1369,18 @@ export class EffectsDirector {
    */
   #updateLights(dt) {
     const l = this.impactLight;
-    if (!l || !this.lightsEnabled || l.userData.decay <= 0) return;
-    if (l.userData.fresh) { l.userData.fresh = false; return; }
-    const d = l.userData.decay - dt * IMPACT_LIGHT_RATE;
-    if (d <= 0) { l.intensity = 0; l.userData.decay = 0; return; }
-    l.userData.decay = d;
-    l.intensity = (l.userData.peak || l.intensity) * d * d;
+    if (!l || !this.lightsEnabled) return;
+    const u = l.userData;
+    if ((u.decay || 0) <= 0 && (u.ember || 0) <= 0) return;
+    if (u.fresh) { u.fresh = false; return; }
+    const peak = u.peak || l.intensity;
+    const d = Math.max(0, (u.decay || 0) - dt * IMPACT_LIGHT_RATE);
+    const e = Math.max(0, (u.ember || 0) - dt * EMBER_LIGHT_RATE);
+    u.decay = d;
+    u.ember = e;
+    u.hot = peak * d * d;
+    l.intensity = u.hot + peak * EMBER_SHARE * e * e;
+    if (d <= 0 && e <= 0) l.intensity = 0;
   }
 
   /** Feeds the arena lighting and the depth prepass into the smoke shader. */
@@ -1464,6 +1535,8 @@ export class EffectsDirector {
       // that nothing is advancing.
       this.impactLight.intensity = 0;
       this.impactLight.userData.decay = 0;
+      this.impactLight.userData.ember = 0;
+      this.impactLight.userData.hot = 0;
       this.impactLight.userData.fresh = false;
     }
     this.debris.setShadows(ultra);
@@ -1502,6 +1575,8 @@ export class EffectsDirector {
     if (this.impactLight) {
       this.impactLight.intensity = 0;
       this.impactLight.userData.decay = 0;
+      this.impactLight.userData.ember = 0;
+      this.impactLight.userData.hot = 0;
       this.impactLight.userData.peak = 0;
       this.impactLight.userData.fresh = false;
     }

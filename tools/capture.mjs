@@ -202,14 +202,20 @@ const SHOTS = [
     setup: `window.KB.testHarness.forceJuggle({ attacker: 0, hits: 3 });`,
     // Wait for the combo to actually reach the air hits, then freeze so the
     // shutter lands on the juggle rather than on the recovery after it.
-    waitFor: 'window.__kbHitCount >= 2',
+    // Wait for the victim to actually be OFF THE GROUND, not merely for the
+    // hit count. The first version gated on hits alone and accepted the
+    // `airborne` FLAG as proof of height -- so it certified a frame in which
+    // the victim stood with both feet planted and ground dust at his foot,
+    // which a critic then reported as a launch regression. The flag can be
+    // true on the tick the launch is applied, before any height exists.
+    waitFor: 'window.__kbHitCount >= 2 && window.KB.fighters[1].position.y > 0.6',
     settle: 120,
     verify: `(() => {
       const KB = window.KB;
       const airborne = KB.fighters[1].airborne || KB.fighters[1].position.y > 0.25;
       KB.paused = true;
       return { hits: window.__kbHitCount || 0, victimY: +KB.fighters[1].position.y.toFixed(2),
-               airborne, ok: (window.__kbHitCount || 0) >= 2 && airborne };
+               airborne, ok: (window.__kbHitCount || 0) >= 2 && KB.fighters[1].position.y > 0.6 };
     })()`,
     teardown: 'window.KB.paused = false;',
   },

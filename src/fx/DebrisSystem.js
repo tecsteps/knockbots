@@ -120,6 +120,8 @@ export class DebrisSystem {
     this.life = new Float32Array(capacity);
     this.maxLife = new Float32Array(capacity);
     this.tint = new Float32Array(capacity * 3);
+    /** Per-shard cooling rate, as a multiple of `COOL_TIME`. */
+    this.coolRate = new Float32Array(capacity);
 
     for (let i = 0; i < capacity; i++) {
       this.rot[i * 4 + 3] = 1;
@@ -201,7 +203,19 @@ export class DebrisSystem {
       this.maxLife[i] = life * (0.7 + Math.random() * 0.6);
       this.life[i] = this.maxLife[i];
       this.heat[i] = 0.75 + Math.random() * 0.25;
-      this.tint[o] = col.r; this.tint[o + 1] = col.g; this.tint[o + 2] = col.b;
+      // A shard is torn off a painted, scuffed, unevenly weathered plate, so no
+      // two come off the same colour. One flat tint across the whole burst is
+      // the same defect the spark fragments had — a population that reads as one
+      // object stamped out N times. Value varies most (which face of the plate,
+      // how much primer is left), hue a little.
+      const v = 0.74 + Math.random() * 0.52;
+      this.tint[o] = col.r * v * (0.94 + Math.random() * 0.12);
+      this.tint[o + 1] = col.g * v * (0.94 + Math.random() * 0.12);
+      this.tint[o + 2] = col.b * v * (0.94 + Math.random() * 0.12);
+      // Mass decides how long it holds the heat the blow put into it. Without
+      // this the whole burst dims in lockstep, which is what turns a scatter of
+      // torn metal back into a single fading decal.
+      this.coolRate[i] = 0.55 + Math.random() * 1.05;
     }
   }
 
@@ -268,7 +282,9 @@ export class DebrisSystem {
       const c = this.mesh.instanceColor.array;
       c[o] = this.tint[o]; c[o + 1] = this.tint[o + 1]; c[o + 2] = this.tint[o + 2];
 
-      if (this.heat[i] > 0) this.heat[i] = Math.max(0, this.heat[i] - dt / COOL_TIME);
+      if (this.heat[i] > 0) {
+        this.heat[i] = Math.max(0, this.heat[i] - (dt * (this.coolRate[i] || 1)) / COOL_TIME);
+      }
 
       this.life[i] = l;
       if (l <= 0) {

@@ -65,6 +65,19 @@
  *     knee instead of a flat scale so a 17-nit light bank stops clipping to
  *     paper while a 3-nit sign keeps its colour.
  *
+ *     That knee caps every background emitter at `bgLights / bgKnee` — 1.2
+ *     linear on `industrial` — which through the display transform lands at
+ *     about 0.81 of display white, so nothing in the surround can ever reach
+ *     the top of the range no matter how it is authored. That looks like a
+ *     direct cause of a frame with no clipped pixels, and it is not: swept at
+ *     runtime with a re-bake, `bgKnee` from 0.50 down to 0.08 (asymptote 1.2 to
+ *     7.5) and `bgLights` from 0.60 to 1.00 changed the delivered hero frame by
+ *     **nothing at any percentile** — p02 through p999 and the saturated
+ *     fraction identical to four decimals. `scene.background` only shows where
+ *     no geometry draws, and `Stage` closes the pit. The visible emitters in a
+ *     fight framing all belong to `StagePracticals` and the robots; this file
+ *     owns none of them.
+ *
  * The world the fighters stand in is therefore always much darker than the
  * light falling on them, which is the cheat every fighting game uses to make
  * characters pop.
@@ -233,12 +246,35 @@ const KEY_BOX = {
    * a long thin bar down the plates at a radiance the tone curve lands on white,
    * on a fill that stays where it was.
    *
-   * It is also what buys the top of the range back. Every capture before this
-   * measured zero clipped pixels on a fighter and a 99.9th percentile around
-   * 0.8: nothing on the armour ever reached white, which is the difference
-   * between a lit object and a photographed one. Raising exposure would have
-   * done it too and would have taken the deck and the backdrop up with it; a
-   * hotter, narrower source puts the peak on the armour and nowhere else.
+   * **The second half of that argument does not survive measurement, and the
+   * width is therefore not a top-of-range lever.** The claim above is that
+   * halving the panel at constant irradiance leaves the fill alone and doubles
+   * the bar. Tested at 1080p with the frame clock stopped — a null control of
+   * two grabs with nothing changed differs by exactly zero code values, and two
+   * `base` variants interleaved through the run came back bit-identical — by
+   * driving `box.width` down and `box.intensity` up by the reciprocal, so the
+   * irradiance at the fighter is held and only the radiance moves. Percentiles
+   * over a fighter-only mask on the head closeup, linear luminance:
+   *
+   *     radiance x1.0 (0.30 m)   p50 0.1170   p99 0.6187   max 0.9691
+   *     radiance x1.4 (0.22 m)   p50 0.1169   p99 0.6187   max 0.9691
+   *     radiance x2.7 (0.11 m)   p50 0.1165   p99 0.6187   max 0.9691
+   *
+   * Nearly three times the radiance and the brightest pixel on the fighter does
+   * not move at all. There is no bar to double. What the box *does* do is real
+   * and is the reason it stays: leaving the width at 0.11 m with the authored
+   * radiance restored — 37% of the irradiance — dropped the same fighter's
+   * median from 0.117 to 0.085, so the panel carries about a quarter of the
+   * light on the character. It is a fill source, and only a fill source.
+   *
+   * The reason is roughness. A rectangle only reflects *as* a rectangle where
+   * the specular lobe is narrower than the source; over the roughness the
+   * armour is actually authored at, the LTC lobe integrates the whole panel and
+   * the peak follows irradiance, which is exactly the quantity being held
+   * constant. So this is a live lever again the moment `Materials.js` puts a
+   * genuinely smooth surface on a fighter — polished trim, a visor, a chromed
+   * piston — and it is inert until then. That belongs to the character
+   * workstream; nothing in this file can buy it.
    */
   width: 0.3,
   height: 2.0,

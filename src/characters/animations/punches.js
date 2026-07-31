@@ -292,6 +292,7 @@
  */
 
 import { validateClip } from '../AnimationFormat.js';
+import { whip } from './reactions.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -2209,6 +2210,40 @@ export const PUNCH_CLIPS = {
 
   },
 };
+
+// ---------------------------------------------------------------------------
+// Overlapping action. `whip` (see the long note in ./reactions.js) pushes each
+// joint's keys later as you walk down the kinetic chain, so the pelvis leads
+// and the fist arrives last. On an attack it pivots on the clip's own
+// `impact.tick`, which it pins with a real key first, so the contact pose comes
+// out bit-identical — measured at 0.00mm, and `check.mjs`'s worst anchor ratio
+// does not move.
+//
+// W is per clip and chosen by sweep: the largest whip that improved the
+// head-lag centroid and the chain's monotonicity while regressing NOTHING in
+// the round-11 guard — contact-speed-over-peak, follow-through past contact,
+// worst single-tick hurtbox travel, wind-up silhouette retreat, and the tick-0
+// and final stance match.
+//
+// That gate is why only 9 of 14 striking clips here are whipped. The rest —
+//   p.overhand, p.backfist, p.hammerFist, p.pistonRush, p.launcherPunch
+// — failed it at every W. Most failed on `carry`: past the pivot a delay is the
+// same thing as holding the contact pose longer, so chain order and follow-
+// through pull against each other, and follow-through wins where they collide.
+// Their negative lag is in the RECOVERY POSE and wants re-posing, not re-timing.
+// ---------------------------------------------------------------------------
+const WHIP = {
+  'p.jab': 6,
+  'p.jabAlt': 5,
+  'p.straight': 6,
+  'p.hook': 6,
+  'p.uppercut': 6,
+  'p.elbow': 3,
+  'p.lowJab': 5,
+  'p.duckingStraight': 6,
+  'p.siegeSlam': 4,
+};
+for (const id in WHIP) whip(PUNCH_CLIPS[id], WHIP[id], { pivot: PUNCH_CLIPS[id].impact.tick });
 
 for (const id in PUNCH_CLIPS) validateClip(PUNCH_CLIPS[id], BONE_NAMES);
 

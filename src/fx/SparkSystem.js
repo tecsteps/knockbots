@@ -51,11 +51,26 @@ const _alt = new THREE.Vector3(1, 0, 0);
  * are pure filaments, and fragments are chips of armour plate that tumble about
  * their own axis rather than smearing at all, which is what separates them in
  * the eye from the molten oxide around them.
+ *
+ * `spread` is the multiplicative size band *inside* the tier, and it is not the
+ * same number for all three. Keeping it narrow is right for the two fine tiers —
+ * the separation that matters is between tiers, and widening it there just
+ * blurs the three populations back into one. It is wrong for the fragments, and
+ * measurably so: the fragment tier is the only part of a burst still alive a
+ * third of a second later, so on every frame after the flare it *is* the burst,
+ * and there is then nothing left in the frame to establish scale against. Read
+ * out of the live pool on a frozen contact frame, a launcher's 109 fragments
+ * spanned 0.062-0.138 m — and the top of that band is the jet's 1.15x size
+ * multiplier rather than any real variation, so the fan's own fragments were a
+ * 1.67x window. `spread` is the ratio of the widest to the narrowest in a tier:
+ * 1.67 reproduces the previous `0.75 + rnd * 0.5` exactly, and 2.50 on the
+ * fragments still leaves a clean gap between the populations — the mid tier
+ * tops out at 1.16 against the fragments' bottom at 1.52.
  */
 const TIERS = [
-  { frac: 0.60, size: 0.24, speed: 1.35, life: 0.66, streak: 1.6 },
-  { frac: 0.30, size: 0.90, speed: 1.00, life: 1.00, streak: 1.0 },
-  { frac: 0.10, size: 2.40, speed: 0.55, life: 1.45, streak: 0.0 },
+  { frac: 0.60, size: 0.24, speed: 1.35, life: 0.66, streak: 1.6, spread: 1.67 },
+  { frac: 0.30, size: 0.90, speed: 1.00, life: 1.00, streak: 1.0, spread: 1.67 },
+  { frac: 0.10, size: 2.40, speed: 0.55, life: 1.45, streak: 0.0, spread: 2.50 },
 ];
 
 const VERT = /* glsl */ `
@@ -107,8 +122,18 @@ void main() {
   if ( streakK < 0.02 ) {
     // A fragment is a chip of plate, not a filament: it tumbles about its own
     // axis at a rate set by how much of the blow it took.
+    //
+    // And it is not square. A square quad at a random roll is a lozenge at a
+    // random angle, and a hundred of them with one size and one colour is the
+    // "generic round sprites" line in docs/CRITIC.md's failure list — which
+    // matters more than it sounds, because the fragments outlive every other
+    // element of a burst by a third of a second, so after the flare they *are*
+    // the burst. Giving each one its own aspect costs nothing (the hash is
+    // already computed for the sputter) and turns the population into chips of
+    // torn plate seen at assorted angles rather than one shape repeated.
     float roll = aStyle.y + age * ( 5.0 + fract( aStyle.y ) * 12.0 );
-    mv = billboard( p, position.xy, sz, roll );
+    float chip = 0.42 + hash11( seed * 5.3 ) * 0.72;
+    mv = billboard( p, position.xy * vec2( 1.0, chip ), sz, roll );
   } else {
     // Head of the streak sits on the particle; the body trails behind it.
     float len = sz * ( 1.0 + clamp( speed * uStreak * streakK, 0.0, 11.0 ) );
@@ -146,8 +171,23 @@ void main() {
   // Both are clamped at the mid tier. Letting the fines run away puts most of
   // the burst's particles at the dim end of the ramp on the contact frame, and
   // the hit loses the punch that the count was bought for.
+  //
+  // A third offset, and it is the one that was missing. Thermal mass varied
+  // between tiers and not at all within one, so every particle of a tier sat on
+  // exactly the same point of the ramp on every frame of its life. Measured out
+  // of the live pool on a frozen contact frame, a launcher's 109 fragments had
+  // a ramp position of 0.172 with a standard deviation of 0.038, and the red
+  // and green channels of the colour that produces had a standard deviation of
+  // *zero* — one hundred and nine particles painting one identical colour.
+  // That is docs/CRITIC.md's "particles that fade uniformly", exactly.
+  //
+  // Two chips off the same plate do not cool at the same rate; the ratio is set
+  // by their surface-to-volume, which varies as much within a size band as it
+  // does between bands. Centred on 1.0, so the burst's mean brightness on the
+  // contact frame is unchanged and only its variance goes up.
   float fine = clamp( streakK, 0.0, 1.0 );
-  float tt = t * ( 1.0 + 0.30 * fine ) + ( 1.0 - along ) * 0.28 * fine;
+  float mass = 0.68 + hash11( seed * 2.7 ) * 0.64;
+  float tt = t * ( 1.0 + 0.30 * fine ) * mass + ( 1.0 - along ) * 0.28 * fine;
   vColor = sparkEmission( clamp( tt, 0.0, 1.0 ), heat ) * aTint;
 }`;
 
@@ -317,9 +357,12 @@ export class SparkSystem {
         aLife[l] = time;
         aLife[l + 1] = life * tier.life * (0.62 + Math.random() * 0.7);
         aLife[l + 2] = Math.random() * 1000;
-        // Kept narrow within a tier: the spread that matters is between tiers,
-        // and widening it here just blurs the three populations back into one.
-        aLife[l + 3] = size * tier.size * (0.75 + Math.random() * 0.5);
+        // Narrow inside the two fine tiers, wide inside the fragments — see the
+        // note on `spread` in TIERS. Log-uniform so the whole band is occupied
+        // evenly instead of piling at the bottom, and centred on 1.0 so the
+        // burst's mean size is unchanged whatever the band is.
+        aLife[l + 3] = size * tier.size
+          * Math.exp((Math.random() - 0.5) * Math.log(tier.spread));
 
         const s = i * 2;
         // Streak weight is jittered inside the tier as well, because length is

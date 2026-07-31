@@ -32,26 +32,56 @@ import { bus } from '../core/Bus.js';
 import { MAX_HEALTH, METER_MAX, ROUNDS_TO_WIN, ROUND_TIME_SECONDS, TICK_HZ } from '../core/Constants.js';
 import { applyKbText } from './Typeface.js';
 
-// Hold/ease timing below is counted in *simulated ticks*, not real seconds.
-// A real-dt hold reads fine at a steady 60fps, but the moment a hit lands is
-// exactly the moment the frame is most likely to be expensive (hitstop,
-// sparks, screen shake, a camera cut all firing at once) — the render can
-// go slow right when the drain/combo readout most needs to be legible, and
-// a countdown driven by wall-clock dt then burns through its whole budget in
-// a couple of chunky frames before anyone sees it ease (see docs/CRITIC.md's
-// 08b-hud-motion capture, which caught exactly this). Ticks advance at a
-// fixed 60Hz regardless of render pace, so counting against the fighters'
-// own `simTick` keeps the beat the same length in game-time whether the
-// frame that tick lands on took 2ms or 200ms to draw.
+// -----------------------------------------------------------------------------
+// Two clocks, and the reason there have to be two.
 //
-// A hold long enough to read as a deliberate beat, short enough that the
-// bleed-down itself still fits inside the window a hit's hitstop/callouts
-// hold the eye for — at the old 0.5s-of-real-time the chip gap sat frozen
-// for nearly the whole of that window and the ease that followed was over
-// almost before it started.
+// THE HOLD is counted in *simulated ticks*. A real-dt hold reads fine at a
+// steady 60fps, but the moment a hit lands is exactly the moment the frame is
+// most likely to be expensive (hitstop, sparks, screen shake, a camera cut all
+// firing at once), and a countdown driven by wall-clock dt then burns through
+// its whole budget in a couple of chunky frames before anyone sees it. Ticks
+// advance at a fixed 60Hz regardless of render pace, so the beat is the same
+// length in game-time whether the frame it lands on took 2ms or 200ms to draw.
+//
+// THE BLEED-DOWN is driven off real seconds, and this is the fix for a bug that
+// stood for four rounds. `Fighter#simTick` does not advance during hitstop or
+// the KO freeze — `Game.#frame` gates the whole accumulator on `frozen`, so
+// zero ticks run — which means a bar eased against ticks freezes at precisely
+// the two moments it exists to animate. Measured, three runs, on the certified
+// `10-ko` frame: the loser at TRUE HEALTH ZERO, its `.hp-drain` sitting at
+// scaleX 1.00 / 1.00 / 0.91 and `.hp-ghost` at 0.87 / 0.80 / 0.91. A defeated
+// robot next to a bar that reads full, in the single most-screenshotted frame
+// a fighting game has. And after an ordinary launcher the chip gap moved
+// exactly 0.0000 for the first ~300ms of real time, because those were the
+// hitstop frames.
+//
+// The hold therefore keeps its tick deadline AND gets a real-time ceiling, and
+// whichever expires first ends it. In normal play the tick deadline always wins
+// (10 ticks = 167ms against a 250ms ceiling), so the chunky-frame protection
+// above is untouched; the ceiling only bites when the simulation is frozen,
+// which is the exact case it exists for. Both deadlines are absolute rather
+// than countdowns, so neither can be over-consumed by a batched frame.
 const DRAIN_HOLD_TICKS = 10;
-const DRAIN_RATE_PER_TICK = 6.0 / TICK_HZ; // damp lambda, per tick, once the hold expires
-const GHOST_RATE_PER_TICK = 3.0 / TICK_HZ;
+/** Real-time escape for the hold. 1.5x the tick deadline's nominal length. */
+const DRAIN_HOLD_MAX_SECONDS = 0.25;
+/** Damp lambdas, per REAL second. Numerically identical to the old per-tick
+ *  rates at 60Hz, so the bleed reads the same in an unfrozen frame. */
+const DRAIN_LAMBDA = 6.0;
+const GHOST_LAMBDA = 3.0;
+/**
+ * Clamp on a single HUD-clock step, so a backgrounded tab (rAF stops, then
+ * `performance.now()` jumps by seconds) cannot teleport an ease.
+ *
+ * 0.25, matching `Game.#frame`'s own `Math.min(getDelta(), 0.25)`, rather than
+ * a tighter number picked for tidiness. The KO burst is the slowest moment in
+ * the build — traced from the `roundEnd` event, HUD updates arrive at t = 301,
+ * 379, then not again until 1048 ms, a single 670 ms frame — and at a 0.1 s
+ * clamp that frame advanced the bar by 100 ms of ease instead of 670, leaving
+ * the loser's drain still at 0.50 nearly a second after it died. A ceiling that
+ * throws away real elapsed time on the frames that matter most is the same
+ * class of bug as easing on a clock that stops.
+ */
+const MAX_HUD_STEP = 0.25;
 const CRITICAL_RATIO = 0.22;
 const COMBO_HOLD_TICKS = 66; // ~1.1s of game-time with no new hit before the combo readout dismisses
 const MAX_CALLOUTS = 24;
@@ -100,12 +130,27 @@ export class HUD {
     this.#buildCallouts();
     this.#buildAnnouncements();
 
-    /** Per-fighter animated health-bar state. `drainHoldUntil` is an
-     * absolute `simTick`, not a countdown, so a slow/batched frame can never
-     * over-consume it (see the timing note above `DRAIN_HOLD_TICKS`). */
+    /** Per-fighter animated health-bar state. `drainHoldUntil` (a `simTick`)
+     * and `drainHoldUntilTime` (a HUD-clock second) are both absolute
+     * deadlines, not countdowns, so a slow or batched frame can never
+     * over-consume either (see the timing note above `DRAIN_HOLD_TICKS`). */
     this.hp = fighters.map(() => ({
-      fill: 1, drain: 1, ghost: 1, drainHoldUntil: 0, lastTick: null,
+      fill: 1, drain: 1, ghost: 1, drainHoldUntil: 0, drainHoldUntilTime: 0,
     }));
+
+    /**
+     * The HUD's own presentation clock, in seconds.
+     *
+     * Deliberately not the `dt` `Game` passes in: that is `sceneDt`, already
+     * multiplied by `HITSTOP_SCENE_RATE` during a freeze — it is the clock that
+     * makes hitstop look like hitstop, and reusing it here would leave the
+     * health bars just as frozen as `simTick` does. It advances on real time,
+     * and stops only when the game is genuinely paused, which covers both the
+     * pause menu and the capture harness's `KB.paused = true` freeze (so a
+     * contact frame is still photographed with a fresh, un-bled chip gap).
+     */
+    this.clock = 0;
+    this.clockLastNow = null;
     this.lastName = [null, null];
     this.lastWins = [-1, -1];
 
@@ -466,6 +511,7 @@ export class HUD {
     const preRatio = THREE.MathUtils.clamp((defender.health + damage) / MAX_HEALTH, 0, 1);
     s.drain = Math.max(s.drain, preRatio);
     s.drainHoldUntil = defender.simTick + DRAIN_HOLD_TICKS;
+    s.drainHoldUntilTime = this.clock + DRAIN_HOLD_MAX_SECONDS;
 
     this.#spawnCallout(point, `-${Math.round(damage)}`, 'callout--damage', defender.index === 0 ? -1 : 1);
     if (counter) this.#spawnCallout(point, 'COUNTER HIT', 'callout--counter', 0);
@@ -496,6 +542,7 @@ export class HUD {
     const preRatio = THREE.MathUtils.clamp((defender.health + chip) / MAX_HEALTH, 0, 1);
     s.drain = Math.max(s.drain, preRatio);
     s.drainHoldUntil = defender.simTick + DRAIN_HOLD_TICKS;
+    s.drainHoldUntilTime = this.clock + DRAIN_HOLD_MAX_SECONDS;
   }
 
   #onComboEnd({ fighter }) {
@@ -519,9 +566,13 @@ export class HUD {
 
   /**
    * @param {import('../core/Game.js').Game} game
-   * @param {number} dt real seconds since the last frame
+   * @param {number} [_dt] the caller's scene dt. Unused: it is scaled down
+   *   during hitstop, which is exactly when this HUD must keep animating.
+   *   See `this.clock`.
    */
-  update(game, dt) {
+  update(game, _dt) {
+    const step = this.#advanceClock(game);
+
     const showHud = IN_FIGHT_PHASES.has(game.phase);
     if (showHud !== this.visible) {
       this.root.classList.toggle('hud--hidden', !showHud);
@@ -531,7 +582,7 @@ export class HUD {
     }
     if (!showHud) return;
 
-    this.#updateHealth();
+    this.#updateHealth(step);
     this.#updateNamesAndPips(game);
     this.#updateTimer(game);
     this.#updateMeters(game);
@@ -540,28 +591,44 @@ export class HUD {
     this.#servicePortraits(game);
   }
 
-  #updateHealth() {
+  /**
+   * Advance the HUD's presentation clock and return this frame's step in
+   * seconds. See the note on `this.clock` in the constructor for why this is
+   * not the `dt` the caller hands in.
+   * @param {import('../core/Game.js').Game} game
+   * @returns {number} clamped seconds elapsed since the previous frame
+   */
+  #advanceClock(game) {
+    const now = performance.now() / 1000;
+    const raw = this.clockLastNow == null ? 0 : now - this.clockLastNow;
+    this.clockLastNow = now;
+    const step = game.paused ? 0 : THREE.MathUtils.clamp(raw, 0, MAX_HUD_STEP);
+    this.clock += step;
+    return step;
+  }
+
+  /**
+   * @param {number} step seconds on the HUD clock since the previous frame
+   */
+  #updateHealth(step) {
     for (let i = 0; i < this.fighters.length; i++) {
       const f = this.fighters[i];
       const s = this.hp[i];
       const el = this.sides[i];
 
-      // Ease against ticks the fighter has actually simulated since the last
-      // render, not real dt — see the timing note above `DRAIN_HOLD_TICKS`.
       const tick = f.simTick;
-      const tickDelta = s.lastTick == null ? 0 : Math.max(0, tick - s.lastTick);
-      s.lastTick = tick;
-
       const ht = THREE.MathUtils.clamp(f.health / MAX_HEALTH, 0, 1);
       const gt = THREE.MathUtils.clamp((f.health + f.recoverable) / MAX_HEALTH, 0, 1);
 
+      // The hold runs on ticks with a real-time ceiling; the bleed itself runs
+      // on real seconds so that hitstop and the KO freeze cannot stop it. See
+      // the note above `DRAIN_HOLD_TICKS`.
+      const holding = tick < s.drainHoldUntil && this.clock < s.drainHoldUntilTime;
+
       s.fill = ht; // instant — the "true" layer never eases
-      if (tick < s.drainHoldUntil) {
-        s.drain = Math.max(s.drain, ht);
-      } else {
-        s.drain = THREE.MathUtils.damp(s.drain, ht, DRAIN_RATE_PER_TICK, tickDelta);
-      }
-      s.ghost = THREE.MathUtils.damp(s.ghost, gt, GHOST_RATE_PER_TICK, tickDelta);
+      if (holding) s.drain = Math.max(s.drain, ht);
+      else s.drain = THREE.MathUtils.damp(s.drain, ht, DRAIN_LAMBDA, step);
+      s.ghost = THREE.MathUtils.damp(s.ghost, gt, GHOST_LAMBDA, step);
 
       el.fill.style.transform = `scaleX(${s.fill})`;
       el.drain.style.transform = `scaleX(${Math.max(s.drain, s.fill)})`;
@@ -573,7 +640,7 @@ export class HUD {
       // A pulsing hot edge while the chip is actively bleeding down toward
       // the true value — the only way an eased `transform` reads as motion
       // in a single sampled frame instead of a static gap.
-      const bleeding = tick >= s.drainHoldUntil && s.drain - s.fill > 0.002;
+      const bleeding = !holding && s.drain - s.fill > 0.002;
       el.drain.classList.toggle('hp-drain--bleeding', bleeding);
     }
   }

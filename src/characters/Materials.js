@@ -1005,10 +1005,105 @@ const GRAIN = { rough: 0.075, height: 0.006, aspect: 3 };
  *
  * all three to test round 13's attribution of the pale "decal" patches. None of
  * them moved the artefact — see the correction at the chip loop.
+ *
+ *   roughStruct gain on the whole mm-to-decimetre roughness STRUCTURE stack
+ *   roughGrain  gain on the 2-4 texel roughness grain, {@link GRAIN}.rough
+ *
+ * Both default to 1. They exist because round 15's brief was "the roughness map
+ * is functionally flat across every large armour plate", and the only way to
+ * test a claim about how much a term is worth is to sweep its gain and
+ * photograph the result. See the note above the painted ORM loop for what the
+ * sweep returned.
  */
-const AB = { grain: null, chipMetal: null, wear: null, panelValue: null };
+const AB = {
+  grain: null, chipMetal: null, wear: null, panelValue: null,
+  roughStruct: 1, roughGrain: 1,
+};
 if (typeof window !== 'undefined' && window.__KB_MAT) Object.assign(AB, window.__KB_MAT);
 if (AB.grain !== null) GRAIN.height = AB.grain;
+
+/**
+ * Anisotropy of the base specular lobe on painted armour and trim.
+ *
+ * Round 15's brief was that the roughness map is functionally flat across every
+ * large armour plate, so no highlight has shape, and the named fix was a
+ * multi-octave roughness map plus directional brush anisotropy. The first half
+ * did not survive measurement and the second half is the whole result.
+ *
+ * The instrument is micro-contrast on the delivered pixels — the critic's own
+ * metric, 100 * RMS(L - box4(L)) / mean(L) over a crop of one surface, sRGB
+ * luma — on the frozen 02-closeup framing, three reps a side, every arm inside
+ * ONE probe run. (Between-run comparison on this project is not safe: the same
+ * build measured 0.338 and 0.427 mean plate luma on two runs an hour apart,
+ * because other workstreams are editing the light rig in parallel. Every table
+ * below is within-run.)
+ *
+ * The reference band, measured the same way on crops that are 100% one in-focus
+ * Tekken 8 surface: knit sleeve 18.3, white fleece 15.9, red jeans 14.7, blue
+ * glove 20.1, white jacket 23.7, gold armband 23.3, cyan glove 14.0 — and one
+ * smooth vinyl glove at 3.3, so the band is wide and the low end of it is not
+ * automatically a failure.
+ *
+ * **The roughness structure is not flat, and making it flatter or three times
+ * louder does not change the image.** Sweeping a gain over the whole
+ * mm-to-decimetre stack (the 8cm weathering patch, the 8cm cast mottle, the
+ * 1.6cm tooth, the 5mm rolling marks and the per-plate batch jitter — see the
+ * painted ORM loop):
+ *
+ *     gain   pauldron  chest  head   brow  shoulder  slab
+ *     0        7.48    5.78   9.91  17.23   9.45    15.75
+ *     1        7.40    5.73   9.98  16.79   9.50    14.83
+ *     3        7.96    6.17  10.53  17.09  10.52    13.88
+ *
+ * Deleting the entire structure is indistinguishable from shipping it. In
+ * texture space the map is not flat either — inside 48px windows of clean paint,
+ * away from every groove, rivet, chip and grime term, roughness spans 0.5
+ * absolute with a high-pass RMS of 0.040 above one texel. The map has the
+ * structure; the frame cannot see it. The 2-4 texel grain is the one roughness
+ * octave with any travel (6x amplitude buys +25-36%) and it is unshippable long
+ * before that: at 2x the plate reads as cast tooth, at 3x as crackle, at 6x as
+ * crushed foil.
+ *
+ * **Anisotropy is worth more than every roughness lever put together**, on the
+ * exact large flat plates the brief was about, for no triangles, no texture and
+ * no bake time:
+ *
+ *                  pauldron  chest  head   brow  shoulder  slab   mean
+ *     isotropic      7.35    5.78  10.64  16.65   8.89    15.17  10.75
+ *     anisotropy .4  8.87    8.92  10.56  13.38  11.80    20.44  12.33
+ *                   +21%    +54%     0%   -20%    +33%    +35%   +15%
+ *
+ * The mechanism is the one thing the brief had right: it is about shape, not
+ * quantity. A GGX lobe stretched along the roll direction answers a moving
+ * surface with a highlight that has a long axis, and a plate whose curvature
+ * carries that axis across the form gets a highlight that travels and narrows
+ * instead of a soft blob that fades. It is also what these plates ARE: rolled
+ * stock under thin paint, which is a directional surface. `kb.worn` has run
+ * anisotropic at 0.28 since it was written, and it is the one plate material no
+ * critic has ever called flat.
+ *
+ * Kept moderate at 0.4. 0.8 measured no better (pauldron 8.65 against 8.69) and
+ * pushes the plates toward brushed chrome, which is a different material from
+ * the one this roster is made of. The brow bar's -20% is real and is the cost:
+ * a lobe with a long axis smears a highlight that was already tight against a
+ * hard geometric edge. It is the only crop of six that regresses and it is a
+ * crop where the surface was already inside the reference band. At fighting
+ * range the two are all but indistinguishable, which is the correct behaviour:
+ * the lobe shape is a closeup asset and it neither aliases nor shimmers at
+ * distance.
+ *
+ * COST: not resolvable on this machine, and honestly so. Alternated inside one
+ * page load at a character-fill framing, each ON block compared against the mean
+ * of its two neighbouring OFF blocks to cancel drift, twelve pairs: median
+ * -1.1 ms, mean -2.0 ms, spread -8.3 to +6.9. The negative sign is physically
+ * impossible, which is the point — the OFF arm's own median wandered between
+ * 15.1 and 34.6 ms during the same run, because half a dozen agents were driving
+ * Chromium on this box at the time. The instrument cannot see a character-shader
+ * change under that, exactly as the charter records for the round-14 detail
+ * normal. What can be said: no texture, no bake time, no triangle and no draw
+ * call, and a fragment-shader delta that a 20ms-wide noise floor cannot find.
+ */
+const PLATE_ANISOTROPY = 0.4;
 
 const DETAIL_CACHE = new Map();
 const SHARED_TEXTURES = new Set();
@@ -1374,12 +1469,13 @@ function buildPlateDetail(size) {
     const jitter = t3 - role - 0.5;
 
     let rough =
-      ROLE_ROUGH[role] + jitter * 0.10 +
-      patch[i] * 0.17 +      // 8cm weathering patches: the hand-sized gloss break
-      casting[i] * 0.13 +    // 8cm cast and roll mottle
-      tooth[i] * 0.11 +      // 1.6cm surface tooth
-      machining[i] * 0.12 +  // 5mm rolling marks in the plate stock
-      grain[i] * GRAIN.rough +  // cast tooth, 2-4 texels: the octave the set had none of
+      ROLE_ROUGH[role] + jitter * 0.10 * AB.roughStruct +
+      (patch[i] * 0.17 +      // 8cm weathering patches: the hand-sized gloss break
+       casting[i] * 0.13 +    // 8cm cast and roll mottle
+       tooth[i] * 0.11 +      // 1.6cm surface tooth
+       machining[i] * 0.12    // 5mm rolling marks in the plate stock
+      ) * AB.roughStruct +
+      grain[i] * GRAIN.rough * AB.roughGrain +  // cast tooth, 2-4 texels
       cav * 0.14;            // nothing ever wipes the bottom of a trough
     // A fastener head is rubbed bright by every hand and spanner that has been
     // near it; a weld bead is the one thing on a plate that was never finished.
@@ -1411,8 +1507,8 @@ function buildPlateDetail(size) {
     const g = grime[i];
     const cav = clamp01((1 - ao[i]) * 1.4);
     let rough =
-      0.26 + patch[i] * 0.13 + casting[i] * 0.12 + tooth[i] * 0.07 + machining[i] * 0.06 +
-      grain[i] * GRAIN.rough +
+      0.26 + (patch[i] * 0.13 + casting[i] * 0.12 + tooth[i] * 0.07 + machining[i] * 0.06) * AB.roughStruct +
+      grain[i] * GRAIN.rough * AB.roughGrain +
       cav * 0.16 + (1 - chip[i]) * 0.05;
     rough -= clamp01(rivet[i]) * 0.14;
     if (bead[i] > 0) rough += Math.sqrt(bead[i]) * 0.15;
@@ -2314,6 +2410,40 @@ if ( kbLattice.x > 0.0 && kbPitch > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 
 	roughnessFactor = clamp( roughnessFactor + 0.30 * kbLat + 0.09 * kbLatH - 0.13 * kbLatL, 0.06, 1.0 );
 	metalnessFactor *= 1.0 - 0.35 * kbLat;
 
+	// ROUND 15, MEASURED AND REVERTED: a real chamfer in the NORMAL.
+	//
+	// Note what every term above this line has in common. The lattice, the seam,
+	// the lip, the joint, the halo, the bolts -- all of them change albedo,
+	// roughness, metalness or clearcoat, and NOT ONE of them touches the normal.
+	// A panel gap here is therefore a dark stroke of constant width painted on a
+	// flat plate, with kbLatL offering the lip a gloss change and nothing else.
+	// That is exactly what round 15's critic saw at 3x, and the fix looked
+	// obvious: give the two lips a real 27-degree break so they catch the key.
+	//
+	// It was built -- a smoothstep V-profile in metres either side of kbDm, tilted
+	// into the shading normal with the standard surface-gradient construction so
+	// it needs no tangent frame, applied to nonPerturbedNormal as well so the coat
+	// followed the substrate, and band-limited for free by taking the height
+	// derivative with dFdx rather than analytically. It works: the term is live and
+	// its output changes with amplitude. **It is worth nothing.** Micro-contrast on
+	// the frozen closeup, three reps a side in one page-load-matched run, six crops
+	// (100 * RMS(L - box4(L)) / mean L):
+	//
+	//                pauldron  chest  head  brow  shoulder  slab   mean
+	//     off           7.35    5.78  10.64 16.65   8.89    15.17  10.75
+	//     2.2mm/1.1mm   6.88    6.21   9.77 15.89   9.62    15.45  10.64
+	//     3.0mm/6.0mm   6.93    6.17   9.88 15.38   9.75    15.19  10.55
+	//
+	// Three crops up, three down, the mean flat to slightly negative, and 2.7x the
+	// depth changes nothing -- so this is not an amplitude that wants tuning, it is
+	// a lever with no travel. The reason is scale: a 2mm break at the closest
+	// framing the game uses is four screen pixels wide, and a four-pixel tilt on a
+	// plate lit by a slowly-varying environment redistributes a little energy
+	// across those four pixels rather than adding any. The same measurement found
+	// anisotropy on the base lobe worth +21 to +54% on the same crops, which is
+	// what shipped instead. Do not re-derive this one from first principles: the
+	// argument for it is good and the number is flat.
+
 	// Fastener row, when the builder asked for one. Real panels are held at
 	// their edges, so the studs march around the plate's own perimeter at the
 	// panel pitch rather than down the middle of the field. They are shading and
@@ -2834,6 +2964,10 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     roughness: 1,
     metalness: 1,
     aoMapIntensity: 1,
+    // See {@link PLATE_ANISOTROPY}. Rotation 0 is the U axis of the plate's own
+    // box projection, which is the direction the stock was rolled.
+    anisotropy: PLATE_ANISOTROPY,
+    anisotropyRotation: 0,
     clearcoat: 1,
     clearcoatRoughness: 1,
     clearcoatMap: shared.plateCc,
@@ -2860,6 +2994,8 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     metalnessMap: shared.plateOrmPainted,
     roughness: 0.92,
     metalness: 1,
+    anisotropy: PLATE_ANISOTROPY,
+    anisotropyRotation: 0,
     clearcoat: 1,
     clearcoatRoughness: 0.8,
     clearcoatMap: shared.plateCc,
