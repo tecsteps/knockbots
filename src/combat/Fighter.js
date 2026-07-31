@@ -83,6 +83,10 @@ const SIDESTEP_SPEED = 3.8;
 const SIDESTEP_TICKS = 20;
 const JUMP_VY = 7.7;
 const JUMP_HOLD_TICKS = 7;      // hold up this long and the sidestep becomes a jump
+/** Widest depth gap the pair may hold, in metres. Roughly one body width. */
+const AXIS_MAX_GAP = 0.85;
+/** Per-tick fraction of the remaining depth gap closed once the evade is over. */
+const AXIS_REALIGN_RATE = 0.06;
 const GROUND_FRICTION = 0.80;
 const SLIDE_FRICTION = 0.93;    // while stunned — knockback should actually carry
 const AIR_DRAG = 0.996;
@@ -785,6 +789,7 @@ export class Fighter {
     this.#advanceAnimation();
     this.#integrate();
     this.#pushApart();
+    this.#realignAxis();
     this.#clampToArena();
     this.#regen();
     this.#updateFlags();
@@ -1670,6 +1675,56 @@ export class Fighter {
     const push = (minD - d) * 0.5;
     this.position.x += (dx / d) * push;
     this.position.z += (dz / d) * push;
+  }
+
+  /**
+   * Pull the pair back toward a shared fight axis.
+   *
+   * `facing` is `Math.sign(opponent.x - this.x)` — a SIGN ALONG X, not a yaw.
+   * Nothing in the rig can point a fighter at an opponent who is displaced in Z.
+   * Sidestep, meanwhile, moves purely in Z and nothing ever undid it, so the
+   * depth separation was bounded only by the arena wall.
+   *
+   * A player reported the end state: sidestep a few times in training against a
+   * standing opponent and the two robots end up stacked along the camera axis,
+   * one hidden behind the other, with every attack whiffing. Both halves follow
+   * from the same cause. The strike capsules lead forward along ±X, so an
+   * opponent parked off-axis is simply not in front of anything; and once the X
+   * gap closes, `Math.sign` returns 0 and `facing` latches at its last value, so
+   * the fighters stop even nominally facing each other. The camera framing
+   * solver has nothing to frame either, which is why it looked like the camera
+   * was stuck.
+   *
+   * Real fighting games let you leave the axis and then bring you back — the
+   * sidestep is a brief evasion, not a new place to stand. This does the same:
+   * while neither fighter is mid-sidestep and both are grounded, ease the depth
+   * gap shut, and hard-cap it so it can never exceed a body's width even mid-
+   * evade. Deliberately soft, so a sidestep still dodges; the cap is what makes
+   * the broken state unreachable.
+   */
+  #realignAxis() {
+    const o = this.opponent;
+    if (!o || o.state === STATE.KO || this.state === STATE.KO) return;
+    if (this.state === STATE.THROW || this.state === STATE.THROWN) return;
+    if (o.state === STATE.THROW || o.state === STATE.THROWN) return;
+
+    const dz = this.position.z - o.position.z;
+    const evading = this.state === STATE.SIDESTEP || o.state === STATE.SIDESTEP;
+
+    // Hard cap first: this is what makes "standing behind each other" impossible.
+    if (Math.abs(dz) > AXIS_MAX_GAP) {
+      const over = Math.abs(dz) - AXIS_MAX_GAP;
+      this.position.z -= Math.sign(dz) * over * 0.5;
+      o.position.z += Math.sign(dz) * over * 0.5;
+      return;
+    }
+    // Then the ease, but never while the evade is still running or it would
+    // cancel the very dodge the player asked for.
+    if (evading || !this.grounded || !o.grounded) return;
+    if (Math.abs(dz) < 0.004) { this.position.z -= dz * 0.5; o.position.z += dz * 0.5; return; }
+    const step = dz * AXIS_REALIGN_RATE * 0.5;
+    this.position.z -= step;
+    o.position.z += step;
   }
 
   /** Walls and floor. Records the wall impact so CombatSystem can splat. */

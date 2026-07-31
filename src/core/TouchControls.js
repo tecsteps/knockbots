@@ -354,6 +354,42 @@ export class TouchControls {
       window.addEventListener('touchstart', this._onFirstTouch, { capture: true, passive: true });
     }
 
+    /*
+     * Go fullscreen on a handset, on the first touch.
+     *
+     * A player's screenshot showed the game squeezed between Brave's URL bar and
+     * its bottom toolbar — a 2340x1080 phone rendering the fight into roughly
+     * half its height, with the touch buttons crowding the fighters. Browser
+     * chrome is not free real estate on a device this size, and a fighting game
+     * needs the width.
+     *
+     * It has to be the FIRST TOUCH and nothing earlier: every engine gates
+     * requestFullscreen on a user gesture and rejects it outside one, so calling
+     * it at boot silently fails. Coarse pointers only, because forcing a desktop
+     * browser fullscreen because someone clicked would be hostile. The promise
+     * rejection is swallowed on purpose — iOS Safari does not implement
+     * requestFullscreen on non-video elements at all, and a console error there
+     * would be noise about a platform limitation rather than a defect.
+     *
+     * Orientation lock is attempted separately and is allowed to fail on its
+     * own: it is unsupported on iOS and rejects when the device is not already
+     * in the requested orientation, and neither case should cost us fullscreen.
+     */
+    if (coarse) {
+      this._onFirstGesture = () => {
+        window.removeEventListener('touchend', this._onFirstGesture, true);
+        window.removeEventListener('pointerup', this._onFirstGesture, true);
+        const el = document.documentElement;
+        if (!document.fullscreenElement && el.requestFullscreen) {
+          el.requestFullscreen({ navigationUI: 'hide' })
+            .then(() => screen.orientation?.lock?.('landscape'))
+            .catch(() => {});
+        }
+      };
+      window.addEventListener('touchend', this._onFirstGesture, { capture: true, passive: true });
+      window.addEventListener('pointerup', this._onFirstGesture, { capture: true, passive: true });
+    }
+
     // The rotate prompt is for real handsets only. A desktop window dragged
     // narrow is not a device that can be turned, and telling its owner to
     // rotate it would be nonsense.
@@ -740,6 +776,11 @@ export class TouchControls {
     this._unsub?.();
     clearTimeout(this._flashT);
     this._orient?.removeEventListener('change', this._onOrient);
+    if (this._onFirstGesture) {
+      window.removeEventListener('touchend', this._onFirstGesture, true);
+      window.removeEventListener('pointerup', this._onFirstGesture, true);
+    }
+    if (this._onFirstTouch) window.removeEventListener('touchstart', this._onFirstTouch, true);
     this.root?.remove();
   }
 }
