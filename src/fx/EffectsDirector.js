@@ -177,6 +177,10 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
  *
  * ROUND 18: THE LIGHT'S AMPLITUDE WAS NEVER THE PROBLEM. ITS POSITION WAS.
  *
+ * (Its conclusion that position is the lever stands and is the basis of the
+ * round below. Its *sign* does not: `lightLift` is now -0.20, not +0.60, and the
+ * +0.60 figures in this section are the superseded ones. Read ROUND 19 first.)
+ *
  * The round that cut the amplitude was right that the impact light owns the
  * over-exposure and wrong about which of its numbers to reach for. Measured by
  * toggling one frozen `04-impact` contact frame in place — launcher, +1
@@ -272,6 +276,142 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
  * ZERO. Three probe runs of an unchanged build measured 4.63%, 4.35% and 0.65%
  * clipped for exactly that reason — on a loaded machine the scored frame is
  * sometimes photographed with the impact light already extinguished.
+ *
+ * ---
+ *
+ * ROUND 19: THE LIFT WAS THE RIGHT KNOB AND IT WAS TURNED THE WRONG WAY.
+ * `lightLift` GOES FROM +0.60 TO -0.20 — BEHIND THE CONTACT, NOT IN FRONT.
+ *
+ * The round above optimised the launcher's light against **clipped white**, and
+ * clipped white is not the defect. Measured on one frozen `04-impact` contact
+ * frame with the light moved in place — same session, same frame, sim paused,
+ * render clock pinned to 0, camera stubbed, grain and chroma off, so the
+ * control repeats to the last digit and the noise floor is **0.000** — the
+ * whole-frame clipped fraction is 0.173 % at lift +0.60 and 0.171 % at lift 0.
+ * It does not move. It cannot: the blow-out that a critic sees on this frame is
+ * not white, it is a **mid-tone additive veil** at luma 200-250 that fills the
+ * panel gaps and takes the armour's local contrast with it, and no
+ * clipped-white statistic can see it.
+ *
+ * The statistic that does see it is the fraction of the contact ROI with **any
+ * channel saturated**, and on that the tier gap the brief describes is real and
+ * large. Over a 260 px disc on the projected contact, both tiers at ~5.0 m,
+ * everything below from ONE frozen frame per tier:
+ *
+ *                       hot px    local     mid-tone   ROI    core    any-chan
+ *                        >=235   contrast   contrast   p05    sat     clipped
+ *     launcher, +0.60    30872    10.388     11.162    23.5   .1738    14.19 %
+ *     launcher, -0.20    22086    11.863     12.169    15.4   .1632     7.19 %
+ *     16-impact-heavy    16973    10.245      9.714    11.9   .1630     7.27 %
+ *
+ * `local contrast` is the RMS of ( L - box9(L) ) over the whole ROI;
+ * `mid-tone contrast` is the same restricted to 60 <= L < 200, the band the
+ * panel lines and edge wear actually live in; `p05` is the 5th percentile of
+ * luma, i.e. how dark the darkest gaps still are.
+ *
+ * Read the three rows together. The launcher was running **1.95x the heavy's
+ * saturated-channel area**; it now runs 0.99x of it — the rung it is supposed to
+ * be one step above, reached without touching a single count. Every contrast
+ * statistic goes the other way at the same time: local contrast +14.2 %,
+ * mid-tone +9.0 %, and the 5th percentile falls from 23.5 to 15.4, which is the
+ * panel gaps getting their shadow back. It still puts 5,100 hot pixels on the
+ * plate that switching the light off does not, and it keeps 30 % more hot area
+ * than the heavy, so the ladder still reads. At 3x the struck chest plates go
+ * from a single cream slab to plates with gaps, bevels and saturated blue trim,
+ * with the flare's pinpoint still the brightest thing in the frame.
+ *
+ * The only thing it costs is 6 % of the hot region's colour saturation
+ * (.1738 -> .1632), which lands it on the heavy's .1630.
+ *
+ * `04b-impact-decay`, the +8-frame shot, moves the same way for free: hot pixels
+ * 8,026 -> 6,864 and saturated-channel area 4.14 % -> 3.05 %.
+ *
+ * **Why behind and not in front.** A point light 0.6 m off a large
+ * camera-facing plate is a soft, even, low-gradient wash across the whole plate
+ * — the worst possible thing to add to a surface whose readability is entirely
+ * in its high frequencies. Put the same light *inside* the plate and its
+ * camera-facing face gets almost nothing (N·L points away), while the gap
+ * walls, the bevels and the plates canted away from it get raked. The energy
+ * lands on the edges instead of on the faces. That is also the honest physical
+ * story: the flash is struck *in* the metal, and what the camera sees is what
+ * escapes through the gaps.
+ *
+ * The whole sweep, on one frozen frame, lift in metres along the view ray
+ * (positive = toward the camera), amplitude unchanged at 5.1. `off` is the same
+ * frame with the light silenced, which is the floor every column runs to:
+ *
+ *     lift      +0.60  +0.45  +0.30  +0.15   0.00  -0.10  -0.20  -0.35  -0.50    off
+ *     hot px    30872  33893  36182  29797  23156  22560  22086  21841  21758  21591
+ *     any-chan  14.19  16.45  17.19  13.13   8.00   7.55   7.19   6.83   6.65   6.41
+ *     contrast  10.39  10.09  10.04  10.89  11.79  11.85  11.86  11.88  11.88  11.62
+ *     mid-tone  11.16  10.93  10.84  11.48  12.19  12.21  12.17  12.18  12.16  12.02
+ *     core sat  .1738  .1733  .1643  .1705  .1648  .1639  .1632  .1620  .1609  .1590
+ *
+ * **+0.30 is the worst point of the entire curve** — a light sitting just clear
+ * of the surface is the maximum-wash position — and the previous round swept
+ * 0.30 / 0.45 / 0.60 / 0.80 / 1.00 / 1.30, which is only the descending arm on
+ * the far side of that peak. Every number it saw improved with distance, so it
+ * concluded the answer was further out. It was, in that range. The range
+ * excluded the answer.
+ *
+ * -0.20 is the knee and it is chosen on the whole row, not on one column. By
+ * -0.20 the contrast columns have flattened to within 0.02 of their floor and
+ * the saturated-channel area is already below the heavy's 7.27; past it only
+ * the colour keeps draining toward the light-off floor, which is spending the
+ * light for nothing. Note also that everything from 0.00 outward beats the
+ * light-off row on contrast as well as on brightness — the light is not merely
+ * being dimmed, it is being spent on edges instead of on faces.
+ *
+ * **The amplitude was tested again and is deliberately unchanged.** Compensating
+ * the negative lift with gain buys a little of the lost saturation back and
+ * costs the same amount of saturated-channel area — at -0.20, x1.6 gives core
+ * sat .1656 and any-chan 7.58, x2.0 gives .1667 and 7.82, against .1632 and
+ * 7.19 at x1.0. It is a wash, and it is not worth breaking the `light` ladder
+ * for: 5.1 x 1.6 is 8.2, which would overtake ULTRA's 6.8 and make the ladder
+ * non-monotonic in a field this file has twice been corrected for. One constant
+ * moves; nothing else does.
+ *
+ * Two things were re-measured on the same frame and are NOT levers, confirming
+ * the round above rather than contradicting it:
+ *
+ *  - **`distance` still does nothing.** 6.5 -> 4.0 -> 2.6 -> 1.8 -> 1.2 m gives
+ *    local contrast 10.759 / 10.759 / 10.761 / 10.787 / 10.891 against a 0.000
+ *    noise floor. The struck plate is far inside the window at every value.
+ *  - **`decay` is worse, not better.** Steepening the falloff to 3.0, with the
+ *    amplitude compensated to hold the illuminance at the contact, takes hot
+ *    pixels from 31.0k to 32.0k and local contrast from 10.80 to 10.64; at 3.0
+ *    uncompensated it is 36.7k and 10.16. A steeper curve concentrates *more*
+ *    energy in the near field, which is the direction the defect already runs.
+ *
+ * Three cautions about the instrument, all found while building it, because two
+ * of them will silently corrupt any table produced this way:
+ *
+ *  - **Do not measure the first frame after the freeze.** One run in several,
+ *    the frame grabbed immediately after `paused = true` is still settling and
+ *    reads 30 % darker over the whole ROI (mean luma 104.7 against 138.5). Every
+ *    later grab of that same frozen frame is then identical to the last digit.
+ *    Render one throwaway variant first and treat the second as the control.
+ *  - **Largest-connected-component statistics are not comparable across
+ *    variants.** "Detail inside the hot core" flips which blob it is measuring
+ *    when the impact's own core stops being the biggest one in the ROI, so it
+ *    jumps 3.66 -> 1.85 between lift -0.10 and -0.20 while every other column
+ *    moves by a hundredth. Total hot area and RMS over the whole ROI do not have
+ *    that failure mode; prefer them.
+ *  - **All-channels-clipped on this frame is mostly the stage.** It reads 0.83 %
+ *    for the launcher against 0.002 % for the heavy, which looks like a
+ *    hundredfold tier defect and is not one: with the whole director silenced
+ *    the launcher's ROI still reads 0.786 %, because an arena light bar crosses
+ *    the frame at chest height behind the fighter. Any tier comparison here has
+ *    to be run against a director-silenced baseline before it means anything.
+ *
+ * Finally, one number this round could not reproduce and does not believe. The
+ * brief for it reported `04-impact` at "detail inside the hot core 11.23 against
+ * 22.81 for the heavy tier, over a hot region 40 % larger". Measured on frozen
+ * frames with a 0.000 noise floor, the two tiers' local contrast sits at 10.39
+ * and 10.25 — within 1.4 % of each other, not 2x — and the launcher's hot region
+ * is 82 % larger, not 40 %. The tier defect is real and it is the one in the
+ * table above; the 2x contrast gap is not, and is most likely a cross-run
+ * comparison of two differently-posed captures. See docs/PROFILING.md, trap 5.
  */
 const HIT_FX = {
   /**
@@ -353,7 +493,7 @@ const HIT_FX = {
     flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
     core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 30,
     debris: 10, fluid: 14, light: 5.1, impact: 0.17, dust: 8,
-    lightLift: 0.60, lightHex: 0xff9d4a, lightHexCounter: 0xffb877,
+    lightLift: -0.20, lightHex: 0xff9d4a, lightHexCounter: 0xffb877,
   },
   [WEIGHT.ULTRA]: {
     sparks: 1150, jet: 330, speed: 14.5, size: 0.048, heat: 4.0, sparkLife: 0.30,
@@ -1175,8 +1315,12 @@ export class EffectsDirector {
       // the plate it lights, and how much of its energy is delivered as colour
       // rather than as luminance. See the note above `HIT_FX` for the frames.
       case FX_PART.LIGHT: {
+        // A NEGATIVE lift is meaningful and is what the launcher ships: it puts
+        // the light *behind* the contact, inside the plate it just struck. See
+        // ROUND 19 above. `#towardCamera` takes a signed distance along the view
+        // ray, so the only thing to get right here is not to gate on `> 0`.
         const lift = r.lightLift ?? LIGHT_LIFT_M;
-        const at = lift > 0 ? this.#towardCamera(c.point, lift, _v3) : c.point;
+        const at = lift !== 0 ? this.#towardCamera(c.point, lift, _v3) : c.point;
         this.#flashLight(at, r.light * k,
           c.counter ? (r.lightHexCounter ?? LIGHT_HEX_COUNTER) : (r.lightHex ?? LIGHT_HEX));
         break;

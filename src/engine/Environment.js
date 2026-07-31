@@ -195,8 +195,26 @@ const RIM = {
    * so the body is neither dimmer nor flatter, while the edge band gains 3.8%
    * over the background. It is still well under the 2.6 ceiling above, which is
    * where the body genuinely did go flat.
+   *
+   * **1.66, and the reason is that this pass was never only drawing an edge.**
+   * Zeroing the two spots on a frozen frame and differencing removes **15.6% of
+   * the total light on a fighter**, and the difference image is not a rim: it is
+   * a cyan-and-magenta wash over the whole arm, the whole thigh and half the
+   * torso. A point source at 3.2 m wraps, and a faceted robot presents plates
+   * facing the rim azimuth all over its body, so most of that 15.6% lands
+   * *inside* the silhouette where it acts as a third fill. The 2.6 ceiling above
+   * was found by pushing until the body went flat; the body was already being
+   * flattened at 1.95, just not enough to notice next to the softbox doing four
+   * times as much of it.
+   *
+   * Cutting it 15% is worth about 0.05 of form contrast and it does not cost the
+   * edge — measured across the change the silhouette band goes **up** relative
+   * to the body (0.81 -> 0.94), because taking fill off the body is worth more to
+   * the edge than the rim's own 15% is. It is not cut further because hue is the
+   * channel this light exists for and the reference leans on it: at 0.5 the cyan
+   * on a warm robot stops reading as a second source.
    */
-  gain: 1.95,
+  gain: 1.66,
 };
 
 /**
@@ -293,15 +311,72 @@ const KEY_BOX = {
    * pushes its key drags the softbox with it and the ratio survives.
    *
    * It was 0.6 on top of a directional key running at full authored strength,
-   * which put 1.6 keys on the fighter and 1.0 on the deck. It is now the larger
-   * half of a split budget — see {@link DIRECTIONAL_KEY_SHARE} — so the fighter
-   * still receives the same 1.6 and the deck receives 0.66. The old ceiling
-   * argument (past about 0.7 the box starts filling the creases the hard key is
-   * carving, because three gives area lights no shadow) still holds and is what
-   * stops the split going further: at 0.94 the soft half is already 59% of the
-   * key on the fighter, and every further point of it is a point of terminator.
+   * which put 1.6 keys on the fighter and 1.0 on the deck. It then became the
+   * larger half of a split budget — see {@link DIRECTIONAL_KEY_SHARE} — at 0.94.
+   *
+   * **0.94 was three times too much, and the estimate that justified it was off
+   * by a factor of five.** That number came from a light-meter argument: "at
+   * 0.94 the soft half is already 59% of the key on the fighter". What actually
+   * arrives on a fighter is measurable, and the estimate was never checked
+   * against it. Measured by zeroing one term at a time on a frozen frame inside
+   * a single page session — the null control and the restore-and-regrab both
+   * differ from the base by **0.0000** code values, so every figure below is
+   * signal — and integrating linear luminance over a fighter mask built by
+   * hiding the robots in that same frozen frame:
+   *
+   *     key softbox (this light)      43.6% of the light on a fighter
+   *     per-fighter rim spots         15.6%
+   *     key directional (shadowed)    15.6%
+   *     env IBL                        6.4%
+   *     hemisphere fill, bounce,
+   *     ceiling strips, practicals    under 0.5% each
+   *
+   * The softbox was not 59% of the key. It was **2.8x** the key, and it is the
+   * largest single source of light on the character by a factor of nearly three.
+   * Three gives a `RectAreaLight` no shadow, so 43.6% of a fighter's light was
+   * arriving with no occlusion term at all: it filled every crease the hard key
+   * was carving and it lit the shadow side to the same value as the lit side.
+   *
+   * Two things follow, and both were measured rather than argued:
+   *
+   *   - **The body had no form.** Low-frequency luminance range across the body
+   *     — blur sigma pinned to a tenth of the subject's own on-screen width, so
+   *     the figure is scale-invariant, then (p90-p10)/p50 inside the mask — read
+   *     **0.58-0.66** on the pale fighter. The same measurement on hand-placed
+   *     boxes fully inside a Tekken 8 character runs **0.76 to 1.65** across
+   *     seven references, median 1.16. We were at roughly half the reference.
+   *   - **The rim was not a rim.** The one-pixel band inside the silhouette
+   *     measured **0.81 to 1.05x the body core** across four runs. A rim light
+   *     is by definition an edge brighter than the body; ours was the same
+   *     value as the body, because the softbox had lifted the body to meet it.
+   *     That is the rubric's "strong coloured rim separating fighter from
+   *     background" reading as nothing at all, and no amount of driving the rim
+   *     harder could have fixed it — the fill was the problem.
+   *
+   * At 0.34, with the directional key raised to 0.92 and {@link RIM}.gain at
+   * 0.85 of its old value, the same frozen-frame comparison gives:
+   *
+   *     form contrast, pale fighter   0.64 -> 0.80   (+25%)
+   *     form contrast, dark fighter   1.24 -> 1.30
+   *     silhouette edge / body core   0.81 -> 0.94
+   *     fighter / deck luminance      6.09 -> 3.88
+   *
+   * The cost is real and is paid on purpose: the fighters lose about a fifth of
+   * their brightness and the deck gains about a fifth. Both are affordable
+   * because both were outside the reference to begin with — the pale fighter sat
+   * at 0.31-0.37 linear against a Tekken range of 0.097-0.248, and figure/ground
+   * sat at 4.3-6.1 against a Tekken 1.31-1.78. This spends a surplus that was
+   * measured, not a margin that was guessed.
+   *
+   * What does **not** work, tested and discarded so nobody repeats it: shrinking
+   * the panel's angular size at constant irradiance. The wrap of a 6°x40° source
+   * around the terminator is not what flattens the body. Driving height from
+   * 2.0 m to 0.2 m and width from 0.30 m to 0.12 m, with intensity raised by the
+   * reciprocal of the area so the irradiance at the fighter is held, moves form
+   * contrast by 0.02-0.05 and the edge ratio not at all. The only lever on this
+   * light is how much of it there is.
    */
-  share: 0.94,
+  share: 0.34,
 };
 
 /**
@@ -351,8 +426,33 @@ const KEY_BOX = {
  * at a ratio of 1.4 is hue and rim, not luminance, and this rig already spends
  * heavily on both. So the split is kept for the deck it takes off the set and
  * not pushed further for a number the reference does not exhibit.
+ *
+ * **0.66 -> 0.92, and the direction of the argument above is now reversed.**
+ * The paragraph before this one is still correct about what the split buys; what
+ * it did not know is what the soft half was doing to the character it was
+ * supposed to be lighting. See {@link KEY_BOX}.share for the term-by-term
+ * decomposition: the softbox turned out to be 43.6% of the light on a fighter
+ * against the directional key's 15.6%, so the shadow-casting half of the key was
+ * outnumbered nearly three to one by a half that three gives no shadow at all.
+ * A fighter lit that way has no terminator and no rim, and both are measured
+ * there.
+ *
+ * This is the half of that repair that puts brightness back. It cannot be free:
+ * a directional key is parallel and infinite, so every unit of it lands on the
+ * deck as well. Measured on the same frozen frames, the deck is **56.6% env IBL,
+ * 34.3% key directional, 13.7% practicals**, and the fighter is only 6.4% env
+ * IBL — which is why cutting `environmentIntensity` looks like the obvious way
+ * to pay for a bigger key and is not: holding the deck exactly would need the
+ * IBL at roughly half, and the IBL is what the metal reflects.
+ *
+ * So the deck is allowed to rise about a fifth and the ratio to fall from 4.3-6.1
+ * to 3.9. That is spending a measured surplus: the reference runs 1.31-1.78 and
+ * we remain more than twice it. The share is held at 0.92 rather than pushed to
+ * the 1.4-1.8 the sweep also covered because past about 1.0 the lift stops being
+ * confined to the deck — the crowd band is 39.6% key directional too, and at 1.8
+ * the whole set flattens up toward the fighters faster than the fighters gain.
  */
-const DIRECTIONAL_KEY_SHARE = 0.66;
+const DIRECTIONAL_KEY_SHARE = 0.92;
 
 /**
  * The overhead strip pair: two long thin {@link THREE.RectAreaLight}s running

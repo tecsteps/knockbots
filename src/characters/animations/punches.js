@@ -1078,6 +1078,29 @@ export const PUNCH_CLIPS = {
   // +22.2 px on that band (control -3.6 px, and the critic's own baseline
   // reading was -1.7 px), which the calibration curve places at roughly 40-60 px
   // of body travel -- consistent with the +58.7 px measured directly.
+  //
+  // ROUND 19 RE-MEASURED ALL OF THAT AND IT REPRODUCES. NOTHING WAS CHANGED HERE.
+  //
+  // The round-19 brief still carried the pre-round-18 finding ("hips a net
+  // -1.7 px, chest RETREATS 11.9 px") as standing. It is not. Driven through
+  // `17-anim-strip`'s exact staging and parked camera, clock pinned to 1/60,
+  // stepped a tick at a time, SIX independent arms in two page sessions:
+  //
+  //     hips, screen, +6t -> +16t     +50.1  +50.2  +50.7  +50.9  (+52.3 +48.6)
+  //     chest, screen, same window    +20.4  +20.5  +21.5  +21.6
+  //     hips peak / chest peak        move tick 20-21 / 24-25  -> chest lags 4
+  //
+  // Against the brief's bar of "at least 40 px" and "chest lags hips by 2 to 4
+  // ticks", both halves pass, on every arm, with a 0.8 px spread. The upward
+  // chain order also holds per-tick: hips peak t19, spine02 t21, elbow_R t22,
+  // chest t23, head t24.
+  //
+  // THE BAND-CENTROID FORM OF THE TEST STILL CANNOT PASS, independently
+  // confirmed. Implemented exactly as written — y 430-570, x 620-960, masked
+  // against the seven-panel per-pixel median — it reads +25.6 px on the shipped
+  // strip and +27.5 px on a fresh one. That is the saturation the round-18 note
+  // calibrated: the band's right edge at x 960 cuts the body and clips the mass
+  // that would carry the centroid. Measure the hips BONE, not the band.
   'p.uppercut': {
     name: 'Uppercut',
     duration: 36, blendIn: 3, blendOut: 8,

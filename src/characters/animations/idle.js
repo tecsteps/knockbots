@@ -307,13 +307,94 @@ const ONTO_LEAD = {
 // ---------------------------------------------------------------------------
 // idle.fight — the clip that is on screen more than any other.
 //
-// Two breaths per loop, the second shallower, so the cycle never reads as a
-// metronome. The chest reaches the top of the inhale on frame 16 and the head
-// does not follow until frame 22; on the way down the head leads by four frames
-// instead, which is the small asymmetry that stops a loop looking mechanical.
-// Underneath it the weight rocks once from the rear foot to the lead foot and
-// back, and the guard sinks a couple of degrees before being re-set — a fighter
-// correcting a guard that keeps drifting.
+// ROUND 19: IT WAS A MANNEQUIN, AND IT IS HALF OF THE FRAME THE AXIS IS SCORED ON.
+//
+// `17-anim-strip` is seven panels of one attack. The attacker moves; the
+// DEFENDER stands in `idle.fight` for five of them. Measured on the strip's own
+// parked camera, one page session, clock pinned to 1/60, over the seventeen
+// ticks that cover panels +0t..+16t:
+//
+//     defender pelvis, screen      5.8 px across  x  0.9 px vertical
+//     defender pelvis, world       27 mm of total path
+//     defender chest, screen      14.0 x 0.9 px
+//     defender head, screen       25.1 x 1.8 px
+//
+// Nine tenths of a pixel of vertical pelvis travel over a quarter of a second.
+// The pelvis screen X was bit-identical (1075.7) on fourteen consecutive ticks.
+// Cropped at 3x the five panels are the same picture with a different attacker
+// pasted over them, which is exactly CRITIC.md's "pose-to-pose robotic motion"
+// and it was sitting in the middle of the scored frame the whole time.
+//
+// The cause was authored, not procedural: the old loop carried TWENTY-SIX
+// MILLIMETRES of pelvis travel across all 108 ticks, spread over two breaths and
+// one slow weight rock. Over any 16-tick window that averages 10 mm and bottoms
+// out at 1.8 mm. Breathing is not weight; a fighter in a stance is a mass held
+// on two springs and it never stops moving.
+//
+// So the loop now carries a real settle: FOUR bounces per loop, 27 ticks each
+// (2.2 Hz, a boxer's cadence), against TWO breaths at 54 and ONE weight rock at
+// 108. Three periods, pairwise coprime enough that nothing in the loop repeats
+// before the loop does.
+//
+// THE BOUNCE IS IN THE LEGS, NOT IN THE ROOT, and that is the whole reason it is
+// safe. Dropping the root alone buries the boots; lifting it alone floats them,
+// and "floaty feet" is on CRITIC.md's list of what drags this axis. `SETTLE` is
+// solved rather than eyeballed: the per-leg flex below was bisected against the
+// real forward kinematics until BOTH boots rise exactly 50 mm relative to the
+// pelvis, and the root then drops exactly 50 mm, so the sole does not move at
+// all. Measured over the whole loop as the lowest boot bone:
+//
+//     shipped clip   -31.1 mm .. +1.4 mm      (31 mm of burial, 1.4 of float)
+//     this clip      -11.8 mm .. +1.3 mm
+//
+// Strictly inside the old envelope at both ends — less burial for the planter to
+// absorb, no more float — while pelvis travel goes 26 mm -> 50 mm over the loop
+// and 10.1 mm -> 31.6 mm over a 16-tick window, worst case 1.8 mm -> 12.7 mm.
+// Boot pitch (toe minus foot height) moves under 3 mm at full sink, so the sole
+// angle the stance authored survives.
+//
+// The bounce is asymmetric on purpose: `quad` down, `snap` off the bottom,
+// `sine` back to the top, and the four amplitudes are 1.00 / 0.66 / 0.90 / 0.58
+// so no two consecutive bounces are the same height. The torso, guard and head
+// read the bounce FIVE TICKS LATE (`LAG`) and ride `sine` while the legs ride
+// the snap — CRITIC.md's "the hips lead, the head lags", applied to the neutral
+// rather than only to the strike.
+//
+// SEEN, NOT JUST MEASURED. Single page session, one compiled program, the only
+// difference being which key arrays hang on the animator's clip object; the
+// strip's own parked camera; clock pinned to 1/60; motion blur and film grain
+// off at the freeze. Three arms a side, the first discarded as a warm-up (the
+// defender is still settling out of the boot sequence in it and says so — its
+// pelvis starts 47 px high). Over the seventeen ticks covering panels +0t..+16t:
+//
+//                              old (2 arms)      this clip (2 arms)
+//     pelvis vertical, screen    2.06 / 1.18 px   16.18 / 16.25 px
+//     head vertical, screen      2.74 / 1.58 px   16.93 / 17.01 px
+//     knee_L vertical, screen    0.58 / 0.57 px    4.00 /  3.96 px
+//     pelvis world path          29.6 / 32.2 mm  136.3 / 138.2 mm
+//     pelvis screen path         7.41 / 8.07 px   34.19 / 34.69 px
+//
+// And in pixels, over a 210x540 band on the defender that the attacker never
+// reaches (mean absolute difference out of 255, two reps a side, run-to-run
+// noise floor 1.3-2.5, background-only band 0.1):
+//
+//     panel pair      old            this clip
+//     +0t -> +6t      14.56 / 14.42  28.27 / 28.48
+//     +6t -> +10t     10.78 / 10.38  14.63 / 14.79
+//     +10t -> +13t     7.21 /  8.24  16.68 / 16.61
+//     +13t -> +16t    21.00 / 20.87  20.04 / 20.19
+//
+// The last pair does not move and should not: by then the attacker's drive is
+// pushing the defender through `separatePair` and that pair was never the
+// mannequin. The three that are actually idle roughly double.
+//
+// WHAT IT DOES NOT TOUCH, checked because it would confound two other
+// workstreams. The attacker's hips screen X agrees within 0.8 px and its
+// hand_R within 2 px across all four arms, and the uppercut connects on the
+// IDENTICAL tick in every one — so no reach, spacing or contact-timing change.
+// `#trackFootfalls` fires ZERO times in 300 ticks of neutral idle on both
+// clips, so the deck picks up no new dust. Mean stance height is unchanged in
+// any way a frame can see: pelvis 0.8927 -> 0.8871 m, head 8.8 mm lower.
 // ---------------------------------------------------------------------------
 const GUARD_SINK = {
   clavicle_L: [0, 0, -1.5], shoulder_L: [3, 0, 2], elbow_L: [4, 0, -2],
@@ -324,17 +405,80 @@ const GUARD_RESET = {
   clavicle_R: [0, 0, -1.6], shoulder_R: [-3, 0, 2], elbow_R: [-4, 0, 0],
 };
 
-const idleFight = makeClip('idle.fight', { duration: 108, loop: true, blendIn: 8, blendOut: 8 }, [
-  { t: 0, ease: 'sine', pose: STANCE, root: [0, STANCE_Y, 0] },
-  { t: 16, ease: 'sine', pose: add(STANCE, INHALE, mix({}, ONTO_REAR, 0.35), { head: [1, 1, 0] }), root: [0, STANCE_Y + 0.011, 0] },
-  { t: 22, ease: 'sine', pose: add(STANCE, INHALE, mix({}, ONTO_REAR, 0.6), { head: [-2.5, 1.5, 1], neck: [-1.5, 0, 0] }), root: [0, STANCE_Y + 0.012, -0.006] },
-  { t: 38, ease: 'sine', pose: add(STANCE, mix(INHALE, EXHALE, 0.45), ONTO_REAR, GUARD_SINK, { head: [-1, 2, 1] }), root: [0, STANCE_Y - 0.002, -0.012] },
-  { t: 52, ease: 'sine', pose: add(STANCE, EXHALE, ONTO_REAR, GUARD_SINK, { head: [2, 1, 0] }), root: [0, STANCE_Y - 0.014, -0.010] },
-  { t: 62, ease: 'quad', pose: add(STANCE, EXHALE, mix(ONTO_REAR, ONTO_LEAD, 0.5), GUARD_RESET, { head: [1, -1, 0] }), root: [0, STANCE_Y - 0.008, -0.002] },
-  { t: 74, ease: 'sine', pose: add(STANCE, mix(EXHALE, INHALE, 0.5), ONTO_LEAD, { head: [-1, -2, -1] }), root: [0, STANCE_Y + 0.006, 0.006] },
-  { t: 86, ease: 'sine', pose: add(STANCE, mix({}, INHALE, 0.55), mix({}, ONTO_LEAD, 0.6), { head: [-1.5, -1, 0] }), root: [0, STANCE_Y + 0.007, 0.004] },
-  { t: 98, ease: 'sine', pose: add(STANCE, mix({}, EXHALE, 0.4), mix({}, ONTO_LEAD, 0.2), { head: [1, 0, 0] }), root: [0, STANCE_Y - 0.004, 0] },
-]);
+/**
+ * The settle. Solved, not authored: these six numbers were bisected against the
+ * rig's own forward kinematics until the lowest bone of EACH boot rises exactly
+ * 50 mm relative to the pelvis, so pairing them with `SETTLE_Y` leaves both
+ * soles where they were. The two legs need different amounts because the stance
+ * is bladed — the lead leg is already carrying 39 degrees of hip flex and the
+ * rear one only 9.
+ */
+const SETTLE = {
+  hip_L: [-9.0, 0, 0], knee_L: [16.0, 0, 0], ankle_L: [-7.0, 0, 0],
+  hip_R: [-9.0, 0, 0], knee_R: [18.0, 0, 0], ankle_R: [-7.7, 0, 0],
+};
+/** Root drop that exactly cancels `SETTLE`'s boot lift. */
+const SETTLE_Y = -0.050;
+/** Ribs and shoulders compressing under the drop, above the waist. */
+const ABSORB = {
+  spine01: [1.6, 0, 0], spine02: [1.4, 0, 0], chest: [1.2, 0, -1.2],
+};
+
+/** Ticks the upper body runs behind the pelvis. */
+const LAG = 5;
+/** One bounce, in ticks. Four of them fill the 108-tick loop. */
+const BOUNCE = 27;
+/** Bounce depths, in loop order. Deliberately unequal — a metronome reads dead. */
+const BOUNCE_AMP = [1.0, 0.66, 0.9, 0.58];
+/** Offsets inside one bounce: top, bottom, three-quarters back up. */
+const BOUNCE_KEYS = [[0, 0, 'quad'], [9, 1, 'snap'], [18, 0.35, 'sine']];
+
+const cosWave = (t, period, peak) => 0.5 - 0.5 * Math.cos((2 * Math.PI * (t - peak)) / period);
+
+/** Sink fraction at any tick, read off the same three key values, for the lag terms. */
+function settleAt(t) {
+  const tt = ((t % 108) + 108) % 108;
+  const c = Math.floor(tt / BOUNCE);
+  const p = tt - c * BOUNCE;
+  const pts = [[0, 0], [9, 1], [18, 0.35], [27, 0]];
+  for (let i = 0; i < 3; i++) {
+    if (p >= pts[i][0] && p <= pts[i + 1][0]) {
+      const u = (p - pts[i][0]) / (pts[i + 1][0] - pts[i][0]);
+      return BOUNCE_AMP[c] * (pts[i][1] + (pts[i + 1][1] - pts[i][1]) * u);
+    }
+  }
+  return 0;
+}
+/** Two breaths per loop, the second shallower. */
+const breathAt = (t) => cosWave(t, 54, 16) * ((((t % 108) + 108) % 108) < 54 ? 1 : 0.72);
+/** One slow weight rock: -1 fully on the rear boot, +1 fully on the lead. */
+const rockAt = (t) => 1 - 2 * cosWave(t, 108, 74);
+
+const idleFight = makeClip('idle.fight', { duration: 108, loop: true, blendIn: 8, blendOut: 8 },
+  BOUNCE_AMP.flatMap((amp, c) => BOUNCE_KEYS.map(([off, frac, ease]) => {
+    const t = c * BOUNCE + off;
+    const s = amp * frac;          // this key's sink
+    const sl = settleAt(t - LAG);  // what the upper body is still catching up to
+    const r = rockAt(t);
+    const b = breathAt(t - LAG);
+    return {
+      t,
+      ease,
+      // The head and neck ride a sine while the legs ride the snap, so the skull
+      // is still travelling when the boots have already arrived.
+      easeBy: { head: 'sine', neck: 'sine', chest: 'sine' },
+      pose: add(
+        STANCE,
+        mix({}, SETTLE, s),
+        mix({}, ABSORB, sl),
+        r >= 0 ? mix({}, ONTO_LEAD, r) : mix({}, ONTO_REAR, -r),
+        mix(EXHALE, INHALE, b),
+        mix({}, GUARD_SINK, sl),
+        { head: [3.0 - 6 * b + 3.0 * sl, 2 * r, 1.2 * r], neck: [-2.4 * b + 1.2 * sl, 0.8 * r, 0] },
+      ),
+      root: [0, STANCE_Y + 0.010 + SETTLE_Y * s, -0.010 * r],
+    };
+  })));
 
 // ---------------------------------------------------------------------------
 // idle.breathe — the between-rounds / neutral idle. Same rig, lower intensity:

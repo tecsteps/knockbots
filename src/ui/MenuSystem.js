@@ -2651,10 +2651,48 @@ const KBS_CSS = `
 .kbs-bracket--tr { right: 0; top: 0; border-left: 0; border-bottom: 0; }
 .kbs-bracket--bl { left: 0; bottom: 0; border-right: 0; border-top: 0; }
 .kbs-bracket--br { right: 0; bottom: 0; border-left: 0; border-top: 0; }
+/*
+ * The one piece of type on this screen with nothing underneath it, and it was
+ * the least legible thing in the frame. 10px mono at \`--kb-text-faint\`, laid
+ * straight onto a live 3D preview whose subject stands right behind it: on
+ * 12-select-screen the machine's own copper armour passes under "CHASSIS
+ * FEED" and the caption disappears into it.
+ *
+ * Measured on the delivered pixels of the shot itself — glyph ink as the top
+ * decile of the caption's rect, against the background it actually covers:
+ *
+ *     as shipped    ink  79.6   covered background 41.0   1.79:1   peak ink 102
+ *     this          ink 130.2   covered background 19.6   4.82:1   peak ink 159
+ *
+ * Three separate causes, and the peak-ink column is what separates them. At
+ * 0.5em / weight 400 a mono stroke is about a pixel wide, so the glyph never
+ * reaches its own colour anywhere — its brightest delivered pixel is 102
+ * against a nominal 158. Weight and a little size fix that (159), the dim
+ * token instead of the faint one lifts the whole letterform, and the wash
+ * takes the render out from under it. Same blurred-rect idiom as
+ * \`.meter-label\` in ui.css, for the same reason and with the same geometry,
+ * because these two captions have the identical problem and should not be
+ * solved twice.
+ */
 .kbs-stage-tag {
   position: absolute; left: 0; top: 2.1em;
-  font-family: var(--kb-font-mono); font-size: 0.5em;
-  letter-spacing: 0.24em; color: var(--kb-text-faint);
+  z-index: 0;
+  font-family: var(--kb-font-mono); font-size: 0.56em; font-weight: 700;
+  letter-spacing: 0.24em; color: var(--kb-text-dim);
+  padding: 0.3em 0.7em; margin: -0.3em -0.7em;
+}
+/* Behind the type, in front of the preview. \`.kbs-stage-tag\` is already
+   \`position: absolute\`, so it is the containing block for this; \`z-index: 0\`
+   above is what makes it a stacking context so \`-1\` cannot fall through it. */
+.kbs-stage-tag::before {
+  content: '';
+  position: absolute;
+  inset: -0.05em -0.15em;
+  z-index: -1;
+  border-radius: 0.8em;
+  background: rgba(4, 7, 12, 0.95);
+  filter: blur(0.4em);
+  pointer-events: none;
 }
 .kbs-stage-tag b { color: var(--kb-danger); }
 .kbs-sweep {

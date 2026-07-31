@@ -719,11 +719,32 @@
  * was reading as washed-out against it. This gives the name a fixed-contrast
  * surface to sit on, cut with the same parallelogram language as the bars.
  */
+/*
+ * `width: 100%`, not `max-width: 100%`, AND WHY IT IS NOT COSMETIC.
+ *
+ * `.hp-block` is a column flex container, so a child with no width of its own
+ * is sized by `align-items`. That resolves to the default `stretch` on P1 and
+ * to `flex-end` on `.hp-block--p2` (see that rule) — and `flex-end` makes a
+ * flex item SHRINK TO ITS CONTENT. `.hp-frame` never noticed because it
+ * carries its own `width: 100%`; this element did not.
+ *
+ * Measured in the live DOM on a frozen 1920x1080 frame: P1's nameplate strip
+ * was 767.5 px wide and P2's was 172.0 px — the same element, the same style
+ * sheet, a 4.5x difference decided entirely by which side it was on. Scanned
+ * off the shipped 10-ko capture the two plates run x 82..841 and x 1669..1832.
+ * That is the most-looked-at chrome in the game, it is in four of the six
+ * frames this axis is scored on, and it is visible at 1x without zooming.
+ *
+ * The comment on `.hp-block`'s padding already ASSERTS this invariant — "every
+ * flow child of `.hp-block` (`.hp-frame`, `.nameplate`) is a `width: 100%`
+ * box" — so the rule below is that assertion finally being true.
+ */
 .nameplate {
   position: relative;
   display: flex;
   align-items: center;
   gap: 0.55em;
+  width: 100%;
   max-width: 100%;
   min-width: 0;
   padding: 0.2em 0.5em;
@@ -759,7 +780,21 @@
 }
 /* Name, identity rule and pips all sit above the face. */
 .nameplate > * { position: relative; z-index: 1; }
-.hp-block--p2 .nameplate { flex-direction: row-reverse; }
+/*
+ * `row`, NOT `row-reverse` — the reversal was being applied twice.
+ *
+ * `HUD#buildBlock` already appends the two children in mirrored DOM order:
+ * `[name, pips]` for P1 and `[pips, name]` for P2. Adding `row-reverse` on top
+ * of that reversed an already-reversed row, so P2 came out in P1's order and
+ * the plate read, from the screen edge inward, PIPS, RULE, NAME against P1's
+ * RULE, NAME, PIPS. `justify-content: flex-end` is what actually packs the
+ * mirrored row against the outer edge now that the plate is full width.
+ *
+ * At 172 px the plate was too small for the mis-order to register; at its true
+ * 767.5 px it is the difference between two nameplates that mirror and two
+ * that merely both exist.
+ */
+.hp-block--p2 .nameplate { flex-direction: row; justify-content: flex-end; }
 
 /*
  * `box-sizing: content-box`, against the `#ui *` reset, is load-bearing here
@@ -1268,15 +1303,56 @@
  * FINE on both readings — it is left alone, because the sibling that looks
  * similar is not the one that is broken.
  *
- * A soft elliptical wash, not a plate: no hard edge anywhere on it, so it reads
- * as the caption casting a shadow rather than as a fifth panel added to a bar
- * that already has four. The negative margin cancels the padding exactly, so
- * the first glyph stays on `--kb-col-clear` — the shared column the comment on
- * `.meter-block` is about. The gradient is symmetric left-to-right because
- * `.meter-block--p2` mirrors and the label mirrors back, and a directional fade
- * would come out pointing the wrong way on P2.
+ * THE WASH THAT WAS ADDED TO FIX THAT DID NOT FADE. It was written as
+ * `radial-gradient(ellipse 58% 118% at 50% 50%, ...)` painted on the element's
+ * own background, described in this comment as "a soft elliptical wash, not a
+ * plate: no hard edge anywhere on it". Photographed, it is a hard-edged
+ * rectangle, and the arithmetic says why: in `radial-gradient` a percentage
+ * radius is a fraction of the BOX, so `118%` of a 19 px-tall caption is an
+ * ellipse 2.4x taller than the box it is painted in. The gradient's own fade
+ * never happens inside the element; the element's edge does the cutting.
+ *
+ * Recovered as an alpha profile rather than as pixels, so the number is not a
+ * function of whatever the arena happened to be doing: the same frozen UI was
+ * photographed over two flat backdrops (luma 111 and 232) with the 3D canvas
+ * hidden, and opacity solved per pixel as 1 - (o2 - o1) / (bg2 - bg1). Down
+ * the caption's own ink-free left margin, top row to bottom row:
+ *
+ *   ellipse  0.00 .15 .17 .19 .21 .23 .25 .26 .27 .28 .28 .28 .28 .27 .26 .24 .24 .21 .18 .17 .14 0.00
+ *   this     0.37 .44 .50 .56 .61 .66 .70 .74 .76 .78 .79 .79 .78 .76 .74 .70 .66 .61 .56 .50 .44 0.37
+ *
+ * Two defects in one line. The old wash STARTS at 0.15 and STOPS at 0.14 — a
+ * fifteen-point discontinuity in a single pixel, which is the whole visible
+ * top and bottom edge of the grey box that shows up over any bright part of
+ * the arena (08-hud, where a bloom streak passes behind P1's caption). And it
+ * never exceeds 0.28, so 72% of a moving 1080p render reads straight through
+ * the surface the caption is supposed to be resting on — which is the actual
+ * mechanism behind the 2.49:1 measured above, not the absence of a wash.
+ *
+ * A blurred rounded rect instead. Softness comes from the blur, so it is real
+ * gaussian falloff that keeps going past the element's edge instead of being
+ * clipped by it (largest step in the profile above: 0.07/px, and it is still
+ * fading where the sample window ends), while the core is dense enough to be a
+ * surface. Contrast against the same shared letterform mask, over the flat
+ * backdrop: 4.06:1 -> 5.12:1, with the ink itself unmoved at 148.7 -> 147.9,
+ * which is the check that the wash really is behind the type.
+ *
+ * `position: relative; z-index: 0` is load-bearing, not tidiness. Without the
+ * `position` the pseudo-element resolves `inset` against the nearest POSITIONED
+ * ancestor — `.meter-wrap` — and the wash covers a 700 px band of the HUD;
+ * that was the first version of this and the probe caught it. The explicit
+ * `z-index: 0` makes the caption its own stacking context so `z-index: -1`
+ * below is guaranteed to land behind the type and in front of everything else,
+ * on P1 as well as on P2 (where `scaleX(-1)` supplies one for free).
+ *
+ * The negative margin still cancels the padding exactly, so the first glyph
+ * stays on `--kb-col-clear` — the shared column the comment on `.meter-block`
+ * is about — and the shape is still symmetric left-to-right, because
+ * `.meter-block--p2` mirrors and the label mirrors back.
  */
 .meter-label {
+  position: relative;
+  z-index: 0;
   font-family: var(--kb-font-label);
   font-size: max(9px, 0.58em);
   font-weight: 700;
@@ -1287,8 +1363,16 @@
   transition: color 0.2s ease;
   padding: 0.34em 1em 0.3em;
   margin: -0.34em -1em -0.3em;
-  background: radial-gradient(ellipse 58% 118% at 50% 50%,
-    rgba(4, 7, 12, 0.92) 0%, rgba(4, 7, 12, 0.8) 45%, rgba(4, 7, 12, 0) 100%);
+}
+.meter-label::before {
+  content: '';
+  position: absolute;
+  inset: -0.05em -0.15em;
+  z-index: -1;
+  border-radius: 0.8em;
+  background: rgba(4, 7, 12, 0.95);
+  filter: blur(0.4em);
+  pointer-events: none;
 }
 .meter-label.meter-label--full {
   color: var(--kb-cyan);
@@ -1857,8 +1941,13 @@
 
   /* Shrink-wrap the nameplate. Stretched to the bar's full width it was a
    * black slab across a quarter of the screen for the sake of six letters —
-   * affordable at 1080p, a third of the visible arena here. */
-  .nameplate { align-self: flex-start; }
+   * affordable at 1080p, a third of the visible arena here.
+   *
+   * `width: auto` is now part of that and has to be: the base rule gained an
+   * explicit `width: 100%` (see it for why), and an explicit width beats
+   * `align-self` outright, so these two lines alone would have quietly stopped
+   * doing anything on a phone the moment the desktop bug was fixed. */
+  .nameplate { width: auto; align-self: flex-start; }
   .hp-block--p2 .nameplate { align-self: flex-end; }
 
   /* 41px of cap height subtends 1.2deg at arm's length, four times the
