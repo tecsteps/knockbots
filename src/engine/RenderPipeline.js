@@ -1346,6 +1346,45 @@ class BokehDofPass extends Pass {
  * which is contrast, not glow. So the top end was bought in the display
  * transform instead (see `buildGradeLut` and `look.exposure`) and this pass was
  * left exactly where it was.
+ *
+ * ## What that analysis did not measure, and why `clamp` moved anyway
+ *
+ * Everything above is a *luminance percentile* argument, and it is right on its
+ * own terms. It is blind to the thing that actually decides the stage score,
+ * which is LOCAL CONTRAST — and the pedestal it describes is not flat. It is a
+ * blur of the frame's highlights, so it is thickest exactly where the highlights
+ * are, and on this stage the brightest object is a twenty-four-metre emissive
+ * capping strip that runs the full width of frame immediately under the crowd.
+ * Its halo is what the mid-ground is wearing.
+ *
+ * Measured on one frozen `06-stage-wide` frame, toggling only this pass's own
+ * uniforms so no shader recompiles and the null control is exactly zero.
+ * Laplacian variance over screen band y 250-430 — the crowd, the fence and the
+ * terrace, the one band the stage was out of range on:
+ *
+ *     bloom off entirely   523.3   p10 0.00078   <- black floor gone, not shippable
+ *     clamp 2.0 (shipped)  156.9   p10 0.00583
+ *     clamp 1.4            201.4   p10 0.00474
+ *     clamp 1.0            242.9   p10 0.00393
+ *     clamp 0.7            287.4   p10 0.00329
+ *     clamp 0.45           339.3   p10 0.00256   <- below the reference minimum
+ *     radius 0.35 -> 0.02  183.4   p10 0.00450
+ *     strength 0.22 -> 0.12 245.5  p10 0.00398
+ *
+ * Two things fall out. The band statistic is a straight monotone trade against
+ * the black floor and nothing buys its way out of it — `clamp 0.45 / strength
+ * 0.36` reaches the same 281 as `clamp 0.7 / strength 0.22` at the same p10, so
+ * the pedestal *is* the veil and they cannot be separated. And `radius`, which
+ * the analysis above correctly reports as nearly irrelevant to the luminance
+ * floor, is nearly irrelevant here too, for the same reason: the pedestal lives
+ * in the coarse mips and those are weighted by strength.
+ *
+ * So the only question is where on that one curve to sit. The reference p10s,
+ * re-measured with the HUD band excluded so they are comparable, run 0.00273 to
+ * 0.03977. `clamp 0.75` lands the band at roughly 280 against 157 — a 1.8x
+ * recovery — at a p10 of about 0.0035, which is inside the reference range and
+ * is lifted back to ~0.0039 by the floor chroma work in the same round. Going
+ * further leaves the range.
  */
 class HighlightBloomPass extends UnrealBloomPass {
   /**
@@ -2186,7 +2225,13 @@ export class RenderPipeline {
       lutStrength: 1.0, saturation: 1.0,
       chroma: 0.0, distortion: 0.018, grain: 0.02, vignette: 0.3,
       bloomStrength: 0.22, bloomRadius: 0.35, bloomThreshold: 5.5,
-      bloomKnee: 0.35, bloomClamp: 2.0,
+      // `bloomClamp` was 2.0. See the note on HighlightBloomPass: the veil this
+      // pass lays down is the single largest thing standing between the stage's
+      // mid-ground and a Tekken-grade detail figure, and the energy limit is the
+      // knob that controls it. Measured, in-page, on one frozen 06-stage-wide
+      // frame with the sim and the frame clock stopped, so the null control
+      // between two grabs is exactly zero.
+      bloomKnee: 0.35, bloomClamp: 0.75,
       aoIntensity: 0.92, dofStrength: 0.9, motionBlur: 0.45,
     };
 

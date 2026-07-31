@@ -37,15 +37,39 @@ const CATWALK_Y = 5.7;
 const ROOF_Y = 12.0;
 const SHELL_Z = -19.0;      // the hangar's rear shell wall
 
-// Spectator terrace: four treads climbing away from the fence. The crowd
-// placement reads the same numbers, so a rank always lands on a step.
-const TERRACE_RANKS = 4;
-const TERRACE_Z0 = PIT_BACK - 0.6;   // z of the lowest tread's front edge
-const TERRACE_BACK = PIT_BACK - 4.6; // z the terrace runs back to
-const TERRACE_RUN = 0.9;             // tread depth
-const TERRACE_RISE = 0.42;
-const TERRACE_Y0 = 1.15;             // top of the lowest tread
-const TERRACE_TOP = TERRACE_Y0 + (TERRACE_RANKS - 1) * TERRACE_RISE;
+// Spectator terrace. The crowd placement reads the same table, so a rank always
+// lands on a step.
+//
+// It used to be four treads at a constant 0.9m run and 0.42m rise, ending at
+// z=-13.2 with its top at y=2.41. That is where a chunk of the stage's depth
+// problem lived, and the reason is a frustum measurement rather than a taste:
+// projecting the world through the live wide camera (1.87, 4.5, 13.82 at 34deg)
+// puts EVERY tread's crowd inside a single 120-pixel screen band, because four
+// ranks at a constant rise are four parallel lines at the same convergence. The
+// stand read as one card because geometrically it nearly was one.
+//
+// The obvious repair -- another terrace stepped back behind this one -- does not
+// fit and the measurement says so plainly: the machinery bank's cabinets start
+// at MACHINE_Z = -13.9 and the top tread already ends at -13.2. There is 0.7m of
+// clear floor back there, which is not a rank, it is a gap. So the two new tiers
+// are stepped UP rather than back, on a DIFFERENT rise and a shorter run, which
+// is what breaks the convergence: the last two ranks climb half a metre each
+// over a 0.65m tread instead of 0.42 over 0.9, so their heads land 90 screen
+// pixels above the fourth rank's instead of 20.
+//
+// `run` is the depth of the tread in front of this rank's riser.
+const TERRACE = [
+  { y: 1.15, front: PIT_BACK - 0.60, run: 0.90 },
+  { y: 1.57, front: PIT_BACK - 1.50, run: 0.90 },
+  { y: 1.99, front: PIT_BACK - 2.40, run: 0.90 },
+  { y: 2.41, front: PIT_BACK - 3.30, run: 0.65 },
+  { y: 2.91, front: PIT_BACK - 3.95, run: 0.65 },
+  { y: 3.41, front: PIT_BACK - 4.60, run: 0.70 },
+];
+const TERRACE_RANKS = TERRACE.length;
+const TERRACE_Z0 = TERRACE[0].front;         // z of the lowest tread's front edge
+const TERRACE_BACK = PIT_BACK - 5.30;        // z the terrace runs back to
+const TERRACE_TOP = TERRACE[TERRACE_RANKS - 1].y;
 
 const MACHINE_Z = -13.9;    // front face of the machinery bank
 
@@ -249,6 +273,18 @@ export class StageStructure {
     this.timeUniform = { value: 0 };
     /** Linear radiance the mid and far layers fade toward; follows the mood. */
     this.midgroundHaze = { value: new THREE.Color(0x131b26) };
+    /**
+     * How far the stand is allowed to sink into that haze.
+     *
+     * This was a constant 0.62 in the crowd shader. Hiding all 168 figures
+     * outright changed the Laplacian variance of screen band y 250-430 -- the
+     * band the whole stand occupies -- from 285.3 to 284.3, on a frozen frame
+     * whose null control is exactly 0.0. A crowd that can be deleted without
+     * moving a detail statistic is not detail; it is a level. The figures cover
+     * a third of that band and shift it by 7.5/255, so what they were
+     * contributing was tone and not structure, and this is the term that did it.
+     */
+    this.crowdSinkAmount = { value: 0.45 };
 
     // Static geometry goes into the arena-wide bins; the Stage merges every
     // producer's contributions into one mesh per material at the end of init.
@@ -318,6 +354,7 @@ export class StageStructure {
     this.#barrierPanels(W, face);
     this.#barrierFabrication(W, face);
     this.#barrierCapping(W, face);
+    this.#pitDressing(face);
 
     // Spectator terrace. Four steps rather than one shelf, because a crowd on
     // a single level is a row: every figure sits at one height, occludes its
@@ -326,8 +363,7 @@ export class StageStructure {
     // which is both what a real stand does and the only way overlapping
     // silhouettes read as depth instead of clutter.
     for (let i = 0; i < TERRACE_RANKS; i++) {
-      const front = TERRACE_Z0 - i * TERRACE_RUN;
-      const h = TERRACE_Y0 + i * TERRACE_RISE;
+      const { y: h, front } = TERRACE[i];
       // Each tread is a whole box running back to the rear wall, so the flanks
       // would otherwise be four coincident faces fighting for the same depth.
       // Two centimetres of stagger costs nothing and settles it.
@@ -337,9 +373,25 @@ export class StageStructure {
       // Nosing on the step edge: the one line that catches the practicals and
       // separates one tread from the next at twelve metres.
       b.steel.push(place(bevelBox(W, 0.05, 0.1, 0.015), {
-        pos: [0, TERRACE_Y0 + i * TERRACE_RISE - 0.02, front + 0.05],
+        pos: [0, h - 0.02, front + 0.05],
       }));
     }
+
+    // Two guard rails at two heights on two ranks.
+    //
+    // The lower one is the only piece of this stand that lands in the middle of
+    // the screen band the stage was failing on -- its top rail projects to about
+    // y=322 and its posts run a hard vertical every 40 pixels through a band
+    // whose entire complaint was that it had no high-frequency content. The
+    // upper one sits on the first of the new tiers, at a deliberately different
+    // height above its own tread, so the two rails do not converge into a pair
+    // of parallel lines the way the old constant-rise treads did.
+    b.steel.push(place(railing(W - 0.6, { height: 1.06, spacing: 1.5, radius: 0.026 }), {
+      pos: [0, TERRACE[0].y, TERRACE[0].front - 0.42],
+    }));
+    b.steel.push(place(railing(W - 3.2, { height: 0.86, spacing: 2.1, radius: 0.022, toeBoard: false }), {
+      pos: [0, TERRACE[4].y, TERRACE[4].front - 0.24],
+    }));
 
     const fenceH = 2.3;
     const fence = new THREE.PlaneGeometry(W, fenceH);
@@ -354,6 +406,121 @@ export class StageStructure {
     b.steel.push(place(new THREE.CylinderGeometry(0.055, 0.055, W, 8), {
       pos: [0, 1.25 + fenceH, PIT_BACK - 0.66], rot: [0, 0, Math.PI / 2],
     }));
+  }
+
+  /**
+   * Everything that lives in the one screen band the stage was failing on.
+   *
+   * The band is `y 250-430` of the wide framing, and the fight camera is a fixed
+   * enough instrument that this can be stated as a world volume rather than
+   * guessed at: projecting through it (camera at 1.87, 4.5, 13.82, 34deg) that
+   * band is **world y 1.05 to 3.05 at the fence plane** and closes to a 30-pixel
+   * sliver by the time it reaches the shell wall, because the terrace occludes
+   * everything below y=2.0 from z=-18 back. So depth added behind the stand
+   * cannot reach it -- round 15 built a fourteen-segment ribbon board neither
+   * scored frame can see, and this is the same trap one layer further in.
+   *
+   * What CAN reach it is the two metres of air on the pit side of the fence, and
+   * that is what this method fills: hoardings bolted to the mesh, a drape hung
+   * off the top rail, barriers and cases stacked on the lowest treads, and one
+   * rigid board hung deep so the pair of them read as two depths with the crowd
+   * between. Everything here lands in bins that were already being merged, so it
+   * adds no draw call; it and the two new terrace tiers together measure
+   * **+14,970 rendered triangles, 913,262 -> 928,232**, which is 1.6% on a count
+   * that was already 1.5% over the charter ceiling. Recorded rather than hidden.
+   *
+   * Deliberately partial. Boarding the full twenty-four metres would replace a
+   * textured crowd with flat panel and take the band's detail figure DOWN; these
+   * cover about a third of the width, so what they mostly contribute is hard
+   * vertical edges and a readable occlusion order.
+   *
+   * @param {number} face camera-side face of the kerb
+   */
+  #pitDressing(face) {
+    const b = this.bins;
+    const fence = face - 0.66;   // the mesh plane
+    const z = fence + 0.09;      // hoardings sit proud of it, on the pit side
+
+    // --- bolted infill panels on the mesh -----------------------------------
+    //
+    // These were solid painted hoardings for one measured revision and that is
+    // exactly the wrong object here: three flat quads over the crowd took the
+    // band's Laplacian variance from 329 to 310, because they DELETED texture
+    // rather than adding it. What the band wants is another periodic layer at a
+    // slightly different depth from the mesh behind it, so the panel face is bar
+    // grating on its own 0.9m pitch. Same silhouette, same occlusion order, and
+    // the detail is in the panel instead of removed by it.
+    for (const [x, w, h, yc] of [[-8.4, 3.6, 1.10, 2.10], [1.7, 2.9, 0.94, 2.02], [9.2, 3.3, 1.05, 2.14]]) {
+      const face = new THREE.PlaneGeometry(w - 0.1, h - 0.1);
+      const fuv = face.attributes.uv;
+      for (let k = 0; k < fuv.count; k++) fuv.setXY(k, fuv.getX(k) * ((w - 0.1) / 0.62), fuv.getY(k) * ((h - 0.1) / 0.62));
+      b.grate.push(place(face, { pos: [x, yc, z + 0.035] }));
+      b.dark.push(place(bevelBox(w - 0.14, h - 0.14, 0.05, 0.012), { pos: [x, yc, z - 0.03] }));
+      // Frame, centre rib and fixings. Without these a hoarding is a quad, and
+      // a quad in the middle of this band costs detail rather than adding it.
+      for (const dy of [-h / 2, h / 2]) {
+        b.steel.push(place(bevelBox(w + 0.08, 0.07, 0.10, 0.014), { pos: [x, yc + dy, z + 0.01] }));
+      }
+      for (const dx of [-w / 2, w / 2]) {
+        b.steel.push(place(bevelBox(0.07, h + 0.08, 0.10, 0.014), { pos: [x + dx, yc, z + 0.01] }));
+      }
+      b.steel.push(place(bevelBox(w - 0.1, 0.045, 0.06, 0.01), { pos: [x, yc - h * 0.16, z + 0.04] }));
+      b.steel.push(place(boltRow(w - 0.24, 4, 0.022, 0.014), { pos: [x, yc + h / 2 - 0.02, z + 0.06] }));
+    }
+
+    // --- a drape hung off the fence's top rail ------------------------------
+    // Hazard stripe, so it is the highest-contrast object in the band, and its
+    // two vertical edges cut the crowd behind it at a readable depth.
+    b.hazard.push(place(bevelBox(2.4, 1.22, 0.05, 0.01), { pos: [-5.0, 2.55, z - 0.02] }));
+    b.steel.push(place(new THREE.CylinderGeometry(0.03, 0.03, 2.6, 7), {
+      pos: [-5.0, 3.18, z - 0.02], rot: [0, 0, Math.PI / 2],
+    }));
+    for (const dx of [-1.05, 1.05]) {
+      b.steel.push(place(new THREE.CylinderGeometry(0.014, 0.014, 0.45, 5), { pos: [-5.0 + dx, 3.40, z - 0.03] }));
+    }
+
+    // --- the deep board, hung under the crane -------------------------------
+    // Second of the two banners, four metres further back and a metre and a half
+    // higher, so the pair straddle the stand instead of stacking on it. It
+    // occludes the two new upper tiers, which is what makes their depth legible.
+    const DZ = -12.35;
+    b.container.push(place(bevelBox(4.4, 1.35, 0.09, 0.02), { pos: [6.5, 4.62, DZ] }));
+    b.hazard.push(place(bevelBox(4.4, 0.18, 0.10, 0.012), { pos: [6.5, 4.02, DZ + 0.005] }));
+    for (const dy of [-0.675, 0.675]) {
+      b.steel.push(place(bevelBox(4.5, 0.08, 0.12, 0.016), { pos: [6.5, 4.62 + dy, DZ + 0.01] }));
+    }
+    for (const dx of [-1.6, 1.6]) {
+      b.steel.push(place(new THREE.CylinderGeometry(0.022, 0.022, 1.5, 6), { pos: [6.5 + dx, 6.05, DZ] }));
+    }
+
+    // --- barriers and cases stacked on the lowest treads --------------------
+    // The ends of a stand are where the kit that did not fit anywhere else goes,
+    // and they are also the part of the band a hoarding cannot cover without
+    // walling the frame in.
+    for (const s of [-1, 1]) {
+      const bx = s * 10.9;
+      for (let i = 0; i < 4; i++) {
+        // Crowd-control barriers, stacked flat and leaning, four legs showing.
+        b.steel.push(place(bevelBox(2.05, 0.06, 0.9, 0.012), {
+          pos: [bx, TERRACE[0].y + 0.09 + i * 0.13, TERRACE[0].front - 0.62],
+          rot: [0, s * 0.09, 0.035 * (i % 2 ? 1 : -1)],
+        }));
+        b.steel.push(place(bevelBox(1.9, 0.05, 0.05, 0.01), {
+          pos: [bx, TERRACE[0].y + 0.12 + i * 0.13, TERRACE[0].front - 0.30],
+          rot: [0, s * 0.09, 0],
+        }));
+      }
+      // Two flight cases on the second tread, on their castors.
+      for (const [dx, dz, w, h, d] of [[-0.55, -0.34, 1.15, 0.82, 0.66], [0.62, -0.52, 0.86, 1.18, 0.6]]) {
+        const cx = bx + s * dx;
+        const cy = TERRACE[1].y + h / 2 + 0.06;
+        const cz = TERRACE[1].front + dz;
+        b.dark.push(place(bevelBox(w, h, d, 0.03), { pos: [cx, cy, cz] }));
+        // One capping frame, not four corner posts: at twenty-four metres a
+        // case is three pixels of edge and the posts were invisible triangles.
+        b.steel.push(place(bevelBox(w + 0.07, 0.06, d + 0.07, 0.014), { pos: [cx, cy + h / 2, cz] }));
+      }
+    }
   }
 
   /**
@@ -1090,7 +1257,10 @@ export class StageStructure {
     // combat camera can see. Road cases, drum stacks and lighting stands: all
     // objects with a known size, so the crowd in front of them gets a scale.
     const L0 = -12.95;
-    const L0Y = TERRACE_TOP;
+    // Stands on whichever tread actually passes under z=-12.95. That used to be
+    // the top one; with the two new upper tiers it is the fifth, and pinning
+    // this to TERRACE_TOP would leave the whole layer floating half a metre.
+    const L0Y = TERRACE[4].y;
     for (const [x, w, h, d] of [
       [-10.4, 1.3, 1.9, 0.9], [-9.0, 1.1, 1.3, 0.85], [-7.4, 1.5, 2.4, 1.0],
       [4.9, 1.2, 1.7, 0.9], [6.2, 1.4, 2.5, 1.0], [11.2, 1.25, 2.1, 0.9],
@@ -1671,12 +1841,13 @@ export class StageStructure {
           vSink = 1.0 - exp( -max( 0.0, -mvPosition.z - 12.0 ) * 0.1 );
         `);
       shader.uniforms.uSink = this.midgroundHaze;
+      shader.uniforms.uSinkAmt = this.crowdSinkAmount;
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vTint;\nvarying float vSink;\nuniform vec3 uSink;')
+        .replace('#include <common>', '#include <common>\nvarying vec3 vTint;\nvarying float vSink;\nuniform vec3 uSink;\nuniform float uSinkAmt;')
         .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vTint;')
         .replace('#include <opaque_fragment>', /* glsl */ `
           #include <opaque_fragment>
-          gl_FragColor.rgb = mix( gl_FragColor.rgb, uSink, vSink * 0.62 );
+          gl_FragColor.rgb = mix( gl_FragColor.rgb, uSink, vSink * uSinkAmt );
         `);
     };
     mat.customProgramCacheKey = () => 'kb-crowd';
@@ -1690,18 +1861,32 @@ export class StageStructure {
     for (let i = 0; i < count; i++) {
       const r = rng.next();
       if (r < 0.84) {
-        // On the terrace. The back ranks are fuller than the front because the
-        // people who get to the barrier early are the ones already there, and
-        // the rearmost rank stands off the back of the top tread rather than on
-        // it, which puts a fifth band of heads behind the four.
-        const rank = Math.min(TERRACE_RANKS, rng.int(TERRACE_RANKS + 1) + (rng.next() < 0.34 ? 1 : 0));
-        const tread = Math.min(TERRACE_RANKS - 1, rank);
+        // On the terrace, dealt from a WEIGHTED table rather than uniformly.
+        //
+        // The two new upper tiers are deliberately thinner than the four below
+        // them, and this is the whole reason they read as further away rather
+        // than as more of the same. A rank at the same packing density as the
+        // one in front of it produces the same unbroken mass of overlapping
+        // shoulders, and mass at two heights is still one card. Thinning the
+        // back means gaps, gaps mean the tread and the rail behind them are
+        // visible between figures, and THAT is the parallax -- structure seen
+        // through a crowd, not more crowd. They also take the distance fade in
+        // the shader for free, so they arrive dimmer and cooler as well as
+        // sparser, which is the third cue and the cheapest.
+        const w = [0.15, 0.19, 0.19, 0.19, 0.16, 0.12];
+        let acc = rng.next();
+        let rank = 0;
+        while (rank < w.length - 1 && acc > w[rank]) { acc -= w[rank]; rank++; }
+        const step = TERRACE[rank];
         slots.push({
-          x: rng.range(-11.9, 11.9),
-          y: TERRACE_Y0 + tread * TERRACE_RISE,
+          // The upper tiers are narrower, so the stand tapers with height the
+          // way a real stepped stand against a shell wall does.
+          x: rng.range(-11.9, 11.9) * (rank >= 4 ? 0.86 : 1),
+          y: step.y,
           // Jitter deep enough that neighbours in a rank sit at visibly
           // different depths: a rank pegged to one z line is a chorus row.
-          z: TERRACE_Z0 - rank * TERRACE_RUN - rng.range(0.25, 0.8),
+          // Clamped to the tread, which is now shorter on the upper tiers.
+          z: step.front - rng.range(0.22, Math.max(0.3, step.run - 0.12)),
           // One in five is turned well off the pit — talking to the person beside
           // them rather than watching the fight. A terrace where every head
           // points the same way is an audience of cameras, and this is the one

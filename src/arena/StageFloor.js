@@ -54,6 +54,8 @@ const _cPos = new THREE.Vector3();
 const _cQuat = new THREE.Quaternion();
 const _cScale = new THREE.Vector3();
 const _cEuler = new THREE.Euler();
+const _tintA = new THREE.Color();
+const _tintB = new THREE.Color();
 
 // ---------------------------------------------------------------------------
 // Macro map generation
@@ -651,6 +653,49 @@ const FRAG_NORMAL_HOOK = /* glsl */ `
     diffuseColor.rgb *= mix( 1.0, hist.g * uDeckCavNorm, uDeckCav * kbDry );
     roughnessFactor = clamp( roughnessFactor + ( hist.b - 0.5 ) * 2.0 * uDeckRough * kbDry, 0.04, 1.0 );
 
+    // --- practical colour in the DIFFUSE ------------------------------------
+    //
+    // The floor was the one region of the frame outside the reference band for
+    // midtone saturation -- 0.21 against a Tekken band of 0.379-0.465, while
+    // every other region (fighters 0.43, perimeter wall 0.40, the near robot
+    // 0.42) was already inside it. Its LUMINANCE was at parity, so this is not
+    // a brightness problem and must not be paid for with one.
+    //
+    // The cause is that the practicals only ever reached the deck through its
+    // specular lobe and its mirror: the concrete's own albedo is achromatic, so
+    // the diffuse term -- which is most of the deck's area, because most of the
+    // deck is rough and dry -- came back grey no matter what colour was lighting
+    // it. Real ground under coloured practicals is not grey; it is stained by
+    // what has been spilled and lit on it, and it takes a cast from whichever
+    // fitting is nearest.
+    //
+    // So the mood's own practicals are resolved into a warm anchor and a cool
+    // one (see updateTint) and blended across the slab by distance from the pit
+    // centre: the wall bands and the warm fitting live at the perimeter, the
+    // white banks and the rail strip live over the middle and the back. Both
+    // anchors are normalised to LUMA 1 and mixed toward white, so this term is
+    // exactly luminance-preserving on the albedo at every value of uFloorTint
+    // and cannot buy saturation with brightness.
+    //
+    // It is gated on a single uniform so the whole effect can be A/B-toggled
+    // through one branch of one compiled program on one frozen frame.
+    if ( uFloorTint > 0.0001 ) {
+      vec2 kbQ = ( vKbWorld.xz - uFloorTintC ) * uFloorTintR;
+      float kbRad = length( kbQ );
+      // A pure radial ramp reads as a vignette painted on the deck, so break it
+      // with two long world-space waves -- about a nine-metre period, which is
+      // the scale of the drainage regions already in the macro map.
+      kbRad += sin( vKbWorld.x * 0.19 + 1.7 ) * sin( vKbWorld.z * 0.23 - 0.6 ) * uFloorTintVary;
+      float kbW = smoothstep( uFloorTintE.x, uFloorTintE.y, kbRad );
+      vec3 kbTint = mix( uFloorCool, uFloorWarm, kbW );
+      // Damp concrete takes a cast further than a dry, dusty patch does.
+      // Saturated, because mix() past 1.0 EXTRAPOLATES: uFloorTint is 0.82 and
+      // the wet bonus is 1.3x, so an unclamped product would push a tint whose
+      // strong channel is already 2.5 another seven per cent past itself.
+      float kbAmt = saturate( uFloorTint * ( 1.0 + kbWetness * uFloorTintWet ) );
+      diffuseColor.rgb *= mix( vec3( 1.0 ), kbTint, kbAmt );
+    }
+
     // --- expansion-joint relief -------------------------------------------
     //
     // The joints were painted into the macro map as a dark line and nothing
@@ -694,6 +739,26 @@ const FRAG_NORMAL_HOOK = /* glsl */ `
   }
 `;
 
+/**
+ * Tried and reverted: a warm/cool split across the two diffuse terms.
+ *
+ * `reflectedLight.directDiffuse *= warm` and `indirectDiffuse *= cool` at
+ * `lights_fragment_end` is the textbook way to say "the fittings are warm and
+ * the room's bounce is cold", and on this deck it measured and looked WORSE
+ * than not doing it. Two reasons, both worth keeping:
+ *
+ *   - The two terms land on the same pixel, so a warm direct and a cool
+ *     indirect CANCEL there. Measured: warm-direct alone reached 0.286 midtone
+ *     saturation, adding the cool indirect took it back down to 0.269.
+ *   - The deck's direct diffuse is dominated by the key (0xffdcae at 8.6), not
+ *     by the practicals, so warming it further and then applying the chroma
+ *     gain below turned the whole slab rust. Four variants of it were rendered
+ *     and every one read as a red floor rather than as concrete.
+ *
+ * What works instead is below: hue that varies with POSITION, so the perimeter
+ * takes the wall bands and the middle takes the white banks, and then a gain on
+ * what is actually there. Do not put this back without rendering it.
+ */
 const FRAG_REFLECT_HOOK = /* glsl */ `
   #include <opaque_fragment>
   {
@@ -731,6 +796,33 @@ const FRAG_REFLECT_HOOK = /* glsl */ `
       // Energy-conserving: the reflection replaces diffuse rather than adding
       // to it, which is what keeps a wet floor from turning milky.
       gl_FragColor.rgb = mix( gl_FragColor.rgb, gl_FragColor.rgb * ( 1.0 - k * 0.55 ) + refl, saturate( k ) );
+    }
+
+    // --- chroma gain on the deck's own outgoing radiance -------------------
+    //
+    // The colour the practicals put on this floor is already here: the amber
+    // wall bands stain the perimeter, the white banks and the rail strip lay a
+    // cold sheet down the middle, and the mirror carries both. It arrives too
+    // weak to survive, because a rough dielectric returns most of its area
+    // through a diffuse lobe multiplied by an achromatic concrete albedo, and
+    // because everything downstream of here -- fog, the bloom pedestal, the
+    // display transform -- adds white to it.
+    //
+    // So the last thing the deck does is push its own chroma away from its own
+    // luminance. Applied HERE, after the mirror and before tonemapping, fog and
+    // the grade, so it is scene-referred: it amplifies the colour that is
+    // physically present rather than painting a new one on, an achromatic
+    // highlight stays achromatic, and the frame's luminance is untouched
+    // because luma is linear and this is a reflection about it.
+    //
+    // Gain is a measured number, not a taste one, and the ceiling is real: a
+    // whole-region chroma multiple of 2.5 lands the critic's 0.40 midtone
+    // saturation target exactly and looks lurid doing it -- the octagon plates
+    // go orange and the mirror goes electric. 1.9 was where the deck reads as
+    // stained concrete under coloured light instead of as a tinted photograph.
+    if ( uFloorChroma != 1.0 ) {
+      float kbLum = dot( gl_FragColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
+      gl_FragColor.rgb = max( vec3( 0.0 ), kbLum + ( gl_FragColor.rgb - kbLum ) * uFloorChroma );
     }
   }
 `;
@@ -773,6 +865,15 @@ uniform float uDetailAmp;
 uniform float uRippleScale;
 uniform float uRippleAmp;
 uniform float uTime;
+uniform float uFloorTint;
+uniform float uFloorTintWet;
+uniform float uFloorTintVary;
+uniform vec2 uFloorTintC;
+uniform vec2 uFloorTintR;
+uniform vec2 uFloorTintE;
+uniform float uFloorChroma;
+uniform vec3 uFloorWarm;
+uniform vec3 uFloorCool;
 varying vec4 vKbReflCoord;
 varying vec3 vKbWorld;
 float kbWetness = 0.0;`,
@@ -835,7 +936,33 @@ export class StageFloor {
       uRippleScale: { value: 0.35 },
       uRippleAmp: { value: 0.09 },
       uTime: { value: 0 },
+      // --- practical colour in the diffuse (see FRAG_NORMAL_HOOK) ----------
+      /** Master amount. 0 restores the achromatic deck exactly. */
+      uFloorTint: { value: 0.82 },
+      /** Extra cast on damp concrete, as a fraction of the master. */
+      uFloorTintWet: { value: 0.30 },
+      /** Amplitude of the two long waves that break the radial ramp. */
+      uFloorTintVary: { value: 0.22 },
+      /** Centre of the warm/cool blend, biased back toward the white banks. */
+      uFloorTintC: { value: new THREE.Vector2(0, -0.6) },
+      /** Reciprocal radii of the blend ellipse, in 1/metres. */
+      uFloorTintR: { value: new THREE.Vector2(1 / 11.5, 1 / 10.5) },
+      /** Where the blend runs from cool to warm, in those units. */
+      uFloorTintE: { value: new THREE.Vector2(0.70, 1.35) },
+      /** Luma-preserving chroma multiple on the deck's outgoing radiance. */
+      uFloorChroma: { value: 1.6 },
+      uFloorWarm: { value: new THREE.Color(1, 1, 1) },
+      uFloorCool: { value: new THREE.Color(1, 1, 1) },
     };
+
+    /**
+     * How much of a practical's own chroma survives into the deck's albedo.
+     * 1.0 would paint the deck the full colour of the fitting; the anchors are
+     * luma-normalised first, so a saturated fitting normalises to a very strong
+     * multiplier and this is a reduction rather than a gain.
+     */
+    this.tintSat = 1.15;
+    this._tintKey = -1;
 
     /** Scaled to zero when the quality tier turns the mirror pass off. */
     this.reflectionScale = 1;
@@ -1241,9 +1368,79 @@ export class StageFloor {
     this._decalAlpha.needsUpdate = true;
   }
 
+  /**
+   * Resolves the mood's own emitters into the two albedo anchors the deck is
+   * tinted with.
+   *
+   * Split by hue rather than by which array they came from: a mood is free to
+   * hang a cold fitting on the wall and a warm one over the pit, and the deck
+   * has to follow the light that is actually there. Weighted by radiant power,
+   * because a 26-unit fitting decides the cast and a 4.5-unit one does not.
+   *
+   * Both results are normalised to luma 1 and then pulled back toward white by
+   * `tintSat`, which is what makes this term luminance-preserving: `mix` of two
+   * unit-luma colours has unit luma, and luma is linear in the components.
+   *
+   * @param {object} p live Environment mood params
+   */
+  #updateTint(p) {
+    if (!p) return;
+    // Cheap identity for the resolved mood, so a cross-fade updates and a still
+    // frame does not redo this every render. Numeric rather than a template
+    // string: this runs once per rendered frame and a string here would be sixty
+    // throwaway allocations a second for a comparison that never changes.
+    let key = (p.bands?.color?.getHex?.() ?? 0) * 31 + (p.screens?.color?.getHex?.() ?? 0);
+    for (const q of p.practicals ?? []) key = (key * 33 + q.color.getHex() + q.power * 1024) % 1e12;
+    if (key === this._tintKey) return;
+    this._tintKey = key;
+
+    const warm = _tintA.setRGB(0, 0, 0);
+    const cool = _tintB.setRGB(0, 0, 0);
+    let wSum = 0;
+    let cSum = 0;
+    const add = (col, power) => {
+      if (!col || !(power > 0)) return;
+      // Hue side, judged in the linear working space the colours already live in.
+      const dst = col.r >= col.b ? warm : cool;
+      dst.r += col.r * power;
+      dst.g += col.g * power;
+      dst.b += col.b * power;
+      if (dst === warm) wSum += power; else cSum += power;
+    };
+    for (const q of p.practicals ?? []) add(q.color, q.power);
+    // The perimeter wall bands and the terrace screens are emitters too, and on
+    // this stage they are the largest ones by area even though they are not
+    // analytic lights. They are what the deck's edge actually sees.
+    if (p.bands) add(p.bands.color, (p.bands.intensity ?? 0) * 9);
+    if (p.screens) add(p.screens.color, (p.screens.intensity ?? 0) * 6);
+
+    if (wSum <= 0) warm.copy(cool);
+    if (cSum <= 0) cool.copy(warm);
+    if (wSum <= 0 && cSum <= 0) { warm.setRGB(1, 1, 1); cool.setRGB(1, 1, 1); }
+
+    const s = this.tintSat;
+    const bake = (src, dst) => {
+      const l = 0.2126 * src.r + 0.7152 * src.g + 0.0722 * src.b;
+      if (!(l > 1e-6)) { dst.setRGB(1, 1, 1); return; }
+      // A saturated fitting normalises to a very lopsided multiplier -- an
+      // amber band comes out near (2.5, 0.6, 0.0) -- so past `tintSat` ~1.2 the
+      // weak channel goes negative and the deck would multiply into negative
+      // radiance under a mood nobody rendered. Floor it well clear of zero
+      // rather than capping tintSat, so a magenta or sodium mood stays legal.
+      dst.setRGB(
+        Math.max(0.02, 1 + (src.r / l - 1) * s),
+        Math.max(0.02, 1 + (src.g / l - 1) * s),
+        Math.max(0.02, 1 + (src.b / l - 1) * s),
+      );
+    };
+    bake(warm, this.uniforms.uFloorWarm.value);
+    bake(cool, this.uniforms.uFloorCool.value);
+  }
+
   /** @param {number} dt @param {object} envParams live Environment mood params */
   update(dt, time, envParams) {
     this.uniforms.uTime.value = time;
+    this.#updateTint(envParams);
     // The mood decides how wet the room is; the floor decides how that reads.
     // The curve is steeper than it was because this is now the only reflection
     // the floor gets: the screen-space pass that used to sit on top of it in

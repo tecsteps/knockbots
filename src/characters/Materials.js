@@ -3078,6 +3078,8 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
  * @property {THREE.MeshPhysicalMaterial} chrome     mirror accent metal
  * @property {THREE.MeshPhysicalMaterial} carbon     2x2 twill carbon fibre under lacquer
  * @property {THREE.MeshPhysicalMaterial} rubber     matte elastomer boot / grip
+ * @property {THREE.MeshPhysicalMaterial} gasket     matte moulded composite — joint boots, bellows, hose
+ * @property {THREE.MeshPhysicalMaterial} bezel      dark anodised optic surround, mirror-tight lobe
  * @property {THREE.MeshPhysicalMaterial} cable      ribbed sheathing with sheen
  * @property {THREE.MeshPhysicalMaterial} glass      transmissive visor glass
  * @property {THREE.MeshPhysicalMaterial} visor      opaque iridescent lens, cheap alternative to `glass`
@@ -3784,6 +3786,102 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     envMapIntensity: 0.75,
   });
 
+  // -------------------------------------------------------------------------
+  // The three material zones
+  //
+  // Measured, on the frame this axis is scored on (`02-closeup-face`, one frozen
+  // frame, in-page material toggle, 0.000/255 noise floor): 92.6% of the
+  // character's 1.52 Mpx in that shot belonged to five batches — armorPrimary,
+  // armorSecondary, darkMetal, trim, armorAccent — every one of them
+  // `metalness = 1` brushed plate off two source materials, and their highlight
+  // contrast (p99 luma over median luma, per batch) spanned 1.64 to 1.97. One
+  // BRDF, one highlight shape, over the whole subject. `rubber` — the only
+  // genuinely matte thing in the library — held 0.11%.
+  //
+  // These two are the other two zones. They are NOT tints: each differs from the
+  // armour in the terms that decide highlight SHAPE — the specular lobe width,
+  // whether there is a coat over it, and whether the surface is a conductor at
+  // all — which is the thing a single BRDF cannot fake.
+  //
+  //             roughness    metal   coat / coat-rough    spec    env
+  //   armour     ~0.42 (map)   1.0     1.0 / ~0.28 (map)   1.0     1.00
+  //   gasket     ~0.78 (map)   0.0     none                0.5     0.55
+  //   bezel      ~0.12 (map)   0.35    1.0 / 0.035         1.0     1.35
+  //
+  // A moulded composite boot. Dielectric, so its highlight is a broad white
+  // smear that does not take the palette hue the way every metal on the fighter
+  // does, and the sheen term gives it the dusty rim response an elastomer has
+  // instead of the hard chrome edge the frame currently shows. It is lighter
+  // than `rubber` on purpose: `rubber` sits at 0.021 linear, which on a joint
+  // barrel the size of a shoulder reads as a hole punched in the arm, not as a
+  // part. This has to read as a *surface* at the same key exposure as the plate
+  // beside it.
+  // Measured on the frozen closeup: at 0.058 linear the boot came back at median
+  // luma 144 against the armour's 118 — a matte surface BRIGHTER than the plate
+  // covering it, which reads as unpainted clay rather than as under-structure.
+  // The zone has to sit under the armour tonally as well as physically.
+  // Swept on the frozen closeup, one uniform per step, same compiled program,
+  // reading the boot's own pixel mask (median luma of the zone; the armour beside
+  // it reads 123):
+  //
+  //     base 0.030 -> 114     base 0.016 -> 90
+  //     base 0.022 -> 101     base 0.011 -> 78
+  //
+  // At the 0.058 it started at, the boot came back at 144 — a matte surface
+  // BRIGHTER than the plate covering it, which reads as unpainted clay rather
+  // than as under-structure. 0.020 puts it at about 0.78x the armour: clearly
+  // beneath it, still a lit surface rather than the hole `rubber` (0.021 base,
+  // no sheen budget, no env) leaves when it is used on anything large.
+  // Also swept and NOT kept: envMapIntensity 0.45 -> 0.25 moved the zone by
+  // 0.0/255 — the env term on a surface this rough is not doing anything and is
+  // not worth tuning. Sheen is: 0.45 -> 0.25 drops the zone's p99 from 167 to
+  // 143, i.e. the rim response IS the sheen term here.
+  const gasketBase = linearColor(alloy([0.020, 0.021, 0.024], secondary, 0.26));
+  const gasket = new THREE.MeshPhysicalMaterial({
+    name: 'kb.gasket',
+    color: gasketBase,
+    map: shared.softMod,
+    normalMap: shared.softNormal,
+    // Harder than the elastomer's: a bellows boot is moulded with real relief,
+    // and the relief is the only thing separating it from flat paint once the
+    // specular is gone.
+    normalScale: new THREE.Vector2(1.35, 1.35),
+    aoMap: shared.softOrm,
+    roughnessMap: shared.softOrm,
+    roughness: 1,
+    metalness: 0,
+    sheen: 0.45,
+    sheenColor: new THREE.Color(0x8d97a3),
+    sheenRoughness: 1,
+    sheenRoughnessMap: shared.softOrm,
+    specularIntensity: 0.5,
+    ior: 1.46,
+    envMapIntensity: 0.45,
+  });
+
+  // Anodised optic surround. The one surface on the fighter allowed a mirror
+  // lobe: a coat at 0.035 roughness over a near-black substrate, which is what
+  // puts a small, hard, high-frequency highlight on the face instead of the
+  // same broad brushed streak the shoulder behind it already has. The
+  // iridescence is held low — it is a coating interference tint on a bezel, not
+  // an oil slick.
+  const bezel = new THREE.MeshPhysicalMaterial({
+    name: 'kb.bezel',
+    color: linearColor(alloy([0.019, 0.020, 0.023], accent, 0.22)),
+    normalMap: shared.glassNormal,
+    normalScale: new THREE.Vector2(0.5, 0.5),
+    roughnessMap: shared.glassOrm,
+    roughness: 1,
+    metalness: 0.35,
+    clearcoat: 1,
+    clearcoatRoughness: 0.035,
+    iridescence: 0.32,
+    iridescenceIOR: 1.34,
+    iridescenceThicknessRange: [140, 480],
+    ior: 1.58,
+    envMapIntensity: 1.35,
+  });
+
   const cable = new THREE.MeshPhysicalMaterial({
     name: 'kb.cable',
     color: cableBase,
@@ -3862,7 +3960,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
   /** @type {MaterialLibrary} */
   const lib = {
     armor, trim: trimMat, worn, darkMetal, piston, chrome,
-    carbon, rubber, cable, glass, visor, emissive,
+    carbon, rubber, gasket, bezel, cable, glass, visor, emissive,
   };
 
   // `ownsTextures` is empty by design: a library owns only its materials, and

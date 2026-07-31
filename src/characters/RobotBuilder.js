@@ -761,6 +761,8 @@ function fallbackMaterial(name, palette) {
     darkMetal: { color: '#22262b', metalness: 0.95, roughness: 0.48 },
     piston: { color: '#c9ced4', metalness: 1.0, roughness: 0.12 },
     rubber: { color: '#15171a', metalness: 0.05, roughness: 0.92 },
+    gasket: { color: '#2b2f35', metalness: 0, roughness: 0.86, sheen: 0.6 },
+    bezel: { color: '#0d1014', metalness: 0.35, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.035 },
     carbon: { color: '#1a1d21', metalness: 0.4, roughness: 0.42, clearcoat: 0.8 },
     worn: { color: palette.secondary, metalness: 0.9, roughness: 0.55 },
     glass: { color: '#0a0d10', metalness: 0.1, roughness: 0.06, transmission: 0, opacity: 0.85, transparent: true },
@@ -805,9 +807,20 @@ function resolveMaterials(environment, palette) {
     darkMetal: pick('darkMetal').clone(),
     piston: pick('piston').clone(),
     rubber: pick('rubber').clone(),
+    // The two zones that are not brushed metal. Both were carved out of
+    // `darkMetal`, which is why they carry `kbControlOf`: it names the material
+    // the batch used to be, so the split can be A/B'd on ONE frozen frame by
+    // swapping each zone mesh back to its predecessor. That is the only way this
+    // axis is measurable — a cross-run capture on this shot cannot resolve
+    // anything smaller than ~15/255 (docs/PROFILING.md trap 5) and the in-page
+    // toggle measures 0.000/255 between two grabs of an unchanged frame.
+    gasket: pick('gasket').clone(),
+    bezel: pick('bezel').clone(),
     carbon: pick('carbon').clone(),
     glass: pick('glass').clone(),
   };
+  mats.gasket.userData = { ...mats.gasket.userData, kbControlOf: 'darkMetal' };
+  mats.bezel.userData = { ...mats.bezel.userData, kbControlOf: 'darkMetal' };
 
   // Emissive groups get their own material so the Fighter can pulse each
   // independently against health / meter / hit reactions.
@@ -1373,7 +1386,13 @@ class Rig {
       y0: o.y0 - over, y1: o.y1 + over,
       w0: o.w0 * inset, w1: o.w1 * inset,
       d0: (o.d0 ?? o.w0) * inset, d1: (o.d1 ?? o.w1) * inset,
-      mat: 'darkMetal', round: 0.5, perQuad: 2, swell: 0,
+      // ZONE 2. This is the under-structure that shows through every gap between
+      // the armour bands laid over it. As anisotropic gunmetal it mirrored the
+      // sky out of each gap, which is the single most effective way to stop
+      // plates reading as plates: the recess was brighter than the plate. A
+      // matte composite sleeve is both what a real machine has under its armour
+      // and what makes the band above it read as a separate object.
+      mat: 'gasket', round: 0.5, perQuad: 2, swell: 0,
       tier: TIER.PRIMARY, role: 'frame',
     });
 
@@ -1565,6 +1584,9 @@ function bindRigid(geo, boneIndex) {
 const WEAR_BY_MAT = {
   armorPrimary: 0.86, armorSecondary: 0.68, armorAccent: 1.0, trim: 0.92,
   darkMetal: 0.30, piston: 0.55, rubber: 0.62, carbon: 0.44, glass: 0.15, decal: 0.5,
+  // A joint boot is the most exposed soft part on the machine and an optic
+  // bezel is wiped every time anyone services it.
+  gasket: 0.72, bezel: 0.12,
 };
 
 /**
@@ -1573,7 +1595,7 @@ const WEAR_BY_MAT = {
  * a structural frame member, and putting them there is how a procedural robot
  * ends up looking like it was wrapped in wallpaper.
  */
-const NO_PANEL_MATS = new Set(['darkMetal', 'piston', 'rubber', 'carbon', 'glass']);
+const NO_PANEL_MATS = new Set(['darkMetal', 'piston', 'rubber', 'gasket', 'bezel', 'carbon', 'glass']);
 
 /**
  * Panel plans by plate role, as multipliers on the character's plating style.
@@ -2156,7 +2178,7 @@ function buildPelvis(rig, spec) {
       { r: 0, y: -r * 0.84 }, { r: r * 0.79, y: -r * 0.84 }, { r: r * 0.94, y: -r * 0.49, smooth: true },
       { r, y: 0.0, smooth: true }, { r: r * 0.94, y: r * 0.49, smooth: true },
       { r: r * 0.76, y: r * 0.79 }, { r: 0, y: r * 0.79 },
-    ], 20), 'darkMetal', { p: [hx, hipY, 0], r: [0, 0, 90 * DEG], mirror, tier: TIER.PRIMARY });
+    ], 20), 'gasket', { p: [hx, hipY, 0], r: [0, 0, 90 * DEG], mirror, tier: TIER.PRIMARY });
 
     rig.add('hips', boltRing(6, r * 0.76, 0.009, 0.011), 'trim',
       { p: [hx + sign * r * 0.79, hipY, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.GREEBLE });
@@ -2445,7 +2467,7 @@ function buildChestCore(rig, spec, cw, cd, ch, cy, dz = 0) {
       rig.add('chest', latheProfile([
         { r: 0, y: 0 }, { r: 0.102, y: 0 }, { r: 0.102, y: 0.034 },
         { r: 0.084, y: 0.048 }, { r: 0.070, y: 0.048 }, { r: 0.070, y: 0.010 }, { r: 0, y: 0.010 },
-      ], 6, { faceted: true, phase: Math.PI / 6 }), 'darkMetal',
+      ], 6, { faceted: true, phase: Math.PI / 6 }), 'bezel',
       { p: [0, cy, zf], r: [90 * DEG, 0, 0], tier: TIER.PRIMARY });
       // the glow sits at the bottom of the well, behind an iris of trim blades,
       // so the core reads as depth rather than a sticker
@@ -3193,7 +3215,9 @@ function addPipeRun(rig, bone, points, o = {}) {
   if (pts.length < 2) return;
   const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.4);
   const tube = new THREE.TubeGeometry(curve, o.segments ?? 14, radius, 6, false);
-  rig.add(bone, tube, o.mat ?? 'darkMetal', { mirror: o.mirror, tier: o.tier ?? TIER.GREEBLE });
+  // ZONE 2 by default: a pipe run is hose, and hose is the textbook case for the
+  // matte composite. Callers that mean rigid conduit still pass `mat`.
+  rig.add(bone, tube, o.mat ?? 'gasket', { mirror: o.mirror, tier: o.tier ?? TIER.GREEBLE });
 
   const collars = [];
   for (const end of [0, 1]) {
@@ -3307,7 +3331,12 @@ function buildHead(rig, spec, def) {
     { r: nr * 0.96, y: -m.collar * 0.22 }, { r: nr * 1.06, y: -m.collar * 0.06, smooth: true },
     { r: nr * 0.88, y: m.nape * 0.46 }, { r: nr * 1.02, y: m.nape * 0.70, smooth: true },
     { r: nr * 0.94, y: m.nape * 1.04 },
-  ], 16), 'darkMetal', { tier: TIER.PRIMARY });
+    // ZONE 2 (matte composite). A neck that pitches and yaws under armour is
+    // sleeved in a bellows on every real machine, and it is the one surface in
+    // this frame directly behind the face: a mirror there put a second bright
+    // brushed streak immediately under the jaw and flattened the whole head into
+    // the shoulder. See the zone note in Materials.js.
+  ], 16), 'gasket', { tier: TIER.PRIMARY });
   rig.add('neck', bevelBox(0.10 * m.torsoK, 0.05, 0.09 * m.torsoK, 0.010, { topX: 0.8 }), 'armorSecondary',
     { p: [0, m.nape * 0.24, -FRONT * 0.012], tier: TIER.SECONDARY });
 
@@ -3338,7 +3367,7 @@ function buildHead(rig, spec, def) {
     { r: rr * 0.74, y: top - 0.030 },
     { r: rr * 0.96, y: top - 0.020, smooth: true },
     { r: rr * 0.92, y: top },
-  ], 16), 'darkMetal', { tier: TIER.PRIMARY });
+  ], 16), 'gasket', { tier: TIER.PRIMARY });
   // spine of the riser, and a pair of guards that keep it from reading as a pipe
   for (const { sign, mirror } of SIDES) {
     rig.add('head', loftHull([
@@ -3367,7 +3396,11 @@ function buildHead(rig, spec, def) {
  */
 function addVisor(rig, o) {
   const { w, h, y, z, tilt = 0, group = 'visor', brow = 0.034, posts = true } = o;
-  rig.add('head', channelStrip(w, h * 2.1, 0.026), 'darkMetal',
+  // ZONE 3 (dark anodised). The well the lens sits in is the bezel, and it is
+  // the only place on the fighter that gets a mirror-tight coat: a 0.035-rough
+  // lobe next to the plate's ~0.28 coat is a hard small highlight against a
+  // broad one, which is the whole reason a face reads as an instrument.
+  rig.add('head', channelStrip(w, h * 2.1, 0.026), 'bezel',
     { p: [0, y, z], r: [FACE_FRONT[0] + tilt, 0, 0], tier: TIER.SECONDARY });
   rig.glow('head', loftHull([
     { y: -h * 0.5, w: w * 0.74, d: 0.011, round: 0.5 },
@@ -3440,7 +3473,7 @@ function headFurnace(rig) {
     rig.add('head', loftHull([
       { y: -0.052, w: 0.013, d: 0.026, round: 0.4 },
       { y: 0.052, w: 0.011, d: 0.024, round: 0.4 },
-    ]), 'darkMetal', {
+    ]), 'bezel', {
       p: [i * 0.026, 0.020, FRONT * (0.108 - Math.abs(i) * 0.009)], r: [0, i * -9 * DEG, 0], tier: TIER.PRIMARY,
     });
   }
@@ -3551,7 +3584,7 @@ function headTurret(rig) {
   rig.add('head', boltRing(10, 0.132, 0.009, 0.011), 'trim', { p: [0, -0.026, 0], tier: TIER.GREEBLE });
 
   // one slit, cut deep so the brow above it holds a hard shadow
-  rig.add('head', channelStrip(0.152, 0.040, 0.030), 'darkMetal',
+  rig.add('head', channelStrip(0.152, 0.040, 0.030), 'bezel',
     { p: [0, 0.014, FRONT * 0.092], r: FACE_FRONT, tier: TIER.SECONDARY });
   rig.glow('head', loftHull([
     { y: -0.008, w: 0.108, d: 0.012, round: 0.5 },
@@ -3610,7 +3643,7 @@ function headKabuto(rig) {
     { y: 0.048, w: 0.132, d: 0.056, round: 0.26 },
   ]), 'trim', { p: [0, 0, FRONT * 0.072], r: [4 * DEG, 0, 0], tier: TIER.PRIMARY });
   for (let i = 0; i < 3; i++) {
-    rig.add('head', bevelBox(0.096 - i * 0.014, 0.006, 0.008, 0.002), 'darkMetal',
+    rig.add('head', bevelBox(0.096 - i * 0.014, 0.006, 0.008, 0.002), 'bezel',
       { p: [0, -0.040 + i * 0.016, FRONT * 0.106], r: [10 * DEG, 0, 0], tier: TIER.GREEBLE });
   }
   addVisor(rig, { w: 0.116, h: 0.022, y: 0.052, z: FRONT * 0.092, tilt: -6 * DEG, brow: 0.030, posts: false });
@@ -3667,7 +3700,7 @@ function headMandible(rig) {
     rig.add('head', latheProfile([
       { r: 0, y: 0 }, { r: 0.048, y: 0 }, { r: 0.050, y: 0.010, smooth: true },
       { r: 0.036, y: 0.026 }, { r: 0.028, y: 0.026 }, { r: 0.028, y: 0 },
-    ], 18), 'darkMetal', {
+    ], 18), 'bezel', {
       p: [sign * 0.062, 0.052, FRONT * 0.070], r: [-8 * DEG, sign * 34 * DEG, 0], mirror, tier: TIER.PRIMARY,
     });
     rig.glow('head', latheProfile([
@@ -4087,7 +4120,11 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   rig.add(`shoulder_${S}`, latheProfile([
     { r: 0, y: -upper * 0.30 }, { r: upper * 0.74, y: -upper * 0.30 }, { r: upper * 0.84, y: -upper * 0.16, smooth: true },
     { r: upper * 0.84, y: upper * 0.16 }, { r: upper * 0.66, y: upper * 0.28 }, { r: 0, y: upper * 0.28 },
-  ], 22), 'darkMetal', { world: true, p: [sign * 0.012, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
+    // ZONE 2. Every rotary barrel in the rig — shoulder, elbow, wrist, hip,
+    // knee, ankle — is a boot, not a billet. They were the largest single block
+    // of `darkMetal` in the scored frame and they sat at metalness 1 with the
+    // same anisotropic streak as the plate covering them.
+  ], 22), 'gasket', { world: true, p: [sign * 0.012, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
   rig.add(`shoulder_${S}`, boltRing(6, upper * 0.52, 0.008, 0.010), 'trim',
     { world: true, p: [sign * 0.056, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.GREEBLE });
   rig.glow(`shoulder_${S}`, latheProfile([
@@ -4130,7 +4167,7 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   rig.add(`elbow_${S}`, latheProfile([
     { r: 0, y: -elbowW * 0.34 }, { r: elbowR * 0.90, y: -elbowW * 0.34 }, { r: elbowR, y: -elbowW * 0.24, smooth: true },
     { r: elbowR, y: elbowW * 0.24 }, { r: elbowR * 0.82, y: elbowW * 0.34 }, { r: 0, y: elbowW * 0.34 },
-  ], 22), 'darkMetal', { world: true, p: [0, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
+  ], 22), 'gasket', { world: true, p: [0, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
   rig.add(`elbow_${S}`, bevelBox(fore * 1.35, fore * 1.1, fore * 0.75, 0.010, { topX: 0.85, botX: 0.9 }), 'armorSecondary',
     { p: [0, -fore * 0.10, -FRONT * fore * 0.85], r: [10 * DEG, 0, 0], mirror, tier: TIER.PRIMARY });
 
@@ -4164,7 +4201,7 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   rig.add(`wrist_${S}`, latheProfile([
     { r: cuffW * 0.50, y: m.palm * 0.34 }, { r: cuffW * 0.56, y: m.palm * 0.14, smooth: true },
     { r: cuffW * 0.56, y: -m.palm * 0.28 }, { r: cuffW * 0.46, y: -m.palm * 0.44 },
-  ], 20), 'darkMetal', { mirror, tier: TIER.PRIMARY });
+  ], 20), 'gasket', { mirror, tier: TIER.PRIMARY });
   rig.glow(`wrist_${S}`, latheProfile([
     { r: cuffW * 0.51, y: 0 }, { r: cuffW * 0.54, y: 0.003 }, { r: cuffW * 0.54, y: 0.009 }, { r: cuffW * 0.51, y: 0.012 },
   ], 20), 'joints', { p: [0, -0.006, 0], mirror });
@@ -4782,7 +4819,7 @@ function buildLeg(rig, spec, side, sign, mirror) {
   rig.add(`hip_${S}`, latheProfile([
     { r: thighW * 0.50, y: L.thigh * 0.20 }, { r: thighW * 0.56, y: 0.0, smooth: true },
     { r: thighW * 0.56, y: -L.thigh * 0.20 }, { r: thighW * 0.48, y: -L.thigh * 0.32 },
-  ], 20), 'darkMetal', { mirror, tier: TIER.PRIMARY });
+  ], 20), 'gasket', { mirror, tier: TIER.PRIMARY });
 
   // --- knee assembly (knee_L is the SHIN bone; the cap rides with the shin).
   // The barrel is wider than either plate it joins, so the seam always reads as
@@ -4791,7 +4828,7 @@ function buildLeg(rig, spec, side, sign, mirror) {
   rig.add(`knee_${S}`, latheProfile([
     { r: 0, y: -kneeW * 0.36 }, { r: kneeR * 0.90, y: -kneeW * 0.36 }, { r: kneeR, y: -kneeW * 0.24, smooth: true },
     { r: kneeR, y: kneeW * 0.24 }, { r: kneeR * 0.80, y: kneeW * 0.36 }, { r: 0, y: kneeW * 0.36 },
-  ], 22), 'darkMetal', { world: true, p: [0, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
+  ], 22), 'gasket', { world: true, p: [0, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
   rig.add(`knee_${S}`, bevelBox(L.shin * 1.35, L.shin * 1.25, L.shin * 0.85, 0.012,
     { topX: 0.86, botX: 0.72, shearZ: FRONT * 0.02 }), 'armorAccent',
   { p: [0, -L.shin * 0.14, FRONT * L.shin * 0.85], r: [-8 * DEG, 0, 0], mirror, tier: TIER.PRIMARY });
@@ -4901,7 +4938,7 @@ function buildLeg(rig, spec, side, sign, mirror) {
   rig.add(`ankle_${S}`, latheProfile([
     { r: 0, y: -ankleW * 0.24 }, { r: ankleR * 0.88, y: -ankleW * 0.24 }, { r: ankleR, y: -ankleW * 0.14, smooth: true },
     { r: ankleR, y: ankleW * 0.14 }, { r: ankleR * 0.78, y: ankleW * 0.24 }, { r: 0, y: ankleW * 0.24 },
-  ], 20), 'darkMetal', { world: true, p: [0, 0.006, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
+  ], 20), 'gasket', { world: true, p: [0, 0.006, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
 
   // --- foot
   const fw = L.footW, fl = L.foot;

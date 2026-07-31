@@ -172,6 +172,106 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
  * — are deliberately left alone. They fire on frames this was not measured on,
  * at different framings and distances, and a number changed without a frame to
  * check it against is not a fix.
+ *
+ * ---
+ *
+ * ROUND 18: THE LIGHT'S AMPLITUDE WAS NEVER THE PROBLEM. ITS POSITION WAS.
+ *
+ * The round that cut the amplitude was right that the impact light owns the
+ * over-exposure and wrong about which of its numbers to reach for. Measured by
+ * toggling one frozen `04-impact` contact frame in place — launcher, +1
+ * rendered frame, sim paused, render clock pinned to 1/60 through the freeze
+ * and 0 after it, `FightCamera.render` stubbed, adaptive resolution pinned,
+ * grain and chroma off — the control repeats to the last digit, so every number
+ * below has a noise floor of **0.000**:
+ *
+ *                                clipped %   hot px    detail   core sat
+ *     round 17                     4.103      62303     22.73    0.1304
+ *     ...hue only                  3.524      55666     23.69    0.1513
+ *     ...position only             2.408      52656     25.33    0.1357
+ *     BOTH (shipped)               2.371      48665     25.72    0.1463
+ *     impact light silenced        2.311      43521     27.59    0.1272
+ *
+ * over a 340 px disc on the projected contact. `hot px` is the region at
+ * luma >= 200/255; `detail` is the RMS of ( L - box9(L) ) inside it, which is
+ * the high-frequency energy — panel lines, bevels, edge wear — that a blown-out
+ * region does not have; `core sat` is mean (max-min)/max over the same region.
+ *
+ * Read the first and last rows together and the defect is stated exactly: the
+ * light was contributing **1.79 of the 4.10 percentage points of clipped white
+ * — 44% of it — and taking a third of the frame's local contrast with it.** The
+ * same ablation on the untouched `16-impact-heavy` frame gives 0.805% with the
+ * light and 0.791% without: **1.7%**. That is the whole difference between the
+ * tier that works and the tier that does not, and it is not a difference of
+ * radiance. It is that a launcher's contact point lands under a large plate
+ * facing the camera with the light buried a few centimetres inside it.
+ *
+ * So `lightLift` is the same correction this file has already made four times.
+ * `e.point` is a capsule intersection, i.e. INSIDE the armour: the flare, the
+ * heat core, the spark spawn and the contact front have each had to be moved out
+ * along the view ray to be seen at all, and the light was the last element still
+ * buried in the robot, lighting a plate from 5 cm at 1/r^2. Moved 0.60 m out —
+ * along the VIEW RAY, so its screen position does not move one pixel — its share
+ * of the clipped white falls to **2.5%, the heavy tier's number**, while it
+ * still puts 5,000 hot pixels on the plate that the silenced light does not.
+ * The lift was swept on one frozen frame: 0.30 / 0.45 / 0.60 / 0.80 / 1.00 /
+ * 1.30 m give clipped 0.651 / 0.520 / 0.512 / 0.507 / 0.506 / 0.506 against a
+ * 0.504 floor. Clipping is already at the floor by 0.60; past it the light only
+ * fades toward being switched off, so 0.60 is the knee and not a guess.
+ *
+ * `lightHex` is the other half, and it is the "re-spend it as colour" step. At
+ * 0xffd0a0 all three channels saturate together and the plate goes cream; at
+ * 0xff9d4a the blue channel keeps most of its headroom, so the trim colour, the
+ * stencils and the panel gaps survive the same candela. It buys 0.58 pp of
+ * clipped white and +16% core saturation on its own, and after it the struck
+ * plate is MORE saturated than the same frame with the light switched off
+ * entirely (0.1463 against 0.1272) — which is what "the energy is being
+ * delivered as colour rather than as luminance" means as a number.
+ *
+ * **`light` itself is deliberately unchanged, and the ladder stays strictly
+ * monotonic.** A sweep of the amplitude on the frozen frame — 0.85 / 0.70 /
+ * 0.55 of the shipped value — moves clipped white by 0.003 pp and detail by
+ * 0.26 once the position is fixed. The brief for this round named the 5.1 as
+ * the constant to cut; on the frame it does almost nothing, and the camera is
+ * not closer on `04-impact` either (contact-to-camera 4.87 m against the
+ * heavy's 4.41 m — the heavy shot is the closer one).
+ *
+ * Three more things were disproved on the same frame and are recorded so nobody
+ * re-tries them:
+ *
+ *  - **`FRONT_HEAT_GAIN` is not a lever here.** Silencing the camera-facing
+ *    contact front outright — the other constant this round was pointed at —
+ *    moves clipped white by 0.09 pp and detail by 0.09. It is doing its job on
+ *    the light tier, where it was measured into existence, and it is not what
+ *    blows out a launcher.
+ *  - **`impact` (the radial smear) is usually not even in the frame.** At
+ *    `decay: 18` and the 0.6 hitstop FX clock, a launcher's 0.17 is gone in
+ *    9 ms of FX time, which is less than one rendered frame at contact. It was
+ *    measured at 0.00 to 0.12 across runs depending only on how long that one
+ *    frame took. The previous round's -3.40 pp for the overlay was measured
+ *    before its own cut and does not describe the current constants.
+ *  - **The flare's tint is not a lever either.** Pulling the flash and heat
+ *    core tints toward amber by 0.35 and 0.55 changes core saturation by 0.0002.
+ *    The flare saturates to white at its centre by construction and it is small;
+ *    the colour that reaches the eye off a hit is the colour the LIGHT puts on
+ *    the armour.
+ *
+ * ULTRA takes the hue and NOT the lift, on measurement. The only ULTRA contact
+ * the harness can produce is a ground-level slam (`siegeSlam`; the overdrive
+ * super frames at 10 m and shows nothing), and there the lift spreads the wash
+ * across the floor instead of concentrating it: clipped 0.448 -> 0.219 but hot
+ * area 42.9k -> 51.4k and detail 25.31 -> 22.87. The hue alone is better or
+ * neutral on every metric (clipped 0.336, detail 25.14, sat 0.1529 -> 0.1660),
+ * so that is what ships. A chest-height ultra would probably want the lift;
+ * there is no frame to prove it on, so it does not get one.
+ *
+ * One property of the capture worth knowing before trusting any number off
+ * `04-impact`: the harness does not pin the clock between contact and its +1
+ * shutter, and the light's envelope is `peak * d^2` with `d` falling at 18/s of
+ * FX time. At a 16 ms frame it delivers 0.67 of peak; at 93 ms it delivers
+ * ZERO. Three probe runs of an unchanged build measured 4.63%, 4.35% and 0.65%
+ * clipped for exactly that reason — on a loaded machine the scored frame is
+ * sometimes photographed with the impact light already extinguished.
  */
 const HIT_FX = {
   /**
@@ -230,6 +330,7 @@ const HIT_FX = {
     flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
     core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 30,
     debris: 10, fluid: 14, light: 5.1, impact: 0.17, dust: 8,
+    lightLift: 0.60, lightHex: 0xff9d4a, lightHexCounter: 0xffb877,
   },
   [WEIGHT.ULTRA]: {
     sparks: 1150, jet: 330, speed: 14.5, size: 0.048, heat: 4.0, sparkLife: 0.30,
@@ -237,8 +338,14 @@ const HIT_FX = {
     flash: 0.7, flashHeat: 6.0, flashLife: 0.16,
     core: 0.28, coreHeat: 5.6, coreLife: 0.9, ember: 42,
     debris: 18, fluid: 26, light: 6.8, impact: 0.30, dust: 14,
+    lightHex: 0xff9d4a, lightHexCounter: 0xffb877,
   },
 };
+
+/** Where the impact light sits, and what colour it is, when a tier says nothing. */
+const LIGHT_HEX = 0xffd0a0;
+const LIGHT_HEX_COUNTER = 0xfff0d8;
+const LIGHT_LIFT_M = 0;
 
 /**
  * How each impact shape throws its material.
@@ -1026,9 +1133,17 @@ export class EffectsDirector {
         });
         break;
 
-      case FX_PART.LIGHT:
-        this.#flashLight(c.point, r.light * k, c.counter ? 0xfff0d8 : 0xffd0a0);
+      // The impact light. Two things about it are decided here rather than in
+      // `#flashLight`, because both are per-weight: WHERE it sits relative to
+      // the plate it lights, and how much of its energy is delivered as colour
+      // rather than as luminance. See the note above `HIT_FX` for the frames.
+      case FX_PART.LIGHT: {
+        const lift = r.lightLift ?? LIGHT_LIFT_M;
+        const at = lift > 0 ? this.#towardCamera(c.point, lift, _v3) : c.point;
+        this.#flashLight(at, r.light * k,
+          c.counter ? (r.lightHexCounter ?? LIGHT_HEX_COUNTER) : (r.lightHex ?? LIGHT_HEX));
         break;
+      }
 
       case FX_PART.PUNCH:
         if (r.impact > 0) this.#punch(c.point, r.impact * k, c.ultra);

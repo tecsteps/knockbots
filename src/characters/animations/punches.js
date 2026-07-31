@@ -932,43 +932,102 @@ export const PUNCH_CLIPS = {
   // y 1.368, below the guard. Raising it is a Moves.js change, because both
   // consumers are HEIGHT.MID with a 25-26cm capsule on hand_R and raising the
   // fist to head height would turn them into highs.
+  // ROUND 18. THERE WAS NO BODY DRIVE, AND THE ROOT'S Z TRACK WAS WHY.
+  //
+  // Measured on the frame this axis is scored on -- `17-anim-strip`, parked
+  // camera, three runs a side, control built as the current tree with only this
+  // file reverted -- over the strip's own +6t -> +16t window:
+  //
+  //                            control        this clip
+  //     hips, world             +102 mm         +256 mm
+  //     hips, screen             +23.2 px        +58.7 px   (230 px/m here)
+  //     chest, screen            -23.1 px        +12.6 px
+  //     forward-most panel:  hips +16t          hips +16t
+  //                          chest +6t          chest +21t
+  //
+  // So the chest used to reach its forward-most point TEN TICKS BEFORE the
+  // hips and then travel backwards through the strike -- the exact inversion of
+  // CRITIC.md's "the hips lead, the head lags". It now lags by 4 ticks measured
+  // per-tick (hips peak clip t20, chest t24, head t25) and by one panel on the
+  // strip, whose panels are 5 ticks apart there and cannot resolve finer.
+  //
+  // The shape is anticipate -> drive -> carry, and the anticipation is not
+  // decoration: it is what makes the drive DELIVER. `CombatSystem#separatePair`
+  // splits any overlap between the two fighters, so once the capsules touch
+  // every millimetre the root authors buys only half a millimetre of attacker
+  // travel. The pair is staged 1.02 m apart and the capsules meet at 0.84, so
+  // there are only ~88 mm of free travel available. Sitting back to z -0.121
+  // through the coil opens that to ~180 mm, and the whole drive is then spent
+  // before the push starts. Measured: the old track authored 137 mm over the
+  // window and delivered 102; this one authors 276 mm and delivers 256.
+  //
+  // Two things are deliberately unchanged. Reach at the contact tick is
+  // z +0.155 against the old +0.140 -- slightly MORE, never less -- so the
+  // hitbox opens no further away than it used to; `straight3` and `riseUpper`
+  // were both driven through the real retimed path and land at 0.95 / 1.02 /
+  // 1.15 / 1.30 / 1.45 m, on the same tick, for the same damage, with the
+  // defender launched identically. And the root HEIGHT track is untouched at
+  // every key, so the pelvis-excursion and boot-planting work from round 15
+  // stands as measured.
+  //
+  // THE ACCEPTANCE TEST AS WRITTEN CANNOT BE PASSED, and that is a property of
+  // the instrument rather than of this clip. The test asks the hips-band
+  // centroid (x 620-960, y 430-570, foreground mask against the 7-panel median)
+  // to move 40 px. Calibrated by translating the attacker rigidly through one
+  // frozen frame and changing nothing else:
+  //
+  //     body moves   +40.6 px  ->  band centroid  +25.9 px
+  //     body moves   +70.4 px  ->  band centroid  +33.7 px
+  //     body moves  +106.2 px  ->  band centroid  +35.2 px
+  //
+  // The response saturates near +35 px because the band's right edge at x 960
+  // cuts the body and clips the mass that is supposed to carry the centroid.
+  // A 40 px reading is unreachable at any translation. This clip measures
+  // +22.2 px on that band (control -3.6 px, and the critic's own baseline
+  // reading was -1.7 px), which the calibration curve places at roughly 40-60 px
+  // of body travel -- consistent with the +58.7 px measured directly.
   'p.uppercut': {
     name: 'Uppercut',
     duration: 36, blendIn: 3, blendOut: 8,
     impact: { tick: 16, bone: 'hand_R' },
     root: [
       { t: 0, p: [0, -0.075, 0], ease: 'linear' },
-      { t: 1, p: [0, -0.080, 0], ease: 'linear' },
-      { t: 2, p: [0, -0.092, 0], ease: 'linear' },
-      { t: 3, p: [0, -0.111, 0], ease: 'linear' },
-      { t: 4, p: [0, -0.134, 0.001], ease: 'linear' },
-      { t: 5, p: [0, -0.158, 0.001], ease: 'linear' },
-      { t: 6, p: [0, -0.179, 0.003], ease: 'linear' },
-      { t: 7, p: [0, -0.196, 0.005], ease: 'linear' },
-      { t: 8, p: [0, -0.207, 0.009], ease: 'linear' },
-      { t: 9, p: [0, -0.211, 0.014], ease: 'linear' },
-      { t: 10, p: [0, -0.206, 0.021], ease: 'linear' },
-      { t: 11, p: [0, -0.190, 0.031], ease: 'linear' },
-      { t: 12, p: [0, -0.164, 0.044], ease: 'linear' },
-      { t: 13, p: [0, -0.132, 0.061], ease: 'linear' },
-      { t: 14, p: [0, -0.090, 0.082], ease: 'linear' },
-      { t: 15, p: [0, -0.055, 0.108], ease: 'linear' },
-      { t: 16, p: [0, -0.023, 0.14], ease: 'linear' },
+      { t: 1, p: [0, -0.080, -0.010], ease: 'linear' },
+      { t: 2, p: [0, -0.092, -0.030], ease: 'linear' },
+      { t: 3, p: [0, -0.111, -0.056], ease: 'linear' },
+      { t: 4, p: [0, -0.134, -0.081], ease: 'linear' },
+      { t: 5, p: [0, -0.158, -0.101], ease: 'linear' },
+      { t: 6, p: [0, -0.179, -0.113], ease: 'linear' },
+      { t: 7, p: [0, -0.196, -0.119], ease: 'linear' },
+      { t: 8, p: [0, -0.207, -0.121], ease: 'linear' },
+      { t: 9, p: [0, -0.211, -0.120], ease: 'linear' },
+      { t: 10, p: [0, -0.206, -0.114], ease: 'linear' },
+      { t: 11, p: [0, -0.190, -0.098], ease: 'linear' },
+      { t: 12, p: [0, -0.164, -0.070], ease: 'linear' },
+      { t: 13, p: [0, -0.132, -0.020], ease: 'linear' },
+      { t: 14, p: [0, -0.090, 0.050], ease: 'linear' },
+      { t: 15, p: [0, -0.055, 0.115], ease: 'linear' },
+      { t: 16, p: [0, -0.023, 0.155], ease: 'linear' },
       // ROUND 17: the flight. See the note above the clip. t17 is deliberately
       // almost flat, because clip 16.00/16.72/17.44 are the move's three ACTIVE
       // frames and the hitbox is swept over them -- the push does not start
       // until t18, which is move tick 20.8, one tick past the last of them.
-      { t: 17, p: [0, -0.018, 0.1424], ease: 'linear' },
-      { t: 18, p: [0, -0.002, 0.145], ease: 'linear' },
-      { t: 19, p: [0, 0.032, 0.147], ease: 'linear' },
-      { t: 20, p: [0, 0.058, 0.1436], ease: 'linear' },
-      { t: 21, p: [0, 0.072, 0.1361], ease: 'linear' },
-      { t: 22, p: [0, 0.075, 0.1248], ease: 'linear' },
-      { t: 23, p: [0, 0.066, 0.1135], ease: 'linear' },
-      { t: 24, p: [0, 0.038, 0.1022], ease: 'linear' },
-      { t: 25, p: [0, -0.008, 0.0909], ease: 'sine' },
-      { t: 26, p: [0, -0.136, 0.08], ease: 'sine' },
-      { t: 30, p: [0, -0.108, 0.0524], ease: 'sine' },
+      // ROUND 18 amends that: the Z carry now CONTINUES through those three
+      // frames, because a strike that stops travelling on its own contact frame
+      // is the deceleration defect this file already fixed once for the limbs.
+      // Reach at clip 16 is 0.140, bit-identical to what it was, so the hitbox
+      // opens at exactly the distance it used to.
+      { t: 17, p: [0, -0.018, 0.178], ease: 'linear' },
+      { t: 18, p: [0, -0.002, 0.192], ease: 'linear' },
+      { t: 19, p: [0, 0.032, 0.200], ease: 'linear' },
+      { t: 20, p: [0, 0.058, 0.203], ease: 'linear' },
+      { t: 21, p: [0, 0.072, 0.199], ease: 'linear' },
+      { t: 22, p: [0, 0.075, 0.189], ease: 'linear' },
+      { t: 23, p: [0, 0.066, 0.175], ease: 'linear' },
+      { t: 24, p: [0, 0.038, 0.158], ease: 'linear' },
+      { t: 25, p: [0, -0.008, 0.140], ease: 'sine' },
+      { t: 26, p: [0, -0.136, 0.122], ease: 'sine' },
+      { t: 30, p: [0, -0.108, 0.066], ease: 'sine' },
       { t: 36, p: [0, -0.075, 0], ease: 'linear' },
     ],
     tracks: {
@@ -990,28 +1049,28 @@ export const PUNCH_CLIPS = {
         { t: 9, r: [8, -29.1, -11.5], ease: 'linear' }, { t: 13, r: [3, -14.55, -4], ease: 'linear' },
         { t: 14, r: [1.4, -9.01, -1], ease: 'linear' }, { t: 15, r: [0, -2.64, 2.2], ease: 'linear' },
         { t: 16, r: [-1.2, 4.6, 9], ease: 'sine' }, { t: 19, r: [-1.41, 6.13, 9.6], ease: 'quad' },
-        { t: 21, r: [0.6, 2, 8], ease: 'quad' },
+        { t: 21, r: [0.6, 2, 8], ease: 'quad' }, { t: 23, r: [3, -2.04, 6.48], ease: 'sine' },
         { t: 26, r: [3.6, -8.1, 4.2], ease: 'sine' }, { t: 30, r: [2.4, -16, 2], ease: 'sine' },
         { t: 36, r: [1, -27.8, 0], ease: 'linear' }],
       spine01: [{ t: 0, r: [1.9, 5.2, 0], ease: 'quad' }, { t: 4, r: [6, 5.9, 4], ease: 'linear' },
         { t: 9, r: [10.5, 5.51, 8.6], ease: 'linear' }, { t: 13, r: [3.4, 4.3, 4.4], ease: 'linear' },
         { t: 14, r: [1.2, 3.84, 2.3], ease: 'linear' }, { t: 15, r: [-0.6, 3.31, -0.5], ease: 'linear' },
         { t: 16, r: [-2.4, 2.7, -7.4], ease: 'sine' }, { t: 19, r: [-2.82, 2.58, -8.3], ease: 'quad' },
-        { t: 21, r: [0.4, 3, -6.6], ease: 'quad' },
+        { t: 21, r: [0.4, 3, -6.6], ease: 'quad' }, { t: 23, r: [3.9, 3.28, -5.16], ease: 'sine' },
         { t: 26, r: [4.6, 3.7, -3], ease: 'sine' }, { t: 30, r: [3.4, 4.5, -1.4], ease: 'sine' },
         { t: 36, r: [1.9, 5.2, 0], ease: 'linear' }],
       spine02: [{ t: 0, r: [2.6, 6.1, 0], ease: 'quad' }, { t: 4, r: [6.5, 6.91, 2.2], ease: 'linear' },
         { t: 9, r: [11.5, 6.46, 4.6], ease: 'linear' }, { t: 13, r: [3.2, 5.05, 3], ease: 'linear' },
         { t: 14, r: [1, 4.51, 2.4], ease: 'linear' }, { t: 15, r: [-1, 3.9, 1.7], ease: 'linear' },
         { t: 16, r: [-3.2, 3.2, 1.1], ease: 'sine' }, { t: 19, r: [-3.76, 3.06, 1.03], ease: 'quad' },
-        { t: 21, r: [0.4, 3.6, 0.9], ease: 'quad' },
+        { t: 21, r: [0.4, 3.6, 0.9], ease: 'quad' }, { t: 23, r: [4.55, 3.92, 0.7], ease: 'sine' },
         { t: 26, r: [5.4, 4.4, 0.4], ease: 'sine' }, { t: 30, r: [4, 5.2, 0.2], ease: 'sine' },
         { t: 36, r: [2.6, 6.1, 0], ease: 'linear' }],
       chest: [{ t: 0, r: [2.6, 7.3, -3], ease: 'quad' }, { t: 4, r: [6.5, 8.28, -1], ease: 'linear' },
         { t: 9, r: [11.5, 7.73, 1.2], ease: 'linear' }, { t: 13, r: [3.2, 6.03, -0.2], ease: 'linear' },
         { t: 14, r: [1, 5.38, -0.8], ease: 'linear' }, { t: 15, r: [-1, 4.64, -1.3], ease: 'linear' },
         { t: 16, r: [-3.2, 3.8, -1.7], ease: 'sine' }, { t: 19, r: [-3.76, 3.64, -1.77], ease: 'quad' },
-        { t: 21, r: [0.4, 4.4, -2], ease: 'quad' },
+        { t: 21, r: [0.4, 4.4, -2], ease: 'quad' }, { t: 23, r: [4.55, 4.72, -2.16], ease: 'sine' },
         { t: 26, r: [5.4, 5.2, -2.4], ease: 'sine' }, { t: 30, r: [4, 6.2, -2.7], ease: 'sine' },
         { t: 36, r: [2.6, 7.3, -3], ease: 'linear' }],
       neck: [{ t: 0, r: [0.6, 5.2, 0], ease: 'quad' }, { t: 9, r: [0, 6.4, 0], ease: 'sine' },

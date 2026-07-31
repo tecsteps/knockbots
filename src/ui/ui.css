@@ -71,6 +71,15 @@
   --kb-cut-sm: 0.45em;
   --kb-radius: 2px;
   /*
+   * Chamfer depth for the plate ring described under "THE CHROME HAS TO BE
+   * MADE OF SOMETHING" below. A length, not a switch — the switch is the
+   * selector list, for the same reason `--kb-edge` on `.kb-text` is: a ring
+   * of zero width is not an absent ring, it is a ring made entirely of
+   * antialiasing residue.
+   */
+  --kb-bev: 2px;
+  --kb-bev-sm: 1.5px;
+  /*
    * The one shared left inset every piece of a player's HUD cluster —
    * portrait chip, hp-frame, nameplate, overdrive label, overdrive track —
    * snaps to, so the cluster reads as one designed column instead of five
@@ -300,6 +309,55 @@
  * HUD
  * ==================================================================== */
 
+/*
+ * THE CHROME HAS TO BE MADE OF SOMETHING.
+ *
+ * The display type got its chamfer and its edge-light (see `.kb-text::after`
+ * above) and the critic credited it. Nothing that was not type got either.
+ * Measured on the certified 08-hud frame, taking the median tone of each row
+ * of a plate's own surface and reporting the spread top to bottom:
+ *
+ *     timer housing (181x131)   14.9/255 of range, and 7 across its interior
+ *     nameplate strip (775x29)   7  units below the top hairline
+ *     overdrive track            0  units — every row of the empty track
+ *                                   measured exactly 12/255
+ *
+ * Zero range over the full depth of a plate is not "dark", it is a hole cut in
+ * the frame. Next to a health fill that has a bevel, a gloss and a gradient,
+ * the housings around it were the only untextured shapes in the interface.
+ *
+ * THE RING IDIOM, used by every plate below.
+ *
+ * The plate element keeps its `clip-path` and is painted with the CHAMFER —
+ * lit across the top and down the left, dark across the bottom and down the
+ * right. A `::before` inset by `--kb-bev`, carrying the SAME `clip-path`,
+ * paints the plate's face on top of it. What survives is a `--kb-bev`-wide rim
+ * that follows the chamfer the whole way round.
+ *
+ * Why not an inset `box-shadow`, which is one line: because an inset shadow is
+ * a rectangular ring and `clip-path` cuts away exactly the parts of it lying on
+ * the diagonals — the same failure already written up on `.portrait-chip`,
+ * where half of every chip's keyline was missing in every capture this project
+ * has taken. Every plate here is a parallelogram or an octagon; the rectangular
+ * ring misses the only edges that needed the treatment.
+ *
+ * Why not the two-copy `mask-composite: subtract` chamfer that `.kb-text` uses:
+ * it works, and it was built and measured, but it costs the plate its
+ * `drop-shadow` (CSS applies `filter` before `mask`, so a masked box's shadow
+ * spread is clipped away by its own mask — see `.kb-text`), and the cuts here
+ * are sized in `em` while an SVG mask stretched with `preserveAspectRatio=none`
+ * can only express them as percentages. The inset child needs neither.
+ *
+ * AND THE STAIRCASE IS NOT WHAT IT LOOKS LIKE. The brief for this work assumed
+ * `clip-path` produced a hard unantialiased diagonal and that an SVG mask would
+ * fix it. Rendered side by side over a flat mid-grey — same octagon, one
+ * clipped and one masked — both produced 0.58 partially-covered pixels per row
+ * along the same cut, i.e. identical antialiasing. The stepping that reads as a
+ * staircase is the geometry of a 0.64-px-per-row diagonal at 1x and no
+ * rasteriser removes it. What removes the *appearance* is a lit line running
+ * along the cut, which is what the ring is.
+ */
+
 .hud {
   position: absolute;
   inset: 0;
@@ -458,17 +516,18 @@
   max-width: 44em;
   padding: 0.26em;
   /*
-   * Raised tonal floor. The previous recipe bottomed out at #0a0c11/#000 for
-   * the lower 80% of the bar's height — against a dark arena that reads as
-   * flat black merging into flat black, so the chamfer this gradient exists
-   * to sell had nothing to separate from. The lit top 7% is untouched (that
-   * highlight already reads); everything below it now settles on a floor
-   * (#171c26) closer to the panel tokens than to void black, so the bevel
-   * stays a visible dark-metal edge the full height of the bar instead of
-   * disappearing into the background for its bottom four-fifths.
+   * The bezel is now the RING (see the block at the top of the HUD section):
+   * this element paints the chamfer and `::before` paints the face over it, so
+   * the lit edge follows the two 0.9em diagonal cuts instead of stopping dead
+   * at them, which is all the rectangular inset highlight below could ever do.
+   * The face's own gradient — the raised tonal floor that keeps the bar from
+   * bottoming out into the dark arena for its lower four-fifths — moved
+   * unchanged onto `::before`.
    */
-  background: linear-gradient(180deg,
-    #8891a4 0%, #4b5468 7%, #262c38 22%, #1c212b 50%, #171c26 100%);
+  background:
+    linear-gradient(90deg, rgba(226, 238, 255, 0.28), rgba(226, 238, 255, 0) 4%),
+    linear-gradient(270deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0) 3.5%),
+    linear-gradient(180deg, #c2cee1 0%, #7d8799 22%, #333b49 60%, #12171f 90%, #05070c 100%);
   clip-path: polygon(var(--kb-cut) 0, 100% 0, calc(100% - var(--kb-cut)) 100%, 0 100%);
   box-shadow:
     inset 0 0.07em 0 rgba(255, 255, 255, 0.65),
@@ -476,6 +535,18 @@
     inset 0 -0.1em 0.06em rgba(0, 0, 0, 0.95),
     inset 0 0 0 0.05em rgba(0, 0, 0, 0.9);
   filter: drop-shadow(0 0.55em 1.1em rgba(0, 0, 0, 0.55)) drop-shadow(0 0.1em 0.16em rgba(0, 0, 0, 0.6));
+}
+/* The bezel's face. Same shape, inset by the chamfer depth; the strip of
+ * parent left showing round it IS the chamfer. */
+.hp-frame::before {
+  content: '';
+  position: absolute;
+  inset: var(--kb-bev);
+  z-index: 0;
+  pointer-events: none;
+  clip-path: polygon(var(--kb-cut) 0, 100% 0, calc(100% - var(--kb-cut)) 100%, 0 100%);
+  background: linear-gradient(180deg,
+    #8891a4 0%, #4b5468 7%, #262c38 22%, #1c212b 50%, #171c26 100%);
 }
 /*
  * THE EMPTY TRACK IS THE SECOND-BIGGEST SHAPE IN THE FRAME AND IT WAS A HOLE.
@@ -504,6 +575,10 @@
  */
 .hp-inner {
   position: relative;
+  /* Above `.hp-frame::before`, which is the bezel's face and would otherwise
+   * paint over the channel — both are positioned, so DOM order alone does not
+   * settle it once the face exists. */
+  z-index: 1;
   height: 100%;
   width: 100%;
   background:
@@ -652,11 +727,38 @@
   max-width: 100%;
   min-width: 0;
   padding: 0.2em 0.5em;
-  background: linear-gradient(180deg, rgba(11, 14, 22, 0.88), rgba(5, 7, 12, 0.72));
+  /*
+   * Ring chamfer, per the block at the top of the HUD section. The old recipe
+   * was rgba(11,14,22,.88) over rgba(5,7,12,.72) with a 1px `--kb-line` inset:
+   * photographed, that is 7 units of tone across the strip's whole 29px depth
+   * and a keyline that `clip-path` erased on both of the diagonals it was
+   * supposed to describe. This element is now the chamfer and `::before` is
+   * the face.
+   */
+  background:
+    linear-gradient(90deg, rgba(226, 238, 255, 0.26), rgba(226, 238, 255, 0) 6%),
+    linear-gradient(270deg, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0) 5%),
+    linear-gradient(180deg, #93a3bd 0%, #4a5468 30%, #10151e 72%, #04060a 100%);
   clip-path: polygon(0.4em 0, 100% 0, calc(100% - 0.4em) 100%, 0 100%);
-  box-shadow: inset 0 0 0 1px var(--kb-line), inset 0 0.05em 0 rgba(255, 255, 255, 0.06);
   filter: drop-shadow(0 0.22em 0.4em rgba(0, 0, 0, 0.45));
 }
+.nameplate::before {
+  content: '';
+  position: absolute;
+  inset: var(--kb-bev-sm);
+  z-index: 0;
+  pointer-events: none;
+  clip-path: polygon(0.4em 0, 100% 0, calc(100% - 0.4em) 100%, 0 100%);
+  /* Still translucent, so the arena reads through it the way it always did —
+   * the strip gained a material, not an opaque lid. */
+  background:
+    repeating-linear-gradient(100deg, rgba(214, 230, 255, 0.028) 0 1px, transparent 1px 5px),
+    linear-gradient(180deg,
+      rgba(38, 46, 62, 0.94) 0%, rgba(20, 26, 37, 0.92) 34%,
+      rgba(9, 12, 19, 0.88) 76%, rgba(15, 20, 30, 0.9) 100%);
+}
+/* Name, identity rule and pips all sit above the face. */
+.nameplate > * { position: relative; z-index: 1; }
 .hp-block--p2 .nameplate { flex-direction: row-reverse; }
 
 /*
@@ -815,14 +917,36 @@
  * a 0.174mm pixel subtends 0.26deg; below that a shape stops resolving as a
  * shape at all.
  */
+/*
+ * The pips are the smallest chrome in the HUD and were the flattest: one fill
+ * of `--kb-grey-dim` inside a diamond `clip-path`, with an inset black ring
+ * that the clip removed on all four of the diamond's edges — every edge it
+ * has. Two flat grey lozenges. They take the ring treatment at 1.5px, which on
+ * a 12px diamond is a quarter of the shape, so each pip now reads as a cut
+ * gem: lit top-left facet, dark bottom-right one.
+ */
 .pip {
+  position: relative;
   width: max(9px, 0.62em); height: max(9px, 0.62em);
-  background: var(--kb-grey-dim);
+  background: linear-gradient(160deg, #c3cede 0%, #7d8799 34%, #3b4353 72%, #1a1f2a 100%);
   clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4);
   transition: background 0.25s ease, box-shadow 0.25s ease;
 }
-.pip.pip--won { background: var(--kb-accent); box-shadow: 0 0 0.5em rgba(255, 138, 42, 0.75); }
+.pip::before {
+  content: '';
+  position: absolute;
+  inset: var(--kb-bev-sm);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  background: linear-gradient(160deg, #6d7688 0%, #464e5e 46%, #262c38 100%);
+  transition: background 0.25s ease;
+}
+.pip.pip--won {
+  background: linear-gradient(160deg, #ffe6bd 0%, #ffb066 34%, #c25a12 74%, #6d2f06 100%);
+  box-shadow: 0 0 0.5em rgba(255, 138, 42, 0.75);
+}
+.pip.pip--won::before {
+  background: linear-gradient(160deg, #ffc78a 0%, #ff8a2a 48%, #a8480d 100%);
+}
 
 /* -- timer -------------------------------------------------------------- */
 
@@ -844,17 +968,51 @@
  * ("88"-class advance) so it never resizes as the count ticks down through
  * narrower digits like "1".
  */
+/*
+ * THE FOCAL PLATE OF THE WHOLE INTERFACE, AND IT WAS A HOLE.
+ *
+ * `linear-gradient(180deg, #0d1119, #070a10)` is 16/255 down to 9/255: a
+ * 181x131 octagon dead centre of frame carrying six units of tone over its
+ * entire depth, and an `inset 0 0 0 1px` keyline that the clip-path deleted on
+ * all four diagonals — which are the only edges an octagon has that a
+ * rectangular ring cannot describe. Photographed at 8x the cut read as a bare
+ * tone step straight from the arena to near-black.
+ *
+ * Ring treatment (see the top of the HUD section), plus a face that is a real
+ * machined plate: a lit top rail, a graded body, a faint bounce along the
+ * bottom, and a milled hatch fine enough to survive 8-bit quantisation
+ * (0.035 alpha on a 5px period — the `.hp-inner` note records what happens
+ * below that).
+ */
 .timer-frame {
   width: 9em; height: 6.5em;
+  position: relative;
   display: grid; place-items: center;
-  background: linear-gradient(180deg, #0d1119, #070a10);
+  background:
+    linear-gradient(90deg, rgba(226, 238, 255, 0.30), rgba(226, 238, 255, 0) 42%),
+    linear-gradient(270deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0) 34%),
+    linear-gradient(180deg, #b9c8e2 0%, #7f8ea9 26%, #39424f 62%, #10151c 88%, #05070c 100%);
   clip-path: polygon(14% 0, 86% 0, 100% 30%, 100% 70%, 86% 100%, 14% 100%, 0 70%, 0 30%);
-  box-shadow: inset 0 0 0 1px var(--kb-line);
   filter: drop-shadow(0 0.3em 0.6em rgba(0, 0, 0, 0.5));
+}
+.timer-frame::before {
+  content: '';
+  position: absolute;
+  inset: var(--kb-bev);
+  z-index: 0;
+  pointer-events: none;
+  clip-path: polygon(14% 0, 86% 0, 100% 30%, 100% 70%, 86% 100%, 14% 100%, 0 70%, 0 30%);
+  background:
+    linear-gradient(163deg, rgba(126, 152, 196, 0.14) 0%, rgba(126, 152, 196, 0) 40%),
+    repeating-linear-gradient(100deg, rgba(214, 230, 255, 0.035) 0 1px, transparent 1px 5px),
+    linear-gradient(180deg,
+      #2b3446 0%, #1a2130 6%, #131926 24%, #0e131d 52%, #0b0f18 76%, #121826 92%, #1d2434 100%);
 }
 .timer-value {
   font-size: 5.4em;
   height: 1em;
+  /* Over the housing's face, which is a positioned sibling. */
+  z-index: 2;
 }
 .timer-frame.timer--tense {
   filter: drop-shadow(0 0.3em 0.6em rgba(0, 0, 0, 0.5)) drop-shadow(0 0 0.9em rgba(255, 59, 78, 0.75));
@@ -936,19 +1094,46 @@
 .meter-label { grid-row: label; }
 .meter-block--p2 .meter-label { transform: scaleX(-1); }
 
+/*
+ * `background: #090c13`, one flat fill, and it measured exactly that: every
+ * row of the empty track photographed at 12/255, ZERO units of range over the
+ * bar's full depth — the only element in the HUD with no tonal variation at
+ * all. `--kb-shadow-panel`'s `inset 0 0 0 1px` keyline was, again, a rectangle
+ * against a chamfered box.
+ *
+ * Ring chamfer, and a face that is a machined channel: a dark lip under the
+ * top rail, a raised mid floor so the hatch has something to sit on, and the
+ * ribbing at 0.05 alpha on a 4px period, which is the figure `.hp-inner`
+ * already established as the floor for surviving an 8-bit frame.
+ */
 .meter-frame {
   grid-row: bar;
   position: relative;
   height: 0.62em;
   width: 100%;
   max-width: 30em;
-  background: #090c13;
+  background:
+    linear-gradient(90deg, rgba(226, 238, 255, 0.24), rgba(226, 238, 255, 0) 7%),
+    linear-gradient(270deg, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0) 6%),
+    linear-gradient(180deg, #8e9cb6 0%, #414b5e 34%, #0d121a 76%, #04060a 100%);
   clip-path: polygon(var(--kb-cut-sm) 0, 100% 0, calc(100% - var(--kb-cut-sm)) 100%, 0 100%);
-  box-shadow: var(--kb-shadow-panel);
+  box-shadow: 0 0.35em 0.9em rgba(0, 0, 0, 0.5);
   overflow: hidden;
+}
+.meter-frame::before {
+  content: '';
+  position: absolute;
+  inset: var(--kb-bev-sm);
+  z-index: 0;
+  pointer-events: none;
+  clip-path: polygon(var(--kb-cut-sm) 0, 100% 0, calc(100% - var(--kb-cut-sm)) 100%, 0 100%);
+  background:
+    repeating-linear-gradient(100deg, rgba(214, 230, 255, 0.05) 0 1px, transparent 1px 4px),
+    linear-gradient(180deg, #050810 0%, #131a26 40%, #0d121b 78%, #05070c 100%);
 }
 .meter-fill {
   position: absolute; inset: 0;
+  z-index: 1;
   transform-origin: left center;
   will-change: transform;
   background: linear-gradient(90deg, var(--kb-cyan-dim), var(--kb-cyan) 60%, #bdfeff);
@@ -961,11 +1146,15 @@
 }
 .meter-ticks {
   position: absolute; inset: 0;
+  z-index: 2;
   background-image: repeating-linear-gradient(90deg, rgba(0,0,0,0.55) 0 1px, transparent 1px 20%);
   pointer-events: none;
 }
+/* `--kb-shadow-panel` carries the rectangular inset keyline this plate just
+ * stopped using; the full/burst states inherit the ring instead and only add
+ * their glow. */
 .meter-frame.meter--full {
-  box-shadow: var(--kb-shadow-panel), var(--kb-glow-cyan);
+  box-shadow: 0 0.35em 0.9em rgba(0, 0, 0, 0.5), var(--kb-glow-cyan);
 }
 .meter-frame.meter--full .meter-fill { animation: meterFullPulse 0.9s ease-in-out infinite; }
 @keyframes meterFullPulse {
@@ -974,8 +1163,8 @@
 }
 .meter-frame.meter--burst { animation: meterBurst 0.5s ease-out; }
 @keyframes meterBurst {
-  0% { box-shadow: var(--kb-shadow-panel), 0 0 2.4em rgba(63, 224, 255, 0.95); filter: brightness(2.2); }
-  100% { box-shadow: var(--kb-shadow-panel), var(--kb-glow-cyan); filter: brightness(1); }
+  0% { box-shadow: 0 0.35em 0.9em rgba(0, 0, 0, 0.5), 0 0 2.4em rgba(63, 224, 255, 0.95); filter: brightness(2.2); }
+  100% { box-shadow: 0 0.35em 0.9em rgba(0, 0, 0, 0.5), var(--kb-glow-cyan); filter: brightness(1); }
 }
 .meter-label {
   font-family: var(--kb-font-label);
@@ -1995,15 +2184,40 @@
   display: flex; align-items: center; justify-content: flex-end;
   padding: 0 clamp(1.2em, 4vw, 3.4em);
 }
+/*
+ * The results card is the largest single plate the game draws and it had the
+ * HUD's problem: `--kb-shadow-panel` ends in `inset 0 0 0 1px var(--kb-line)`,
+ * and the one edge of this shape that is not a rectangle side — the 1.5em cut
+ * across the top-left — is precisely the edge that keyline could never reach.
+ * The ring idiom (see the top of the HUD section) puts a lit chamfer on it.
+ */
 .results-panel {
+  position: relative;
   width: min(30em, 46vw);
   display: flex; flex-direction: column;
   gap: 0.85em;
   padding: 1.9em 1.8em 1.7em;
-  background: linear-gradient(160deg, var(--kb-panel-2) 0%, var(--kb-panel) 42%, #0a0d14 100%);
+  /* Darker top rail than the HUD plates carry, and a faster falloff along it:
+   * this chamfer runs the full 600px width of the card, and at the HUD's rail
+   * value (#b9c8e2) it stopped reading as a bevel and started reading as a
+   * white keyline drawn round a box. */
+  background:
+    linear-gradient(100deg, rgba(226, 238, 255, 0.34), rgba(226, 238, 255, 0) 34%),
+    linear-gradient(270deg, rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0) 24%),
+    linear-gradient(180deg, #6b7788 0%, #4a5364 16%, #2c3341 48%, #12171f 84%, #05070c 100%);
   clip-path: polygon(1.5em 0, 100% 0, 100% 100%, 0 100%, 0 1.5em);
-  box-shadow: var(--kb-shadow-panel);
+  box-shadow: 0 0.6em 2.2em rgba(0, 0, 0, 0.55);
 }
+.results-panel::before {
+  content: '';
+  position: absolute;
+  inset: var(--kb-bev);
+  z-index: 0;
+  pointer-events: none;
+  clip-path: polygon(1.5em 0, 100% 0, 100% 100%, 0 100%, 0 1.5em);
+  background: linear-gradient(160deg, var(--kb-panel-2) 0%, var(--kb-panel) 42%, #0a0d14 100%);
+}
+.results-panel > * { position: relative; z-index: 1; }
 /* Eyebrow: a short accent rule then the label, the same "system heading"
  * pattern the select screen's ROSTER / UNIT DOSSIER captions use, so the two
  * screens read as one interface. */
