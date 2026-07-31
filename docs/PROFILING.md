@@ -423,3 +423,50 @@ front of it. The four traps above all describe ways this box lies about timing.
 **Do not spend another round on this without first reproducing it on a quiet machine, or better,
 in a real browser.** A stall that leaves no trace in program count, resource count or draw count
 is far more likely to be the measurement environment than the game.
+
+---
+
+# Trap 5: the captures are not reproducible, and the noise is larger than the work
+
+Added round 16, after **three independent agents hit it in the same round from three different
+directions**. This is the most expensive measurement defect the project has found, because unlike
+the four above it does not corrupt timing — it corrupts the *image comparisons that decide every
+score*.
+
+Two runs of an **unchanged tree**, identical shot list, no code between them:
+
+| shot | mean absolute delta | pixels ≥ 8/255 |
+|---|---|---|
+| `02-closeup-face` | **24.3 / 255** | **57 %** |
+| `09-roster` | 3.5 / 255 | 8 % |
+| `06-stage-wide` floor band | — | **29 %** |
+
+Every material change measured on the closeup across four rounds is *smaller than that spread*.
+So those measurements were substantially comparing poses, not materials, and the flat character
+score across four rounds of real work is consistent with that.
+
+**Causes, as far as they are understood.** A shot that pauses inside its own `setup` pauses
+wherever wall-clock left the idle cycle, because `setup` runs after a fixed delay — the head moves
+tens of pixels and rotates between runs. On top of that, `paused` gates the **accumulator, not the
+render**: `Game.#render` runs unconditionally on wall-clock dt, so spring bones, breathing, FX and
+TAA keep advancing in a "paused" shot. Adaptive resolution is also live and moves the delivered
+resolution on its own. And the wide shot adds sub-pixel camera drift over a highly detailed deck.
+
+**Three fixes were tried and ALL THREE MEASURED WORSE than doing nothing.** Recorded so nobody
+repeats them:
+
+1. Wait for `KB.tick >= t0 + 150`, then pause — **42.2 / 255**. `t0` is sampled at shot start and
+   varies run to run, so a fixed *offset* lands at a different phase of a cyclic pose every time.
+   A relative origin cannot pin a cycle.
+2. Absolute origin — force `startMatch` + `setPhase('fight')`, wait on `phaseTicks` — **39.2**.
+3. Same, plus freezing the render clock (`clock.getDelta = () => 0`) — **33.1**.
+
+Baseline is 24.3. All three were reverted; `tools/capture.mjs` is unchanged on this point.
+
+**It is solvable.** A bespoke probe built by the character workstream reaches **1.65 / 255** on the
+same framing (freeze at a fixed tick, adaptive resolution pinned off, clock frozen). The
+difference between that probe and the shot is where the answer is, and it has not been found yet.
+
+**Until it is, two rules.** A full-harness A/B across runs cannot resolve anything smaller than
+these numbers — toggle **in-page**, on one frozen frame, so nothing else moves between the pair.
+And treat any cross-round still comparison on the character axis as unproven.
