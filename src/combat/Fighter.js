@@ -45,7 +45,8 @@ import {
 } from '../core/Constants.js';
 import { bus } from '../core/Bus.js';
 import { Rng } from '../core/Rng.js';
-import { BONES, HURTBOX_BONES, IK_CHAINS, SPRING_BONES, SPRING_DEFS, createSkeleton } from '../characters/Skeleton.js';
+import { BONES, BONE_NAMES, HURTBOX_BONES, IK_CHAINS, SPRING_BONES, SPRING_DEFS, createSkeleton } from '../characters/Skeleton.js';
+import { sampleClip, Pose } from '../characters/AnimationFormat.js';
 import { activeBoxes, isActive, isInvulnerable } from './MoveSchema.js';
 import { MOVES, findMove } from './Moves.js';
 import { Animator } from '../characters/Animator.js';
@@ -132,6 +133,26 @@ const ROOT_MOTION_SCALE = 1.0;
 // Per-tick share of the leftover animation yaw that unwinds once no clip is
 // driving it. A move may spin the chassis; it may not decide where it ends up.
 const ANIM_YAW_RELEASE = 0.22;
+/**
+ * Most the chassis may be turned to put a strike on the line to the opponent.
+ * See `strikeAim` for what this fixes and how it was measured.
+ *
+ * Swept against the connection rate of all 182 non-throw moves at four ranges,
+ * 728 attempts in total. 0 is the behaviour before this existed:
+ *
+ *     cap      0    20    35    45    55    70    90 deg
+ *     connect 82 %  91 %  92 %  93 %  94 %  94 %  94 %
+ *     dead    21     9     4     4     4     4     4  moves
+ *
+ * It is flat past 55 because nothing is left that a turn can fix — the four
+ * moves still dead at every cap are all `sp.risingFang`, whose aim is corrected
+ * to 13 degrees and which whiffs anyway, so it is a separate defect. 55 is
+ * therefore the smallest cap that buys the whole improvement, and a cap matters:
+ * past this the clip is not aiming badly, it is striking somewhere else
+ * entirely, and turning the whole chassis that far to chase it would read worse
+ * than the whiff does.
+ */
+const AIM_LIMIT = 55 * Math.PI / 180;
 
 /**
  * States whose clips are authored to keep the fighter on its feet, and so the
@@ -330,6 +351,117 @@ export function retimeFor(move) {
   return move.retime;
 }
 
+// ---------------------------------------------------------------------------
+// Strike aiming
+//
+// A clip's `root` track may author a body pivot — `ry` — and the Animator
+// EXTRACTS it rather than baking it into the bones, so the only place it is ever
+// applied is `animYaw` on the fighter's group. Which means it rotates the
+// striking limb along with everything else, and the strike leaves the body at
+// whatever angle the pivot happens to leave it at.
+//
+// That is the kicks-never-connect defect, and here is the measurement. Driving
+// all 182 non-throw moves through the real sim at 0.9/1.02/1.2/1.5 m and
+// listening on the bus, then recording the angle between (striking bone - hips)
+// and the line to the opponent on the first active frame:
+//
+//     |aim error| <= 25 deg   409/432 connections = 95 %
+//     |aim error| >  25 deg   186/296 connections = 63 %
+//
+// and every move that connected at NONE of the four distances is in the second
+// group bar one clip. The four worst offenders, all of which whiffed 4/4:
+//
+//     clip           authored ry at contact   aim error   connects
+//     k.midKick            -58 deg             39 deg       0/4
+//     k.highKick           -70 deg             37 deg       0/4
+//     k.roundhouse         -96 deg             44 deg       0/4
+//     p.backfist          -276 deg            102 deg       0/4
+//
+// The pivot itself is not the fault — `k.spinKick` pivots 249 degrees and hits
+// 4/4, because its leg track is authored to come round with the spin and its aim
+// error is 2 degrees. What breaks a move is the pivot the limb does NOT
+// compensate for.
+//
+// So the correction is aiming, not suppression: the chassis is turned by
+// whatever puts the strike back on the line, ramped in over the startup so
+// nothing snaps, held through the active window, and released over the recovery
+// so the move still ends where the animation says. A clip whose limb already
+// tracks the target asks for nothing.
+
+/** Lazy scratch rig for the static aim solve. Built once, never rendered. */
+let _aimRig = null;
+function aimRig() {
+  if (_aimRig) return _aimRig;
+  const { bones, byName } = createSkeleton(null);
+  const rest = Object.create(null);
+  for (const b of bones) rest[b.name] = b.quaternion.clone();
+  _aimRig = { bones, byName, rest, pose: new Pose(BONE_NAMES) };
+  return _aimRig;
+}
+const _aimQ = new THREE.Quaternion();
+const _aimId = new THREE.Quaternion();
+const _aimV = new THREE.Vector3();
+const _aimV2 = new THREE.Vector3();
+
+/**
+ * Radians to add to `animYaw` so this move's strike leaves the body pointing at
+ * the opponent. Static — a property of (clip, frame data) — so it is solved once
+ * and cached on the move next to its retime.
+ *
+ * Measured on the CLIP's own forward kinematics at its declared contact tick,
+ * not on last tick's bone matrices, for the same reason `#installPelvisLift`
+ * does: a servo reading its own output cannot tell its correction from the thing
+ * it is correcting.
+ *
+ * @param {Object} move
+ * @returns {number} radians, clamped to +/- AIM_LIMIT
+ */
+export function strikeAim(move) {
+  if (move.aimBias !== undefined) return move.aimBias;
+  move.aimBias = 0;
+  const clip = CLIPS[move.clip];
+  const box = move.active?.[0]?.boxes?.[0];
+  if (!clip || !box) return 0;
+  const rig = aimRig();
+  const bone = rig.byName[box.bone];
+  const hips = rig.byName.hips;
+  if (!bone || !hips) return 0;
+
+  // The contact tick in CLIP time. `retimeFor` pins the clip's declared contact
+  // onto the move's first active frame, so when the clip declares one that tick
+  // IS the first active frame; without one the clip plays at its authored rate
+  // and the move's own frame number is the clip's.
+  const r = retimeFor(move);
+  const t = r ? r.pivot : move.active[0].from;
+
+  const { bones, rest, pose } = rig;
+  pose.reset();
+  sampleClip(clip, t, pose, 1);
+  for (const b of bones) {
+    const w = pose.weight[b.name] || 0;
+    if (w > 0) {
+      _aimQ.copy(pose.rot[b.name]);
+      if (w < 1) _aimQ.slerp(_aimId, 1 - w);
+      b.quaternion.copy(rest[b.name]).multiply(_aimQ);
+    } else {
+      b.quaternion.copy(rest[b.name]);
+    }
+  }
+  // Root translation only. The authored yaw is added below as a scalar, exactly
+  // as the runtime adds it — through `animYaw` on the group, never on the bones.
+  rig.byName.root.position.copy(pose.rootPos);
+  rig.byName.root.quaternion.identity();
+  rig.byName.root.updateMatrixWorld(true);
+
+  _aimV.set(box.offset[0], box.offset[1], box.offset[2]).applyMatrix4(bone.matrixWorld);
+  _aimV2.setFromMatrixPosition(hips.matrixWorld);
+  _aimV.sub(_aimV2);
+  // The rig's front is +Z, so a strike on the line has x = 0 after the pivot.
+  const err = wrapPi(Math.atan2(_aimV.x, _aimV.z) + pose.rootYaw);
+  move.aimBias = -THREE.MathUtils.clamp(err, -AIM_LIMIT, AIM_LIMIT);
+  return move.aimBias;
+}
+
 /** Mirror of Skeleton.scaleFor — hurtbox radii must scale with the proportions. */
 function proportionScale(name, p) {
   if (!p) return 1;
@@ -360,6 +492,8 @@ export class Fighter {
     // on the previous tick so render() can interpolate across a spin.
     this.animYaw = 0;
     this.prevAnimYaw = 0;
+    /** How much of the current move's aim correction is already in `animYaw`. */
+    this.aimYaw = 0;
     this.position = new THREE.Vector3((index === 0 ? -1.9 : 1.9), 0, 0);
     this.prevPosition = this.position.clone();
     this.velocity = new THREE.Vector3();
@@ -715,6 +849,7 @@ export class Fighter {
     this.visualYaw = yawForFacing(facing);
     this.animYaw = 0;
     this.prevAnimYaw = 0;
+    this.aimYaw = 0;
     this.health = MAX_HEALTH;
     this.recoverable = 0;
     this.meter = Math.min(this.meter, METER_MAX * 0.25);
@@ -1799,14 +1934,52 @@ export class Fighter {
    * full turn so a 360 spin costs nothing, and bleeds back to neutral as the
    * drive fades — so a move that ends 180 degrees round pivots back to face the
    * opponent over its recovery instead of leaving the fighter back-turned.
+   *
+   * On top of the authored turn it folds in the strike-aiming bias (see
+   * `strikeAim`), as a DELTA against however much of it is already folded in, so
+   * the two live in one angle and everything downstream — the pose, the
+   * hitboxes, the hit-reaction direction, the render interpolation — sees a
+   * single consistent body yaw rather than a correction bolted on at one of them.
    * @param {number} dYaw  radians of authored yaw this tick
    * @param {number} drive 0..1 share of the animation still authoring yaw
    */
   #advanceRootYaw(dYaw, drive) {
-    let yaw = this.animYaw + dYaw;
+    const aim = this.#aimBias();
+    // The release is the AUTHORED turn bleeding back to neutral, so the aim bias
+    // is lifted out before it runs and put back after. Leaving it in makes the
+    // two fight: on a clip with no authored root track `drive` is 0, the release
+    // takes 22 % of the whole angle every tick, and a 55-degree correction can
+    // only ever reach the 15 degrees where the two balance.
+    let yaw = this.animYaw - this.aimYaw + dYaw;
     if (drive < 1) yaw -= yaw * ANIM_YAW_RELEASE * (1 - drive);
+    yaw += aim;
+    this.aimYaw = aim;
     if (yaw > Math.PI || yaw <= -Math.PI) yaw = wrapPi(yaw);
     this.animYaw = Math.abs(yaw) < 1e-4 ? 0 : yaw;
+  }
+
+  /**
+   * How much of this move's aim correction should be applied on this tick.
+   *
+   * Ramped in across the startup so the turn reads as the fighter squaring up to
+   * throw the blow rather than as a snap, held flat across the active window so
+   * every frame of the strike is aimed the same, and released across the
+   * recovery so the move finishes on the pose the animation authored.
+   * @returns {number} radians
+   */
+  #aimBias() {
+    const mv = this.currentMove;
+    if (!mv || this.state !== STATE.ATTACK || !mv.active?.length) return 0;
+    const bias = strikeAim(mv);
+    if (!bias) return 0;
+    const t = this.moveTick;
+    if (t <= 0) return 0;
+    const first = mv.active[0].from;
+    if (t < first) return bias * (t / Math.max(1, first));
+    const last = mv.active[mv.active.length - 1].to;
+    if (t <= last) return bias;
+    const out = Math.max(1, (mv.total ?? last) - last);
+    return t - last >= out ? 0 : bias * (1 - (t - last) / out);
   }
 
   /** Write the simulated transform and the canonical pose onto the scene graph. */

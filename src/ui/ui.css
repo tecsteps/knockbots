@@ -984,15 +984,57 @@
  * (0.035 alpha on a 5px period — the `.hp-inner` note records what happens
  * below that).
  */
+/*
+ * THE NUMERALS DID NOT FIT THE PLATE THEY SIT ON.
+ *
+ * At 1x this looks like a timer in a box. At 9x the "5" of "54" has its bottom
+ * bar resting ON the bottom-left bevel keyline and the "4" has its top-right
+ * stem crossing the top-right one — a machined plaque whose engraving collides
+ * with its own bezel, which is exactly the class of thing this axis keeps
+ * losing points to.
+ *
+ * It is arithmetic, not taste. The plate was 181x131 at (869.5, 20.1); the
+ * glyph body box is 153.1x108.9 at (883.5, 31.2) — 14.0 px of clearance in the
+ * straight middle band, which is fine. But the octagon bites 14% of the WIDTH
+ * over the top and bottom 30% of the HEIGHT, and the glyphs are 108.9 of the
+ * plate's 131 tall, so their top and bottom rows land deep inside the chamfer:
+ *
+ *     plate's left edge at the glyph's top row      887.7   glyph ink at 883.5
+ *     plate's left edge at the glyph's bottom row   887.7   glyph ink at 883.5
+ *
+ * 4.2 px of ink outside the plate at both ends, and all four corners of the ink
+ * box test outside the clip polygon. The drop-shadow layer sits 8.7 px lower
+ * still, which is why the bottom reads worse than the top.
+ *
+ * Two terms, chosen so the numeral is not touched — it was fought for once
+ * already (see the size note above) and shrinking it to fit the frame would be
+ * solving the wrong end:
+ *
+ *   - 9.7em wide instead of 9em. +14 px, 7 px a side, spent out of two health
+ *     bars that are ~700 px each.
+ *   - an 11%/26% chamfer instead of 14%/30%. Still unmistakably an octagon at
+ *     1x — the bite is 21.5 px of a 195.6 px plate — but the diagonal starts
+ *     later and runs shallower.
+ *
+ * Recomputed against the same glyph box: 6.8 px of plate outside the ink at the
+ * top row, 6.7 px at the bottom row, 21.3 px through the middle. Every corner
+ * of the ink box is inside the polygon.
+ *
+ * It also fixes the state that matters most. `timerPulse` scales the numeral to
+ * 1.14 under ten seconds, which put the ink at x=872.8 against a plate edge of
+ * 869.5 — 3 px in the straight band and far outside at both chamfers, i.e. the
+ * timer broke its own housing precisely when the player was staring at it. At
+ * 9.7em the pulsed extreme still clears by 10.6 px.
+ */
 .timer-frame {
-  width: 9em; height: 6.5em;
+  width: 9.7em; height: 6.5em;
   position: relative;
   display: grid; place-items: center;
   background:
     linear-gradient(90deg, rgba(226, 238, 255, 0.30), rgba(226, 238, 255, 0) 42%),
     linear-gradient(270deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0) 34%),
     linear-gradient(180deg, #b9c8e2 0%, #7f8ea9 26%, #39424f 62%, #10151c 88%, #05070c 100%);
-  clip-path: polygon(14% 0, 86% 0, 100% 30%, 100% 70%, 86% 100%, 14% 100%, 0 70%, 0 30%);
+  clip-path: polygon(11% 0, 89% 0, 100% 26%, 100% 74%, 89% 100%, 11% 100%, 0 74%, 0 26%);
   filter: drop-shadow(0 0.3em 0.6em rgba(0, 0, 0, 0.5));
 }
 .timer-frame::before {
@@ -1001,7 +1043,9 @@
   inset: var(--kb-bev);
   z-index: 0;
   pointer-events: none;
-  clip-path: polygon(14% 0, 86% 0, 100% 30%, 100% 70%, 86% 100%, 14% 100%, 0 70%, 0 30%);
+  /* Must track `.timer-frame`'s polygon exactly, or the inner face steps away
+     from the outer keyline along all four diagonals. */
+  clip-path: polygon(11% 0, 89% 0, 100% 26%, 100% 74%, 89% 100%, 11% 100%, 0 74%, 0 26%);
   background:
     linear-gradient(163deg, rgba(126, 152, 196, 0.14) 0%, rgba(126, 152, 196, 0) 40%),
     repeating-linear-gradient(100deg, rgba(214, 230, 255, 0.035) 0 1px, transparent 1px 5px),
@@ -1017,14 +1061,46 @@
 .timer-frame.timer--tense {
   filter: drop-shadow(0 0.3em 0.6em rgba(0, 0, 0, 0.5)) drop-shadow(0 0 0.9em rgba(255, 59, 78, 0.75));
 }
+/*
+ * The tense pulse is a LIGHT pulse, not a size pulse.
+ *
+ * `transform: scale(1.14)` on a numeral that already fills 78% of its plate's
+ * width and 83% of its height cannot be contained by any plate you would
+ * actually want to draw: measured through the clip polygon, the pulsed ink sat
+ * 8.2 px outside the plate at the top row even after the housing was widened,
+ * and closing that needs either a 6% chamfer (which stops reading as an
+ * octagon at 1x) or a 10.8em plate. So the timer broke its own housing exactly
+ * in the last ten seconds, which is the one stretch of the round anybody is
+ * looking at it.
+ *
+ * Urgency does not have to be size. A red wash breathing UNDER the numeral
+ * carries it, it reads at any distance, and geometrically it costs nothing: the
+ * pulsed clearance is now the resting clearance, +7.4 px at the top and bottom
+ * rows and +21.2 px through the middle.
+ *
+ * `opacity` on its own layer, not `filter` on the numeral — the motion-language
+ * note at the top of this file reserves per-frame animation to `transform` and
+ * `opacity`, and a `filter` keyframe would repaint the plate sixty times a
+ * second for the whole last ten seconds of every round. The layer is inside
+ * `.timer-frame`, so its own `clip-path` keeps the wash on the plate.
+ */
 .timer-frame.timer--tense .timer-value {
   --kb-ink-a: #ffb3ba;
   --kb-ink-b: #a4020f;
+}
+.timer-frame.timer--tense::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse 62% 78% at 50% 52%,
+    rgba(255, 72, 92, 0.55), rgba(196, 20, 40, 0.28) 58%, rgba(120, 0, 14, 0) 100%);
   animation: timerPulse 0.6s ease-in-out infinite;
 }
 @keyframes timerPulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.14); }
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
 }
 /*
  * Sized to actually read at 1080p, not just sit there as a caption: at the
@@ -1166,6 +1242,40 @@
   0% { box-shadow: 0 0.35em 0.9em rgba(0, 0, 0, 0.5), 0 0 2.4em rgba(63, 224, 255, 0.95); filter: brightness(2.2); }
   100% { box-shadow: 0 0.35em 0.9em rgba(0, 0, 0, 0.5), var(--kb-glow-cyan); filter: brightness(1); }
 }
+/*
+ * THE ONE PIECE OF HUD TYPE WITH NOTHING UNDERNEATH IT.
+ *
+ * Every other readout in the top bar sits on a plate — the nameplate, the
+ * health frame, the meter track, the timer housing. This caption is bare 11px
+ * type laid straight onto a live 1080p arena, and it is the only reason
+ * "OVERDRIVE" reads as "O ERDRIVE" in a 3x crop.
+ *
+ * Measured rather than asserted, by toggling `visibility` on the label alone in
+ * ONE frozen frame (sim paused, clock pinned to 0) and shuttering the label's
+ * own rect twice, so the only difference between the two images is the label.
+ * Glyph coverage is the top decile of that difference — the letterform, not its
+ * shadow. Two independent readings per pixel: the ink against the background it
+ * actually covers, and the ink against the mean of the rendered pixels within
+ * 3px of it.
+ *
+ *                        vs covered bg          vs local mean
+ *     .meter-label P1    2.49  77% under 3:1    2.50  82% under 3:1
+ *     .meter-label P2    4.07   3% under 3:1    3.03  47% under 3:1
+ *     .round-label       6.60   0% under 3:1    4.69  11% under 3:1
+ *
+ * Three-quarters of P1's caption is below the ratio at which type stops
+ * separating from what it is on. `.round-label` is measured here too and is
+ * FINE on both readings — it is left alone, because the sibling that looks
+ * similar is not the one that is broken.
+ *
+ * A soft elliptical wash, not a plate: no hard edge anywhere on it, so it reads
+ * as the caption casting a shadow rather than as a fifth panel added to a bar
+ * that already has four. The negative margin cancels the padding exactly, so
+ * the first glyph stays on `--kb-col-clear` — the shared column the comment on
+ * `.meter-block` is about. The gradient is symmetric left-to-right because
+ * `.meter-block--p2` mirrors and the label mirrors back, and a directional fade
+ * would come out pointing the wrong way on P2.
+ */
 .meter-label {
   font-family: var(--kb-font-label);
   font-size: max(9px, 0.58em);
@@ -1175,6 +1285,10 @@
   color: var(--kb-text-dim);
   text-shadow: 0 0.1em 0.15em rgba(0, 0, 0, 0.8);
   transition: color 0.2s ease;
+  padding: 0.34em 1em 0.3em;
+  margin: -0.34em -1em -0.3em;
+  background: radial-gradient(ellipse 58% 118% at 50% 50%,
+    rgba(4, 7, 12, 0.92) 0%, rgba(4, 7, 12, 0.8) 45%, rgba(4, 7, 12, 0) 100%);
 }
 .meter-label.meter-label--full {
   color: var(--kb-cyan);

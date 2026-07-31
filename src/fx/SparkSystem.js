@@ -320,6 +320,10 @@ export class SparkSystem {
    * @param {number} [opts.heat]   peak radiance at ignition
    * @param {THREE.Color|{r:number,g:number,b:number}} [opts.tint]
    * @param {THREE.Vector3} [opts.inherit] velocity added to every spark
+   * @param {number} [opts.window] EMISSION WINDOW, seconds of FX time. See the
+   *   note below: the burst is spawned already spread along its trajectories
+   *   instead of piled on one point, which is what stops a contact frame being
+   *   a white blob.
    */
   burst(point, normal, opts = {}) {
     const total = Math.max(1, Math.round(opts.count ?? 40));
@@ -329,6 +333,7 @@ export class SparkSystem {
     const size = opts.size ?? 0.035;
     const tint = opts.tint;
     const inherit = opts.inherit;
+    const window = Math.max(0, opts.window ?? 0);
 
     _dir.copy(normal);
     if (_dir.lengthSq() < 1e-6) _dir.set(0, 1, 0);
@@ -410,9 +415,72 @@ export class SparkSystem {
         aVel[o] = vx; aVel[o + 1] = vy; aVel[o + 2] = vz;
         aTint[o] = tr; aTint[o + 1] = tg; aTint[o + 2] = tb;
 
+        // THE EMISSION WINDOW, and it is the largest single defect this axis
+        // has had since the impact light. See the note above `TIERS`.
+        //
+        // Every spark in a burst was born at the same instant on the same
+        // point. The frame the axis is scored on is ONE rendered frame past
+        // contact, and at the 0.6 hitstop FX clock that is 10 ms — so a
+        // launcher's 1,005 sparks were photographed having travelled 10 cm from
+        // a common origin. A thousand additive streaks inside a 45-pixel disc
+        // is not a thousand sparks, it is one white blob, and every one of them
+        // is invisible inside it.
+        //
+        // A real contact sheds ejecta over the length of the contact and the
+        // camera sees the spray after it has left the surface, so the burst is
+        // spawned ALREADY IN FLIGHT: each particle is aged by a uniform draw
+        // from [0, window], which distributes the population along its own
+        // trajectory instead of piling it at the origin. Nothing is removed —
+        // same count, same radiance, same size, same speed — the same energy is
+        // simply spread over the volume it would really occupy.
+        //
+        // Measured by mutating the birth times of the live pool on ONE frozen
+        // contact frame and re-reading it, so the control repeats to the last
+        // digit and the noise floor is 0.000. Launcher, `04-impact` geometry,
+        // 170 px disc on the projected contact:
+        //
+        //     window   clipped %   hot px   detail   core sat
+        //     0 (was)     1.343     32119    8.294    0.1420
+        //     0.035       0.633     30093    8.990    0.1594
+        //     0.060       0.633     28438    9.404    0.1620
+        //     0.090       0.633     27965    9.591    0.1653
+        //     0.130       0.633     26832    9.923    0.1727
+        //
+        // Clipped white falls by more than half and stops at 0.633 — that floor
+        // is the flare and the arena, i.e. every clipped pixel the SPARKS were
+        // contributing is gone — while local contrast inside the hot region
+        // rises 13% and the region's colour saturation rises 14%. Heavy moves
+        // the same way (clipped 3.428 -> 2.083, detail 9.048 -> 10.360) and so
+        // does a jab (0.644 -> 0.589, detail 16.34 -> 17.13), so the ladder is
+        // unchanged in shape. Eight frames later the burst is where it always
+        // was: detail 15.61 -> 15.97, hot 27.4k -> 26.1k.
+        //
+        // The life is extended by the same draw rather than left alone, so a
+        // pre-rolled spark still burns for its full life FROM THE CONTACT
+        // FRAME. Without that the fine tier — 60% of the count and a 106 ms
+        // life at its shortest — loses up to half of itself before the decay
+        // shot at +8 frames. On the contact frame the two are indistinguishable
+        // (detail 9.404 against 9.381); at +8 the compensation is what keeps
+        // the cloud populated.
+        //
+        // **0.060 is not the knee, and it is not meant to be.** The numbers keep
+        // improving past it — doubling the window again takes the launcher's
+        // hot-mask detail to 10.992 and its 170 px hot area down another 14% —
+        // but the picture stops being a contact. At roughly 0.12 s a gap opens
+        // between the flare and the head of the spray and the frame reads as
+        // the moment *after* the blow rather than the blow. The window is set
+        // by where the ejecta still leaves the plate, not by the metric.
+        //
+        // Offsetting the ORIGIN along the velocity instead — same geometry, no
+        // phase shift on the cooling ramp — was tried and is worse on every
+        // metric (detail 9.243, sat 0.1582, and 9,500 MORE hot pixels at 340
+        // px): the whole spray then sits on one point of the temperature ramp,
+        // which is the "particles that fade uniformly" defect this file has
+        // already been corrected for twice.
+        const pre = window > 0 ? Math.random() * window : 0;
         const l = i * 4;
-        aLife[l] = time;
-        aLife[l + 1] = life * tier.life * (0.62 + Math.random() * 0.7);
+        aLife[l] = time - pre;
+        aLife[l + 1] = life * tier.life * (0.62 + Math.random() * 0.7) + pre;
         aLife[l + 2] = Math.random() * 1000;
         // Narrow inside the two fine tiers, wide inside the fragments — see the
         // note on 'spread' in TIERS. Log-uniform so the whole band is occupied

@@ -275,6 +275,25 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
  */
 const HIT_FX = {
   /**
+   * `sparkWindow` — the emission window, in seconds of FX time, and it is the
+   * field that decides whether the contact frame shows sparks or shows a blob.
+   *
+   * Every other number in this table is a magnitude. This one is a *phase*: the
+   * burst is spawned already spread along its own trajectories rather than
+   * piled on one point, because the frame this axis is scored on is one
+   * rendered frame past contact and at the 0.6 hitstop FX clock that is ten
+   * milliseconds of travel. `SparkSystem.burst` carries the measurement — the
+   * short version is that on a frozen `04-impact` the launcher's clipped white
+   * fell from 1.343% to 0.633% with no spark removed, and 0.633 is the floor
+   * with the sparks hidden entirely.
+   *
+   * It is not spent where the counts are: an ablation on the same frozen frame
+   * puts the sparks at 16,000 of the launcher's 20,700 FX-added hot pixels and
+   * at 2.35 of its 4.16 lost points of local contrast, against 3,300 and 0.54
+   * for the flare and 1,900 and 0.28 for the contact front. The blow-out on
+   * this tier is overdraw, and the count was never the thing to reach for.
+   */
+  /**
    * THE BOTTOM RUNG HAS TO BE VISIBLE, and it was not.
    *
    * Measured on the certified `15-impact-light` frame — a jab, landed, frozen
@@ -305,6 +324,7 @@ const HIT_FX = {
    */
   [WEIGHT.LIGHT]: {
     sparks: 260, jet: 92, speed: 8.4, size: 0.032, heat: 2.9, sparkLife: 0.18,
+    sparkWindow: 0.040,
     ring: 0.33, ringLife: 0.13, thick: 0.095, ringHeat: 2.6,
     flash: 0.35, flashHeat: 3.9, flashLife: 0.075,
     core: 0.13, coreHeat: 3.1, coreLife: 0.42, ember: 14,
@@ -312,6 +332,7 @@ const HIT_FX = {
   },
   [WEIGHT.MEDIUM]: {
     sparks: 400, jet: 130, speed: 9.3, size: 0.035, heat: 3.2, sparkLife: 0.20,
+    sparkWindow: 0.048,
     ring: 0.44, ringLife: 0.15, thick: 0.10, ringHeat: 3.0,
     flash: 0.44, flashHeat: 4.3, flashLife: 0.09,
     core: 0.16, coreHeat: 3.7, coreLife: 0.55, ember: 20,
@@ -319,6 +340,7 @@ const HIT_FX = {
   },
   [WEIGHT.HEAVY]: {
     sparks: 680, jet: 200, speed: 10.4, size: 0.038, heat: 3.4, sparkLife: 0.24,
+    sparkWindow: 0.055,
     ring: 0.62, ringLife: 0.19, thick: 0.11, ringHeat: 3.4,
     flash: 0.56, flashHeat: 4.6, flashLife: 0.11,
     core: 0.19, coreHeat: 4.4, coreLife: 0.72, ember: 26,
@@ -326,6 +348,7 @@ const HIT_FX = {
   },
   [WEIGHT.LAUNCHER]: {
     sparks: 780, jet: 225, speed: 11.4, size: 0.04, heat: 3.5, sparkLife: 0.26,
+    sparkWindow: 0.060,
     ring: 0.72, ringLife: 0.21, thick: 0.115, ringHeat: 3.6,
     flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
     core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 30,
@@ -334,6 +357,7 @@ const HIT_FX = {
   },
   [WEIGHT.ULTRA]: {
     sparks: 1150, jet: 330, speed: 14.5, size: 0.048, heat: 4.0, sparkLife: 0.30,
+    sparkWindow: 0.070,
     ring: 1.20, ringLife: 0.28, thick: 0.135, ringHeat: 4.2,
     flash: 0.7, flashHeat: 6.0, flashLife: 0.16,
     core: 0.28, coreHeat: 5.6, coreLife: 0.9, ember: 42,
@@ -631,6 +655,14 @@ export class EffectsDirector {
     this._installedComposer = null;
     this._pass = null;
     this._ready = false;
+
+    // MEASUREMENT ONLY, no behaviour change. Every number in the comments above
+    // was produced by toggling one of these tables on a single frozen contact
+    // frame, which is the only A/B on this axis with a zero noise floor -- a
+    // fresh hit re-rolls the camera spring and the shutter frame, a mutation on
+    // the live table does not. Handing the tables to the page is what makes
+    // that possible without editing the file between arms of a pair.
+    if (typeof window !== 'undefined') window.__kbFx = { HIT_FX, SHAPE_FX, director: this };
   }
 
   // -------------------------------------------------------------------------
@@ -1070,6 +1102,9 @@ export class EffectsDirector {
           life: r.sparkLife * 0.8,
           inherit: _v3.copy(c.dir).multiplyScalar(r.speed * 0.5),
           size: r.size * 1.15, heat: r.heat * 1.15,
+          // The lance runs ahead of the fan, so it is spread over a shorter
+          // window: it is the leading edge of the ejecta, not the body of it.
+          window: r.sparkWindow * 0.7,
         });
         break;
 
@@ -1078,6 +1113,7 @@ export class EffectsDirector {
           count: r.sparks * k, speed: r.speed * k, spread: s.fanSpread,
           life: r.sparkLife, inherit: c.inherit, size: r.size, heat: r.heat,
           tint: c.counter ? _c.setRGB(1.0, 0.86, 0.72) : null,
+          window: r.sparkWindow,
         });
         break;
 
@@ -1090,6 +1126,7 @@ export class EffectsDirector {
         this.sparks.burst(c.spawn, c.ember, {
           count: r.ember * k, speed: r.speed * 0.22, spread: 0.85,
           life: r.sparkLife * 1.25, size: r.size * 0.8, heat: r.heat * 0.85,
+          window: r.sparkWindow,
         });
         break;
 

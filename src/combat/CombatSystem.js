@@ -60,7 +60,7 @@ const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
  * This is the whole of collision detection in this game: hurtboxes and hitboxes
  * are both capsules, and a capsule is a segment plus a radius.
  */
-function segSegDistSq(p1, q1, p2, q2, c1, c2) {
+export function segSegDistSq(p1, q1, p2, q2, c1, c2) {
   const d1 = _a.subVectors(q1, p1);
   const d2 = _b.subVectors(q2, p2);
   const r = _c.subVectors(p1, p2);

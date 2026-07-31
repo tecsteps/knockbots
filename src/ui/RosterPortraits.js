@@ -36,7 +36,49 @@ const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 const _box = new THREE.Box3();
 
-const SIZE = 256;           // square target; the tile crops to its own aspect
+const SIZE = 256;           // square portrait; the tile crops to its own aspect
+
+/**
+ * The whole roster is photographed onto ONE render target, and read back once.
+ *
+ * The render is not the cost and has not been for two rounds. With the
+ * shader-program anchor in `MenuSystem#warmRoster` the draw is ~20 ms and
+ * `compileAsync` is 0.7-1.1 ms; profiling the real warm loop on the real select
+ * screen, wrapping the two renderer entry points and summing:
+ *
+ *     compileAsync                 7 calls    6 ms total   max   1 ms
+ *     readRenderTargetPixelsAsync  6 calls  5132 ms total  max 2793 ms
+ *
+ * One call. The readback is 320-565 ms steady state and 2793 ms on the first,
+ * against a 262 KB transfer — so it is latency, not bandwidth: a fence that
+ * cannot signal until the queue ahead of it (a 1080p frame with fifteen lights
+ * and a post chain, plus the select screen's own live 3D preview) has drained,
+ * polled from a main thread that is itself busy. Ten of those is the entire
+ * remaining fill time and no amount of scheduling removes it, because it is not
+ * scheduling.
+ *
+ * So the portraits are rendered into tiles of one atlas as each robot passes
+ * through, and a single readback lifts the whole sheet. The render stays
+ * synchronous, which also means a caller may dispose its robot the moment
+ * `capture` returns instead of holding it across a half-second fence.
+ *
+ * 4x3 at 256 px is 1024x768 — one render target, replacing the 256x256 one, so
+ * the charter's eight-target budget is unchanged.
+ */
+const COLS = 4;
+const ROWS = 3;
+const ATLAS_W = COLS * SIZE;
+const ATLAS_H = ROWS * SIZE;
+
+/**
+ * How long a rendered tile may sit unread before the sheet is lifted.
+ *
+ * The batch is only worth having if it actually batches, and it is only worth
+ * batching what arrives close together: at ~60 ms a machine, 250 ms collects
+ * four or five. The queue also calls `flush()` explicitly when it drains, so
+ * this is the bound on a queue that stops early — not the normal path.
+ */
+const FLUSH_MS = 250;
 
 /**
  * A portrait lens, not a scene lens.
@@ -243,7 +285,20 @@ export class RosterPortraits {
     this.cache = new Map();
     /** @type {Map<string,object>} character id -> what the framing resolved to */
     this.frames = new Map();
-    this._busy = false;
+    /**
+     * Called with `(id, dataUrl)` as each portrait finishes developing. The
+     * pixels now exist a batch after the render that produced them, so a
+     * caller cannot learn the URL from `capture`'s return value any more.
+     * @type {?(id: string, url: string) => void}
+     */
+    this.onPortrait = null;
+    /** @type {Map<string,number>} character id -> atlas slot, once rendered. */
+    this._slots = new Map();
+    /** Slots rendered but not yet read back. @type {Set<number>} */
+    this._dirty = new Set();
+    this._reading = false;
+    this._drawing = false;
+    this._flushTimer = 0;
     this._rt = null;
     this._scene = null;
     this._camera = null;
@@ -253,7 +308,7 @@ export class RosterPortraits {
 
   #ensure() {
     if (this._rt) return;
-    this._rt = new THREE.WebGLRenderTarget(SIZE, SIZE, {
+    this._rt = new THREE.WebGLRenderTarget(ATLAS_W, ATLAS_H, {
       format: THREE.RGBAFormat,
       type: THREE.UnsignedByteType,
       colorSpace: THREE.SRGBColorSpace,
@@ -284,28 +339,46 @@ export class RosterPortraits {
     this._canvas.width = SIZE;
     this._canvas.height = SIZE;
     this._ctx = this._canvas.getContext('2d');
-    this._buf = new Uint8Array(SIZE * SIZE * 4);
+    this._buf = new Uint8Array(ATLAS_W * ATLAS_H * 4);
   }
 
-  /** True once a portrait exists for this character. */
-  has(id) { return this.cache.has(id); }
+  /**
+   * True once this machine has been PHOTOGRAPHED — which is a slice earlier
+   * than when its picture is available, and deliberately so. The warm-up asks
+   * this to decide whether a machine still needs work, and a machine whose
+   * pixels are sitting in the atlas waiting on the batch does not.
+   */
+  has(id) { return this.cache.has(id) || this._slots.has(id); }
   get(id) { return this.cache.get(id) ?? null; }
 
   /**
    * Photograph an already-built robot. Call this while you still hold it and
    * before disposing it — the caller owns the robot's lifetime, not us.
    *
+   * The picture is NOT ready when this resolves — the sheet is read back in one
+   * batch (see the atlas note above) and each portrait is announced on
+   * `onPortrait` when it develops. What this resolving means is that the robot
+   * is free: the draw is synchronous, so the caller can dispose immediately
+   * rather than holding a whole rig across a half-second fence.
+   *
    * @param {string} id character id
    * @param {{ group: THREE.Object3D }} robot the result of `buildRobot`
-   * @returns {Promise<?string>} data URL, or null if it could not be captured
+   * @returns {Promise<boolean>} whether the machine was photographed
    */
   async capture(id, robot) {
-    if (this.cache.has(id) || this._busy || !robot?.group) return this.cache.get(id) ?? null;
-    const rAsync = this.renderer.readRenderTargetPixelsAsync;
-    if (typeof rAsync !== 'function') return null;   // never fall back to the sync path
+    if (this.has(id) || !robot?.group) return this.has(id);
+    if (typeof this.renderer.readRenderTargetPixelsAsync !== 'function') return false;
+    if (this._slots.size >= COLS * ROWS) return false;   // sheet full
+    // The readback no longer blocks this method, but `compileAsync` still
+    // awaits with the robot parented into the shared portrait scene. Two
+    // captures overlapping there would photograph both machines into one tile.
+    // The caller serialises, so this never fires; it exists so that staying
+    // true is not the caller's job.
+    if (this._drawing) return false;
+    this._drawing = true;
 
-    this._busy = true;
     this.#ensure();
+    const slot = this._slots.size;
 
     const prevTarget = this.renderer.getRenderTarget();
     const group = robot.group;
@@ -413,6 +486,24 @@ export class RosterPortraits {
       // metal plate with its bevel highlight. Both were being painted and then
       // covered by a black square. Cutting the machine out restores them and
       // gives the chip somewhere to put a floor shadow.
+      //
+      // Scissored to this machine's tile so the nine already on the sheet
+      // survive the clear. Both are needed: the viewport places the projection
+      // inside the tile, the scissor keeps the clear inside it.
+      //
+      // Set on the RENDER TARGET, not with `renderer.setViewport`. The renderer
+      // methods are in CSS pixels and multiply by `pixelRatio` on the way to
+      // GL; the target's own `viewport`/`scissor` are copied through verbatim by
+      // `setRenderTarget`. The quality tiers run `renderScale` at 0.85 and 0.7,
+      // so the renderer path put every portrait into a 218x218 box at 85% of
+      // the tile's offset — the whole sheet came back with each machine shoved
+      // down-left and cropped, and it looked like a framing bug rather than a
+      // unit bug. Using the target's fields also means the previous viewport
+      // comes back on its own when `prevTarget` is restored.
+      const { x, y } = this.#rect(slot);
+      this._rt.viewport.set(x, y, SIZE, SIZE);
+      this._rt.scissor.set(x, y, SIZE, SIZE);
+      this._rt.scissorTest = true;
       this.renderer.setClearColor(0x000000, 0);
       this.renderer.setRenderTarget(this._rt);
       this.renderer.clear(true, true, true);
@@ -420,35 +511,125 @@ export class RosterPortraits {
       this.renderer.setRenderTarget(prevTarget);
       this.renderer.setClearColor(_clear, prevClearAlpha);
 
-      await rAsync.call(this.renderer, this._rt, 0, 0, SIZE, SIZE, this._buf);
-
-      // WebGL reads bottom-up; flip while blitting into the 2D canvas.
-      const img = this._ctx.createImageData(SIZE, SIZE);
-      for (let y = 0; y < SIZE; y++) {
-        const src = (SIZE - 1 - y) * SIZE * 4;
-        img.data.set(this._buf.subarray(src, src + SIZE * 4), y * SIZE * 4);
-      }
-      this._ctx.clearRect(0, 0, SIZE, SIZE);
-      this._ctx.putImageData(img, 0, 0);
-      // PNG, not lossy WebP. The image is now a cut-out and its whole value is
-      // a clean silhouette against the tile's own backdrop; lossy compression
-      // rings that alpha edge, which at a 63.5 px chip is the only edge there
-      // is. Ten 256px images live in memory for the session — no network.
-      const url = this._canvas.toDataURL('image/png');
-      this.cache.set(id, url);
-      return url;
+      this._slots.set(id, slot);
+      this._dirty.add(slot);
+      if (!this._flushTimer) this._flushTimer = setTimeout(() => this.flush(), FLUSH_MS);
+      return true;
     } catch {
-      return null;
+      return false;
     } finally {
       // Always hand the robot back exactly as we found it, or the caller's
       // dispose() runs against a group we have reparented.
       if (posed) for (const r of posed) r.bone.rotation.set(r.x, r.y, r.z);
       if (prevParent) prevParent.add(group);
       else this._scene.remove(group);
+      // The readback wants the whole sheet, so the tile scissor must not
+      // outlive the draw that needed it.
+      if (this._rt) {
+        this._rt.scissorTest = false;
+        this._rt.viewport.set(0, 0, ATLAS_W, ATLAS_H);
+        this._rt.scissor.set(0, 0, ATLAS_W, ATLAS_H);
+      }
       this.renderer.setRenderTarget(prevTarget);
       this.renderer.setClearColor(_clear, prevClearAlpha);
-      this._busy = false;
+      this._drawing = false;
     }
+  }
+
+  /** Bottom-left origin of a slot's tile, in atlas pixels. WebGL is Y-up. */
+  #rect(slot) {
+    return { x: (slot % COLS) * SIZE, y: ATLAS_H - SIZE - Math.floor(slot / COLS) * SIZE };
+  }
+
+  /**
+   * Lift the sheet: one readback for every tile drawn since the last one.
+   *
+   * Safe to call at any time and from anywhere — it is a no-op with nothing
+   * pending, and if a readback is already in flight it lets that one finish and
+   * re-arms, because the tiles it has not covered are still marked dirty.
+   *
+   * @returns {Promise<number>} how many portraits developed
+   */
+  async flush() {
+    if (this._flushTimer) { clearTimeout(this._flushTimer); this._flushTimer = 0; }
+    if (this._reading || !this._dirty.size || !this._rt) return 0;
+    const rAsync = this.renderer.readRenderTargetPixelsAsync;
+    if (typeof rAsync !== 'function') return 0;
+
+    this._reading = true;
+    const taking = [...this._dirty];
+    this._dirty.clear();
+    let developed = 0;
+    try {
+      // The whole sheet in one call. Reading only the rows that are dirty was
+      // tried in the arithmetic and is not worth the bookkeeping: this is a
+      // latency cost, not a bandwidth one (262 KB took 320-565 ms), so the
+      // number that matters is one rather than ten.
+      await rAsync.call(this.renderer, this._rt, 0, 0, ATLAS_W, ATLAS_H, this._buf);
+      const bySlot = new Map();
+      for (const [id, slot] of this._slots) bySlot.set(slot, id);
+      for (const slot of taking) {
+        const id = bySlot.get(slot);
+        if (!id || this.cache.has(id)) continue;
+        const url = this.#develop(slot);
+        if (!url) continue;
+        this.cache.set(id, url);
+        developed++;
+        try { this.onPortrait?.(id, url); } catch { /* a listener never breaks the sheet */ }
+      }
+    } catch {
+      // Put them back so the next flush retries rather than losing the tile.
+      for (const s of taking) this._dirty.add(s);
+    } finally {
+      this._reading = false;
+      if (this._dirty.size && !this._flushTimer) {
+        this._flushTimer = setTimeout(() => this.flush(), FLUSH_MS);
+      }
+    }
+    return developed;
+  }
+
+  /** Cut one tile out of the read-back sheet and encode it. */
+  #develop(slot) {
+    const { x, y } = this.#rect(slot);
+    // WebGL reads bottom-up; flip while blitting into the 2D canvas.
+    const img = this._ctx.createImageData(SIZE, SIZE);
+    for (let row = 0; row < SIZE; row++) {
+      const src = ((y + SIZE - 1 - row) * ATLAS_W + x) * 4;
+      img.data.set(this._buf.subarray(src, src + SIZE * 4), row * SIZE * 4);
+    }
+    this._ctx.clearRect(0, 0, SIZE, SIZE);
+    this._ctx.putImageData(img, 0, 0);
+    // LOSSLESS, and lossless is the whole requirement — not the container.
+      //
+      // The rule this line used to state was "PNG, not lossy WebP", and it is
+      // right about the lossy half: the image is a cut-out whose entire value
+      // is a clean silhouette against the tile's own backdrop, and a lossy
+      // codec rings that alpha edge, which at a 63.5 px chip is the only edge
+      // there is. But `toDataURL('image/webp', 1)` is Chromium's LOSSLESS webp
+      // path, not its quality-100 lossy one, and it is a straight win here.
+      //
+      // Round-tripped through an `Image` and re-read with `getImageData`, on a
+      // 256px noise field cut out by a hard-edged circular alpha mask — the
+      // worst case a codec can be handed:
+      //
+      //     image/png            6802 B   max channel error 0   channels wrong 0
+      //     image/webp q=1      13327 B   max channel error 0   channels wrong 0
+      //     image/webp q=0.92   10763 B   max channel error 176 channels wrong 69472
+      //
+      // Bit-exact, and q=0.92 is shown to prove the test can tell the
+      // difference. The reason to move is the encoder cost, which is paid on
+      // the main thread once per machine while the player is looking at the
+      // grid: 26.7 ms for PNG against 1.1 ms for lossless webp, averaged over
+      // ten encodes. That is 255 ms of the roster's fill time, for nothing.
+      // The extra 6.5 KB never touches the network — these live in memory for
+      // the session.
+      //
+      // `toDataURL` returns a `data:image/png` URL when it does not know the
+      // type, so the fallback is a string check rather than a feature test.
+    let url = this._canvas.toDataURL('image/webp', 1);
+    if (!url.startsWith('data:image/webp')) url = this._canvas.toDataURL('image/png');
+    return url;
   }
 
   /**
@@ -478,10 +659,14 @@ export class RosterPortraits {
   }
 
   dispose() {
+    if (this._flushTimer) { clearTimeout(this._flushTimer); this._flushTimer = 0; }
     this._rt?.dispose();
     this._rt = null;
     this._scene = null;
+    this.onPortrait = null;
     this.cache.clear();
     this.frames.clear();
+    this._slots.clear();
+    this._dirty.clear();
   }
 }

@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { METER_MAX, MAX_HEALTH, GROUND_Y } from '../core/Constants.js';
 import { bus } from '../core/Bus.js';
 import { MOVES, findMoveByTag, getMove } from './Moves.js';
-import { STATE, retimeFor } from './Fighter.js';
+import { STATE, retimeFor, strikeAim } from './Fighter.js';
 
 /** Tag search order when a caller asks for a semantic move name. */
 const TAG_ALIASES = {
@@ -450,6 +450,138 @@ export function makeTestHarness(game) {
       game.fighters[1].reset(new THREE.Vector3(1.9, GROUND_Y, 0), -1);
       game.combat.reset();
       game.setPhase('fight');
+    },
+
+    /**
+     * Drive every move in a set through the REAL simulation at several ranges
+     * and report which ones connect.
+     *
+     * This is the instrument that found the kicks-never-connect defect, and it
+     * is here rather than in a tool because the defect was invisible to every
+     * offline reconstruction of the collision test. The capsules are built from
+     * posed bone matrices, and the pose is the Animator's — layers, IK, springs,
+     * pelvis lift and the extracted root yaw included. Rebuild any of that
+     * outside the Fighter and the geometry comes out different: a hand-rolled
+     * rig sample said `k.midKick` OVERLAPPED the defender by 14 cm at 0.9 m, and
+     * the shipping game whiffed it at every range. The difference was the
+     * authored body pivot, which only exists once `Fighter` applies it.
+     *
+     * So it steps the real tick order — `Fighter.simulate` on both, then
+     * `CombatSystem.simulate` — with no renderer and no clock, which makes it
+     * synchronous, deterministic, and runnable from a console or from Node.
+     *
+     * `aim: false` runs the same compiled program with the strike-aim bias
+     * forced to zero, which is how the before/after for that fix is taken: one
+     * build, one page, one uniform branch, so nothing but the correction differs
+     * between the two numbers.
+     *
+     * @param {{moveSet?:string, dists?:number[], attacker?:number, aim?:boolean}} o
+     * @returns {{total:number, connected:number, rate:number, dead:string[],
+     *            rows:Array<{id:string, clip:string, hits:number, aim:number}>}}
+     */
+    probeMoves(o = {}) {
+      const [a, d] = [fighters()[o.attacker ?? 0], fighters()[1 - (o.attacker ?? 0)]];
+      const set = MOVES[o.moveSet || a.moveSetKey] || MOVES.standard;
+      const dists = o.dists || [0.9, 1.02, 1.2, 1.5];
+      const rows = [];
+      let landed = 0;
+      let attempts = 0;
+
+      // Listen on the bus rather than on the fighters: `hit` is the event the
+      // player's report is about, and it is emitted from exactly one place.
+      let struck = false;
+      const off = [bus.on('hit', () => { struck = true; }), bus.on('block', () => { struck = true; })];
+
+      // The A/B branch. `strikeAim` caches on the move, so overwriting the cache
+      // switches the correction off for every fighter at once with no rebuild.
+      const saved = [];
+      if (o.aim === false) {
+        for (const move of Object.values(set)) {
+          saved.push([move, strikeAim(move)]);
+          move.aimBias = 0;
+        }
+      }
+
+      try {
+        for (const [id, move] of Object.entries(set)) {
+          if (!move.active?.length || move.props?.throw) continue;
+          let hits = 0;
+          let aim = 0;
+          for (const dist of dists) {
+            stage(a, d, dist);
+            d.health = MAX_HEALTH * 100;
+            a.health = MAX_HEALTH * 100;
+            a.animYaw = 0;
+            a.aimYaw = 0;
+            // Settle both bodies on the idle clip first, so the probe measures
+            // the move rather than whatever pose the match happened to be in.
+            a.animator?.play('idle.fight', { blend: 0, loop: true });
+            d.animator?.play('idle.fight', { blend: 0, loop: true });
+            for (let i = 0; i < 8; i++) { a.simulate(null); d.simulate(null); }
+            stage(a, d, dist);
+            a.animYaw = 0;
+            a.aimYaw = 0;
+
+            struck = false;
+            a.startMove(move);
+            a.animator?.play(move.clip, { blend: 0, loop: false, retime: retimeFor(move) });
+            for (let t = 0; t < move.total + 4 && !struck; t++) {
+              a.simulate(null);
+              d.simulate(null);
+              if (a.hitboxes.length && !aim) aim = strikeAim(move) * 180 / Math.PI;
+              game.combat.simulate(game.tick + t);
+            }
+            attempts++;
+            if (struck) { hits++; landed++; }
+          }
+          rows.push({ id, clip: move.clip, hits, aim: Math.round(aim) });
+        }
+      } finally {
+        for (const [move, bias] of saved) move.aimBias = bias;
+        for (const fn of off) fn?.();
+        this.resetFight();
+      }
+
+      const dead = rows.filter((r) => r.hits === 0).map((r) => `${r.id} (${r.clip})`);
+      return {
+        total: attempts, connected: landed, rate: landed / Math.max(1, attempts),
+        dead, rows,
+      };
+    },
+
+    /**
+     * Switch the strike-aim correction off or on for a whole move set, on the
+     * running page. `strikeAim` caches its answer on the move, so this is the
+     * uniform branch a still A/B needs: one compiled program, one frozen frame,
+     * and the only thing that differs between the pair is the correction.
+     * @param {boolean} on
+     * @param {string} [moveSet]
+     * @returns {number} moves switched
+     */
+    setAim(on, moveSet) {
+      const set = MOVES[moveSet || fighters()[0].moveSetKey] || MOVES.standard;
+      let n = 0;
+      for (const move of Object.values(set)) {
+        if (move.aimSaved === undefined) move.aimSaved = strikeAim(move);
+        const next = on ? move.aimSaved : 0;
+        if (move.aimBias !== next) n++;
+        move.aimBias = next;
+      }
+      return n;
+    },
+
+    /**
+     * Advance the fixed-step simulation by `n` ticks with no renderer and no
+     * clock, so a caller can stop on an exact frame of an exact move. Only the
+     * fight-phase tick order is run — the same one `Game` runs.
+     * @param {number} n
+     */
+    stepTicks(n = 1) {
+      for (let i = 0; i < n; i++) {
+        for (const f of fighters()) f.simulate(null);
+        game.combat.simulate(game.tick + i);
+      }
+      return n;
     },
 
     /** Raw frame data for the UI/debug overlays and for balance spot-checks. */

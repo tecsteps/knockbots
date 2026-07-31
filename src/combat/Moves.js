@@ -487,6 +487,27 @@ function coreMoves(mv, cfg) {
     knockback: [3.4, 0.4, 0], blockPush: [2.4, 0, 0], meterGain: 6, trail: 'foot_R',
     props: { crushLow: true, airborne: [4, 34], travel: [{ from: 4, to: 20, x: 4.2, z: 0 }] },
   });
+  // The only move in the game that is legal WHILE AIRBORNE.
+  //
+  // `canUse` has supported `requireAir` since it was written and nothing had
+  // ever set it, and its other branch — `st.airborne && !m.followUp` — rejects
+  // every ground move. So a jumping fighter had no attack at all: measured by
+  // holding up to a full jump and pressing 4 on ten consecutive airborne ticks,
+  // `#tryMove` returned null on all ten and the fighter simply floated. A player
+  // asked for an air kick; there was no such thing to find.
+  //
+  // Bare 4 in the air, which cannot collide with the standing `4` because the
+  // two are separated by exactly that gate. Deliberately weak on block: it
+  // lands late in the jump arc and the recovery runs into the ground, which is
+  // what stops a jump-in being the whole game.
+  mv({
+    id: 'airKick', name: 'Drop Kick', input: '4', clip: 'k.jumpKick', tag: 'air',
+    active: [W(11, 15, FOOT_R(0.27))], total: 34,
+    height: HEIGHT.MID, weight: WEIGHT.MEDIUM, damage: 17,
+    adv: { block: -13, hit: 2 }, reaction: REACTION.KNOCKDOWN,
+    knockback: [3.0, 0.2, 0], blockPush: [2.4, 0, 0], meterGain: 6, trail: 'foot_R',
+    props: { requireAir: true, crushLow: true },
+  });
 
   // --- rushing / wall-carry ------------------------------------------------
   mv({

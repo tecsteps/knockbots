@@ -783,6 +783,33 @@ const FRAG_REFLECT_HOOK = /* glsl */ `
       refl += texture2DProj( uReflection, coord + vec4( 0.0,  blurR * 0.6, 0.0, 0.0 ) ).rgb * 0.16;
       refl += texture2DProj( uReflection, coord + vec4( 0.0, -blurR * 0.6, 0.0, 0.0 ) ).rgb * 0.16;
 
+      // --- specular-lobe roll-off on the reflected radiance ------------------
+      //
+      // Five point samples of a mirror image are a DELTA lobe, and a delta lobe
+      // returns a source's peak radiance intact. A real damp slab integrates
+      // that source over a finite lobe, so a small very bright fitting comes
+      // back attenuated by roughly (source solid angle / lobe solid angle) --
+      // which for this arena's overhead LED strips is a large number.
+      //
+      // Without that attenuation the strips arrive on the deck at their own
+      // scene-referred radiance, the ripple normal shatters them across
+      // neighbouring pixels, and the display transform clips every one of them
+      // to 255. Measured at the fight framing, in the 900x400 px band of deck
+      // the strips land on: 0.85% of that band was clipped past 240 and its mean
+      // luminance was 88.5 -- against 61.6 with the mirror off entirely, and
+      // against a Tekken 8 wet-floor p95 of 145 with nothing clipped anywhere.
+      // The frame's brightest object was the ground.
+      //
+      // A Reinhard shoulder is the cheap stand-in for that integral. It is
+      // exactly transparent below the knee -- the fighters, the hoardings and
+      // the wall bands all reflect under it and are untouched -- and compresses
+      // only what a point sample was always going to over-report. uReflKnee at
+      // 0 restores the raw mirror, which is how this is A/B'd through one
+      // branch of one compiled program.
+      if ( uReflKnee > 0.0 ) {
+        refl = refl / ( 1.0 + refl / uReflKnee );
+      }
+
       // Roughness fade. This is the term that decides how much of the deck is
       // allowed to mirror at all, and it used to close at 0.78 — which on this
       // floor is most of it, because damp concrete bakes out around 0.5. The
@@ -859,6 +886,7 @@ uniform float uJointDark;
 uniform float uReflStrength;
 uniform float uReflDistort;
 uniform float uReflBlur;
+uniform float uReflKnee;
 uniform vec2 uReflRough;
 uniform float uDetailScale;
 uniform float uDetailAmp;
@@ -929,6 +957,26 @@ export class StageFloor {
       uReflStrength: { value: 0.62 },
       uReflDistort: { value: 0.028 },
       uReflBlur: { value: 0.075 },
+      /**
+       * Reinhard knee on the reflected radiance, in scene-referred units.
+       * 0 disables the term and restores the raw mirror. See the roll-off note
+       * in FRAG_REFLECT_HOOK for why a point-sampled mirror needs one.
+       *
+       * Swept 4.0 / 2.0 / 1.0 / 0.5 against the raw mirror in one page session
+       * on one frozen frame (noise floor 0.79/255, base reproduced twice). In
+       * the 900x400 band of deck the overhead strips land on, every value from
+       * 4.0 down takes the clipped fraction from 0.81% to 0.00%; the band's mean
+       * luminance goes 84.4 -> 75.7 / 73.8 / 71.6 / 69.4, against 61.6 with the
+       * mirror off entirely. 1.0 is where the strip stops reading as a shattered
+       * white speckle field and starts reading as a sheen you can see the slab
+       * joints through, with the reflection still plainly present.
+       *
+       * A minimum gather radius was tried alongside it, on the theory that the
+       * wet mask drives roughness down exactly where the reflection is strongest
+       * and collapses the five-tap cross to one tap. It is inert: 0.012 changed
+       * the band by 0.014/255 against a 0.79 floor. Not shipped.
+       */
+      uReflKnee: { value: 1.0 },
       // Roughness at which the reflection starts and finishes fading out.
       uReflRough: { value: new THREE.Vector2(0.30, 0.98) },
       uDetailScale: { value: 2.4 },

@@ -638,9 +638,19 @@ export class MenuSystem {
     if (this._warmed || !this.game.environment) return;
     this._warmed = true;
     const queue = ROSTER.slice();
+    // 80 ms, not 900.
+    //
+    // The 900 ms deadline was correct while a machine cost 230-755 ms to
+    // photograph: the scheduler could not be the limiter next to work that
+    // large, and an A/B at the time proved it (see `#selectShow`). With the
+    // shader-program anchor below the work is ~150 ms a machine, and at that
+    // size a deadline that can insert nearly a second of nothing between two
+    // units of work is the largest single term left. Still `requestIdleCallback`
+    // rather than `setTimeout(0)`, so a busy frame is never interrupted — only
+    // the worst case is bounded.
     const idle = window.requestIdleCallback
-      ? (fn) => window.requestIdleCallback(fn, { timeout: 900 })
-      : (fn) => setTimeout(fn, 220);
+      ? (fn) => window.requestIdleCallback(fn, { timeout: 80 })
+      : (fn) => setTimeout(fn, 20);
     // The next machine is scheduled off the END of the previous capture, not
     // alongside it.
     //
@@ -684,17 +694,51 @@ export class MenuSystem {
         queue.unshift(...queue.splice(at, 1));
       }
       const def = queue.shift();
-      const next = () => idle(step);
+      // The last machine out of the queue lifts the sheet immediately instead
+      // of waiting out `RosterPortraits`' own debounce.
+      const next = () => { if (!queue.length) this._portraits?.flush(); idle(step); };
       try {
         const robot = buildRobot(def, createSkeleton(def.proportions), this.game.environment);
         // The build is already being paid for; photograph it on the way to the
         // bin so the roster tiles can show the real machine instead of a
-        // pictogram. Disposal waits for the readback, which is async.
+        // pictogram. `capture` resolves once the DRAW is done — the picture
+        // arrives later, on `onPortrait`, when the batch is read back.
         this.#portraits().capture(def.id, robot)
-          .then((url) => { if (url) this.#applyPortrait(def.id, url); })
           .catch(() => {})
           .finally(() => {
-            try { robot.dispose(); } catch { /* already gone */ }
+            // ONE robot is never disposed, and that is what makes the other
+            // nine cheap.
+            //
+            // `RobotBuilder`'s `dispose()` calls `dispose()` on each of the
+            // robot's ~8 materials. Those materials are clones of a
+            // module-level per-palette library, but the library copies are
+            // never themselves drawn, so the only thing holding a reference to
+            // the compiled WebGLProgram is the clone. Disposing the last drawn
+            // clone drops `usedTimes` to zero and Three.js DELETES the program
+            // — and because the program cache key is built from material
+            // parameters and not from colour, every machine in the roster wants
+            // the same programs back. The warm-up was therefore paying a full
+            // link for machine N+1 that machine N had just thrown away.
+            //
+            // Measured on this exact loop, ten machines, inside a live match,
+            // timing `buildRobot` and `RosterPortraits#capture` per machine and
+            // the `compileAsync` inside it (which is where the link lands):
+            //
+            //   dispose every robot   7187 ms total   compile 63-336 ms each
+            //   keep the first        3848 ms total   compile 0.7-1.0 ms after #1
+            //   dispose every robot   6760 ms total   compile 124-322 ms each
+            //
+            // Run as A/B/A in one page so the caches, the driver and the frame
+            // are the same on both arms. The anchor also drops `buildRobot`
+            // from 90-105 ms to 25-45 ms, for the same reason one level up.
+            //
+            // The cost is one robot's geometry and materials held for the
+            // session. It is added to NO scene — `RosterPortraits` reparents it
+            // out in its own `finally` before this runs — so it contributes
+            // zero triangles and zero draw calls to every frame. It is a memory
+            // charge and nothing else.
+            if (!this._programAnchor) this._programAnchor = robot;
+            else { try { robot.dispose(); } catch { /* already gone */ } }
             next();
           });
       } catch {
@@ -710,6 +754,7 @@ export class MenuSystem {
   #portraits() {
     if (!this._portraits) {
       this._portraits = new RosterPortraits(this.game.renderer.renderer, this.game.environment);
+      this._portraits.onPortrait = (id, url) => this.#applyPortrait(id, url);
     }
     return this._portraits;
   }
@@ -1034,6 +1079,11 @@ export class MenuSystem {
     // that never mattered. If the tiles are to be full at 1400 ms, the capture
     // has to get cheaper or the portraits have to outlive the session — the
     // scheduler is not where the time is.
+    // Anything already drawn onto the portrait sheet develops NOW rather than
+    // on its own debounce: the grid is the thing being looked at from this
+    // instant, and a readback that has already been paid for should not land a
+    // quarter of a second after the screen it is for.
+    this._portraits?.flush();
     const r = this._select;
     r.locked = false;
     r.focus = -1;
