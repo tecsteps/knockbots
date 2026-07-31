@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.16.0",
-    "commits": "92",
+    "rev": "0.17.0",
+    "commits": "97",
     "modules": 64,
-    "lines": "55k",
+    "lines": "56k",
     "clips": 91,
     "moves": 191,
     "characters": 10
@@ -11,27 +11,27 @@
   "verdicts": [
     {
       "axis": "Interface craft",
-      "score": 76
+      "score": 74
     },
     {
       "axis": "Stage detail",
-      "score": 70
+      "score": 72
+    },
+    {
+      "axis": "Lighting & atmosphere",
+      "score": 66
+    },
+    {
+      "axis": "Impact & effects",
+      "score": 57
     },
     {
       "axis": "Character rendering",
       "score": 64
     },
     {
-      "axis": "Lighting & atmosphere",
-      "score": 63
-    },
-    {
-      "axis": "Impact & effects",
-      "score": 54
-    },
-    {
       "axis": "Animation quality",
-      "score": 51
+      "score": 42
     }
   ],
   "log": [
@@ -682,11 +682,28 @@
         "One of the round’s findings was a hole in this project’s own instrument, and a critic found it. The juggle shot accepted the airborne flag as proof that the victim was off the ground — but that flag can be true on the very tick the launch is applied, before any height exists. So the shot certified a frame in which the victim stood with both feet planted and ground dust at his foot. It now requires real height, and three consecutive runs give 1.51, 1.52 and 1.52 metres. The launch itself was never broken; I checked that before changing anything.",
         "Seventeen shots, seventeen certified, zero defects, 13.8 milliseconds median at 72.5fps. The instrument is now trustworthy and the scores are not moving. After four rounds of that, the honest conclusion is that the briefs are aiming at work the scored frames cannot show."
       ]
+    },
+    {
+      "phase": "PHASE 22",
+      "when": "Round 16",
+      "rev": "rev 0.17.0",
+      "title": "The targeting fix worked, and the axis it could not reach fell",
+      "paras": [
+        "Impact 57, lighting 66, stage 72, character 64, interface 74, animation 42. Average 63.0 to 62.5.",
+        "The headline is not the average. Last round’s diagnosis was that four rounds of flat scores came from aiming good work at things the scored frames cannot show. So this round every workstream had to prove its change visible in the specific frame its axis is judged on, with a before-and-after pixel delta, and the critics were asked to report bluntly whether that worked.",
+        "Three answered yes with pixels — impact, lighting and stage — and all three went up. The two that answered “nothing visible” or “partially” did not move. That is the cleanest evidence this project has produced about its own method.",
+        "Impact was the clearest win. Ejecta elongation went from a median aspect of 2.30 to 5.02 and a 90th percentile of 3.47 to 9.25, with the before and after ranges not overlapping, landing inside the band measured on the Tekken references. And the cause was not the one the brief named: the lifeless particles were the fragment tier, drawn as tumbling squares with zero streak, which is a tenth of the burst by count and most of it by lit area. Underneath that sat a formula error worth keeping — streak length was a multiple of particle size, so the widest particles needed the most smear and got the least. A photograph’s streak is speed times exposure and has nothing to do with how big the thing is.",
+        "The shadow workstream fixed the defect two critics had independently named, and disproved most of its own brief on the way. There is a shadow-casting key light, it is on, and ablating it brightens nearly eighteen per cent of the floor band — the critics were right about the effect and wrong about the cause. What was actually missing is that a fighter’s cast shadow lands a metre down-light of the boot at a forty-one degree key elevation, with no term at all where foot meets deck. Contact shadows fixed the inverted sign on both fighters: deck immediately down-light of each went from brighter than open floor to fourteen and eleven levels darker, while open deck at the same depth did not move. Floor darkening reached 7.7 per cent against the critic’s eight per cent bar — straddled, not cleared, and the agent declined to inflate the effect to clear it.",
+        "It also caught a false finding that had already been written into the source mid-round: a comment asserting that a true multiply blend draws nothing on this renderer, and that every scuff the stage has ever stamped was a no-op. Re-measured with a working toggle, all three blend spellings agree to a tenth of a point. The sweep behind that claim had produced its control frame by hiding objects — and the planar reflector was silently un-hiding them every frame, an unconditional assignment where a restore belonged. That bug had been corrupting any measurement taken by toggling visibility, and it is now fixed.",
+        "The nine-point fall on animation is mine, and it is worth stating plainly. The tick strip built last round so the axis could be judged at all earned its keep immediately by exposing a frozen attacker that four rounds of single-frame captures had hidden — and the frozen attacker was a defect in the shot, not in the animation. The setup restarted the move with one call where the test harness uses two: the state machine restarted while the animator kept playing the idle. A critic template-tracked the pelvis at six pixels of travel with the sign inverted, against the thirty-nine the clip should give, and concluded correctly that the code had not moved. Fixed; the attacker now visibly moves where before it was identical in all seven panels. The strip still under-samples the wind-up, and that is queued rather than claimed.",
+        "Character stayed flat and the critic was exact about why. The machining-lay work is the best-argued change the axis has had, and unlike previous rounds it produced a genuine measured delta rather than an assertion. But five per cent on a band that needs a hundred and thirty is below both the detection threshold and the frame’s own capture noise. The requirement stopped unmeasured work shipping. It did not make this work visible.",
+        "Eighteen shots, eighteen certified, zero defects, 13.6 milliseconds median at 73.5fps with the 95th percentile improving from 30.7 to 18.6. Triangles stand at 915,870 against a 900,000 ceiling, which needs a decision rather than another round of drift."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.16.0",
+    "rev": "0.17.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
