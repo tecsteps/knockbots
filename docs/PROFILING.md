@@ -549,3 +549,43 @@ Two further causes found, the second by the character workstream:
 manifest, and only difference frames whose signatures match.** That turns a frame nobody could
 measure on into one that is exact when it is valid and self-declaring when it is not. Do not
 average across runs with different signatures — you will be averaging poses.
+
+---
+
+# Open defect: kicks never connect
+
+Reported by a player ("n and m make him kick but I never hit the opponent, even when that close").
+Reproduced and partly characterised; **not yet root-caused**. Recorded here so the next attempt does
+not repeat the two dead ends.
+
+**Reproduction.** Force each move through the test harness at a staged distance and listen on the
+bus. Punches land at every distance; kicks miss at every distance:
+
+| move | 0.9 m | 1.02 m | 1.2 m | 1.5 m |
+|---|---|---|---|---|
+| `jab` (p.jab) | hit | hit | hit | hit |
+| `jabLow` | hit | hit | hit | hit |
+| `midKick` (k.midKick) | — | **whiff** | — | — |
+| `jab3` (k.midKick) | miss | miss | miss | miss |
+
+**What is ruled out.** The event emitted is `whiff`, not `block`, with the defender `idle` and
+`isBlocking = false` — so this is a genuine capsule miss, not a guard interaction. Hitboxes *are*
+being created: two of them, on `foot_R` and `ankle_R`, radius 0.27 and 0.23, present through the
+active window. The defender has 22 hurtboxes. The move reaches its active frames.
+
+**A dead end, with its numbers.** The forward-lead table gives feet the largest lead of any limb
+(0.31 against 0.24 for hands). That looks inverted — a lead compensates for an anchor bone sitting
+behind the striking surface, which is true of a fist inside a glove and false of a foot at the end
+of an extended leg. Cutting it to 0.13 changed nothing: kicks still whiffed at all four distances.
+Reverted. The reasoning may still be sound; it is not the cause.
+
+**A measurement error worth not repeating.** An earlier pass reported the kick capsule "overshooting
+by 6 cm", computed as centre-to-centre distance minus the summed radii. `CombatSystem#findConnection`
+uses `segSegDistSq` — **segment to segment**, not centre to centre — so that figure overstates the
+gap for a capsule of any length and does not localise the miss. Re-measure with the same segment
+test the engine uses before drawing any conclusion about where the capsules are.
+
+**Where to look next.** The X and Y extents overlap generously on the numbers taken so far, which
+leaves Z, the sampling tick, or `attacker.connected` suppressing the window. Sample inside the sim
+tick rather than from a `setInterval`, and print `segSegDistSq` itself for every hitbox/hurtbox pair
+on the frame the move is active.
