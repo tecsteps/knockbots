@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.19.0",
-    "commits": "105",
+    "rev": "0.20.0",
+    "commits": "108",
     "modules": 64,
-    "lines": "58k",
+    "lines": "59k",
     "clips": 91,
     "moves": 191,
     "characters": 10
@@ -14,24 +14,24 @@
       "score": 76
     },
     {
-      "axis": "Interface craft",
-      "score": 75
-    },
-    {
       "axis": "Stage detail",
-      "score": 73
+      "score": 76
     },
     {
       "axis": "Character rendering",
       "score": 73
     },
     {
-      "axis": "Impact & effects",
-      "score": 65
+      "axis": "Interface craft",
+      "score": 73
     },
     {
       "axis": "Animation quality",
-      "score": 61
+      "score": 63
+    },
+    {
+      "axis": "Impact & effects",
+      "score": 63
     }
   ],
   "log": [
@@ -731,11 +731,26 @@
         "Separately, a player reported two things with a screenshot, and both were real. The fighters could end up stacked along the camera axis, unable to hit each other. One cause explained all of it: facing is the sign of the opponent’s X offset, not a yaw, so nothing in the rig can point a fighter at an opponent displaced in depth — while sidestep moves purely in depth and nothing ever undid it. Strike capsules lead along the X axis, so an opponent parked off-axis is not in front of anything and every attack whiffs, which is exactly what the screenshot’s move readout said. Once the X gap closes the sign returns zero and facing latches, so the two stop even nominally facing each other, and the camera solver has nothing left to frame.",
         "Reproduced by forcing the reported state — both fighters on the centre line, 4.8 metres apart in depth. A hard cap at roughly one body width pulls that to 0.83 metres within 250 milliseconds, a soft ease closes it within a second once the evade is over, and a launcher then lands where it had whiffed. The same report also asked for fullscreen on mobile, which now fires on the first touch, since every engine rejects the request outside a user gesture."
       ]
+    },
+    {
+      "phase": "PHASE 25",
+      "when": "Round 19",
+      "rev": "rev 0.20.0",
+      "title": "The targets were hit and the scores stopped moving",
+      "paras": [
+        "Stage 76, lighting 76, character 73, interface 73, animation 63, impact 63. The average went 70.5 to 70.7 after two rounds of nearly four points each. Momentum stopped.",
+        "The uncomfortable part is that the work landed. The floor’s midtone saturation went from 0.200 to 0.355 against a pre-computed target of 0.40, whole-frame chroma from 0.247 to 0.350 against 0.372, and mid-ground local contrast rose 2.3x — all measured on a single frozen frame with only uniform branches differing and a null control of exactly zero. The score did not move.",
+        "The most useful finding was not the one briefed. The bloom pedestal had been erasing the stage: clamping it alone lifts mid-ground contrast from 166 to 285, because a 24-metre emissive strip runs directly beneath the crowd and its halo was what the mid-ground was wearing. An earlier analysis in the render pipeline had swept that same pass and correctly concluded it could not raise the top of the luminance range — but it had only ever measured luminance percentiles, which are blind to local contrast. The old note was extended rather than replaced.",
+        "Four things were disproved, two of them the agent’s own instincts. A warm-direct, cool-indirect diffuse split is the textbook move and it measured and looked worse, because both terms land on the same pixel and cancel, and the deck’s direct light is the key rather than the practicals — it turned the whole slab rust. Solid painted hoardings on the fence made things worse, because three flat quads delete texture. A second crowd tier does not physically fit, and the frustum says so. And the crowd was contributing nothing at all: hiding all 168 figures moved the measured band by one unit while covering a third of it. They were level, not structure.",
+        "The interface lever also landed and the axis still lost two points. The chrome now has a face — the overdrive track went from zero units of range across its entire depth to 121, and the health bezel’s left cut went from plate and background being byte-identical to a real edge. The agent measured it against a noise floor of exactly zero, having first confirmed its probe reproduced the shipped capture bit-for-bit. It then disproved the brief it was given: replacing the clip-path with an SVG mask buys no edge coverage whatsoever. Rendered side by side, both produce 0.58 partially covered pixels per row on the same diagonal. The stepping is the geometry of a 0.64-pixel-per-row slope at 1x, not a missing antialias.",
+        "A new measurement hazard was recorded: one agent found that the shared capture directory had been rewritten mid-round by another agent, with its own changes already live in it, so what it believed was a “before” was nothing of the kind. Concurrent capture into one directory is now its own source of wrong answers.",
+        "Separately, a player reported four things from a laptop and a phone. Two are fixed: the camera cut the taller robot’s head off on a wide-short window, because the framing solver used a nominal standing height rather than the chassis the character actually carries — and because the vertical field of view does not grow with aspect, the error only becomes visible past about 2:1. And the training readout was unreadable at 10 pixels and sat directly on top of the near fighter. Two are open: kicks do not connect at any distance, measured as a six-centimetre overshoot at the active frame, and the first hypothesis for it was tested and disproved."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.19.0",
+    "rev": "0.20.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
