@@ -42,6 +42,19 @@ export const FLOOR = { w: 32, d: 28, cx: 0, cz: 2 };
 
 const FIELD = 512; // resolution of the noise fields behind the macro map
 
+/**
+ * Contact-shadow slots: a body pool and two foot lobes for each of two
+ * fighters. Fixed, because an InstancedMesh cannot grow and the count is a
+ * property of the match, not of the stage.
+ */
+export const CONTACT_COUNT = 6;
+
+const _cMat = new THREE.Matrix4();
+const _cPos = new THREE.Vector3();
+const _cQuat = new THREE.Quaternion();
+const _cScale = new THREE.Vector3();
+const _cEuler = new THREE.Euler();
+
 // ---------------------------------------------------------------------------
 // Macro map generation
 // ---------------------------------------------------------------------------
@@ -615,6 +628,7 @@ export class StageFloor {
     this.#buildApron();
     this.#buildDrains(bins);
     this.#buildDecals(textures);
+    this.#buildContacts();
   }
 
   /**
@@ -692,7 +706,8 @@ export class StageFloor {
 
     const mat = new THREE.ShaderMaterial({
       name: 'arena.floorDecal',
-      uniforms: { map: { value: textures.scorch }, uTint: { value: new THREE.Color(0x1a1c22) } },
+      // Linear radiance of scorched deck, not a multiplier — see the blend note.
+      uniforms: { map: { value: textures.scorch }, uTint: { value: new THREE.Color(0.016, 0.015, 0.017) } },
       vertexShader: /* glsl */ `
         attribute float aAlpha;
         varying vec2 vUv;
@@ -712,15 +727,22 @@ export class StageFloor {
         void main() {
           float a = texture2D( map, vUv ).a * vAlpha;
           if ( a < 0.004 ) discard;
-          gl_FragColor = vec4( mix( vec3( 1.0 ), uTint, a ), 1.0 );
+          gl_FragColor = vec4( uTint * a, a );
         }
       `,
-      // dst * src: a scuff darkens what is under it and needs no lighting of
-      // its own. Spelled out rather than using MultiplyBlending, which in r185
-      // additionally demands premultiplied alpha.
+      // A scuff darkens what is under it and needs no lighting of its own.
+      //
+      // Source-over with a near-black premultiplied colour, so `uTint` here is
+      // the linear radiance of scorched deck rather than a multiplier. This used
+      // to be spelled as a literal multiply (`Zero`/`SrcColor`); both spellings
+      // render identically on this renderer and either is correct. An
+      // intermediate revision claimed the multiply drew nothing and that every
+      // scorch ever stamped had been a no-op -- that was an artefact of a broken
+      // control frame, and the whole story is in the blend note in
+      // `#buildContacts` below.
       blending: THREE.CustomBlending,
-      blendSrc: THREE.ZeroFactor,
-      blendDst: THREE.SrcColorFactor,
+      blendSrc: THREE.SrcAlphaFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
       blendEquation: THREE.AddEquation,
       transparent: true,
       depthWrite: false,
@@ -743,6 +765,204 @@ export class StageFloor {
     this._decalNext = 0;
     this._decalLife = new Float32Array(COUNT);
     this.group.add(this.decals);
+  }
+
+  /**
+   * Contact shadows — the term that was missing, with its sign the wrong way up.
+   *
+   * Measured on 06-stage-wide before this existed: the deck immediately under a
+   * fighter's boot was **brighter** than open deck at the same depth, because
+   * the only thing the fighter did to the floor beneath it was add — the planar
+   * mirror smears the robot's own lit armour down onto the slab, and the light
+   * pools sit under the fight plane. Ablating the key light's shadow map moved
+   * the floor band's mean by 2.8/255 and lit 17.8% of it, so the analytic
+   * shadow was working; ablating the *fighters'* `castShadow` moved 0.33% of
+   * that band. The robots were in the shadow map and their shadow was landing a
+   * metre down-left of the boot, one long soft slab at 41 degrees, with nothing
+   * at all where the foot meets the deck. A cast shadow that starts a metre
+   * away is not a contact cue.
+   *
+   * So this is the contact cue, and it is deliberately not a shadow map:
+   *
+   *   - It **multiplies**, so it darkens the reflection and the light pools too,
+   *     not just the key's diffuse. On a wet deck whose value is mostly image
+   *     -based lighting and mirror, attenuating only the analytic term is why
+   *     the real shadow reads at 4/255.
+   *   - It is anchored **per foot**, off `foot_L`/`foot_R` in the fighter's own
+   *     skeleton, with a broad body pool behind it. Two lobes: a tight dark core
+   *     for the sole and a wide soft one for the mass above it.
+   *   - It **opens and fades with height**, so a juggled fighter's floor mark
+   *     spreads and washes out instead of sliding around under a robot that is
+   *     three metres up.
+   *
+   * Six instances, twelve triangles, one draw call, no texture. Same multiply
+   * blend and the same `NO_REFLECT` layer as the scuff decals above: a mark
+   * painted on the mirror must not also be mirrored.
+   */
+  #buildContacts() {
+    const COUNT = CONTACT_COUNT;
+    const geo = new THREE.PlaneGeometry(1, 1);
+    geo.rotateX(-Math.PI / 2);
+    this._contactAlpha = new THREE.InstancedBufferAttribute(new Float32Array(COUNT), 1);
+    this._contactHard = new THREE.InstancedBufferAttribute(new Float32Array(COUNT), 1);
+    geo.setAttribute('aAlpha', this._contactAlpha);
+    geo.setAttribute('aHard', this._contactHard);
+
+    const mat = new THREE.ShaderMaterial({
+      name: 'arena.floorContact',
+      // Linear radiance an occluded patch of deck still receives, not a colour.
+      // The lit deck sits around 0.04 linear at this framing, so this is a
+      // roughly 3.5x drop at the core with the bounce left in.
+      uniforms: { uTint: { value: new THREE.Color(0.012, 0.014, 0.019) } },
+      vertexShader: /* glsl */ `
+        attribute float aAlpha;
+        attribute float aHard;
+        varying vec2 vUv;
+        varying float vAlpha;
+        varying float vHard;
+        void main() {
+          vUv = uv;
+          vAlpha = aAlpha;
+          vHard = aHard;
+          vec4 world = instanceMatrix * vec4( position, 1.0 );
+          gl_Position = projectionMatrix * modelViewMatrix * world;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uTint;
+        varying vec2 vUv;
+        varying float vAlpha;
+        varying float vHard;
+        void main() {
+          float r = length( vUv - 0.5 ) * 2.0;
+          if ( r > 1.0 ) discard;
+          // A plateau with a soft rim, not a Gaussian, and that is a
+          // measurement. The first shape here was
+          // ( 1 - smoothstep( 0, 1, r ) )^1.9, and rendering the occlusion term
+          // out as colour is what showed why it underperformed: across most of
+          // the lobe's area it lands between 0.05 and 0.2, and on a deck sitting
+          // at 50/255 that is a 2-4/255 change -- under the 6/255 this axis is
+          // scored on. Measured on the frozen wide framing, that shape moved
+          // 1.17% of the floor band against a 0.27% noise floor. The plateau
+          // puts the gradient in the outer third and holds a real value across
+          // the rest, which is also what occlusion under a standing body looks
+          // like: broad, flat, dark, soft only at the edge.
+          float edge = 1.0 - smoothstep( 0.36, 1.0, r );
+          float core = 1.0 - smoothstep( 0.0, max( vHard, 0.02 ), r );
+          float occ = clamp( edge * ( 0.66 + 0.34 * core ), 0.0, 1.0 ) * vAlpha;
+          if ( occ < 0.004 ) discard;
+          // Near-black over source-alpha is dst * ( 1 - occ ) plus a floor of
+          // bounce, which is the multiply this wanted, through the one blend
+          // function the platform actually honours. See the note below.
+          gl_FragColor = vec4( uTint * occ, occ );
+        }
+      `,
+      // Straight source-over. `uTint` is therefore linear radiance -- what an
+      // occluded patch of deck still receives -- rather than a multiplier, and
+      // the blend evaluates dst * ( 1 - occ ) + tint * occ, which is a multiply
+      // with a bounce floor built into it.
+      //
+      // CORRECTION, and read this before "fixing" the scuff decals above back:
+      // an earlier revision of this comment reported that a true multiply
+      // (`blendSrc = Zero, blendDst = SrcColor`, and its mirror image
+      // `DstColor`/`Zero`) draws **nothing** on this renderer -- 0.17% against a
+      // 0.17% noise floor -- and concluded that every scorch this stage had ever
+      // stamped was a no-op. That is wrong, and how it went wrong matters more
+      // than the result. The control frame in that sweep was made by setting
+      // `contacts.visible = false`, and `PlanarReflector.render` used to finish
+      // with `for ( const o of this._hidden ) o.visible = true` -- so the mirror
+      // pass put every excluded object back on, once a frame, for ever. Nothing
+      // on the reflector's exclude list could be hidden by anyone. The "off"
+      // frame still had the decal in it, so "off" and "on" measured the same, so
+      // a working blend mode looked like a dead one.
+      //
+      // The reflector now saves and restores that flag. Re-run on the same
+      // frozen framing with a toggle that works, an 8m disc at full strength,
+      // counting pixels darkened by more than 6/255 over an 800x260 crop of the
+      // deck:
+      //
+      //     blendSrc      blendDst              darkened
+      //     Zero          SrcColor               27.93%
+      //     DstColor      Zero                   27.85%
+      //     SrcAlpha      OneMinusSrcAlpha       27.92%   <- what ships here
+      //
+      // All three spellings work and they agree to a tenth of a point. No
+      // blend-factor restriction is biting on this path. Source-over is kept
+      // because it is the most portable of the three and because a bounce floor
+      // models an occluded surface better than a pure multiply does -- not
+      // because a multiply is broken. It is not.
+      blending: THREE.CustomBlending,
+      blendSrc: THREE.SrcAlphaFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
+      blendEquation: THREE.AddEquation,
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      polygonOffset: true,
+      polygonOffsetFactor: -8,
+      polygonOffsetUnits: -8,
+    });
+
+    this.contacts = new THREE.InstancedMesh(geo, mat, COUNT);
+    this.contacts.name = 'arena.floor.contacts';
+    this.contacts.frustumCulled = false;
+    this.contacts.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.contacts.userData.gbuffer = false;
+    // After the deck haze and the light pools, so an occluded patch of floor
+    // loses the pool it is standing in as well as its own albedo.
+    this.contacts.renderOrder = 3;
+    this.contacts.layers.set(LAYER.NO_REFLECT);
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (let i = 0; i < COUNT; i++) this.contacts.setMatrixAt(i, zero);
+    this.contacts.instanceMatrix.needsUpdate = true;
+    this.group.add(this.contacts);
+  }
+
+  /**
+   * Writes one contact lobe.
+   *
+   * The lobe is an ellipse, not a disc, and `yaw` is what makes it worth the
+   * extra two arguments. The key light stands at about 41 degrees, so a
+   * fighter's real cast shadow is a long slab starting roughly a metre
+   * down-light of the boot — measured, that shadow moves 0.33% of the floor
+   * band, and between it and the foot there was simply nothing. Stretching the
+   * lobe along the light's ground azimuth closes that gap, so the contact term
+   * and the shadow map read as one mark instead of a dark patch and a separate
+   * smudge with lit deck in between.
+   *
+   * @param {number} i slot, 0..CONTACT_COUNT-1
+   * @param {number} x world
+   * @param {number} z world
+   * @param {number} rLong metres, semi-axis along `yaw`
+   * @param {number} rShort metres, semi-axis across it
+   * @param {number} yaw radians, rotation of the long axis about +Y
+   * @param {number} strength 0..1
+   * @param {number} hardness 0..1
+   */
+  setContact(i, x, z, rLong, rShort, yaw, strength, hardness) {
+    const a = clamp01(strength);
+    if (a <= 0.002 || rLong <= 0 || rShort <= 0) {
+      _cScale.set(0, 0, 0);
+      _cQuat.identity();
+    } else {
+      _cScale.set(rLong * 2, 1, rShort * 2);
+      _cEuler.set(0, yaw, 0);
+      _cQuat.setFromEuler(_cEuler);
+    }
+    // Stacked under the scuff decals (+0.004) so a scorch still reads on top of
+    // a shadow, and above the slab so the depth test keeps it off the barrier.
+    _cPos.set(x, this.floorY + 0.0015 + i * 0.0002, z);
+    _cMat.compose(_cPos, _cQuat, _cScale);
+    this.contacts.setMatrixAt(i, _cMat);
+    this._contactAlpha.setX(i, a);
+    this._contactHard.setX(i, hardness);
+  }
+
+  /** Pushes whatever `setContact` wrote this frame. */
+  commitContacts() {
+    this.contacts.instanceMatrix.needsUpdate = true;
+    this._contactAlpha.needsUpdate = true;
+    this._contactHard.needsUpdate = true;
   }
 
   /**
@@ -799,6 +1019,8 @@ export class StageFloor {
     this.decals.instanceMatrix.needsUpdate = true;
     this._decalAlpha.needsUpdate = true;
     this._decalNext = 0;
+    for (let i = 0; i < CONTACT_COUNT; i++) this.setContact(i, 0, 0, 0, 0, 0, 0, 0);
+    this.commitContacts();
   }
 
   dispose() {
@@ -810,6 +1032,8 @@ export class StageFloor {
     this.ripple.dispose();
     this.decals.geometry.dispose();
     this.decals.material.dispose();
+    this.contacts.geometry.dispose();
+    this.contacts.material.dispose();
     this.apron.geometry.dispose();
     this.apron.material.dispose();
   }

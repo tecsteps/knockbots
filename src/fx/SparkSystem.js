@@ -10,10 +10,12 @@
  *
  * Three details do most of the visual work:
  *
- *  - **Velocity-stretched billboards.** A spark is a streak, not a dot. The quad
- *    is aligned to the screen-space velocity and its length scales with speed,
- *    with the bright head pinned to the particle position and the tail trailing
- *    behind it. Stretch is clamped so a fast spark never becomes a laser.
+ *  - **Velocity-stretched billboards, on every tier.** A spark is a streak, not
+ *    a dot. The quad is aligned to the screen-space velocity and its length is
+ *    `speed x exposure` — a shutter, so it is a *length* and not a multiple of
+ *    the particle's own size — with the bright head pinned to the particle
+ *    position and the tail trailing behind it. The smear is capped in metres so
+ *    a fast spark never becomes a laser.
  *  - **Three size tiers per burst.** A burst whose particles are all one size
  *    reads as a puff however many of them there are, because nothing in it
  *    establishes scale. See `TIERS`.
@@ -47,10 +49,27 @@ const _alt = new THREE.Vector3(1, 0, 0);
  * are what the eye actually tracks across the frame.
  *
  * `frac` is the share of the burst; `size`, `speed` and `life` scale the burst's
- * nominal values. `streak` is how far the quad smears along its velocity — motes
- * are pure filaments, and fragments are chips of armour plate that tumble about
- * their own axis rather than smearing at all, which is what separates them in
- * the eye from the molten oxide around them.
+ * nominal values. `streak` is the share of the shutter each tier smears over —
+ * see `uStreak`. It is close to 1 for everything, because smear length is set by
+ * how fast a particle moves and how long the shutter is open, not by what the
+ * particle is; the fragments take a little less of it only because a chip that
+ * is tumbling is not travelling in a straight line for the whole exposure.
+ *
+ * **The fragment tier used to be `streak: 0`, and that was the single largest
+ * defect on this axis.** It is 10% of the burst by count and the great majority
+ * of it by lit area — measured on a frozen `04b-impact-decay`, a launcher's
+ * free-field ejecta cloud was 28 blobs with a median area of 63 px — so what the
+ * frame shows *is* the fragments. Drawn as tumbling squares they were round
+ * blobs carrying nothing but depth-of-field blur: median PCA aspect 2.30 over
+ * three runs (range 1.91-2.42) against Tekken 8 at 3.96 and 5.19 on the same
+ * kind of measurement. A hundred bright pills all the same shape, all the same
+ * colour, sitting still in the air.
+ *
+ * The fragment tier is also a little smaller and noticeably faster than it was
+ * (2.40 -> 2.00, 0.55 -> 0.85). Both changes buy aspect: smear is an absolute
+ * length, so a narrower quad turns the same smear into a longer streak, and a
+ * faster chip smears further to begin with. 1.60 was tried first and taken back
+ * — it cost more brightness in the cloud than the aspect was worth.
  *
  * `spread` is the multiplicative size band *inside* the tier, and it is not the
  * same number for all three. Keeping it narrow is right for the two fine tiers —
@@ -68,9 +87,9 @@ const _alt = new THREE.Vector3(1, 0, 0);
  * tops out at 1.16 against the fragments' bottom at 1.52.
  */
 const TIERS = [
-  { frac: 0.60, size: 0.24, speed: 1.35, life: 0.66, streak: 1.6, spread: 1.67 },
-  { frac: 0.30, size: 0.90, speed: 1.00, life: 1.00, streak: 1.0, spread: 1.67 },
-  { frac: 0.10, size: 2.40, speed: 0.55, life: 1.45, streak: 0.0, spread: 2.50 },
+  { frac: 0.60, size: 0.24, speed: 1.35, life: 0.66, streak: 1.00, fine: 1.00, spread: 1.67 },
+  { frac: 0.30, size: 0.90, speed: 1.00, life: 1.00, streak: 1.00, fine: 0.62, spread: 1.67 },
+  { frac: 0.10, size: 2.00, speed: 0.85, life: 1.45, streak: 0.80, fine: 0.10, spread: 2.50 },
 ];
 
 const VERT = /* glsl */ `
@@ -78,12 +97,13 @@ attribute vec3 aOrigin;
 attribute vec3 aVel;
 attribute vec4 aLife;    // birth, life, seed, size
 attribute vec3 aTint;
-attribute vec2 aStyle;   // streak weight, tumble phase
+attribute vec3 aStyle;   // shutter share, tumble phase, fineness
 
 uniform float uTime;
 uniform float uFloorY;
 uniform float uSizeScale;
 uniform float uStreak;
+uniform float uStreakMax;
 uniform float uHeat;
 
 varying vec2 vUv;
@@ -116,30 +136,56 @@ void main() {
   float speed = length( vel );
   float sz = size * uSizeScale * ( 0.4 + 0.6 * ( 1.0 - t ) );
   float streakK = aStyle.x;
+  // How fine the particle is, 1 = a filament of oxide, 0 = a chip of plate.
+  // This used to be read off the streak weight, which no longer carries it:
+  // smear length is a shutter and is very nearly the same for every tier, so
+  // the thermal-mass channel had to become its own attribute.
+  float fine = aStyle.z;
+
+  // SMEAR IS A SHUTTER, NOT A SIZE MULTIPLIER.
+  //
+  // The previous form was 'len = sz * ( 1 + speed * k )', which says a big
+  // particle smears further than a small one at the same speed. Nothing about a
+  // photograph works that way: a streak is how far the thing moved while the
+  // shutter was open, and that is 'speed * exposure' whatever the thing is. The
+  // old form coupled the two so tightly that the *widest* particles — the
+  // fragments — needed the *most* smear to look like they were moving, and got
+  // none, because they were the tier that opted out of streaking entirely.
+  //
+  // Written as a length, 'uStreak' is an exposure time in seconds and every
+  // tier gets the same one. What separates them is their speed, which is what
+  // should separate them. The cap is absolute for the same reason: a spark that
+  // draws half a metre of streak is a laser however fast it is going.
+  float smear = min( speed * uStreak * streakK, uStreakMax );
+
+  // A chip of plate is not square, and it tumbles: what the camera sees is a
+  // rectangle whose width breathes as the plate turns edge-on and back. That
+  // spin is a WIDTH modulation rather than a roll, because the quad's long axis
+  // now belongs to the velocity — a particle cannot be smeared along its travel
+  // and rolled to a random angle at the same time.
+  //
+  // Fragments only. Narrowing the two fine tiers as well costs real brightness
+  // for nothing: they are already filaments, so the aspect is bought by the
+  // smear, and the width is all the emitting area they have. Measured, applying
+  // it to every tier took 52% of the warm-hot pixels out of the ejecta cloud.
+  //
+  // The band is 0.55-1.30 and the breathing bottoms out at 0.70, not the
+  // 0.42-1.14 / 0.58 the tumbling square used, and that is a brightness
+  // decision rather than a shape one. A quad narrower than the depth-of-field
+  // circle it is blurred by loses peak radiance to the blur, and the ejecta
+  // cloud is well off the focal plane. Measured on the ejecta ROI of
+  // 04b-impact-decay: at the narrow band the cloud carried 13% MORE total warm
+  // energy than the round-blob original and yet 58% fewer pixels over 0.80
+  // luma, because the same light was spread thinner than the lens could hold.
+  float roll = aStyle.y + age * ( 5.0 + fract( aStyle.y ) * 12.0 );
+  float chip = 0.55 + hash11( seed * 5.3 ) * 0.75;
+  float chipW = mix( 1.0, chip * ( 0.70 + 0.30 * abs( cos( roll ) ) ), step( fine, 0.34 ) );
 
   vec4 mv;
   float along = 1.0;
-  if ( streakK < 0.02 ) {
-    // A fragment is a chip of plate, not a filament: it tumbles about its own
-    // axis at a rate set by how much of the blow it took.
-    //
-    // And it is not square. A square quad at a random roll is a lozenge at a
-    // random angle, and a hundred of them with one size and one colour is the
-    // "generic round sprites" line in docs/CRITIC.md's failure list — which
-    // matters more than it sounds, because the fragments outlive every other
-    // element of a burst by a third of a second, so after the flare they *are*
-    // the burst. Giving each one its own aspect costs nothing (the hash is
-    // already computed for the sputter) and turns the population into chips of
-    // torn plate seen at assorted angles rather than one shape repeated.
-    float roll = aStyle.y + age * ( 5.0 + fract( aStyle.y ) * 12.0 );
-    float chip = 0.42 + hash11( seed * 5.3 ) * 0.72;
-    mv = billboard( p, position.xy * vec2( 1.0, chip ), sz, roll );
-  } else {
-    // Head of the streak sits on the particle; the body trails behind it.
-    float len = sz * ( 1.0 + clamp( speed * uStreak * streakK, 0.0, 11.0 ) );
-    vec2 corner = vec2( position.x, position.y - 0.5 );
-    mv = streakBillboard( p, vel, corner, sz, len, along );
-  }
+  // Head of the streak sits on the particle; the body trails behind it.
+  vec2 corner = vec2( position.x, position.y - 0.5 );
+  mv = streakBillboard( p, vel, corner, sz * chipW, sz + smear, along );
   gl_Position = projectionMatrix * mv;
 
   vUv = vec2( uv.x, 1.0 - uv.y );
@@ -149,7 +195,7 @@ void main() {
   // Bounced sparks have given up energy to the floor and burn cooler, but only a
   // little — a spark that dies the instant it touches the ground takes the whole
   // ember phase with it.
-  float sputter = 0.3 * clamp( streakK, 0.25, 1.5 );
+  float sputter = 0.3 * clamp( fine * 1.5, 0.25, 1.5 );
   float flicker = 1.0 - sputter + sputter * sin( seed * 61.7 + uTime * 78.0 + hash11( seed ) * 6.28 );
   float heat = uHeat * flicker * exp( -bounces * 0.18 );
 
@@ -159,10 +205,9 @@ void main() {
   // good the ramp is the frame only ever shows one point of it.
   //
   //  - Thermal mass. A filament of oxide is cherry-red within two frames; a chip
-  //    of plate holds white heat for the length of its arc. aStyle.x already
-  //    sorts the tiers by exactly the property that decides this — how fine the
-  //    particle is — so the fines run their ramp half again as fast as the
-  //    fragments do, and every frame of the burst contains both ends of it.
+  //    of plate holds white heat for the length of its arc. 'aStyle.z' carries
+  //    exactly that property, so the fines run their ramp half again as fast as
+  //    the fragments do and every frame of the burst contains both ends of it.
   //  - Along the streak. The head of a smear is the particle now; the tail is
   //    where it was two frames ago and has had two frames to cool. Shading the
   //    quad from head to tail is free — streakBillboard already returns the
@@ -185,7 +230,6 @@ void main() {
   // by their surface-to-volume, which varies as much within a size band as it
   // does between bands. Centred on 1.0, so the burst's mean brightness on the
   // contact frame is unchanged and only its variance goes up.
-  float fine = clamp( streakK, 0.0, 1.0 );
   float mass = 0.68 + hash11( seed * 2.7 ) * 0.64;
   float tt = t * ( 1.0 + 0.30 * fine ) * mass + ( 1.0 - along ) * 0.28 * fine;
   vColor = sparkEmission( clamp( tt, 0.0, 1.0 ), heat ) * aTint;
@@ -216,7 +260,7 @@ export class SparkSystem {
       capacity,
       lifeAttribute: 'aLife',
       lifeComponent: 1,
-      attributes: { aOrigin: 3, aVel: 3, aLife: 4, aTint: 3, aStyle: 2 },
+      attributes: { aOrigin: 3, aVel: 3, aLife: 4, aTint: 3, aStyle: 3 },
     });
 
     this.material = new THREE.ShaderMaterial({
@@ -231,7 +275,20 @@ export class SparkSystem {
         uTangentFriction: { value: 0.66 },
         uDrag: { value: 0.82 },
         uSizeScale: { value: 1 },
-        uStreak: { value: 0.30 },
+        // Exposure, in seconds, and it was swept rather than guessed. Measured
+        // on 04b-impact-decay, the free-field ejecta cloud's median PCA aspect
+        // came out 4.93 / 4.33 / 4.76 at 0.005 / 0.009 / 0.013 and 7.80 at
+        // 0.022 — and 0.022 is visibly wrong, a hail of parallel needles rather
+        // than debris, which is the "laser" failure this file has always warned
+        // about. Tekken 8 measures 3.96 and 5.19 on the same statistic, so the
+        // band from 0.005 to 0.013 is the whole usable range and the top of it
+        // is not. 0.011 sits inside it with the widths restored.
+        uStreak: { value: 0.011 },
+        // Absolute ceiling on the smear, in metres. A cap in metres and not in
+        // multiples of the particle: the thing that makes a streak a laser is
+        // its length on screen, which has nothing to do with how big the
+        // particle that drew it was.
+        uStreakMax: { value: 0.22 },
         uHeat: { value: 1.0 },
         uOpacity: { value: 1 },
       },
@@ -304,7 +361,7 @@ export class SparkSystem {
       for (let j = 0; j < n; j++, k++) {
         const i = (first + k) % cap;
 
-        // Cosine-lobe about the normal, widened by `spread`. Fragments are
+        // Cosine-lobe about the normal, widened by 'spread'. Fragments are
         // heavy, so they hold the line of the blow more tightly than the motes.
         //
         // A clean cone has a clean edge, and a clean edge is what turns a fan
@@ -323,7 +380,7 @@ export class SparkSystem {
 
         // Speed decides streak length, so its distribution is the distribution
         // of streak lengths, and that is what a burst is read by on the one
-        // frame anyone sees it. The previous curve was `0.35 + r^3 * 2.1`,
+        // frame anyone sees it. The previous curve was '0.35 + r^3 * 2.1',
         // which does have a heavy tail — but a cubed uniform puts half the
         // population between 0.35 and 0.61, a 1.7x window. Half the fan was
         // therefore drawn at one length with a handful of long fliers around
@@ -358,20 +415,23 @@ export class SparkSystem {
         aLife[l + 1] = life * tier.life * (0.62 + Math.random() * 0.7);
         aLife[l + 2] = Math.random() * 1000;
         // Narrow inside the two fine tiers, wide inside the fragments — see the
-        // note on `spread` in TIERS. Log-uniform so the whole band is occupied
+        // note on 'spread' in TIERS. Log-uniform so the whole band is occupied
         // evenly instead of piling at the bottom, and centred on 1.0 so the
         // burst's mean size is unchanged whatever the band is.
         aLife[l + 3] = size * tier.size
           * Math.exp((Math.random() - 0.5) * Math.log(tier.spread));
 
-        const s = i * 2;
-        // Streak weight is jittered inside the tier as well, because length is
+        const s = i * 3;
+        // Shutter share is jittered inside the tier as well, because length is
         // the product of speed and this, and two independent spreads populate
-        // the range far more evenly than one wide one does. Scaling rather
-        // than offsetting is what keeps the fragment tier at exactly zero, so
-        // chips of plate go on tumbling instead of smearing.
+        // the range far more evenly than one wide one does.
         aStyle[s] = tier.streak * (0.72 + Math.random() * 0.56);
         aStyle[s + 1] = Math.random() * 6.283;
+        // Fineness — thermal mass, sputter rate, and whether the quad tumbles.
+        // Jittered so the three tiers are three bands rather than three values:
+        // a population sitting on one point of the cooling ramp is what made a
+        // hundred fragments paint one identical colour.
+        aStyle[s + 2] = tier.fine * (0.7 + Math.random() * 0.6);
       }
     }
   }

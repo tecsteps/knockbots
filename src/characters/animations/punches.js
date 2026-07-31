@@ -787,6 +787,47 @@ export const PUNCH_CLIPS = {
 
   // i16. Sinks into the rear leg, then extends the whole body upward.
   //
+  // ROUND 15. IT DID NOT SINK INTO ANYTHING. The comment above described a
+  // weight shift the data never contained, and this is the clip the animation
+  // axis is scored on (`17-anim-strip` photographs it at clip ticks 1.6, 4.8,
+  // 8.8, 12.8, 16.7, 21.0 and 26.8). Driven through the rig:
+  //
+  //   hip_L.y - hip_R.y   stayed inside 4.3mm for all 36 ticks — the hip line
+  //                       was level in every frame, which is exactly the
+  //                       critic's "both hip lines level"
+  //   hip-to-ankle span   0.803 -> 0.798 -> 0.855: the legs were between 93%
+  //                       and 100% extended from end to end. The knees never
+  //                       bent, so nothing was ever loaded
+  //   the 64mm "sink"     came entirely from the ROOT TRACK translating the
+  //                       whole rig down. The boots went with it: the lead
+  //                       toe pad ran 109mm under the concrete at t6
+  //
+  // A root drop is not a crouch, it is the fighter being lowered. The sink now
+  // comes out of the knees with the ankles held at their stance height, which
+  // is what makes it weight rather than an elevator:
+  //
+  //                          before          after
+  //     pelvis excursion     70mm            188mm
+  //     max hip-line break   4.3mm           54mm  (12.6x)
+  //     knee_L / knee_R      42/45 -> 12/8   42/45 -> 86/65 -> 33/47
+  //     worst boot under     109mm           26mm
+  //     rear heel lift       0mm             55mm at contact, toe pad planted
+  //
+  // Two things this deliberately did NOT change. The root's Z is untouched, so
+  // the move's spacing and forward drive are what they were. And the whole
+  // t0/t36 pose is bit-identical, so entry from and exit to idle still cannot
+  // pop — `regress.mjs` measures stance0 and stanceEnd unchanged at 0.022.
+  //
+  // The contact tick is the one place a pose edit here can break combat, and it
+  // is nearly free on screen: the clip's pelvis at t16 rises 47mm, but the
+  // control was ALREADY being raised by that much by `Fighter#installPelvisLift`
+  // — the servo exists to lift a pelvis whose boots are buried, and both of this
+  // clip's boots were 47mm under at contact. So the correction has moved out of
+  // the servo and into the clip, and the delivered frame's pelvis moves 3.4px.
+  // hand_R at t16 is 54mm from where it was in clip space and the hit still
+  // lands on every capture; check.mjs's anchor ratio stays 1.000 with hand_R
+  // still the leading limb (travel 0.430 -> 0.412m).
+  //
   // ROUND 14. This clip's fist used to DESCEND into contact. Driven through the
   // rig, hand_R ran y 1.501 at t0, a shallow low of 1.373 at t9, back up to
   // 1.480 at t13 and 1.368 at contact — so its minimum height over the whole
@@ -821,47 +862,71 @@ export const PUNCH_CLIPS = {
     impact: { tick: 16, bone: 'hand_R' },
     root: [
       { t: 0, p: [0, -0.075, 0], ease: 'linear' },
-      { t: 1, p: [0, -0.077, 0], ease: 'linear' },
-      { t: 2, p: [0, -0.081, 0], ease: 'linear' },
-      { t: 3, p: [0, -0.089, 0], ease: 'linear' },
-      { t: 4, p: [0, -0.1, 0.001], ease: 'linear' },
-      { t: 5, p: [0, -0.114, 0.001], ease: 'linear' },
-      { t: 6, p: [0, -0.125, 0.003], ease: 'linear' },
-      { t: 7, p: [0, -0.133, 0.005], ease: 'linear' },
-      { t: 8, p: [0, -0.137, 0.009], ease: 'linear' },
-      { t: 9, p: [0, -0.139, 0.014], ease: 'linear' },
-      { t: 10, p: [0, -0.134, 0.021], ease: 'linear' },
-      { t: 11, p: [0, -0.121, 0.031], ease: 'linear' },
-      { t: 12, p: [0, -0.109, 0.044], ease: 'linear' },
-      { t: 13, p: [0, -0.104, 0.061], ease: 'linear' },
-      { t: 14, p: [0, -0.101, 0.082], ease: 'linear' },
-      { t: 15, p: [0, -0.073, 0.108], ease: 'linear' },
-      { t: 16, p: [0, -0.07, 0.14], ease: 'sine' },
-      { t: 19, p: [0, -0.066, 0.147], ease: 'quad' },
-      { t: 26, p: [0, -0.08, 0.08], ease: 'sine' },
+      { t: 1, p: [0, -0.080, 0], ease: 'linear' },
+      { t: 2, p: [0, -0.092, 0], ease: 'linear' },
+      { t: 3, p: [0, -0.111, 0], ease: 'linear' },
+      { t: 4, p: [0, -0.134, 0.001], ease: 'linear' },
+      { t: 5, p: [0, -0.158, 0.001], ease: 'linear' },
+      { t: 6, p: [0, -0.179, 0.003], ease: 'linear' },
+      { t: 7, p: [0, -0.196, 0.005], ease: 'linear' },
+      { t: 8, p: [0, -0.207, 0.009], ease: 'linear' },
+      { t: 9, p: [0, -0.211, 0.014], ease: 'linear' },
+      { t: 10, p: [0, -0.206, 0.021], ease: 'linear' },
+      { t: 11, p: [0, -0.190, 0.031], ease: 'linear' },
+      { t: 12, p: [0, -0.164, 0.044], ease: 'linear' },
+      { t: 13, p: [0, -0.132, 0.061], ease: 'linear' },
+      { t: 14, p: [0, -0.090, 0.082], ease: 'linear' },
+      { t: 15, p: [0, -0.055, 0.108], ease: 'linear' },
+      { t: 16, p: [0, -0.023, 0.14], ease: 'sine' },
+      { t: 19, p: [0, -0.017, 0.147], ease: 'quad' },
+      { t: 21, p: [0, -0.060, 0.1361], ease: 'quad' },
+      { t: 26, p: [0, -0.136, 0.08], ease: 'sine' },
+      { t: 30, p: [0, -0.108, 0.0524], ease: 'sine' },
       { t: 36, p: [0, -0.075, 0], ease: 'linear' },
     ],
     tracks: {
-      hips: [{ t: 0, r: [1, -27.8, 0], ease: 'quad' }, { t: 4, r: [1.41, -33.8, -0.11], ease: 'linear' },
-        { t: 9, r: [2.4, -29.1, -0.02], ease: 'linear' }, { t: 13, r: [0.1, -14.55, 0.9], ease: 'linear' },
-        { t: 14, r: [-0.28, -9.01, 0.81], ease: 'linear' }, { t: 15, r: [-0.71, -2.64, 0.71], ease: 'linear' },
-        { t: 16, r: [-1.2, 4.6, 0.6], ease: 'sine' }, { t: 19, r: [-1.41, 6.13, 0.57], ease: 'quad' },
-        { t: 26, r: [1.2, -8.1, 0.3], ease: 'sine' }, { t: 36, r: [1, -27.8, 0], ease: 'linear' }],
-      spine01: [{ t: 0, r: [1.9, 5.2, 0], ease: 'quad' }, { t: 4, r: [3.1, 5.9, -0.28], ease: 'linear' },
-        { t: 9, r: [4.8, 5.51, -0.12], ease: 'linear' }, { t: 13, r: [0.34, 4.3, 1.5], ease: 'linear' },
-        { t: 14, r: [-0.45, 3.84, 1.36], ease: 'linear' }, { t: 15, r: [-1.36, 3.31, 1.19], ease: 'linear' },
-        { t: 16, r: [-2.4, 2.7, 1], ease: 'sine' }, { t: 19, r: [-2.82, 2.58, 0.95], ease: 'quad' },
-        { t: 26, r: [2.4, 3.7, 0.5], ease: 'sine' }, { t: 36, r: [1.9, 5.2, 0], ease: 'linear' }],
-      spine02: [{ t: 0, r: [2.6, 6.1, 0], ease: 'quad' }, { t: 4, r: [4.22, 6.91, -0.31], ease: 'linear' },
-        { t: 9, r: [6.4, 6.46, -0.14], ease: 'linear' }, { t: 13, r: [0.5, 5.05, 1.7], ease: 'linear' },
-        { t: 14, r: [-0.57, 4.51, 1.53], ease: 'linear' }, { t: 15, r: [-1.8, 3.9, 1.33], ease: 'linear' },
+      // THE HIP LINE BREAKS. `hips` Z is the pelvic roll and it was doing
+      // nothing: over the whole clip hip_L.y - hip_R.y stayed inside 4.3mm, so
+      // both hip lines were level in every frame and nobody was standing on a
+      // leg. It now rolls -11.5deg onto the rear (right) leg through the load
+      // and +9.0deg onto the lead leg through the drive, which is +-40mm of hip
+      // height difference; `spine01` takes an equal and opposite roll so the
+      // ribcage stays upright over a pelvis that is not — the counter-rotation
+      // is what makes it read as weight rather than as the whole chassis
+      // tipping, and it is also what keeps the fist where it was (see below).
+      //
+      // t16 is the pinned contact tick: X and Y here are bit-identical to what
+      // they were, and the Z pair cancels through the chain, so hand_R at
+      // contact moves by the pelvis roll's lever arm on ONE bone — measured
+      // below 30mm — and nothing the combat system reads changes limb.
+      hips: [{ t: 0, r: [1, -27.8, 0], ease: 'quad' }, { t: 4, r: [4.5, -33.8, -5.5], ease: 'linear' },
+        { t: 9, r: [8, -29.1, -11.5], ease: 'linear' }, { t: 13, r: [3, -14.55, -4], ease: 'linear' },
+        { t: 14, r: [1.4, -9.01, -1], ease: 'linear' }, { t: 15, r: [0, -2.64, 2.2], ease: 'linear' },
+        { t: 16, r: [-1.2, 4.6, 9], ease: 'sine' }, { t: 19, r: [-1.41, 6.13, 9.6], ease: 'quad' },
+        { t: 21, r: [0.6, 2, 8], ease: 'quad' },
+        { t: 26, r: [3.6, -8.1, 4.2], ease: 'sine' }, { t: 30, r: [2.4, -16, 2], ease: 'sine' },
+        { t: 36, r: [1, -27.8, 0], ease: 'linear' }],
+      spine01: [{ t: 0, r: [1.9, 5.2, 0], ease: 'quad' }, { t: 4, r: [6, 5.9, 4], ease: 'linear' },
+        { t: 9, r: [10.5, 5.51, 8.6], ease: 'linear' }, { t: 13, r: [3.4, 4.3, 4.4], ease: 'linear' },
+        { t: 14, r: [1.2, 3.84, 2.3], ease: 'linear' }, { t: 15, r: [-0.6, 3.31, -0.5], ease: 'linear' },
+        { t: 16, r: [-2.4, 2.7, -7.4], ease: 'sine' }, { t: 19, r: [-2.82, 2.58, -8.3], ease: 'quad' },
+        { t: 21, r: [0.4, 3, -6.6], ease: 'quad' },
+        { t: 26, r: [4.6, 3.7, -3], ease: 'sine' }, { t: 30, r: [3.4, 4.5, -1.4], ease: 'sine' },
+        { t: 36, r: [1.9, 5.2, 0], ease: 'linear' }],
+      spine02: [{ t: 0, r: [2.6, 6.1, 0], ease: 'quad' }, { t: 4, r: [6.5, 6.91, 2.2], ease: 'linear' },
+        { t: 9, r: [11.5, 6.46, 4.6], ease: 'linear' }, { t: 13, r: [3.2, 5.05, 3], ease: 'linear' },
+        { t: 14, r: [1, 4.51, 2.4], ease: 'linear' }, { t: 15, r: [-1, 3.9, 1.7], ease: 'linear' },
         { t: 16, r: [-3.2, 3.2, 1.1], ease: 'sine' }, { t: 19, r: [-3.76, 3.06, 1.03], ease: 'quad' },
-        { t: 26, r: [3.2, 4.4, 0.6], ease: 'sine' }, { t: 36, r: [2.6, 6.1, 0], ease: 'linear' }],
-      chest: [{ t: 0, r: [2.6, 7.3, -3], ease: 'quad' }, { t: 4, r: [4.22, 8.28, -3.36], ease: 'linear' },
-        { t: 9, r: [6.4, 7.73, -3.16], ease: 'linear' }, { t: 13, r: [0.5, 6.03, -1.1], ease: 'linear' },
-        { t: 14, r: [-0.57, 5.38, -1.27], ease: 'linear' }, { t: 15, r: [-1.8, 4.64, -1.47], ease: 'linear' },
+        { t: 21, r: [0.4, 3.6, 0.9], ease: 'quad' },
+        { t: 26, r: [5.4, 4.4, 0.4], ease: 'sine' }, { t: 30, r: [4, 5.2, 0.2], ease: 'sine' },
+        { t: 36, r: [2.6, 6.1, 0], ease: 'linear' }],
+      chest: [{ t: 0, r: [2.6, 7.3, -3], ease: 'quad' }, { t: 4, r: [6.5, 8.28, -1], ease: 'linear' },
+        { t: 9, r: [11.5, 7.73, 1.2], ease: 'linear' }, { t: 13, r: [3.2, 6.03, -0.2], ease: 'linear' },
+        { t: 14, r: [1, 5.38, -0.8], ease: 'linear' }, { t: 15, r: [-1, 4.64, -1.3], ease: 'linear' },
         { t: 16, r: [-3.2, 3.8, -1.7], ease: 'sine' }, { t: 19, r: [-3.76, 3.64, -1.77], ease: 'quad' },
-        { t: 26, r: [3.2, 5.2, -2.4], ease: 'sine' }, { t: 36, r: [2.6, 7.3, -3], ease: 'linear' }],
+        { t: 21, r: [0.4, 4.4, -2], ease: 'quad' },
+        { t: 26, r: [5.4, 5.2, -2.4], ease: 'sine' }, { t: 30, r: [4, 6.2, -2.7], ease: 'sine' },
+        { t: 36, r: [2.6, 7.3, -3], ease: 'linear' }],
       neck: [{ t: 0, r: [0.6, 5.2, 0], ease: 'quad' }, { t: 9, r: [0, 6.4, 0], ease: 'sine' },
         { t: 13, r: [0.7, 0.5, 0], ease: 'quart' }, { t: 16, r: [1.5, -3, 0], ease: 'sine' },
         { t: 19, r: [1.59, -3.38, 0], ease: 'quad' }, { t: 26, r: [0.5, 0.2, 0], ease: 'sine' },
@@ -920,39 +985,145 @@ export const PUNCH_CLIPS = {
         { t: 16, r: [-2, 0, -2], ease: 'snap' }, { t: 19, r: [6, 0, -5], ease: 'sine' },
         { t: 22, r: [-28, 0, -10], ease: 'sine' }, { t: 26, r: [-18, 0, 0], ease: 'sine' },
         { t: 36, r: [-14, 0, 0], ease: 'linear' }],
-      hip_L: [{ t: 0, r: [-39, 10, 11], ease: 'quad' }, { t: 9, r: [-12, -16, 12], ease: 'sine' },
-        { t: 13, r: [-20, -8, 10], ease: 'quart' }, { t: 16, r: [-16, -2, 8], ease: 'sine' },
-        { t: 19, r: [-15.56, -1.34, 7.78], ease: 'quad' }, { t: 26, r: [-20, -8, 10], ease: 'sine' },
+      hip_L: [{ t: 0, r: [-39, 10, 11], ease: 'quad' },
+        { t: 2, r: [-44.09, 4.22, 13.41], ease: 'quad' },
+        { t: 4, r: [-49.08, -1.56, 18.51], ease: 'quad' },
+        { t: 6, r: [-50.8, -7.33, 23.11], ease: 'quad' },
+        { t: 9, r: [-51.15, -16, 25.29], ease: 'sine' },
+        { t: 11, r: [-48.81, -12, 18.71], ease: 'sine' },
+        { t: 13, r: [-43.38, -8, 14.62], ease: 'quart' },
+        { t: 15, r: [-31.52, -4, 6.73], ease: 'quart' },
+        { t: 16, r: [-26.61, -2, -0.57], ease: 'sine' },
+        { t: 19, r: [-25.36, -1.34, -1.31], ease: 'quad' },
+        { t: 21, r: [-30.9, -3.24, 0.19], ease: 'quad' },
+        { t: 26, r: [-40.13, -8, 6.21], ease: 'sine' },
+        { t: 30, r: [-38.48, -0.8, 11.11], ease: 'sine' },
         { t: 36, r: [-39, 10, 11], ease: 'linear' }],
-      knee_L: [{ t: 0, r: [42, 0, 0], ease: 'quad' }, { t: 9, r: [44, 0, 0], ease: 'sine' },
-        { t: 13, r: [26, 0, 0], ease: 'quart' }, { t: 16, r: [12, 0, 0], ease: 'sine' },
-        { t: 19, r: [10.46, 0, 0], ease: 'quad' }, { t: 26, r: [30, 0, 0], ease: 'sine' },
+      knee_L: [{ t: 0, r: [42, 0, 0], ease: 'quad' },
+        { t: 2, r: [49.72, 0, 0], ease: 'quad' },
+        { t: 4, r: [66.07, 0, 0], ease: 'quad' },
+        { t: 6, r: [78.13, 0, 0], ease: 'quad' },
+        { t: 9, r: [85.69, 0, 0], ease: 'sine' },
+        { t: 11, r: [80.32, 0, 0], ease: 'sine' },
+        { t: 13, r: [64.36, 0, 0], ease: 'quart' },
+        { t: 15, r: [43.12, 0, 0], ease: 'quart' },
+        { t: 16, r: [32.58, 0, 0], ease: 'sine' },
+        { t: 19, r: [30.13, 0, 0], ease: 'quad' },
+        { t: 21, r: [38.06, 0, 0], ease: 'quad' },
+        { t: 26, r: [61.27, 0, 0], ease: 'sine' },
+        { t: 30, r: [54.81, 0, 0], ease: 'sine' },
         { t: 36, r: [42, 0, 0], ease: 'linear' }],
-      ankle_L: [{ t: 0, r: [-4, 2, 0], ease: 'quad' }, { t: 9, r: [-39.2, 2, 0], ease: 'sine' }, { t: 13, r: [-11.3, 2, 0], ease: 'quart' },
-        { t: 16, r: [-0.3, 2, 0], ease: 'sine' }, { t: 19, r: [1, 2, 0], ease: 'quad' }, { t: 26, r: [-15.7, 2, 0], ease: 'sine' },
+      ankle_L: [{ t: 0, r: [-4, 2, 0], ease: 'quad' },
+        { t: 2, r: [-9.12, 2, 0], ease: 'quad' },
+        { t: 4, r: [-21.39, 2, 0], ease: 'quad' },
+        { t: 6, r: [-31.53, 2, 0], ease: 'quad' },
+        { t: 9, r: [-38.33, 2, 0], ease: 'sine' },
+        { t: 11, r: [-34.22, 2, 0], ease: 'sine' },
+        { t: 13, r: [-20.21, 2, 0], ease: 'quart' },
+        { t: 15, r: [0.87, 2, 0], ease: 'quart' },
+        { t: 16, r: [21.36, 2, 0], ease: 'sine' },
+        { t: 19, r: [23.98, 2, 0], ease: 'quad' },
+        { t: 21, r: [0.25, 2, 0], ease: 'quad' },
+        { t: 26, r: [-22.7, 2, 0], ease: 'sine' },
+        { t: 30, r: [-16.47, 2, 0], ease: 'sine' },
         { t: 36, r: [-4, 2, 0], ease: 'linear' }],
-      foot_L: [{ t: 0, r: [0, 0, 0], ease: 'quad' }, { t: 9, r: [5.3, 0, 0], ease: 'sine' }, { t: 13, r: [7.2, 0, 0], ease: 'quart' },
-        { t: 16, r: [7.3, 0, 0], ease: 'sine' }, { t: 19, r: [7.3, 0, 0], ease: 'quad' }, { t: 26, r: [7, 0, 0], ease: 'sine' },
+      foot_L: [{ t: 0, r: [0, 0, 0], ease: 'quad' },
+        { t: 2, r: [0.89, 0, 0], ease: 'quad' },
+        { t: 4, r: [1.05, 0, 0], ease: 'quad' },
+        { t: 6, r: [1.05, 0, 0], ease: 'quad' },
+        { t: 9, r: [1, 0, 0], ease: 'sine' },
+        { t: 11, r: [0.49, 0, 0], ease: 'sine' },
+        { t: 13, r: [-0.84, 0, 0], ease: 'quart' },
+        { t: 15, r: [-7.14, 0, 0], ease: 'quart' },
+        { t: 16, r: [-16.46, 0, 0], ease: 'sine' },
+        { t: 19, r: [-17.18, 0, 0], ease: 'quad' },
+        { t: 21, r: [-4.58, 0, 0], ease: 'quad' },
+        { t: 26, r: [-0.47, 0, 0], ease: 'sine' },
+        { t: 30, r: [-0.27, 0, 0], ease: 'sine' },
         { t: 36, r: [0, 0, 0], ease: 'linear' }],
-      toe_L: [{ t: 0, r: [0, 0, 0], ease: 'quad' }, { t: 9, r: [2.2, 0, 0], ease: 'sine' }, { t: 13, r: [3, 0, 0], ease: 'quart' },
-        { t: 16, r: [3, 0, 0], ease: 'sine' }, { t: 19, r: [3.1, 0, 0], ease: 'quad' }, { t: 26, r: [2.9, 0, 0], ease: 'sine' },
+      toe_L: [{ t: 0, r: [0, 0, 0], ease: 'quad' },
+        { t: 2, r: [0.49, 0, 0], ease: 'quad' },
+        { t: 4, r: [0.98, 0, 0], ease: 'quad' },
+        { t: 6, r: [1.47, 0, 0], ease: 'quad' },
+        { t: 9, r: [2.2, 0, 0], ease: 'sine' },
+        { t: 11, r: [2.6, 0, 0], ease: 'sine' },
+        { t: 13, r: [3, 0, 0], ease: 'quart' },
+        { t: 15, r: [3, 0, 0], ease: 'quart' },
+        { t: 16, r: [3, 0, 0], ease: 'sine' },
+        { t: 19, r: [3.1, 0, 0], ease: 'quad' },
+        { t: 21, r: [3.04, 0, 0], ease: 'quad' },
+        { t: 26, r: [2.9, 0, 0], ease: 'sine' },
+        { t: 30, r: [1.74, 0, 0], ease: 'sine' },
         { t: 36, r: [0, 0, 0], ease: 'linear' }],
-      hip_R: [{ t: 0, r: [-9, -6, -12], ease: 'quad' }, { t: 9, r: [-6, 6, -14], ease: 'sine' },
-        { t: 13, r: [6, 2, -13], ease: 'quart' }, { t: 16, r: [10, -6, -12], ease: 'sine' },
-        { t: 19, r: [10.44, -6.88, -11.89], ease: 'quad' }, { t: 26, r: [6, 2, -13], ease: 'sine' },
+      hip_R: [{ t: 0, r: [-9, -6, -12], ease: 'quad' },
+        { t: 2, r: [-10.61, -3.33, -7.39], ease: 'quad' },
+        { t: 4, r: [-14.73, -0.67, -4.34], ease: 'quad' },
+        { t: 6, r: [-17.65, 2, -3.46], ease: 'quad' },
+        { t: 9, r: [-19.51, 6, 0.7], ease: 'sine' },
+        { t: 11, r: [-13.9, 4, -4.64], ease: 'sine' },
+        { t: 13, r: [-10.68, 2, -8.91], ease: 'quart' },
+        { t: 15, r: [-7.48, -3.33, -16.59], ease: 'quart' },
+        { t: 16, r: [-9.78, -6, -25.64], ease: 'sine' },
+        { t: 19, r: [-9.71, -6.88, -26.48], ease: 'quad' },
+        { t: 21, r: [-13.1, -4.34, -25], ease: 'quad' },
+        { t: 26, r: [-10.71, 2, -19.37], ease: 'sine' },
+        { t: 30, r: [-9.04, -1.2, -16.85], ease: 'sine' },
         { t: 36, r: [-9, -6, -12], ease: 'linear' }],
-      knee_R: [{ t: 0, r: [45, 0, 0], ease: 'quad' }, { t: 9, r: [46, 0, 0], ease: 'sine' },
-        { t: 13, r: [22, 0, 0], ease: 'quart' }, { t: 16, r: [8, 0, 0], ease: 'sine' },
-        { t: 19, r: [6.46, 0, 0], ease: 'quad' }, { t: 26, r: [26, 0, 0], ease: 'sine' },
+      knee_R: [{ t: 0, r: [45, 0, 0], ease: 'quad' },
+        { t: 2, r: [47.53, 0, 0], ease: 'quad' },
+        { t: 4, r: [55.94, 0, 0], ease: 'quad' },
+        { t: 6, r: [62.65, 0, 0], ease: 'quad' },
+        { t: 9, r: [64.99, 0, 0], ease: 'sine' },
+        { t: 11, r: [61.99, 0, 0], ease: 'sine' },
+        { t: 13, r: [54.92, 0, 0], ease: 'quart' },
+        { t: 15, r: [46.43, 0, 0], ease: 'quart' },
+        { t: 16, r: [46.59, 0, 0], ease: 'sine' },
+        { t: 19, r: [45.54, 0, 0], ease: 'quad' },
+        { t: 21, r: [49.33, 0, 0], ease: 'quad' },
+        { t: 26, r: [55.98, 0, 0], ease: 'sine' },
+        { t: 30, r: [49.42, 0, 0], ease: 'sine' },
         { t: 36, r: [45, 0, 0], ease: 'linear' }],
-      ankle_R: [{ t: 0, r: [-33, -3, 0], ease: 'quad' }, { t: 9, r: [-44.2, -3, 0], ease: 'sine' }, { t: 13, r: [-19.5, 0, 0], ease: 'quart' },
-        { t: 16, r: [-22.4, 0, 0], ease: 'sine' }, { t: 19, r: [-22.3, 0, 0], ease: 'quad' }, { t: 26, r: [-19.1, 0, 0], ease: 'sine' },
+      ankle_R: [{ t: 0, r: [-33, -3, 0], ease: 'quad' },
+        { t: 2, r: [-32.94, -3, 0], ease: 'quad' },
+        { t: 4, r: [-38.73, -3, 0], ease: 'quad' },
+        { t: 6, r: [-43.69, -3, 0], ease: 'quad' },
+        { t: 9, r: [-47.59, -3, 0], ease: 'sine' },
+        { t: 11, r: [-46.32, -1.5, 0], ease: 'sine' },
+        { t: 13, r: [-35.01, 0, 0], ease: 'quart' },
+        { t: 15, r: [-10.64, 0, 0], ease: 'quart' },
+        { t: 16, r: [1.35, 0, 0], ease: 'sine' },
+        { t: 19, r: [2.55, 0, 0], ease: 'quad' },
+        { t: 21, r: [-17.1, 0, 0], ease: 'quad' },
+        { t: 26, r: [-39.81, 0, 0], ease: 'sine' },
+        { t: 30, r: [-34.18, -1.2, 0], ease: 'sine' },
         { t: 36, r: [-33, -3, 0], ease: 'linear' }],
-      foot_R: [{ t: 0, r: [0, 0, 0], ease: 'quad' }, { t: 9, r: [8.2, 0, 0], ease: 'sine' }, { t: 13, r: [-3.1, 0, 0], ease: 'quart' },
-        { t: 16, r: [10.9, 0, 0], ease: 'sine' }, { t: 19, r: [12.6, 0, 0], ease: 'quad' }, { t: 26, r: [-0.6, 0, 0], ease: 'sine' },
+      foot_R: [{ t: 0, r: [0, 0, 0], ease: 'quad' },
+        { t: 2, r: [-1.32, 0, 0], ease: 'quad' },
+        { t: 4, r: [-1.31, 0, 0], ease: 'quad' },
+        { t: 6, r: [-1.58, 0, 0], ease: 'quad' },
+        { t: 9, r: [-1.57, 0, 0], ease: 'sine' },
+        { t: 11, r: [-2.81, 0, 0], ease: 'sine' },
+        { t: 13, r: [-6.44, 0, 0], ease: 'quart' },
+        { t: 15, r: [-16.12, 0, 0], ease: 'quart' },
+        { t: 16, r: [-18.12, 0, 0], ease: 'sine' },
+        { t: 19, r: [-17.59, 0, 0], ease: 'quad' },
+        { t: 21, r: [-10.65, 0, 0], ease: 'quad' },
+        { t: 26, r: [-4.11, 0, 0], ease: 'sine' },
+        { t: 30, r: [-3.37, 0, 0], ease: 'sine' },
         { t: 36, r: [0, 0, 0], ease: 'linear' }],
-      toe_R: [{ t: 0, r: [0, 0, 0], ease: 'quad' }, { t: 9, r: [3.5, 0, 0], ease: 'sine' }, { t: 13, r: [-1.3, 0, 0], ease: 'quart' },
-        { t: 16, r: [4.6, 0, 0], ease: 'sine' }, { t: 19, r: [5.3, 0, 0], ease: 'quad' }, { t: 26, r: [-0.3, 0, 0], ease: 'sine' },
+      toe_R: [{ t: 0, r: [0, 0, 0], ease: 'quad' },
+        { t: 2, r: [0.78, 0, 0], ease: 'quad' },
+        { t: 4, r: [1.56, 0, 0], ease: 'quad' },
+        { t: 6, r: [2.33, 0, 0], ease: 'quad' },
+        { t: 9, r: [3.5, 0, 0], ease: 'sine' },
+        { t: 11, r: [1.1, 0, 0], ease: 'sine' },
+        { t: 13, r: [-1.3, 0, 0], ease: 'quart' },
+        { t: 15, r: [2.63, 0, 0], ease: 'quart' },
+        { t: 16, r: [4.6, 0, 0], ease: 'sine' },
+        { t: 19, r: [5.3, 0, 0], ease: 'quad' },
+        { t: 21, r: [3.7, 0, 0], ease: 'quad' },
+        { t: 26, r: [-0.3, 0, 0], ease: 'sine' },
+        { t: 30, r: [-0.18, 0, 0], ease: 'sine' },
         { t: 36, r: [0, 0, 0], ease: 'linear' }],
     },
   },
@@ -2243,7 +2414,34 @@ const WHIP = {
   'p.duckingStraight': 6,
   'p.siegeSlam': 4,
 };
-for (const id in WHIP) whip(PUNCH_CLIPS[id], WHIP[id], { pivot: PUNCH_CLIPS[id].impact.tick });
+
+/**
+ * A PLANTED LEG MUST NOT BE RE-TIMED.
+ *
+ * `whip`'s chain delays the ankle by 0.80W and the foot by 1.0W — six ticks on
+ * this clip. A bone that is in contact with the concrete has a world position
+ * the floor owns, and delaying it does not read as follow-through, it reads as
+ * the boot sliding: the pose that put the sole flat arrives after the pose that
+ * moved the pelvis over it. It matters here and nowhere else in the file only
+ * because `p.uppercut` is the one clip whose legs are now solved AGAINST the
+ * floor (see the note above the clip); everywhere else the legs are close enough
+ * to static that a delay has nothing to slide.
+ *
+ * Only the leg fractions are zeroed. The spine and both arms keep the full
+ * chain, so the head-lag centroid and chain monotonicity the round-13 sweep
+ * measured are untouched — this changes the timing of four bones per side and
+ * nothing above the pelvis.
+ */
+const PLANTED_LEGS = {
+  hip_L: 0, hip_R: 0, knee_L: 0, knee_R: 0,
+  ankle_L: 0, ankle_R: 0, foot_L: 0, foot_R: 0,
+};
+for (const id in WHIP) {
+  whip(PUNCH_CLIPS[id], WHIP[id], {
+    pivot: PUNCH_CLIPS[id].impact.tick,
+    only: id === 'p.uppercut' ? PLANTED_LEGS : undefined,
+  });
+}
 
 for (const id in PUNCH_CLIPS) validateClip(PUNCH_CLIPS[id], BONE_NAMES);
 

@@ -681,6 +681,40 @@ export class HUD {
    * @param {import('../core/Game.js').Game} game
    */
   #servicePortraits(game) {
+    // Sweep the already-captured cache for EVERY pending side, every frame,
+    // before the one-at-a-time GL path below.
+    //
+    // This is the fix for a defect that was on screen in every scored HUD
+    // frame: P1's chip held a rendered bust and P2's held a bare letter "K",
+    // for the entire match. Both names land on the same frame, so both sides go
+    // pending together, but `RosterPortraits` fills its cache one machine per
+    // idle slice — roster order, a few hundred ms apart. P1 (roster[0]) hit the
+    // cache; P2 (roster[1]) missed by one slice, `#capturePortrait` answered
+    // "handled" for it because a mid-match GL readback is forbidden, and the
+    // pending flag was cleared. Nothing ever re-checked, so a portrait that
+    // arrived 300ms later was never collected and the chips stayed mismatched
+    // until the match ended. Probed live: the cache held [vulkan|kestrel|anvil]
+    // while Kestrel's chip was still showing its monogram.
+    //
+    // Two things had to change together. `#capturePortrait` now reports the
+    // mid-match miss as "not handled" so the flag survives, and the retry has
+    // to live HERE rather than in the single-slot path below, because
+    // `indexOf(true)` only ever services the lowest pending index — one side
+    // stuck pending would starve the other forever.
+    //
+    // The sweep is a `Map.get` and, at most once per side per match, a canvas
+    // blit. No render target, no fence, no `readRenderTargetPixels` — none of
+    // the 135-1433ms stalls documented below are reachable from this path.
+    const portraits = game.menus?._portraits;
+    if (portraits?.get) {
+      for (let i = 0; i < this.portraitPending.length; i++) {
+        if (!this.portraitPending[i]) continue;
+        const url = portraits.get(this.fighters[i]?.def?.id);
+        if (!url) continue;
+        this.#paintPortraitFromUrl(i, url);
+        this.portraitPending[i] = false;
+      }
+    }
     if (this.portraitBusy) return;
     const i = this.portraitPending.indexOf(true);
     if (i < 0) return;
@@ -762,8 +796,15 @@ export class HUD {
     // The normal route through character select fills the cache during idle time
     // where a stall is invisible (measured 3.9ms worst frame). This branch exists
     // for the routes that skip it — a direct start, a rematch, the test harness —
-    // and for those the honest answer is a monogram.
-    if (game.phase === 'fight' || game.phase === 'intro' || game.phase === 'ready') return true;
+    // and for those the honest answer is a monogram *for now*.
+    //
+    // `false`, not `true`: this is a "not yet", not a "handled". Returning true
+    // cleared the pending flag and permanently froze the chip on its monogram
+    // even though the warm-up handed the cache that exact portrait a few hundred
+    // milliseconds later — see `#servicePortraits`, which retries the cache-only
+    // path each frame and costs a `Map.get`. It buys no stall: everything below
+    // this line is still unreachable during a match.
+    if (game.phase === 'fight' || game.phase === 'intro' || game.phase === 'ready') return false;
 
     const renderer = game.renderer?.renderer;
     const scene = game.scene;

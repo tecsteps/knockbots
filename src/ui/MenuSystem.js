@@ -655,7 +655,34 @@ export class MenuSystem {
     // did. Serialising costs nothing — the whole sequence is idle-paced anyway
     // — and makes the tenth deterministic.
     const step = () => {
-      if (!queue.length || this.game.phase === 'fight') return;
+      if (!queue.length) return;
+      // Mid-fight the warm-up narrows to the two machines on screen instead of
+      // abandoning the queue outright.
+      //
+      // `return` here — a permanent stop, since `_warmed` is already true and
+      // nothing restarts it — was why the HUD showed a rendered bust for P1 and
+      // a bare letter "K" for P2 in every scored frame. The queue walks the
+      // roster in index order at one machine per idle slice, and the harness
+      // (like any player who starts a match quickly) reaches `fight` after one
+      // or two slices. Traced across four runs it got as far as
+      // [vulkan] / [vulkan|kestrel] / [vulkan|kestrel|anvil] — so whether P2's
+      // chip had a picture was a coin toss decided by idle-callback scheduling,
+      // and once the fight began it could never be won.
+      //
+      // The exclusion is not free but it is far cheaper than it looks here: the
+      // machines in play have already had their palettes built by `Fighter`, so
+      // RobotBuilder's module-level material and atlas caches are hot and this
+      // is the 21-27ms repeat build, not the ~85ms cold one, once per session,
+      // against a chip that is otherwise wrong for the whole match. Everything
+      // else in the queue still waits for the front end.
+      if (this.game.phase === 'fight') {
+        const live = new Set((this.game.fighters || []).map((f) => f?.def?.id).filter(Boolean));
+        const at = queue.findIndex((d) => live.has(d.id) && !this._portraits?.has(d.id));
+        // Nothing on screen is missing a portrait: idle back off and look again
+        // rather than burning the rest of the roster during a match.
+        if (at < 0) { idle(step); return; }
+        queue.unshift(...queue.splice(at, 1));
+      }
       const def = queue.shift();
       const next = () => idle(step);
       try {

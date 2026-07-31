@@ -107,6 +107,8 @@ export class PlanarReflector {
     this._token = -1;
     this._busy = false;
     this._hidden = [];
+    /** Parallel to `_hidden`: what each object's `visible` was before the pass. */
+    this._hiddenWas = [];
     /** Reused across frames; entries are `{ lod, autoUpdate, visible: [] }`. */
     this._lodState = [];
     this._lodCount = 0;
@@ -221,7 +223,17 @@ export class PlanarReflector {
 
     const selfVisible = self ? self.visible : false;
     if (self) self.visible = false;
-    for (const o of this._hidden) o.visible = false;
+    // Save/restore rather than assign true. The old form unconditionally set
+    // `visible = true` on the way out, which quietly made every excluded object
+    // permanently visible: anything on this list could never be hidden by
+    // anyone, because the mirror ran once a frame and put it back. That cost a
+    // full round of measurement on the contact shadows, whose A/B toggled
+    // `visible` and got the identical frame both ways.
+    for (let i = 0; i < this._hidden.length; i++) {
+      const o = this._hidden[i];
+      this._hiddenWas[i] = o.visible;
+      o.visible = false;
+    }
     if (this.coarseLod) this.scene.traverse(this._collectLod);
 
     // The composer leaves autoClear off between passes; the mirror buffer must
@@ -231,7 +243,7 @@ export class PlanarReflector {
     renderer.render(this.scene, cam);
 
     this.#restoreLods();
-    for (const o of this._hidden) o.visible = true;
+    for (let i = 0; i < this._hidden.length; i++) this._hidden[i].visible = this._hiddenWas[i];
     if (self) self.visible = selfVisible;
 
     renderer.autoClear = prevAutoClear;

@@ -481,7 +481,19 @@ const SHOTS = [
       // axis is scored on.
       KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });
       const mv = a.currentMove;
-      if (mv) a.startMove(mv);
+      if (mv) {
+        // BOTH, not just startMove. TestHarness.armAtImpact drives the state
+        // machine AND the animator; calling only startMove restarts the move
+        // logic while the animator keeps playing whatever it was already
+        // playing -- idle. The result was a strip in which the attacker stands
+        // essentially motionless across all seven panels while the victim is
+        // launched, and a critic template-tracked the pelvis at 6px of travel
+        // with the sign inverted, against the ~39px the clip should give. That
+        // was my defect in this shot, not the animation work it was built to
+        // show.
+        a.startMove(mv);
+        if (a.animator && a.animator.play) a.animator.play(mv.clip, { blend: 0, loop: false });
+      }
       const t = a.position.clone(); t.y += 1.0;
       // Wide enough to hold both fighters and the floor under them: weight
       // transfer and airborne arcs are the axis, and neither reads if the

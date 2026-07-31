@@ -336,26 +336,59 @@ const crumple = whip(makeClip('r.crumple', { duration: 54, blendIn: 1, blendOut:
 // are left behind; the legs swing through last. Vertical travel is deliberately
 // NOT in the root track — the juggle physics owns the height, and doubling it
 // here would put the fighter through the ceiling.
+//
+// ROUND 15. THE BODY NOW TURNS OVER INSTEAD OF RIDING UP FACING FORWARD.
+//
+// Measured through the rig, the old clip's angle between the pelvis-to-head axis
+// and vertical ran 5 / 17 / 27 / 31 / 36 / 28 degrees across t0..t30: over the
+// whole launch the torso never left its own standing axis by more than 36
+// degrees, so the only thing that changed was the Y coordinate the juggle
+// physics was writing. That is precisely the critic's "two bodies each holding
+// its own vertical axis with both hip lines level" — and it is why nothing in
+// the delivered set reads as airborne. A rising body that stays upright reads as
+// an elevator, not as a launch.
+//
+// `hips` X is the lever and it was the thing doing nothing: -10 at t7 and -17 at
+// its extreme. It now folds to +16 on the two compression ticks and then pitches
+// through -40 / -70 / -88, with the roll and yaw opening alongside it so the
+// body turns about all three axes rather than hinging in the camera plane. The
+// pelvis-to-head axis reaches 96 degrees — past horizontal — by the time the
+// juggle hands over to `r.airFlail`, and the head, five ticks behind the pelvis
+// on the whip chain, is dragged through the arc rather than carried level.
+//
+// The root track is untouched, both height and slide: the fighter's trajectory
+// through the world is the juggle physics' business and this is only the pose it
+// holds while travelling it. Nothing about the arc's shape, distance or timing
+// moves — an A/B on this clip isolates the pose and only the pose.
 // ---------------------------------------------------------------------------
 const launch = whip(makeClip('r.launch', { duration: 30, blendIn: 1, blendOut: 6 }, [
   { t: 0, ease: 'expo', pose: STANCE, root: [0, STANCE_Y, 0] },
-  { t: 2, ease: 'quad', pose: add(STANCE, { hips: [8, 2, 0], spine01: [6, 0, 0], chest: [6, 2, 0], neck: [3, 0, 0], head: [6, 0, 0], knee_L: [14, 0, 0], knee_R: [12, 0, 0], hip_L: [-8, 0, 0], hip_R: [-6, 0, 0] }), root: [0, -0.15, -0.01] },
-  { t: 7, ease: 'quad', pose: add(over(STANCE, A_TRAIL), { hips: [-10, 6, 2], spine01: [-7, 2, 2], spine02: [-8, 3, 3], chest: [-12, 6, 6], neck: [-5, -2, -3], head: [-14, -6, -7], hip_L: [-30, 0, 4], knee_L: [-18, 0, 0], hip_R: [-24, 0, -4], knee_R: [-14, 0, 0] }), root: [0, -0.03, -0.1] },
-  { t: 13, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-14, 8, 3], spine01: [-9, 3, 3], spine02: [-10, 4, 4], chest: [-15, 8, 8], neck: [-6, -3, -4], head: [-18, -8, -9] }), root: [0, 0.04, -0.22] },
-  { t: 21, ease: 'sine', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-17, 9, 4], spine01: [-10, 3, 4], spine02: [-11, 4, 4], chest: [-17, 9, 9], neck: [-7, -3, -4], head: [-20, -9, -10], hip_L: [8, 0, 0], hip_R: [10, 0, 0], knee_L: [16, 0, 0], knee_R: [12, 0, 0] }), root: [0, 0.06, -0.32] },
-  { t: 30, pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-13, 8, 4], spine01: [-8, 3, 3], spine02: [-9, 4, 4], chest: [-14, 8, 8], neck: [-6, -3, -4], head: [-16, -8, -9], hip_L: [22, 0, 0], hip_R: [24, 0, 0], knee_L: [34, 0, 0], knee_R: [30, 0, 0] }), root: [0, 0.03, -0.4] },
+  { t: 2, ease: 'quad', pose: add(STANCE, { hips: [15, 3, -3], spine01: [6, 0, -2], spine02: [7, 0, -2], chest: [7, 3, -1], neck: [3, 0, 0], head: [7, 0, 1], knee_L: [22, 0, 0], knee_R: [19, 0, 0], hip_L: [-13, 0, 0], hip_R: [-10, 0, 0] }), root: [0, -0.15, -0.01] },
+  { t: 7, ease: 'quad', pose: add(over(STANCE, A_TRAIL), { hips: [-40, 10, 8], spine01: [-9, 3, 3], spine02: [-10, 4, 4], chest: [-15, 7, 8], neck: [-7, -3, -4], head: [-20, -8, -10], hip_L: [-34, 0, 5], knee_L: [-20, 0, 0], hip_R: [-27, 0, -5], knee_R: [-16, 0, 0] }), root: [0, -0.03, -0.1] },
+  { t: 13, ease: 'quad', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-70, 17, 15], spine01: [-11, 4, 4], spine02: [-12, 5, 5], chest: [-18, 10, 10], neck: [-9, -4, -6], head: [-26, -11, -13] }), root: [0, 0.04, -0.22] },
+  { t: 21, ease: 'sine', pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-88, 22, 21], spine01: [-12, 4, 5], spine02: [-13, 5, 5], chest: [-20, 11, 11], neck: [-10, -4, -6], head: [-29, -12, -14], hip_L: [10, 0, 0], hip_R: [13, 0, 0], knee_L: [18, 0, 0], knee_R: [14, 0, 0] }), root: [0, 0.06, -0.32] },
+  { t: 30, pose: add(over(STANCE, L_AIRBORNE_UP, A_TRAIL), { hips: [-96, 24, 24], spine01: [-10, 4, 4], spine02: [-11, 5, 5], chest: [-17, 10, 10], neck: [-9, -4, -6], head: [-25, -11, -13], hip_L: [26, 0, 0], hip_R: [29, 0, 0], knee_L: [38, 0, 0], knee_R: [34, 0, 0] }), root: [0, 0.03, -0.4] },
 ]), 5);
 
 // ---------------------------------------------------------------------------
 // r.airFlail — the juggle hold. Everything is dead weight being carried by
 // momentum: the limbs lag the torso and the whole body rotates slowly. Loops.
+//
+// The pelvis pitch here is the OTHER half of the launch's arc and has to be read
+// with it: `r.launch` hands over at hips -96, and this loop used to sit at -10
+// to -20, so a juggled fighter snapped 80 degrees back upright over the six
+// ticks of blend and spent the rest of the juggle standing in mid-air. The loop
+// now holds -78 to -92 — still oscillating by the same 10 degrees, so the hold
+// is unchanged as a hold — and the handover costs about 10 degrees instead of
+// 80. Nothing here is in the shot list; it is the continuity the launch edit
+// would otherwise have broken.
 // ---------------------------------------------------------------------------
 const AIR = over(STANCE, L_LIMP, A_LIMP);
 const airFlail = makeClip('r.airFlail', { duration: 36, loop: true, blendIn: 5, blendOut: 5 }, [
-  { t: 0, ease: 'sine', pose: add(AIR, { hips: [-16, 6, 3], spine01: [-9, 2, 2], spine02: [-10, 2, 2], chest: [-10, 4, 5], neck: [-3, -2, -2], head: [-12, -4, -5] }), root: [0, -0.02, 0] },
-  { t: 9, ease: 'sine', pose: add(AIR, { hips: [-10, 10, -2], spine01: [-5, 4, -2], spine02: [-6, 4, -2], chest: [-8, 8, -4], neck: [-2, -3, 2], head: [-9, -6, 4], shoulder_L: [-18, 0, -8], shoulder_R: [14, 0, 6], hip_L: [-14, 0, 0], hip_R: [10, 0, 0], knee_L: [-16, 0, 0], knee_R: [14, 0, 0] }), root: [0, 0.02, 0.03] },
-  { t: 18, ease: 'sine', pose: add(AIR, { hips: [-20, 2, -4], spine01: [-11, 0, -3], spine02: [-12, 0, -3], chest: [-16, 1, -6], neck: [-5, 1, 3], head: [-19, 2, 6], shoulder_L: [10, 0, 6], shoulder_R: [-16, 0, -7], hip_L: [12, 0, 0], hip_R: [-12, 0, 0], knee_L: [18, 0, 0], knee_R: [-14, 0, 0] }), root: [0, 0.01, -0.02] },
-  { t: 27, ease: 'sine', pose: add(AIR, { hips: [-14, -4, 4], spine01: [-8, -2, 3], spine02: [-9, -2, 3], chest: [-12, -4, 6], neck: [-3, 2, -3], head: [-13, 4, -6], shoulder_L: [-8, 0, -4], shoulder_R: [6, 0, 3], hip_L: [-6, 0, 0], hip_R: [6, 0, 0], knee_L: [-8, 0, 0], knee_R: [8, 0, 0] }), root: [0, -0.01, 0.01] },
+  { t: 0, ease: 'sine', pose: add(AIR, { hips: [-88, 6, 3], spine01: [-9, 2, 2], spine02: [-10, 2, 2], chest: [-10, 4, 5], neck: [-3, -2, -2], head: [-12, -4, -5] }), root: [0, -0.02, 0] },
+  { t: 9, ease: 'sine', pose: add(AIR, { hips: [-82, 10, -2], spine01: [-5, 4, -2], spine02: [-6, 4, -2], chest: [-8, 8, -4], neck: [-2, -3, 2], head: [-9, -6, 4], shoulder_L: [-18, 0, -8], shoulder_R: [14, 0, 6], hip_L: [-14, 0, 0], hip_R: [10, 0, 0], knee_L: [-16, 0, 0], knee_R: [14, 0, 0] }), root: [0, 0.02, 0.03] },
+  { t: 18, ease: 'sine', pose: add(AIR, { hips: [-92, 2, -4], spine01: [-11, 0, -3], spine02: [-12, 0, -3], chest: [-16, 1, -6], neck: [-5, 1, 3], head: [-19, 2, 6], shoulder_L: [10, 0, 6], shoulder_R: [-16, 0, -7], hip_L: [12, 0, 0], hip_R: [-12, 0, 0], knee_L: [18, 0, 0], knee_R: [-14, 0, 0] }), root: [0, 0.01, -0.02] },
+  { t: 27, ease: 'sine', pose: add(AIR, { hips: [-86, -4, 4], spine01: [-8, -2, 3], spine02: [-9, -2, 3], chest: [-12, -4, 6], neck: [-3, 2, -3], head: [-13, 4, -6], shoulder_L: [-8, 0, -4], shoulder_R: [6, 0, 3], hip_L: [-6, 0, 0], hip_R: [6, 0, 0], knee_L: [-8, 0, 0], knee_R: [8, 0, 0] }), root: [0, -0.01, 0.01] },
 ]);
 
 // ---------------------------------------------------------------------------

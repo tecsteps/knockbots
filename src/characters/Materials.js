@@ -2120,6 +2120,7 @@ uniform vec4 kbStoryB;     // bare-metal neutralisation, heat, dust, plate masks
 uniform vec4 kbSurface;    // form curvature scale, micro curvature scale, hollow, seam
 uniform vec4 kbSurfaceB;   // burnish, direct occlusion, occlusion sharpness, polish
 uniform vec4 kbLattice;    // panel lattice: strength, gap half-width, occlusion reach, panel span
+uniform vec4 kbDetail;     // machining lay: strength, fine pitch (m), coarse pitch (m), edge wear
 uniform vec3 kbSootColor;
 uniform vec3 kbOxideColor;
 uniform vec3 kbHeatColor;
@@ -2291,6 +2292,121 @@ metalnessFactor = mix( metalnessFactor, 1.0, kbBurn * 0.6 );
 float kbHol = kbHollow * kbSurface.z;
 roughnessFactor = clamp( roughnessFactor + 0.34 * kbHol, 0.06, 1.0 );
 diffuseColor.rgb *= 1.0 - 0.32 * kbHol;
+
+// ---------------------------------------------------------------------------
+// MACHINING LAY, and edge wear that correlates with the form.
+//
+// Every other surface octave on this character arrives through the plate atlas,
+// which bakes at 1024^2 over the model's authored UVs: about 2100 texels per
+// metre, or 1.1 texels per screen pixel at the canonical closeup. The finest
+// octave it can express is therefore ~2.3px wide, and everything below that is
+// simply absent — which is what "form but no grain, and it gets worse the closer
+// you look" means in numbers.
+//
+// This octave does not come from a texture at all. The pattern is analytic and
+// its coordinate is plateFrame, the plate's own face measured IN METRES, so
+// its pitch is a physical distance rather than a texel count: it has no Nyquist
+// limit of its own, and the same code delivers a 1.8mm tool mark at closeup and
+// an 11mm grinding pass at fighting range.
+//
+// Two things separate it from round 14's reverted detail normal, which was a
+// tiling hash sampled triplanar and measured worth 4.7%:
+//
+//   DIRECTION. Real metal has a lay. A tool leaves parallel marks, and the eye
+//   reads parallel marks as machining while it reads isotropic noise as dirt or
+//   as sensor grain — this is why "detail 0.6" was indistinguishable at 5x and
+//   why "detail 0.9" was salt and pepper. The pattern here is constant along the
+//   lay and only varies across it, so it perturbs the normal in ONE direction,
+//   which is also the direction the anisotropic base lobe is already stretched
+//   in (see PLATE_ANISOTROPY). The two now agree instead of describing two
+//   different surfaces. The axis is one of the plate's own face directions, off
+//   the per-plate hash, with a few degrees of skew — a plate is cut from stock in
+//   whatever orientation the nesting gave it, but never at a random angle, which
+//   reads as a scribble.
+//
+//   BAND LIMITING THAT IS EXACT. The gradient is analytic, so the amplitude can
+//   be faded on the MEASURED sampling rate of this fragment — kbAcrossPx is
+//   metres of "across" per screen pixel, straight off the derivative — and an
+//   octave whose period falls under about two pixels is gone rather than
+//   aliasing. A sampled height map cannot do this; it has one mip chain for the
+//   whole frame and it shimmered, which is what capped round 14's amplitude.
+//   The energy is not thrown away either: as an octave drops below Nyquist its
+//   amplitude is handed to roughness, which is where sub-pixel normal variance
+//   physically belongs.
+//
+// The wear half is the same pattern gated on CURVATURE. kbPolish is already
+// the "a lip gets rubbed by everything that brushes past" term; a scuff that
+// runs along the lay and only appears where the form rolls is wear that
+// correlates with the shape of the object, as against forty blotches scattered
+// by a hash.
+if ( kbDetail.x > 0.0 ) {
+	// The face the lay runs on, in metres. A part with no plate frame — a rod,
+	// a boss — falls back to object space on its dominant axis, so a turned
+	// surface still gets tool marks.
+	vec2 kbLayUv = ( vKbFrame.z > 0.0 && vKbFrame.w > 0.0 ) ? vKbFrame.xy
+		: ( kbA.x > kbA.y && kbA.x > kbA.z ? vKbObjPos.zy
+		  : ( kbA.y >= kbA.z ? vKbObjPos.xz : vKbObjPos.xy ) );
+	vec2 kbUvL = mix( kbLayUv, kbLayUv.yx, step( 0.5, vKbSeed.y ) );
+	vec2 kbDir = normalize( vec2( 1.0, ( vKbSeed.x - 0.5 ) * 0.30 ) );
+	float kbAlong = dot( kbUvL, kbDir );
+	float kbAcross = dot( kbUvL, vec2( - kbDir.y, kbDir.x ) );
+	float kbPhase = vKbSeed.x * 31.4 + vKbSeed.y * 17.7;
+
+	// The sampling rate of this octave at this fragment, measured.
+	float kbAcrossPx = max( length( vec2( dFdx( kbAcross ), dFdy( kbAcross ) ) ), 1e-7 );
+	float kbLamF = max( kbDetail.y, 1e-5 );
+	float kbLamC = max( kbDetail.z, 1e-5 );
+	// Full amplitude above ~4 pixels per period, gone below ~2.2.
+	float kbFadeF = 1.0 - smoothstep( 0.24, 0.46, kbAcrossPx / kbLamF );
+	float kbFadeC = 1.0 - smoothstep( 0.24, 0.46, kbAcrossPx / kbLamC );
+
+	// Slope across the lay, dimensionless. Written as a gradient rather than as
+	// a height because the height itself is never needed and a slope is what the
+	// surface-gradient construction below consumes.
+	float kbWF = 6.2831853 / kbLamF;
+	float kbWC = 6.2831853 / kbLamC;
+	float kbChat = 0.62 + 0.38 * sin( kbAlong * ( 2.3271 / kbLamC ) + kbPhase );
+	float kbSlope = kbFadeF * kbChat * 0.068 * (
+			sin( kbAcross * kbWF + kbPhase )
+			+ 0.5 * sin( kbAcross * kbWF * 1.87 + kbPhase * 2.3 ) )
+		+ kbFadeC * 0.039 * sin( kbAcross * kbWC + kbPhase * 0.7 );
+	// A rolled lip is polished smooth; a hollow keeps its tooling.
+	kbSlope *= kbDetail.x * ( 1.0 - 0.70 * kbPolish + 0.35 * kbHol );
+
+	// Mikkelsen's surface gradient, so no tangent frame is needed: this pattern
+	// is placed analytically and has no UVs of its own. vViewPosition is the
+	// negated view position, hence the sign on the two position derivatives.
+	vec3 kbPdx = - kbVx, kbPdy = - kbVy;
+	vec3 kbT1 = cross( kbPdy, normal );
+	vec3 kbT2 = cross( normal, kbPdx );
+	float kbDet = dot( kbPdx, kbT1 );
+	float kbDetS = abs( kbDet ) < 1e-12 ? 1e-12 : kbDet;
+	vec3 kbSg = ( kbSlope * dFdx( kbAcross ) * kbT1 + kbSlope * dFdy( kbAcross ) * kbT2 ) / kbDetS;
+	normal = normalize( normal - kbSg );
+
+	// The octave that fell under Nyquist, handed to the lobe width instead of
+	// being dropped. This is what keeps the plate from going glassy at range.
+	roughnessFactor = clamp( roughnessFactor + kbDetail.x
+		* ( 0.040 * ( 1.0 - kbFadeF ) + 0.018 * ( 1.0 - kbFadeC ) ), 0.04, 1.0 );
+
+	// Abrasion, running along the lay, only where the form rolls.
+	float kbWearAmt = kbDetail.w * kbPolish;
+	if ( kbWearAmt > 0.0 ) {
+		float kbWs = 3.9270 / kbLamC;
+		float kbStreak = 0.5 + 0.5 * sin( kbAcross * kbWs
+			+ 2.2 * sin( kbAlong * kbWs * 0.22 + kbPhase ) );
+		// The streak's own period is 1.6x the grinding pass, so it is band-limited
+		// against that and not against kbLamC, or the abrasion would disappear a
+		// factor of 2.6 earlier than the octave it rides on.
+		float kbFadeW = 1.0 - smoothstep( 0.24, 0.46, kbAcrossPx / ( 1.6 * kbLamC ) );
+		float kbScuff = smoothstep( 0.55, 0.96, kbStreak ) * kbFadeW * kbWearAmt * ( 1.0 - kbGrime * 0.6 );
+		roughnessFactor = clamp( roughnessFactor - 0.16 * kbScuff, 0.04, 1.0 );
+		metalnessFactor = mix( metalnessFactor, 1.0, kbScuff * 0.5 );
+		diffuseColor.rgb = mix( diffuseColor.rgb,
+			kbSteelColor * ( 0.30 + 1.2 * dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) ),
+			kbScuff * 0.45 );
+	}
+}
 
 // Metres per pixel at this fragment, from the same view-space footprint the
 // curvature terms measure with. Every gap below is authored in millimetres, and
@@ -2606,6 +2722,16 @@ const STORY_DEFAULTS = {
   latticeGap: 0.0045,
   latticeOcclusion: 0.026,
   latticePanel: 1.0,
+  // Machining lay. `detail` is the master strength; the two pitches are the
+  // physical wavelength of the tool marks and of the grinding pass, in metres,
+  // and they are what decides which framing the octave lands in: 1.8mm is about
+  // four screen pixels at the 1.35m closeup and correctly disappears at fighting
+  // range, 11mm is four pixels at fighting range and a broad brush at closeup.
+  // `detailWear` is the curvature-gated abrasion that rides on the same axis.
+  detail: 1,
+  detailFine: 0.0030,
+  detailCoarse: 0.011,
+  detailWear: 0.8,
 };
 
 /**
@@ -2656,6 +2782,15 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
     u.kbSurface = { value: new THREE.Vector4(s.form, s.micro, s.hollow, s.seam) };
     u.kbSurfaceB = { value: new THREE.Vector4(s.burnish, s.occlusion, s.occlusionPower, s.polish) };
     u.kbLattice = { value: new THREE.Vector4(s.lattice, s.latticeGap, s.latticeOcclusion, s.latticePanel) };
+    // `window.__KB_DETAIL` scales the machining lay across the whole roster and
+    // is read at COMPILE time, not once at module load, because the control arm
+    // of an A/B has to reach materials that do not exist yet: the roster lineup
+    // builds eight more libraries at shot time, and any clone or program
+    // recompile mints fresh uniform objects that would silently undo a
+    // traverse-and-poke ablation one frame later. Undefined means 1.
+    const abDetail = (typeof window !== 'undefined' && Number.isFinite(window.__KB_DETAIL))
+      ? window.__KB_DETAIL : 1;
+    u.kbDetail = { value: new THREE.Vector4(s.detail * abDetail, s.detailFine, s.detailCoarse, s.detailWear) };
     u.kbSootColor = { value: new THREE.Color(STORY_INK.soot) };
     u.kbOxideColor = { value: new THREE.Color(STORY_INK.oxide) };
     u.kbHeatColor = { value: new THREE.Color(STORY_INK.heat) };
@@ -2887,6 +3022,61 @@ function paletteKey(p, sizes) {
  * cannot resolve a texture fetch on this machine and should not be attempted.
  * The frame is not short of bandwidth on the character shader. It is short of
  * ideas about what to put in it.
+ *
+ * --- Round 16: the same lever again, but DIRECTIONAL, and it survives ---------
+ *
+ * Round 14's conclusion — "normal variance at one to two screen pixels reads as
+ * noise before it reads as material" — is right about ISOTROPIC variance and
+ * wrong as a general statement. What it was actually measuring is that a hash
+ * has no orientation, and the eye reads an unoriented high-frequency field as
+ * grain in the sensor rather than as a finish on the object. Real metal has a
+ * lay. Give the same energy a direction and the same amplitude stops reading as
+ * noise and starts reading as a machined surface.
+ *
+ * Shipped: the analytic machining lay in STORY_FORM_FRAGMENT. No texture, no
+ * tiling rate, no atlas — the pattern's coordinate is `plateFrame` in metres and
+ * its gradient is analytic, so each octave is band-limited on the sampling rate
+ * measured at the fragment (`kbAcrossPx`) instead of on a mip chain, and the
+ * amplitude that aliased in round 14 simply cannot.
+ *
+ * MEASURED, pose-pinned closeup, three reps a side interleaved in ONE page load,
+ * ablated through the uniform branch so both arms are the same compiled program.
+ * Head crop 400x400, mean absolute Laplacian band energy:
+ *
+ *                    1px      2px      4px    1-3px sum   micro-contrast
+ *     lay off       2.453    2.085    2.734     6.907        4.918
+ *     lay on        2.586    2.197    2.763     7.222        5.028
+ *                   +5.4%    +5.4%    +1.1%     +4.6%        +2.2%
+ *
+ * Within-arm spread over three reps: 0.35% on the 1px band. The energy lands in
+ * the fine octaves and nearly none of it in the 4px band, which is the shape the
+ * round-13 note asked for and did not get from any roughness lever.
+ *
+ * Delivered pixels, same pair: whole frame mean absolute delta 3.99/255 against
+ * a 1.65 same-arm noise floor; **11.1% of the frame moves by 8/255 or more,
+ * against 0.45% between two identical frames**. On the head crop alone, 18.9%
+ * of pixels move by 8/255 or more (0.44% noise), on the torso 14.2% (0.42%).
+ * At 5x the plate goes from an airbrushed gradient to a linished surface.
+ *
+ * FILL COST: no texture fetch, no bake, no triangle, no draw call — the term is
+ * six transcendentals and two derivative pairs behind a uniform branch. Paired
+ * alternation in 2.5s holds at a character-fill framing, seventeen blocks:
+ * off median 25.6 ms, on median 25.6 ms, paired median +0.35 ms, paired deltas
+ * -5.8 to +9.1. The box was carrying five other agents at the time (the same
+ * framing runs 13.8 ms idle), so read this as "under half a millisecond and not
+ * distinguishable from zero", not as a clean zero.
+ *
+ * WHAT THIS ROUND ALSO DISPROVED, and it matters more than the lay: **the three
+ * shots this axis is scored on cannot resolve a material change at all.** Three
+ * runs of one unchanged tree through `02-closeup-face` differ by mean absolute
+ * 46-65/255 whole-frame and by 3-6% on the same band metric, because the shot
+ * pauses the sim on a wall-clock delay and photographs whatever the idle cycle
+ * had reached; `09-roster` differs by 4.9/255 between runs for the same reason.
+ * Both are LARGER than any single-material change measured in four rounds. A
+ * control captured through the harness with this term ablated (`__KB_DETAIL=0`,
+ * three runs) overlaps the treatment completely. Round-to-round comparison of
+ * these captures is therefore mostly comparing poses, and the fix is the one
+ * `17-anim-strip` already uses: freeze on an exact tick count, not on a delay.
  */
 function resolveSizes(scale) {
   const q = (n) => Math.max(128, Math.round((n * scale) / 128) * 128);
@@ -3011,7 +3201,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
 
   const worn = new StoryPhysicalMaterial({
     name: 'kb.worn',
-    story: story({ grime: 1.25, oxide: 1.4, bare: 0.3, marking: 0.4, dust: 0.8, burnish: 0.9 }),
+    story: story({ grime: 1.25, oxide: 1.4, bare: 0.3, marking: 0.4, dust: 0.8, burnish: 0.9, detail: 1.15 }),
     color: wornSteel,
     map: wornAlbedo,
     normalMap: shared.plateNormal,
@@ -3037,7 +3227,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // exactly what polishes on an edge.
     story: story({
       plateMasks: false, fade: 0.35, marking: 0, oxide: 0.7, bare: 0, grime: 1.15, heat: 0, dust: 0.5,
-      seam: 0.45, burnish: 0.8, lattice: 0.45,
+      seam: 0.45, burnish: 0.8, lattice: 0.45, detail: 0.9, detailCoarse: 0.008,
     }),
     color: gunmetal,
     map: shared.metalMod,
@@ -3062,7 +3252,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
 
   const piston = new StoryPhysicalMaterial({
     name: 'kb.piston',
-    story: story({ ...bareSteel, grime: 0.35, dust: 0.15, seam: 0, burnish: 0.5, hollow: 0.6 }),
+    story: story({ ...bareSteel, grime: 0.35, dust: 0.15, seam: 0, burnish: 0.5, hollow: 0.6, detail: 0.55, detailWear: 0.3 }),
     color: honedSteel,
     map: shared.metalMod,
     normalMap: shared.metalNormal,
@@ -3084,7 +3274,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
 
   const chrome = new StoryPhysicalMaterial({
     name: 'kb.chrome',
-    story: story({ ...bareSteel, grime: 0.25, dust: 0.1, seam: 0.3, burnish: 0.3, hollow: 0.5, lattice: 0.3 }),
+    story: story({ ...bareSteel, grime: 0.25, dust: 0.1, seam: 0.3, burnish: 0.3, hollow: 0.5, lattice: 0.3, detail: 0.3, detailWear: 0.2 }),
     color: chromeAlloy,
     map: shared.metalMod,
     normalMap: shared.metalNormal,
@@ -3105,7 +3295,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // little soot in the cavities, which is exactly what sells the lacquer.
     story: story({
       plateMasks: false, fade: 0.25, marking: 0, oxide: 0, bare: 0, grime: 0.5, heat: 0, dust: 0.35,
-      seam: 0.5, burnish: 0.12, hollow: 0.7, lattice: 0.5,
+      seam: 0.5, burnish: 0.12, hollow: 0.7, lattice: 0.5, detail: 0,
     }),
     map: shared.carbonAlbedo,
     normalMap: shared.carbonNormal,

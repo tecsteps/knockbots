@@ -34,7 +34,7 @@ import { ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, GROUND_Y } from '../core/Constants.
 import { Rng } from '../core/Rng.js';
 import { makeArenaMaterials } from './StageMaterials.js';
 import { PlanarReflector } from './PlanarReflector.js';
-import { StageFloor } from './StageFloor.js';
+import { StageFloor, CONTACT_COUNT } from './StageFloor.js';
 import { StageWalls } from './StageWalls.js';
 import { StageStructure } from './StageStructure.js';
 import { StageVolumetrics } from './StageVolumetrics.js';
@@ -47,6 +47,33 @@ const REFLECT_SCALE = { ultra: 0.6, high: 0.5, medium: 0.36, low: 0 };
 
 const _pt = new THREE.Vector3();
 const _dir = new THREE.Vector3();
+const _foot = new THREE.Vector3();
+const _root = new THREE.Vector3();
+const _lightDir = new THREE.Vector3();
+
+/**
+ * How the fighters' contact shadows are shaped. Radii are metres at rest and
+ * open with height off the deck, the way a real penumbra does; `fade` is the
+ * height at which the mark is gone.
+ */
+const CONTACT = {
+  /** Semi-axis along the key light's ground azimuth, and across it. */
+  bodyLong: 1.94,
+  bodyShort: 1.68,
+  /** How far down-light the body pool sits from the fighter's own centre. */
+  bodyPush: 0.44,
+  bodyStrength: 0.72,
+  bodyHardness: 0.30,
+  footLong: 0.62,
+  footShort: 0.54,
+  footPush: 0.12,
+  footStrength: 1.0,
+  footHardness: 0.42,
+  /** Metres of lift that doubles a lobe's radius. */
+  spread: 1.15,
+  /** Height at which a lobe has faded out entirely. */
+  fade: 1.5,
+};
 
 export class Stage {
   /**
@@ -168,6 +195,7 @@ export class Stage {
     this.reflector.exclude([
       this.volumetrics.group,
       this.floor.decals,
+      this.floor.contacts,
       this.dust.points,
       this.walls.dents,
       ...this.mergedNoReflect,
@@ -354,6 +382,7 @@ export class Stage {
     this.practicals.update(dt, t, params);
     this.dust.update(dt);
     this.grit.update(dt);
+    this.#updateContacts();
 
     // Wall flash: decays with the barrier's own flicker envelope. Whichever
     // barrier is flickering harder owns the single light; ties cannot happen in
@@ -368,6 +397,90 @@ export class Stage {
     } else {
       this.wallLight.intensity = 0;
     }
+  }
+
+  /**
+   * Drives the floor's contact shadows off whatever fighters are in the scene.
+   *
+   * The stage is handed a scene and an environment and nothing else — that is
+   * the charter's constructor — so the anchors are resolved by name out of the
+   * scene graph rather than by taking a dependency on `Fighter`. `RenderPipeline`
+   * already treats `fighter*` as a naming contract for its split beauty pass, so
+   * this adds no new one. The lookup is cached and re-resolved only when a root
+   * disappears, which is what a character swap does.
+   *
+   * Presentation only: it runs off wall-clock `update`, writes nothing the sim
+   * reads, and is a no-op the frame a robot is still loading.
+   */
+  #updateContacts() {
+    const floor = this.floor;
+    if (!floor?.contacts) return;
+
+    if (!this._contactRoots || this._contactRoots.some((r) => !r.root.parent)) {
+      this._contactRoots = [];
+      for (const child of this.scene.children) {
+        if (!child.name?.startsWith('fighter')) continue;
+        // `foot_*` is the Skeleton.js bone name. If the rig ever renames them
+        // the body pool still lands, which is the difference between a weaker
+        // cue and a fighter floating.
+        this._contactRoots.push({
+          root: child,
+          feet: [child.getObjectByName('foot_L'), child.getObjectByName('foot_R')].filter(Boolean),
+        });
+      }
+    }
+
+    // Ground azimuth the key light throws a shadow along. `RenderPipeline`
+    // re-fits and moves this light every frame but never re-aims it, so reading
+    // it live costs two matrix reads and always agrees with the shadow map.
+    const key = this.environment?.keyLight;
+    let dx = -0.85, dz = -0.53;
+    if (key?.target) {
+      key.updateWorldMatrix(true, false);
+      key.target.updateWorldMatrix(true, false);
+      _lightDir.setFromMatrixPosition(key.target.matrixWorld)
+        .sub(_pt.setFromMatrixPosition(key.matrixWorld));
+      const len = Math.hypot(_lightDir.x, _lightDir.z);
+      if (len > 1e-4) { dx = _lightDir.x / len; dz = _lightDir.z / len; }
+    }
+    // A quad's local +X maps to ( cos yaw, -sin yaw ) after a yaw about +Y.
+    const yaw = Math.atan2(-dz, dx);
+
+    const y0 = this.floorY;
+    let slot = 0;
+    for (const entry of this._contactRoots) {
+      if (slot + 3 > CONTACT_COUNT) break;
+      entry.root.getWorldPosition(_root);
+      const rootLift = Math.max(0, _root.y - y0);
+      const bodyFade = 1 - Math.min(1, rootLift / (CONTACT.fade * 1.6));
+      const bodyGrow = Math.min(2.1, 1 + rootLift / CONTACT.spread);
+      // Pushed down-light so the pool sits between the boots and the head of
+      // the cast shadow rather than concentric with the fighter.
+      const push = CONTACT.bodyPush * bodyGrow;
+      floor.setContact(
+        slot++, _root.x + dx * push, _root.z + dz * push,
+        CONTACT.bodyLong * bodyGrow, CONTACT.bodyShort * bodyGrow, yaw,
+        CONTACT.bodyStrength * bodyFade * bodyFade,
+        CONTACT.bodyHardness,
+      );
+
+      for (let k = 0; k < 2; k++) {
+        const bone = entry.feet[k];
+        if (!bone) { floor.setContact(slot++, 0, 0, 0, 0, 0, 0, 0); continue; }
+        bone.getWorldPosition(_foot);
+        const lift = Math.max(0, _foot.y - y0 - 0.08);
+        const fade = 1 - Math.min(1, lift / CONTACT.fade);
+        const grow = Math.min(2.4, 1 + lift / CONTACT.spread);
+        floor.setContact(
+          slot++, _foot.x + dx * CONTACT.footPush, _foot.z + dz * CONTACT.footPush,
+          CONTACT.footLong * grow, CONTACT.footShort * grow, yaw,
+          CONTACT.footStrength * fade * fade,
+          CONTACT.footHardness / grow,
+        );
+      }
+    }
+    for (let i = slot; i < CONTACT_COUNT; i++) floor.setContact(i, 0, 0, 0, 0, 0, 0, 0);
+    floor.commitContacts();
   }
 
   /**

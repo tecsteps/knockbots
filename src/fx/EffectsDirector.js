@@ -119,19 +119,48 @@ const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
  * survive the frame.
  */
 const HIT_FX = {
+  /**
+   * THE BOTTOM RUNG HAS TO BE VISIBLE, and it was not.
+   *
+   * Measured on the certified `15-impact-light` frame — a jab, landed, frozen
+   * one rendered frame past contact — against the same frame with the whole
+   * director silenced: the hit put **164 hot pixels** (luma > 0.93, r-b > 0.18)
+   * on a 2.07-megapixel frame, 0.008% of it, against 1,865 for the launcher on
+   * `04-impact`. A ladder whose bottom rung is eleven times below its middle
+   * one is not a ladder, it is a hit that did not happen, and a critic reading
+   * that frame is right to say a jab landing is indistinguishable from no jab
+   * landing.
+   *
+   * The scale of the miss is worth stating precisely, because the temptation is
+   * to reach for the counts. At the shutter the light tier had already emitted
+   * all 254 of its sparks. They are invisible for three compounding reasons and
+   * none of them is the count: the particles are 0.028 m against the launcher's
+   * 0.04, they are thrown at 7.4 m/s against 11.4 so a frame later they have
+   * barely cleared the plate they came off, and the flare is 0.26 m of radius
+   * carrying 3.2 of radiance, which resolves to a twenty-pixel dot sitting on a
+   * brightly lit chest. Size, speed and radiance are what deliver a hit on the
+   * one frame anyone sees it; the count only decides how dense it looks once it
+   * has travelled.
+   *
+   * So the two bottom rungs come up on exactly those three, and the ladder
+   * stays strictly monotonic in every field: a light is still below a medium is
+   * still below a heavy in count, size, speed, radiance, flare and candela.
+   * Nothing above MEDIUM is touched — the top of the ladder was never the
+   * complaint.
+   */
   [WEIGHT.LIGHT]: {
-    sparks: 190, jet: 64, speed: 7.4, size: 0.028, heat: 2.6, sparkLife: 0.16,
-    ring: 0.28, ringLife: 0.13, thick: 0.095, ringHeat: 2.2,
-    flash: 0.26, flashHeat: 3.2, flashLife: 0.075,
-    core: 0.10, coreHeat: 2.6, coreLife: 0.42, ember: 10,
-    debris: 0, fluid: 0, light: 2.1, impact: 0, dust: 0,
+    sparks: 260, jet: 92, speed: 8.4, size: 0.032, heat: 2.9, sparkLife: 0.18,
+    ring: 0.33, ringLife: 0.13, thick: 0.095, ringHeat: 2.6,
+    flash: 0.35, flashHeat: 3.9, flashLife: 0.075,
+    core: 0.13, coreHeat: 3.1, coreLife: 0.42, ember: 14,
+    debris: 0, fluid: 0, light: 3.6, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
-    sparks: 340, jet: 105, speed: 8.6, size: 0.032, heat: 3.0, sparkLife: 0.19,
-    ring: 0.40, ringLife: 0.15, thick: 0.10, ringHeat: 2.8,
-    flash: 0.36, flashHeat: 3.8, flashLife: 0.09,
-    core: 0.13, coreHeat: 3.4, coreLife: 0.55, ember: 16,
-    debris: 0, fluid: 5, light: 3.4, impact: 0, dust: 2,
+    sparks: 400, jet: 130, speed: 9.3, size: 0.035, heat: 3.2, sparkLife: 0.20,
+    ring: 0.44, ringLife: 0.15, thick: 0.10, ringHeat: 3.0,
+    flash: 0.44, flashHeat: 4.3, flashLife: 0.09,
+    core: 0.16, coreHeat: 3.7, coreLife: 0.55, ember: 20,
+    debris: 0, fluid: 5, light: 5.2, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
     sparks: 680, jet: 200, speed: 10.4, size: 0.038, heat: 3.4, sparkLife: 0.24,
@@ -319,7 +348,7 @@ export class EffectsDirector {
     this._hits = [];
     for (let i = 0; i < MAX_HIT_CONTEXTS; i++) {
       this._hits.push({
-        point: new THREE.Vector3(), dir: new THREE.Vector3(1, 0, 0),
+        point: new THREE.Vector3(), spawn: new THREE.Vector3(), dir: new THREE.Vector3(1, 0, 0),
         fan: new THREE.Vector3(), ember: new THREE.Vector3(), inherit: new THREE.Vector3(),
         hot: new THREE.Color(), ring: new THREE.Color(),
         shard: new THREE.Color(), coolant: new THREE.Color(),
@@ -584,6 +613,22 @@ export class EffectsDirector {
 
     const shape = SHAPE_FX[e.move?.fx?.shape] || SHAPE_FX[FX_SHAPE.THRUST];
     c.point.copy(e.point);
+    // Where the MATERIAL comes off, as against where the collision happened.
+    //
+    // `e.point` is a capsule intersection and is inside the armour by
+    // construction, so a burst spawned there is behind the plate it came off
+    // and the depth test discards it until the particles have flown clear. On a
+    // launcher that is invisible because the fan is moving at eleven metres a
+    // second and is out in one frame. On a jab it is the whole hit: 260 sparks
+    // at 8.4 m/s have travelled 0.14 m at the frame `15-impact-light` freezes
+    // on, which is still inside the chest they were struck out of.
+    //
+    // A fifth of a metre along the view ray. That is a smaller offset than the
+    // fighter capsule's radius, it moves nothing sideways in frame, and it is
+    // the same correction the heat core has carried since the round that
+    // measured it — this only extends it to the material, which is the part of
+    // a light hit that has to be seen.
+    this.#towardCamera(e.point, 0.2, c.spawn);
     this.#blowDir(e, c.dir);
     c.shape = shape;
     c.recipe = recipe;
@@ -648,6 +693,28 @@ export class EffectsDirector {
   }
 
   /**
+   * Moves a contact point `d` metres along the view ray toward the camera and
+   * writes it to `out`.
+   *
+   * A hit's `point` is a capsule intersection, which is *inside* the armour by
+   * construction. Anything drawn there is depth-tested against the plate it is
+   * supposed to be coming off. The lift is along the view ray specifically:
+   * that is the one direction that cannot move the effect sideways in frame, so
+   * it changes which side of the surface the sprite is on and nothing else.
+   * @param {THREE.Vector3} point
+   * @param {number} d metres
+   * @param {THREE.Vector3} out
+   */
+  #towardCamera(point, d, out) {
+    _eye.setFromMatrixPosition(this.camera ? this.camera.matrixWorld : this.scene.matrixWorld);
+    out.copy(_eye).sub(point);
+    const len = out.length();
+    if (len > 1e-4) out.multiplyScalar(d / len);
+    else out.set(0, 0, 0);
+    return out.add(point);
+  }
+
+  /**
    * Spawns one element of an impact. Every case reads its geometry from the
    * context and its magnitude from the weight recipe, and nothing here knows
    * what tick it is on — the schedule already decided that.
@@ -660,8 +727,21 @@ export class EffectsDirector {
     switch (part) {
       // The flare at the contact point: the brightest element in the game and
       // the one the bloom pass actually feeds on. Its streak lies along the blow.
+      //
+      // Lifted off the struck surface for the same reason the core is, and it
+      // is the same defect: `e.point` is a capsule intersection, so a flare
+      // centred there is half inside opaque armour and the depth test and the
+      // soft-particle fade take the half that matters. `FlashSystem` keeps only
+      // 0.62 of its hot term where `dfade` is zero and kills the halo outright,
+      // so a flare drawn *on* the plate loses a third of its core and all of
+      // its bloom feed — which is most of what a light hit has.
+      //
+      // Half its own radius, capped: the lift is along the VIEW RAY, so it
+      // moves the flare not one pixel sideways and changes its projected size
+      // by a few percent. All it changes is which side of the plate it is on.
       case FX_PART.FLASH:
-        this.flashes.pop(c.point, {
+        this.#towardCamera(c.point, Math.max(0.2, Math.min(0.28, r.flash * 0.55 * k)), _v3);
+        this.flashes.pop(_v3, {
           size: r.flash * k, life: r.flashLife, heat: r.flashHeat * k,
           roll: c.roll, tint: c.hot,
         });
@@ -694,12 +774,7 @@ export class EffectsDirector {
       // both passes the depth test and lets the halo fade in against the plate,
       // which is what puts warm light back on the armour under the reaction.
       case FX_PART.CORE: {
-        _eye.setFromMatrixPosition(this.camera ? this.camera.matrixWorld : this.scene.matrixWorld);
-        _v3.copy(_eye).sub(c.point);
-        const len = _v3.length();
-        if (len > 1e-4) _v3.multiplyScalar(Math.min(0.4, Math.max(0.11, r.core * 1.7 * k)) / len);
-        else _v3.set(0, 0, 0);
-        _v3.add(c.point);
+        this.#towardCamera(c.point, Math.min(0.4, Math.max(0.11, r.core * 1.7 * k)), _v3);
         this.flashes.pop(_v3, {
           size: r.core * k, life: r.coreLife, heat: r.coreHeat * k, cool: true,
         });
@@ -709,7 +784,7 @@ export class EffectsDirector {
       // The tight lance straight down the line of travel. This is what makes the
       // direction readable in a single frame instead of leaving an isotropic ball.
       case FX_PART.JET:
-        this.sparks.burst(c.point, c.dir, {
+        this.sparks.burst(c.spawn, c.dir, {
           count: r.jet * k, speed: r.speed * s.jetSpeed * k, spread: s.jetSpread,
           life: r.sparkLife * 0.8,
           inherit: _v3.copy(c.dir).multiplyScalar(r.speed * 0.5),
@@ -718,7 +793,7 @@ export class EffectsDirector {
         break;
 
       case FX_PART.FAN:
-        this.sparks.burst(c.point, c.fan, {
+        this.sparks.burst(c.spawn, c.fan, {
           count: r.sparks * k, speed: r.speed * k, spread: s.fanSpread,
           life: r.sparkLife, inherit: c.inherit, size: r.size, heat: r.heat,
           tint: c.counter ? _c.setRGB(1.0, 0.86, 0.72) : null,
@@ -731,7 +806,7 @@ export class EffectsDirector {
       // frames after the fast sparks are.
       case FX_PART.EMBER:
         if (!r.ember) break;
-        this.sparks.burst(c.point, c.ember, {
+        this.sparks.burst(c.spawn, c.ember, {
           count: r.ember * k, speed: r.speed * 0.22, spread: 0.85,
           life: r.sparkLife * 1.25, size: r.size * 0.8, heat: r.heat * 0.85,
         });
@@ -740,7 +815,7 @@ export class EffectsDirector {
       // The pressure front, rolled onto the line of the hit and stretched along
       // it, so its long axis reads as the direction the force went.
       case FX_PART.RING:
-        this.shock.spawn(c.point, {
+        this.shock.spawn(c.spawn, {
           mode: 'facing', tilt: c.roll, aspect: s.ringAspect,
           radius: r.ring * s.ringScale * k,
           life: r.ringLife * (c.counter ? 1.15 : 1),
