@@ -329,13 +329,23 @@ export function clipContactFrame(clipId) {
  * Two-anchor time map that plays `move`'s clip against the move's frame counter.
  * Cached on the move: it is a property of a (clip, frame data) pair, and both
  * are static.
+ *
+ * A move may override the clip's declared contact with its own `contact` (a
+ * CLIP frame, not a move frame, so it is not touched by the archetype shift).
+ * That exists because the retime PINS the clip's contact onto the move's first
+ * active frame, which means a wrong `impact.tick` cannot be worked around by
+ * re-authoring the window: whatever tick the window starts on, the clip will be
+ * at its declared contact pose on it. `sp.risingFang` declares 14 and at clip
+ * frame 14 its fist is 1.2 m above the defender's head, so every window that
+ * clip could ever be given whiffed. See the risingFang note in `Moves.js`.
+ *
  * @param {Object} move
  * @returns {?{pivot:number, pivotAt:number, inScale:number, outScale:number}}
  */
 export function retimeFor(move) {
   if (move.retime !== undefined) return move.retime;
   const clip = CLIPS[move.clip];
-  const pivot = clipContactFrame(move.clip);
+  const pivot = move.contact > 0 ? move.contact : clipContactFrame(move.clip);
   const pivotAt = move.startup;
   // A clip with no declared contact — a stance, a reaction, a whiff — plays at
   // its authored rate. There is nothing to line up.

@@ -18,6 +18,7 @@ import { METER_MAX, MAX_HEALTH, GROUND_Y } from '../core/Constants.js';
 import { bus } from '../core/Bus.js';
 import { MOVES, findMoveByTag, getMove } from './Moves.js';
 import { STATE, retimeFor, strikeAim } from './Fighter.js';
+import { segSegDistSq } from './CombatSystem.js';
 
 /** Tag search order when a caller asks for a semantic move name. */
 const TAG_ALIASES = {
@@ -42,6 +43,9 @@ const TAG_ALIASES = {
 /** Scratch for the roster lineup's facing solve. */
 const _lq = new THREE.Quaternion();
 const _lv = new THREE.Vector3();
+/** Scratch for `traceMove`'s closest-point outputs. */
+const _tc1 = new THREE.Vector3();
+const _tc2 = new THREE.Vector3();
 
 export function makeTestHarness(game) {
   /** @type {Array<{at:number, fn:Function}>} */
@@ -546,6 +550,275 @@ export function makeTestHarness(game) {
       return {
         total: attempts, connected: landed, rate: landed / Math.max(1, attempts),
         dead, rows,
+      };
+    },
+
+    /**
+     * Per-tick trace of ONE move: the engine's own `segSegDistSq` for every
+     * hitbox/hurtbox pair, sampled INSIDE the tick loop between
+     * `Fighter.simulate` and `CombatSystem.simulate`.
+     *
+     * `probeMoves` answers "did it connect"; this answers "by how much, where,
+     * and on which tick", which is the only way to tell a capsule that is short
+     * from a capsule that is never tested. The earlier pass at this defect
+     * measured centre-to-centre minus summed radii from a `setInterval` and got
+     * a number that is wrong twice over — the engine tests SEGMENT to segment,
+     * and a sample taken off the sim clock lands wherever wall-clock left it.
+     *
+     * `gap` is metres of clearance: `sqrt(segSegDistSq) - (rHit + rHurt)`, the
+     * exact quantity `#findConnection` compares against zero. Negative is a
+     * connection.
+     *
+     * @param {{move:string, moveSet?:string, dist?:number, attacker?:number}} o
+     * @returns {{move:string, dist:number, aimDeg:number, ticks:Array<Object>}}
+     */
+    traceMove(o = {}) {
+      const [a, d] = [fighters()[o.attacker ?? 0], fighters()[1 - (o.attacker ?? 0)]];
+      const set = MOVES[o.moveSet || a.moveSetKey] || MOVES.standard;
+      const move = getMove(set, o.move) || resolveMove(a, o.move);
+      const dist = o.dist ?? 1.02;
+      const ticks = [];
+      const c1 = new THREE.Vector3();
+      const c2 = new THREE.Vector3();
+
+      // Optional in-page override of the clip-frame the retime pins onto the
+      // first active frame, so a candidate contact tick can be swept on ONE
+      // compiled program with nothing else differing between the runs. Both the
+      // retime and the aim solve are cached on the move and both derive from it,
+      // so both caches are dropped and restored with it.
+      const hadContact = 'contact' in move ? move.contact : undefined;
+      const hadRetime = move.retime;
+      const hadAim = move.aimBias;
+      if (o.contact !== undefined) {
+        move.contact = o.contact;
+        move.retime = undefined;
+        move.aimBias = undefined;
+      }
+
+      stage(a, d, dist);
+      d.health = MAX_HEALTH * 100;
+      a.health = MAX_HEALTH * 100;
+      a.animYaw = 0; a.aimYaw = 0;
+      a.animator?.play('idle.fight', { blend: 0, loop: true });
+      d.animator?.play('idle.fight', { blend: 0, loop: true });
+      for (let i = 0; i < 8; i++) { a.simulate(null); d.simulate(null); }
+      stage(a, d, dist);
+      a.animYaw = 0; a.aimYaw = 0;
+
+      let struck = null;
+      // Where every bone this move strikes with actually IS, on every tick of
+      // the move, whether or not a hitbox exists that tick. Without this a trace
+      // can only say the active window missed; with it you can see whether the
+      // limb ever passed the target at all, which is the difference between a
+      // mistimed window and a strike aimed somewhere the defender is not.
+      const swept = o.sweep === false ? null : [];
+      const off = [
+        bus.on('hit', (e) => { struck = struck || `hit@${e.move?.id}`; }),
+        bus.on('block', () => { struck = struck || 'block'; }),
+      ];
+      try {
+        a.startMove(move);
+        a.animator?.play(move.clip, { blend: 0, loop: false, retime: retimeFor(move) });
+        const sweptBones = [...new Set(move.active.flatMap((w) => w.boxes.map((b) => b.bone)))];
+        for (let t = 0; t < move.total + 4; t++) {
+          a.simulate(null);
+          d.simulate(null);
+          if (swept) {
+            const row = { t: a.moveTick, ay: +a.position.y.toFixed(3) };
+            for (const bn of sweptBones) {
+              const bone = a.boneByName[bn];
+              if (!bone) continue;
+              c1.setFromMatrixPosition(bone.matrixWorld);
+              row[bn] = [+c1.x.toFixed(3), +c1.y.toFixed(3), +c1.z.toFixed(3)];
+            }
+            row.headY = +(d.hurtboxes.find((h) => h.bone === 'head')?.p0.y ?? 0).toFixed(3);
+            // What the connection test WOULD return if the window were open on
+            // this tick. This is the measurement that tells a mistimed window
+            // from a strike that never comes near: it runs the move's own box
+            // definitions through the same capsule construction `#buildHitboxes`
+            // uses and the same `segSegDistSq` the engine compares, on every
+            // tick of the move rather than only on the authored ones.
+            let g = Infinity; let gb = null;
+            for (const w of move.active) {
+              for (const b of w.boxes) {
+                const bone = a.boneByName[b.bone];
+                if (!bone) continue;
+                c1.set(b.offset[0], b.offset[1], b.offset[2]).applyMatrix4(bone.matrixWorld);
+                if (b.length > 0) c2.set(b.offset[0], b.offset[1] - b.length, b.offset[2]).applyMatrix4(bone.matrixWorld);
+                else c2.copy(c1);
+                if (b.fwd) { c1.x += a.facing * b.fwd; c2.x += a.facing * b.fwd; }
+                for (const hu of d.hurtboxes) {
+                  const gg = Math.sqrt(segSegDistSq(c1, c2, hu.p0, hu.p1, _tc1, _tc2)) - b.radius - hu.radius;
+                  if (gg < g) { g = gg; gb = `${b.bone}->${hu.bone}`; }
+                }
+              }
+            }
+            row.wouldGap = +g.toFixed(3);
+            row.pair = gb;
+            swept.push(row);
+          }
+          if (a.hitboxes.length) {
+            let best = null;
+            for (const hb of a.hitboxes) {
+              for (const hu of d.hurtboxes) {
+                const g = Math.sqrt(segSegDistSq(hb.p0, hb.p1, hu.p0, hu.p1, c1, c2)) - hb.radius - hu.radius;
+                if (!best || g < best.gap) {
+                  best = {
+                    gap: +g.toFixed(4), bone: hb.bone, target: hu.bone || hu.region || '?',
+                    hitP0: [+hb.p0.x.toFixed(3), +hb.p0.y.toFixed(3), +hb.p0.z.toFixed(3)],
+                    hitP1: [+hb.p1.x.toFixed(3), +hb.p1.y.toFixed(3), +hb.p1.z.toFixed(3)],
+                    hurtP0: [+hu.p0.x.toFixed(3), +hu.p0.y.toFixed(3), +hu.p0.z.toFixed(3)],
+                  };
+                }
+              }
+            }
+            ticks.push({
+              t: a.moveTick, boxes: a.hitboxes.length,
+              ax: +a.position.x.toFixed(3), ay: +a.position.y.toFixed(3),
+              dx: +d.position.x.toFixed(3),
+              yaw: Math.round(a.animYaw * 180 / Math.PI),
+              air: !!a.airborne, connected: a.connected.size,
+              dstate: d.state, invuln: !!d.invulnerable,
+              ...best,
+            });
+          }
+          game.combat.simulate(game.tick + t);
+        }
+      } finally {
+        for (const fn of off) fn?.();
+        this.resetFight();
+      }
+      const result = {
+        move: `${move.id} (${move.clip})`, dist, struck, contact: o.contact,
+        startup: move.startup, active: move.active.map((w) => [w.from, w.to]),
+        retime: retimeFor(move),
+        aimDeg: Math.round(strikeAim(move) * 180 / Math.PI), ticks, swept,
+      };
+      if (o.contact !== undefined) {
+        if (hadContact === undefined) delete move.contact; else move.contact = hadContact;
+        move.retime = hadRetime;
+        move.aimBias = hadAim;
+      }
+      return result;
+    },
+
+    /**
+     * Drive synthetic `Command`s of the exact shape `Input#commandsFor` builds
+     * through the real `Fighter.simulate`, and report what the fighter did.
+     *
+     * This is the input-side companion to `probeMoves`: that one asks whether a
+     * move connects once it has started, this one asks whether a player can
+     * start it at all. The two failures look identical from the outside — the
+     * player who reported "I never hit the opponent" also could not walk
+     * backwards, and the whole `b+` command column, roundhouse and spin kick
+     * included, was unreachable while block lived on back.
+     *
+     * `walks` holds a held direction for 60 ticks and reports the displacement,
+     * the clip and the guard state. `column` presses every root move's own
+     * notation from neutral and records which move the matcher actually
+     * produced, so a shadowed input shows up as the id that came out instead.
+     *
+     * @param {{moveSet?:string, ticks?:number, attacker?:number}} o
+     */
+    probeInputs(o = {}) {
+      const a = fighters()[o.attacker ?? 0];
+      const d = fighters()[1 - (o.attacker ?? 0)];
+      const setKey = o.moveSet || a.moveSetKey;
+      const set = MOVES[setKey] || MOVES.standard;
+      const hold = o.ticks ?? 60;
+
+      /** A Command with exactly the fields `Input#commandsFor` publishes. */
+      const command = (dir, buttons = [], guard = false, motion = null) => {
+        const x = dir === 'f' || dir === 'df' || dir === 'uf' ? 1
+          : dir === 'b' || dir === 'db' || dir === 'ub' ? -1 : 0;
+        const y = dir === 'u' || dir === 'uf' || dir === 'ub' ? 1
+          : dir === 'd' || dir === 'df' || dir === 'db' ? -1 : 0;
+        const pressed = new Set(buttons);
+        return {
+          x, y, fwd: x > 0, back: x < 0, up: y > 0, down: y < 0,
+          guard, touchGuard: false,
+          held: new Set(buttons), pressed,
+          notation: '', buffer: [], motion,
+        };
+      };
+
+      const neutral = () => {
+        stage(a, d, 2.4);
+        a.animator?.play('idle.fight', { blend: 0, loop: true });
+        for (let i = 0; i < 6; i++) { a.simulate(null); d.simulate(null); }
+      };
+
+      // --- held directions ---------------------------------------------------
+      const walks = [];
+      for (const [label, cmd] of [
+        ['neutral', () => command('')],
+        ['fwd', () => command('f')],
+        ['back', () => command('b')],
+        ['guard', () => command('', [], true)],
+        ['back+guard', () => command('b', [], true)],
+        ['down+guard', () => command('d', [], true)],
+      ]) {
+        neutral();
+        const x0 = a.position.x;
+        for (let t = 0; t < hold; t++) { a.simulate(cmd()); d.simulate(null); }
+        walks.push({
+          input: label,
+          dx: +(a.position.x - x0).toFixed(3),
+          clip: a.animator?.current || null,
+          blocking: !!a.isBlocking,
+          state: a.state,
+        });
+      }
+
+      // --- the command columns ----------------------------------------------
+      // A press is one tick of the button with the direction already held, which
+      // is how a human enters it: `#pushInput` only records a buffer entry on a
+      // fresh press, and the entry carries the direction held on that tick.
+      //
+      // `moveSetKey` is overridden for the duration because `Fighter#tryMove`
+      // matches against the fighter's OWN set, not against whatever table a
+      // caller passed. Reading one set's inputs while the fighter answers from
+      // another reports every input the two sets do not share as unreachable —
+      // it produced five phantom failures per set on the first run of this, and
+      // the only set that looked healthy was the one fighter 0 actually had.
+      const wasSetKey = a.moveSetKey;
+      const column = [];
+      try {
+        a.moveSetKey = setKey;
+        for (const mv of set.__ordered) {
+          if (mv.followUp) continue;
+          const p = mv.parsed;
+          if (!p.buttons.length) continue;
+          neutral();
+          a.meter = METER_MAX;
+          // Airborne moves are entered from a jump, which is what they are for.
+          const air = !!mv.props.requireAir;
+          if (air) {
+            for (let t = 0; t < 24 && !a.airborne; t++) { a.simulate(command('u')); d.simulate(null); }
+            for (let t = 0; t < 6; t++) { a.simulate(command('')); d.simulate(null); }
+          }
+          // Hold the direction for a few ticks first so a held-direction move is
+          // entered the way a player enters it rather than as a same-frame stab.
+          for (let t = 0; t < 4; t++) { a.simulate(command(p.dir, [], false, p.motion)); d.simulate(null); }
+          a.simulate(command(p.dir, p.buttons, false, p.motion));
+          d.simulate(null);
+          for (let t = 0; t < 3 && !a.currentMove; t++) {
+            a.simulate(command(p.dir, [], false, p.motion));
+            d.simulate(null);
+          }
+          column.push({ input: mv.input, want: mv.id, got: a.currentMove?.id ?? null, air, airborne: !!a.airborne });
+        }
+      } finally {
+        a.moveSetKey = wasSetKey;
+        this.resetFight();
+      }
+
+      const missed = column.filter((c) => c.got !== c.want);
+      const backCol = column.filter((c) => c.input.startsWith('b+'));
+      return {
+        moveSet: setKey, walks,
+        column: { total: column.length, matched: column.length - missed.length, missed },
+        backColumn: backCol,
       };
     },
 

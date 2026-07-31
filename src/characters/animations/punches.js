@@ -1101,6 +1101,98 @@ export const PUNCH_CLIPS = {
   // strip and +27.5 px on a fresh one. That is the saturation the round-18 note
   // calibrated: the band's right edge at x 960 cuts the body and clips the mass
   // that would carry the centroid. Measure the hips BONE, not the band.
+  //
+  // ROUND 20. THE BODY DRIVE IS DONE AND IT REPRODUCES A THIRD TIME. THE MOVE
+  // WAS STILL NOT AN UPPERCUT.
+  //
+  // First, the standing finding this round was briefed with — "hips a net
+  // -1.7 px, chest RETREATS 11.9 px" — is measured dead, again, on a third
+  // independent rig. Driven through `17-anim-strip`'s own staging and parked
+  // camera, clock pinned, stepped a tick at a time, cross-arm noise 0.11-0.16 px:
+  //
+  //     hips, screen, +6t -> +16t     +49.5 px   (bar: >= 40)
+  //     chest, screen, same window    +21.0 px
+  //     forward-most tick, t>=16      hips 20, spine01 21, spine02 23,
+  //                                   chest 24, neck 25, head 26
+  //
+  // Both halves pass. Do not brief it as open again without re-measuring it.
+  //
+  // What was still wrong is that the STRIKE stopped at contact. Measured on the
+  // shipped round-19 clip, hand_R world height:
+  //
+  //     t13 1.196   t16 1.399   t17 1.585   t21 1.613 (peak)   t26 1.387
+  //
+  // The fist of the "Skyward Uppercut" rose 186 mm in the tick after contact and
+  // then moved 28 mm over the next four. It peaked 212 mm BELOW its own shoulder
+  // and 530 mm below the top of its own head — the guard hand (hand_L, 1.93) sat
+  // 320 mm HIGHER than the punching hand at the top of the strike. Whatever that
+  // silhouette is, it is a low hook that stops dead, and stopping dead is the
+  // deceleration defect this file already fixed once for the wind-up. The strip
+  // showed it as two near-identical panels: +16t -> +21t was the lowest
+  // pose-change-relative-to-hips of any panel pair in the sheet, 17.6 px against
+  // 34.8 for +13t -> +16t, because ticks 18-21 moved hips, chest and head by
+  // IDENTICAL per-tick amounts — the torso was a rigid body being translated by
+  // the root with zero articulation.
+  //
+  // So the arm now finishes overhead. shoulder_R and elbow_R only; nothing else
+  // in the clip is touched. hand_R world height, same rig, same session, OLD and
+  // NEW differing only in which two key arrays hang on the live clip:
+  //
+  //     tick     16      19      20      21      22      23      26
+  //     OLD    1.423   1.571   1.600   1.612   1.587   1.534   1.373
+  //     NEW    1.423   1.578   1.745   2.147   2.331   2.243   1.645
+  //     screen   0     -2.2   -37.8  -140.9  -198.3  -188.3   -71.3  px
+  //
+  // The peak is 173 mm ABOVE headTop instead of 530 mm below it, and it arrives
+  // at clip 22 — the shoulder leads (its key lands at 20.7 after `whip`), the
+  // forearm trails it (elbow key at 21.996). Contact is untouched: whole-body
+  // max bone delta over ticks 0-16 equals the A/A' noise floor to 0.01 mm.
+  //
+  // THE PIN IS WHY CONTACT SURVIVED. `whip` delays every post-pivot key of this
+  // clip by f*6*(1-(t-16)/20), which for shoulder_R put its first key after the
+  // pivot at 21.55 and for elbow_R at 22.77 — so the three frames the hitbox is
+  // swept over (clip 16.000 / 16.714 / 17.429, and 17.48 / 17.67 for riseUpper
+  // and technical's hammerFist) are governed by those keys and cannot be
+  // re-authored freely. Each track therefore gets an extra key at t 16.5 holding
+  // v16 + k*(old v19 - v16), with k the ratio of the two `snap` curves evaluated
+  // at clip 17.43 once whip has moved both keys: 0.8302 for shoulder_R (next key
+  // 21.55 -> 19.425) and 0.8395 for elbow_R (22.774 -> 20.829). The residual is
+  // sub-degree at the mid-sweep frame. Do not round those two keys, and do not
+  // move t 16.5 without re-deriving them.
+  //
+  // MEASURED THROUGH THE COMBAT SYSTEM, not asserted. All three consumers of
+  // this clip, on their real retimed paths, five spacings each, same page
+  // session, clip arrays swapped:
+  //
+  //     straight3 / heavy       hit tick 20, dmg 31.05, both sides, all five
+  //     straight3 / standard    hit tick 18, dmg 21.63, both sides, all five
+  //     straight3 / technical   hit tick 18, dmg 20.60, both sides, all five
+  //     riseUpper / standard    hit tick 17, dmg 20.60, both sides, all five
+  //     hammerFist / technical  hit tick 18, dmg 23.69, both sides, all five
+  //
+  // Worst hitbox capsule endpoint movement across every active frame of all of
+  // them: 8.3-9.6 mm, rising to 17.2 mm only at the 0.95 m spacing where the
+  // capsules already overlap and `separatePair` is doing the arithmetic. The
+  // hitbox radius is 260 mm. `check.mjs` anchors stay 0-on-the-wrong-limb, worst
+  // ratio 0.59. The stance is untouched — the two versions are identical again
+  // by clip 28, and t0/t36 were never keyed here.
+  //
+  // ONE COST, and it is on a hurtbox rather than a hitbox. hand_R's worst
+  // single-tick travel goes 269 mm (at contact) to 427 mm (at t21, in recovery).
+  // Hurtboxes are not swept the way hitboxes are, so for that one tick a
+  // counter-hit aimed exactly at the airborne fist can pass through it; the
+  // torso, head and leg hurtboxes are unaffected and are what actually catch
+  // strikes. Spreading the swing to lower that number costs the +21t panel,
+  // which is one of the seven the axis is scored on, so it ships measured.
+  //
+  // AND A NOTE FOR WHOEVER OWNS `tools/capture.mjs`: 17-anim-strip's setup calls
+  // `animator.play(mv.clip, {blend: 0, loop: false})` after `startMove`, which is
+  // exactly the assignment `TestHarness.armAtImpact` has a comment warning about
+  // — it drops the retime `Fighter#startMove` installed one line earlier.
+  // Verified by reading `animator.time` against `moveTick` through the shot's own
+  // staging: they are equal at every tick, 0:0 4:4 ... 32:32, where the retime
+  // says clip 16 should land on move tick 20 for a heavy. The strip's panels are
+  // honest CLIP ticks; they are not the move ticks a player sees.
   'p.uppercut': {
     name: 'Uppercut',
     duration: 36, blendIn: 3, blendOut: 8,
@@ -1220,19 +1312,28 @@ export const PUNCH_CLIPS = {
       // target hand path, with a continuity regulariser on the shoulder,
       // because the chain is redundant and an unregularised solve returns a
       // different Euler branch at every key.
+      // THE SKYWARD FINISH. See the ROUND 20 note above the clip. `t: 17` is not
+      // a pose, it is a PIN: it holds the value the old t16->t19 segment had
+      // already interpolated to at the last active frame, so the three frames
+      // the hitbox is swept over are unchanged and everything after them is
+      // free. Its value is v16 + 0.8589 * (old v19 - v16), where 0.8589 is the
+      // ratio of the two `snap` curves at clip 17.43 once `whip` has moved both
+      // keys (old next key 21.55, new next key 19.85). Do not round it.
       shoulder_R: [{ t: 0, r: [-22, 0, 36], ease: 'quad' }, { t: 4, r: [-14.76, 9.67, 47], ease: 'linear' },
         { t: 9, r: [8.4, -49.3, 57.33], ease: 'sine' }, { t: 12, r: [25.9, -79, 44.63], ease: 'quart' },
         { t: 13, r: [27.7, -84.3, 42.73], ease: 'linear' },
         { t: 14, r: [20.5, -77.6, 47.53], ease: 'linear' }, { t: 15, r: [4.7, -67.4, 56.03], ease: 'linear' },
-        { t: 16, r: [-51.3, -39.1, -8.5], ease: 'snap' }, { t: 19, r: [-68.3, -43.39, -24.17], ease: 'sine' },
-        { t: 22, r: [-53.2, -39, -9.8], ease: 'quad' }, { t: 26, r: [-40, -30.9, 6.1], ease: 'sine' },
+        { t: 16, r: [-51.3, -39.1, -8.5], ease: 'snap' }, { t: 16.5, r: [-65.39, -42.66, -21.49], ease: 'sine' },
+        { t: 18, r: [-107.65, 0.39, 41.38], ease: 'sine' },
+        { t: 22, r: [-77.21, -13.69, 25.5], ease: 'sine' }, { t: 26, r: [-40, -30.9, 6.1], ease: 'sine' },
         { t: 36, r: [-22, 0, 36], ease: 'linear' }],
       elbow_R: [{ t: 0, r: [-145, 0, -1], ease: 'quad' }, { t: 4, r: [-156, 0, -1], ease: 'linear' },
         { t: 9, r: [-139.48, 0, -1], ease: 'sine' }, { t: 12, r: [-115.08, 0, -1], ease: 'quart' },
         { t: 13, r: [-110.58, 0, -1], ease: 'linear' },
         { t: 14, r: [-113.88, 0, -1], ease: 'linear' }, { t: 15, r: [-111.28, 0, -1], ease: 'linear' },
-        { t: 16, r: [-89, 0, -1], ease: 'snap' }, { t: 19, r: [-81, 0, -1], ease: 'sine' },
-        { t: 22, r: [-94.2, 0, -1], ease: 'quad' }, { t: 26, r: [-106.3, 0, -1], ease: 'sine' },
+        { t: 16, r: [-89, 0, -1], ease: 'snap' }, { t: 16.5, r: [-82.3, 0, -1], ease: 'sine' },
+        { t: 19, r: [-64.55, 0, -1], ease: 'sine' },
+        { t: 22, r: [-83.34, 0, -1], ease: 'sine' }, { t: 26, r: [-106.3, 0, -1], ease: 'sine' },
         { t: 36, r: [-145, 0, -1], ease: 'linear' }],
       wrist_R: [{ t: 0, r: [-8, 0, 0], ease: 'quad' }, { t: 4, r: [-8, 7, 0], ease: 'linear' },
         { t: 9, r: [-8, 5.82, 0], ease: 'linear' }, { t: 13, r: [-8, 10, 0], ease: 'linear' },

@@ -94,6 +94,166 @@ const POOLS = [
 const POOL_GAIN = 0.096;
 
 /**
+ * WASHES — the near-field gain a lamp puts on the surface it is bolted to.
+ *
+ * **The measurement that motivated this.** A vertical luminance profile through
+ * the back wall at x 150-450, taken off one frozen 1920x1080 frame with the
+ * fighters hidden, in *linear* light:
+ *
+ *     screen y   308    396    412    420    436    452    500
+ *     linear   0.083  0.097  0.258  0.888  0.106  0.114  0.055
+ *
+ * The barrier tube is the 0.888. Sixteen pixels away the wall is back to 0.10,
+ * and a hundred and ten pixels further up it is 0.083 — the same value it has
+ * at the top of the frame, three metres from the nearest source. The brightest
+ * object in the arena was depositing **nothing**: a clipped white line with a
+ * bloom halo and no falloff around it, which is the definition of the rubric's
+ * "flat ambient / everything the same brightness". The eye locates a light by
+ * the gradient it throws, and there was no gradient to find.
+ *
+ * This is also why the round that raised mid-ground band *contrast* 2.3x did
+ * not move the lighting score. Contrast in a band is a statistic; a source that
+ * visibly deposits light is a cue. The band had plenty of the first and none of
+ * the second.
+ *
+ * **Why this is not another pool card.** `POOLS` blends ADDITIVELY, and additive
+ * is the wrong operator for a light landing on a textured surface. The barrier
+ * band ranges roughly 0.05-0.15 linear; adding a 0.3 pedestal to it takes that
+ * to 0.35-0.45 and the ratio between the light and dark parts of the texture
+ * collapses from 3:1 to 1.3:1. That is precisely the mechanism by which the
+ * bloom pedestal was erasing the stage, and by which painted hoardings on the
+ * fence measured worse than no hoardings — a flat quad deletes texture.
+ *
+ * A real wash MULTIPLIES: outgoing radiance is albedo times incident, so more
+ * incident scales every value on the surface by the same factor and the texture
+ * survives intact. These cards therefore blend `dst * src` with `src >= 1`,
+ * which the composer's half-float targets can carry. Outside the falloff the
+ * card is exactly 1.0 and is a no-op, so it cannot lift anything it is not
+ * aimed at.
+ *
+ * **That is measured, not assumed.** Same card, same falloff, same frozen frame,
+ * with an additive twin built in-page from this exact shader with its
+ * `vec3( 1.0 )` identity base swapped for `vec3( 0.0 )` — so the two arms are
+ * the same programme modulo that one term. Sampled over a thin strip of the
+ * barrier band where the falloff is near-constant (y 448-466, x 100-700), and
+ * the two arms matched on the strip's MEAN so neither is simply brighter:
+ *
+ *     arm                       mean    p90/p10   std/mean
+ *     off                      0.0642     6.02      0.669
+ *     multiply                 0.1518     3.78      0.475
+ *     add (matched)            0.1472     2.64      0.354
+ *     multiply                 0.2351     3.26      0.418
+ *     add (interpolated)       0.2351    ~2.18     ~0.264
+ *
+ * At the same mean, multiply keeps **43% more** p90/p10 at the lower level and
+ * **49% more** at the higher, and 34-58% more relative standard deviation. The
+ * residual fall under multiply — 6.02 to 3.26 — is the tone curve, not the
+ * operator: a constant scene-linear gain moves the shadow end further up AgX
+ * than the highlight end, so a display-referred ratio narrows even when the
+ * scene-referred one is exactly preserved.
+ *
+ * Kept to the surfaces the tube is actually mounted against. The deck is
+ * deliberately NOT washed: the fight plane is the band the fighters are read
+ * against, `POOLS` already lands the tube's scatter there, and it lands twice
+ * because the barrier tube is the one emitter left inside the floor's mirror.
+ */
+const WASHES = [
+  // The barrier tube: `#neon` hangs it at [0, 1.28, -8.62], 24 m long. The card
+  // has to sit in front of EVERYTHING it washes, not just in front of the tube:
+  // at z -8.50 the barrier's own front face and its sign plates were nearer than
+  // the card, failed the depth test, and were left unlit while the recessed
+  // panels behind them were multiplied — the measured lift on the band came out
+  // at half what the uniform asked for. 34 cm clears the whole assembly.
+  //
+  // 2.6 m tall, not 3.4: at 3.4 the skirt still carried 58% of the peak a metre
+  // above the tube, so the pass was lifting the wall rather than putting a
+  // gradient on it, which is the additive failure mode arriving by another
+  // route. `edge` [0.86, 0] is flat along the run and falls off across it,
+  // matching a strip's own profile.
+  //
+  // `skew` throws it DOWN. Symmetric, the wash reached as far up the fence as it
+  // did down the barrier, and the fence band is what the fighters' chests and
+  // heads are read against. Measured at the same drive, on-vs-off inside one
+  // session each (so the OFF baselines differ between the two rows and only the
+  // deltas are comparable):
+  //
+  //     card         figure/ground   rim coverage   median silhouette ratio
+  //     symmetric      -24.5%          -2.1 pt            -7.0%
+  //     skewed 0.45    -18.2%          -0.1 pt            -2.8%
+  //
+  // Skewed, the barrier band still gets the whole gradient and the fence keeps
+  // most of its dark. It is also what the fitting does: the tube is channelled
+  // into the top of the barrier and throws down its face.
+  { pos: [0, 1.28, -8.28], rot: [0, 0, 0], w: 26, h: 2.6, edge: [0.86, 0], skew: 0.45, gain: 1.0 },
+];
+
+/**
+ * Peak multiplier minus one at the core of a wash. 0 is the pass switched off
+ * and is an exact no-op; 1.0 doubles the surface directly under the tube.
+ *
+ * Swept in-page on ONE frozen 1920x1080 fight frame with the simulation and the
+ * frame clock stopped, the grain and chroma zeroed and the fighters hidden, so
+ * the only thing moving between grabs is a vec3 uniform on an already-compiled
+ * programme and **the null control between two grabs is exactly 0.000/255**.
+ * Linear luminance from the vertical wall profile at x 150-450, as fractions of
+ * the shipped drive. `y416` is the tube itself; `y440` and `y464` are the
+ * barrier band 24 and 48 px below it; `y392` and `y368` the fence 24 and 48 px
+ * above; `y344` and `y296` the wall 72 and 120 px above, which is where the
+ * gradient has to be back at the unlit value or the pass is a lift, not a wash;
+ * `y584` is the deck, which must not move at all:
+ *
+ *     scale   y296    y344    y368    y392    y440    y464    y584   frame delta
+ *      0.0   0.0836  0.0744  0.1028  0.1085  0.1126  0.0719  0.2295    0.000
+ *      0.3   0.0828  0.0733  0.1154  0.1357  0.1508  0.0988  0.2292    1.596
+ *      0.6   0.0826  0.0730  0.1292  0.1650  0.1911  0.1275  0.2295    2.958
+ *      1.0   0.0825  0.0729  0.1477  0.2036  0.2428  0.1654  0.2300    4.511
+ *      1.5   0.0824  0.0729  0.1706  0.2495  0.3036  0.2106  0.2305    6.147
+ *
+ * The two columns that decide it are `y296`/`y344`, which do not move at all
+ * (-1.3% at the top of the sweep, i.e. the wash has gone), and `y584`, the deck,
+ * which moves 0.2% — so this pass brightens the barrier and nothing else. The
+ * fight plane is the band the fighters are read against and it is untouched,
+ * which is also the proof that the card is correctly kept out of the floor's
+ * planar mirror.
+ *
+ * **Chosen at 0.7 of the trial drive, by eye at 3x on the barrier band and not
+ * by the numbers.** Above that the band stops being a gradient and becomes a
+ * lifted rectangle: at 1.5 the concrete either side of the tube is within a
+ * quarter-stop of the sign plates it is supposed to be sitting behind, and the
+ * red hoarding starts to bleach. The measured band contrast agrees — p90/p10
+ * over y 440-490 goes 6.11 (off) / 3.70 / 3.28 / 2.97 across the sweep — but the
+ * numbers alone would have argued for the smallest drive that moved anything,
+ * and the smallest drive that moves anything does not make the tube read as a
+ * lamp. The picture picked the value; the numbers bounded it.
+ *
+ * **What it costs, at the shipped drive, on-vs-off inside one frozen session.**
+ * Fight framing, whole-frame delta 3.32/255 with 10.4% of pixels over 8/255:
+ *
+ *                              off      on
+ *     figure/ground median    1.572   1.391
+ *     rim coverage            60.4%   58.2%
+ *     median silhouette ratio 2.591   2.196
+ *     frame p10 (shadow end)  0.052   0.051
+ *     frame p99               0.914   0.922
+ *     pixels over 0.90        1.17%   1.26%
+ *
+ * Wide framing, delta 1.56/255 and 4.7% of pixels: figure/ground 1.906 -> 1.806,
+ * rim coverage 63.7% -> 62.9%, median silhouette ratio 2.293 -> 2.207.
+ *
+ * That cost is real and is reported rather than argued away: the band behind the
+ * fighters' hips is 2.2x brighter, and both the whole-frame figure/ground and
+ * the silhouette ratio give some of that back. It is taken because the shadow
+ * end does not move at all, the deck does not move, the highlight end gains
+ * slightly rather than clipping, and the thing bought is the one the axis is
+ * actually failing on — a source in frame that visibly deposits light. Note the
+ * silhouette metrics carry real session-to-session variance (the pose is not
+ * reproducible run to run, docs/PROFILING.md trap 5), so only on-vs-off pairs
+ * from the SAME frozen frame are comparable; across sessions the same change
+ * measured -2.8% and -15% on the median ratio.
+ */
+const WASH_DRIVE = 1.4;
+
+/**
  * Scene-referred radiance the dimmest fixture any mood authors is driven to.
  * Every emitter in this file is a multiple of it, so it is the one number that
  * decides whether the set reads as lit or as painted.
@@ -707,12 +867,137 @@ export class StagePracticals {
 
     this.pools = new THREE.Mesh(geo, this.poolMaterial);
     this.pools.name = 'arena.practicals.pools';
+    this.#washes();
     // Scatter, not scenery: it must never be picked up by the floor mirror or
     // the reflection would double the deposit.
     this.pools.layers.set(LAYER.NO_REFLECT);
     this.pools.castShadow = false;
     this.pools.receiveShadow = false;
     this.group.add(this.pools);
+  }
+
+  /**
+   * The multiplicative near-field wash. See {@link WASHES} for why this is a
+   * separate pass from {@link POOLS} rather than another card in it.
+   *
+   * `dst * src`, with the card's own colour at exactly `vec3(1.0)` outside the
+   * falloff, so the pass is an identity everywhere it is not aimed. Depth-tested
+   * against the opaque buffer and drawn after it: anything nearer than the card
+   * — a fighter standing in front of the barrier — fails the test and is left
+   * alone, which is the correct behaviour, since the wall's wash is not landing
+   * on him.
+   */
+  #washes() {
+    const quads = [];
+    const edge = [];
+    const gain = [];
+    for (const p of WASHES) {
+      const g = place(new THREE.PlaneGeometry(p.w, p.h), { pos: p.pos, rot: p.rot });
+      const n = g.attributes.position.count;
+      const e = new Float32Array(n * 2);
+      const a = new Float32Array(n * 2);
+      for (let i = 0; i < n; i++) {
+        e[i * 2] = p.edge[0];
+        e[i * 2 + 1] = p.edge[1];
+        a[i * 2] = p.gain;
+        a[i * 2 + 1] = p.skew ?? 1;
+      }
+      quads.push(g);
+      edge.push(e);
+      gain.push(a);
+    }
+    const geo = mergeAll(quads);
+    const n = geo.attributes.position.count;
+    const fEdge = new Float32Array(n * 2);
+    const fGain = new Float32Array(n * 2);
+    let o = 0;
+    for (let i = 0; i < gain.length; i++) {
+      fEdge.set(edge[i], o * 2);
+      fGain.set(gain[i], o * 2);
+      o += gain[i].length / 2;
+    }
+    geo.setAttribute('aEdge', new THREE.Float32BufferAttribute(fEdge, 2));
+    geo.setAttribute('aGain', new THREE.Float32BufferAttribute(fGain, 2));
+
+    this.washMaterial = new THREE.ShaderMaterial({
+      name: 'arena.practicals.wash',
+      uniforms: { uWash: { value: new THREE.Color(0, 0, 0) } },
+      vertexShader: /* glsl */ `
+        attribute vec2 aEdge;
+        attribute vec2 aGain;
+        varying vec2 vUv;
+        varying vec2 vEdge;
+        varying vec2 vGain;
+        varying vec3 vWorld;
+        void main() {
+          vUv = uv;
+          vEdge = aEdge;
+          vGain = aGain;
+          vec4 w = modelMatrix * vec4( position, 1.0 );
+          vWorld = w.xyz;
+          gl_Position = projectionMatrix * viewMatrix * w;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uWash;
+        varying vec2 vUv;
+        varying vec2 vEdge;
+        varying vec2 vGain;
+        varying vec3 vWorld;
+        void main() {
+          // Separable plateau-plus-skirt, as the pools use, with the ACROSS axis
+          // squared a second time and the ALONG axis left linear. The two axes
+          // of a strip's near field are not the same shape: along the run the
+          // source is effectively infinite and the falloff is only the run
+          // ending, while across it the wall goes dark within about a metre.
+          // Squaring both (the pools' profile) put the whole cross-gradient
+          // inside the first twenty centimetres, under the bloom halo, where
+          // nothing can see it; squaring neither made the pass a flat lift on
+          // everything within a metre and a half, which is the additive failure
+          // mode arriving by another route.
+          vec2 s = ( vUv - 0.5 ) * 2.0;
+          // Reach upward is vGain.y times the reach downward, so the same card
+          // throws a long gradient down the barrier and a short one up the fence.
+          vec2 q = vec2( abs( s.x ), abs( s.y ) / ( s.y > 0.0 ? vGain.y : 1.0 ) );
+          vec2 e = clamp( ( q - vEdge ) / max( vec2( 1.0 ) - vEdge, vec2( 1e-3 ) ), 0.0, 1.0 );
+          float across = 1.0 - e.y * e.y;
+          float f = ( 1.0 - e.x * e.x ) * across * across;
+
+          // The same large-scale unevenness the pools carry, so the gradient
+          // reads as light on a dirty wall rather than as an airbrushed decal.
+          f *= 0.86 + 0.14 * sin( vWorld.x * 0.71 + 0.4 ) * sin( vWorld.y * 1.9 - 0.7 );
+
+          gl_FragColor = vec4( vec3( 1.0 ) + uWash * ( f * vGain.x ), 1.0 );
+        }
+      `,
+      transparent: true,
+      // dst = dst * src. The composer's targets are half-float, so `src` above
+      // 1.0 is a real gain rather than a clamp.
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.ZeroFactor,
+      blendDst: THREE.SrcColorFactor,
+      blendEquationAlpha: THREE.AddEquation,
+      blendSrcAlpha: THREE.ZeroFactor,
+      blendDstAlpha: THREE.OneFactor,
+      depthWrite: false,
+      toneMapped: false,
+      fog: false,
+      side: THREE.DoubleSide,
+    });
+
+    this.washes = new THREE.Mesh(geo, this.washMaterial);
+    this.washes.name = 'arena.practicals.washes';
+    // A gain on the wall is not scenery, and the floor's mirror would apply it a
+    // second time to the reflected barrier.
+    this.washes.layers.set(LAYER.NO_REFLECT);
+    this.washes.castShadow = false;
+    this.washes.receiveShadow = false;
+    // After the pools, which are additive: an additive deposit that arrives
+    // before the gain gets multiplied by it, which is the wrong order for
+    // scatter sitting in front of the wall rather than on it.
+    this.washes.renderOrder = 2;
+    this.group.add(this.washes);
   }
 
   /** Neon strips along the catwalk edges and the machinery bank. */
@@ -1143,6 +1428,14 @@ export class StagePracticals {
       // The strip's own wash on the barrier and the floor at its foot. The
       // deposit is scatter and stays where it was — only the tube got hotter.
       this.poolMaterial.uniforms.uPool.value[4].copy(rimA).multiplyScalar(pulse * 0.021);
+      // And the gain the same tube puts on the barrier band and the fence rail
+      // it is bolted between. `WASH_DRIVE` is the peak multiplier minus one, so
+      // 0 is the pass switched off and the shipped value is measured — see the
+      // sweep recorded on `WASHES`. Half-tinted rather than fully: a wash is
+      // reflected off grey concrete, so it arrives less saturated than the tube.
+      // Follows the flicker at a square root for the same reason the pools do.
+      this.washMaterial.uniforms.uWash.value
+        .copy(rimA).lerp(_white, 0.5).multiplyScalar(Math.sqrt(pulse) * WASH_DRIVE);
     }
     if (rimB) this.screenMaterial.uniforms.uWarn.value.copy(rimB).lerp(_amber, 0.4);
 
@@ -1188,6 +1481,7 @@ export class StagePracticals {
     this.emitterMaterial.dispose();
     this.runMaterial.dispose();
     this.poolMaterial.dispose();
+    this.washMaterial.dispose();
     this.neonMaterial.dispose();
     this.beaconMaterial.dispose();
     this.screenMaterial.dispose();

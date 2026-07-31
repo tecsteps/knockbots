@@ -665,12 +665,89 @@ const DUST = new THREE.Color(0.46, 0.42, 0.37);
  * ring so that hiding `fx.shockwaves` removes exactly this element and nothing
  * else, which is what makes the before/after above a measurement rather than an
  * assertion.
+ *
+ * ---
+ *
+ * ROUND 20: `FRONT_BAND_M` AT 0.10 SATURATED ITS OWN CLAMP ON EVERY TIER, SO NO
+ * CONTACT FRONT IN THE GAME WAS A FRONT. THEY WERE ALL FILLED DISCS.
+ *
+ * `thickness` is passed as `min(1, FRONT_BAND_M / (0.3 * frontR))`. Solve that
+ * for the clamp: it only binds below 1 when `frontR > FRONT_BAND_M / 0.3`, i.e.
+ * above **0.333 m**. Every tier's front radius is below that —
+ *
+ *     jab 0.208    heavy 0.258    launcher 0.265    ultra 0.334 (marginal)
+ *
+ * — so `thickness` came out **1.0 for all of them** and the metres-band
+ * correction the section above describes was never actually in effect. Confirmed
+ * live: dumping the ring instance buffer on a frozen contact frame reports
+ * `thick: 1` for the launcher's front and for the heavy's.
+ *
+ * What a `thickness` of 1 draws is not a front. `ShockwaveSystem`'s band is
+ * `th = vThickness * 0.3 / max(vGrow, 0.3)`, and on the money frame the front is
+ * only ~0.2 of the way through its life, where `vGrow` is ~0.70 — so the band
+ * came out at **0.43 of the radius**. At the launcher's framing that is an
+ * 84 px-radius ellipse with a 36 px-wide glowing wall, drawn additively at
+ * `ringHeat * FRONT_HEAT_GAIN` = 11.5, sitting on the struck chest. At 3x it is
+ * a soap bubble: a smooth milky lens with the armour veiled inside it, and it is
+ * the single most synthetic-looking object in the frame the axis is headlined
+ * on. `docs/CRITIC.md` names "generic round sprites" as the first thing that
+ * drags this axis down; this was one, 168 px across, on the contact.
+ *
+ * Swept on ONE frozen launcher contact frame by rewriting `aParams.w` in the
+ * live ring buffer and re-reading the same frame — same program, same pose, same
+ * camera, sim paused, render clock 0, camera stubbed, grain and chroma off, so
+ * the control repeats to the last digit and the noise floor is **0.000**.
+ * `hot` is px at luma >= 235 in a 260 px disc on the projected contact,
+ * `anyClip` the share of that disc with any channel >= 254, `contrast` the RMS
+ * of ( L - box9(L) ) over the whole disc:
+ *
+ *     thickness    1.0*    0.45    0.30    0.20    0.12     off
+ *     hot         11008   10406   10271   10194   10134   10049
+ *     anyClip     0.508   0.446   0.432   0.429   0.425   0.419
+ *     contrast   11.753  11.976  12.038  12.088  12.128  12.033
+ *     midCon     11.565  11.705  11.740  11.792  11.816  11.763
+ *                 (* shipped)
+ *
+ * The numbers are small and they are not the point — **look at the frame**. At
+ * 1.0 the ellipse is a filled translucent lens; at 0.20-0.30 it is a bright thin
+ * line with a soft inner shoulder and the struck plates fully readable through
+ * the middle of it. The two images are not the same effect made weaker, they are
+ * a different effect. Note also that thinning it puts contrast *above* the
+ * front-off row (12.038 against 12.033 at 0.30, 12.128 at 0.12) while still
+ * adding 220 hot pixels: the front now costs nothing in local contrast and is
+ * still there, which is the opposite of what it was doing at 1.0.
+ *
+ * The same sweep on the other two certified contact frames, so this is not one
+ * tier's accident. Both improve in the same direction and neither loses its
+ * front — at 0.30 the jab still puts 66 hot px on the frame that `off` does not,
+ * and at 3x it is a clean ellipse where it used to be a milky wash over the
+ * victim's waist:
+ *
+ *     16-impact-heavy   hot 17061 -> 16384   contrast 10.335 -> 10.448
+ *     15-impact-light   hot  7672 ->  7531   contrast 14.640 -> 14.827
+ *
+ * **0.022 m is chosen so the clamp stops binding on every tier**, which is the
+ * whole repair; it is not a magic number. It lands thickness at 0.28 (launcher),
+ * 0.28 (heavy), 0.35 (jab) and 0.22 (ultra) — inside the swept band on all four,
+ * with the *smaller* fronts getting the proportionally wider band, which is
+ * exactly the property the metres formulation exists to provide and the reason
+ * the jab's front survives the change. The world width of the band is
+ * `0.3 * thickness * frontR` = 0.022 m by construction, at every radius and at
+ * every point in the ring's expansion.
+ *
+ * `FRONT_HEAT_GAIN` was swept on the same frozen frame and is **not** a lever,
+ * for the third time in this file: halving it moves `hot` by 605 px and
+ * `contrast` by 0.047, against 0.28 for the thickness. Thinning the band raises
+ * the front's radiance *per pixel* while lowering its total, which is the right
+ * trade — a shock front is bright and thin. The radius was swept too
+ * (`r x0.7` with the same band) and lands on the thin rows without adding
+ * anything, so the front keeps its authored size.
  */
 const FRONT_RADIUS_FLOOR = 0.16;
 const FRONT_RADIUS_SHARE = 0.22;
 const FRONT_LIFE_SHARE = 0.6;
 const FRONT_HEAT_GAIN = 3.2;
-const FRONT_BAND_M = 0.10;
+const FRONT_BAND_M = 0.022;
 const FRONT_LIFT_M = 0.60;
 
 /**

@@ -597,9 +597,45 @@ function coreMoves(mv, cfg) {
     knockback: [5.0, 0.8, 0], blockPush: [4.4, 0, 0], meterGain: 12,
     props: { homing: true },
   });
+  // `contact: 9` is the whole fix for the one move that whiffed 4/4 at every
+  // range after the strike-aim fix landed, and it is not a tuning number.
+  //
+  // `sp.risingFang` declares `impact: { tick: 14 }`. `retimeFor` PINS the clip's
+  // declared contact onto the move's first active frame, so whatever tick the
+  // window is authored on, the clip is in its frame-14 pose on it — and at clip
+  // frame 14 this dragon punch has already left the ground and locked the arm
+  // out overhead. Driven through the real sim and measured with the engine's own
+  // `segSegDistSq`, at every one of the five active frames:
+  //
+  //     move tick   12      13      14      15      16
+  //     clearance  +0.524  +0.778  +0.867  +0.913  +0.937   metres
+  //     fist y      2.34    2.73    2.89    2.98    3.03     (head hurtbox 1.68)
+  //
+  // The fist is a metre and a quarter above the target and receding. That is why
+  // cutting the forward lead did nothing and why no window could have fixed it:
+  // the window was never the free variable. Sweeping the pinned clip frame
+  // instead, at 0.9 / 1.02 / 1.2 m, worst clearance on the first active frame:
+  //
+  //     pinned clip frame   14 (clip)    8       9       10      11
+  //     connections /4         0         3       3       3        3
+  //     clearance @1.02 m   +0.524   -0.269  -0.270  -0.187  -0.162
+  //     clearance @1.2  m   +0.563   -0.158  -0.167  -0.123  -0.037
+  //     fist y at contact     2.34     1.68    1.73    1.93    2.04
+  //     strike-aim solve      -55      -15     -16     -23     -28  deg
+  //
+  // 9 is the pick: the deepest clearance at the outer range, connecting on four
+  // of the five active frames rather than one, and the fist 5 cm above a 1.68 m
+  // head — an uppercut landing through the jaw. It also drops the aim solve from
+  // -55 degrees, which is `AIM_LIMIT` clamping because the solve was reading a
+  // near-vertical arm where the horizontal bearing is degenerate, to -16.
+  //
+  // 1.5 m is still a whiff by 7 cm and is left alone: this is a 12-frame reversal
+  // launcher with no authored travel, and its short range is the cost of its
+  // i1-i11 invulnerability. Closing it is a balance change, not a defect fix.
   mv({
     id: 'risingFang', name: 'Rising Fang', input: 'dp+1', clip: 'sp.risingFang', tag: 'reversalLauncher',
     active: [W(12, 16, [B('hand_L', 0.28, [0, -0.12, 0]), B('elbow_L', 0.22, [0, 0, 0])])], total: 56,
+    contact: 9,
     height: HEIGHT.MID, weight: WEIGHT.LAUNCHER, damage: 23,
     adv: { block: -21, hit: 22 }, reaction: REACTION.LAUNCH, juggleHeight: 7.2,
     knockback: [1.2, 0, 0], blockPush: [1.4, 0, 0], meterGain: 12, trail: 'hand_R',
