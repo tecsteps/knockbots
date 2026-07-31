@@ -3240,7 +3240,12 @@ const KBG_CSS = `
   position: absolute; inset: 0;
   z-index: 39;
   pointer-events: none;
-  font-size: clamp(11px, 1.05vw, 21px);
+  /* Sized off vw, this collapsed to unreadable on a laptop. A player sent a
+     2.41:1 window where 1.05vw resolved to about 10px and the frame-data
+     readout -- the entire point of training mode -- could not be read at all.
+     Raising the floor to 15px is what makes it legible; the vw term still lets
+     it grow on a large display. */
+  font-size: clamp(15px, 1.05vw, 21px);
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.2s ease;
@@ -3298,11 +3303,16 @@ const KBG_CSS = `
    15em down clears \`.combo--p0\`, which is \`top: 8.6em\` and about four em tall
    at its largest tier; a juggle counter fired straight into the frame readout
    would be the same mistake one layer down. */
+/* Anchored to the BOTTOM-left, not the middle-left.
+   At 15em down from the top this sat exactly where the near fighter stands and
+   covered him -- reported by a player, with a screenshot of Vulkan behind the
+   card. The deck below the fighters is the only large region of a fight frame
+   that is reliably empty, so the readout lives there and grows upward. */
 .kbg-panel {
   position: absolute;
   left: calc(1.1em + var(--kb-sa-l));
-  top: calc(15em + var(--kb-sa-t));
-  width: 14.5em;
+  bottom: calc(3.2em + var(--kb-sa-b));
+  width: 15.5em;
   display: flex; flex-direction: column; gap: 0.5em;
 }
 .kbg-card {
@@ -3402,7 +3412,7 @@ const KBG_CSS = `
    is right for a desktop where the root is 20px and wrong at the floor, so on
    a handset the small type stops scaling and holds a legible size instead. */
 @media (max-height: 560px) {
-  .kbg-panel { top: calc(14em + var(--kb-sa-t)); width: 150px; }
+  .kbg-panel { bottom: calc(2.6em + var(--kb-sa-b)); width: 168px; }
   .kbg-banner b { font-size: 11px; letter-spacing: 0.26em; padding: 0.3em 0.5em 0.24em 0.8em; }
   /* The chip alone carries the message at this size; the caption would be 5px. */
   .kbg-banner span { display: none; }

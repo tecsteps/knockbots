@@ -996,7 +996,46 @@ export class FightCamera {
   #silhouetteTop(fighter) {
     const scale = fighter?.def?.proportions?.height ?? 1;
     const base = fighter?.position ? fighter.position.y : this.floorY;
-    return base + FIGHTER_HEIGHT * scale + 0.08;
+    const nominal = base + FIGHTER_HEIGHT * scale + 0.08;
+    return Math.max(nominal, base + this.#chassisHeight(fighter));
+  }
+
+  /**
+   * Real height of a fighter's built mesh above its feet, cached per character.
+   *
+   * The nominal standing height above is a rig constant scaled by the
+   * character's proportions, and it does NOT include what the chassis actually
+   * carries -- Vulkan's shoulder pack and stack sit well above it. That
+   * underestimate was invisible at 16:9 and cut his head off on a laptop.
+   *
+   * The reason is worth stating, because it is not obvious: `fov` here is the
+   * VERTICAL angle, so a wider viewport buys horizontal room and none at all
+   * vertically. In #fitDistance the required distance is the max of a
+   * horizontal term (which divides by hTan, and hTan grows with aspect) and a
+   * vertical term (which does not). At 16:9 the horizontal term dominates and
+   * pushes the camera far enough out that a wrong height still fits; past about
+   * 2:1 the horizontal term collapses, the vertical term binds, and the camera
+   * comes in until the underestimate is exactly what you see. A player on a
+   * 2.41:1 laptop screen reported the head cut off.
+   *
+   * Measured once per character from the built group, then cached: it is a
+   * bounding box over a full robot and far too expensive to do per frame, and
+   * it does not change unless the character does.
+   */
+  #chassisHeight(fighter) {
+    const g = fighter?.robot?.group;
+    const id = fighter?.def?.id;
+    if (!g || !id) return 0;
+    this._chassisH ??= new Map();
+    const hit = this._chassisH.get(id);
+    if (hit !== undefined) return hit;
+    const box = new THREE.Box3().setFromObject(g);
+    // Empty box guards against a call before the mesh is built.
+    const h = Number.isFinite(box.max.y) && box.max.y > box.min.y
+      ? (box.max.y - box.min.y) + 0.10
+      : 0;
+    this._chassisH.set(id, h);
+    return h;
   }
 
   /**
