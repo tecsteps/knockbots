@@ -552,7 +552,7 @@ average across runs with different signatures — you will be averaging poses.
 
 ---
 
-# Open defect: kicks never connect
+# CLOSED defect: kicks never connect (fixed rounds 20-22)
 
 Reported by a player ("n and m make him kick but I never hit the opponent, even when that close").
 Reproduced and partly characterised; **not yet root-caused**. Recorded here so the next attempt does
@@ -589,3 +589,31 @@ test the engine uses before drawing any conclusion about where the capsules are.
 leaves Z, the sampling tick, or `attacker.connected` suppressing the window. Sample inside the sim
 tick rather than from a `setInterval`, and print `segSegDistSq` itself for every hitbox/hurtbox pair
 on the frame the move is active.
+
+
+## Resolution
+
+**Root cause: an extracted body pivot.** A clip's root track may author `ry`. The Animator extracts
+it rather than baking it into the bones, so the only place it is ever applied is `Fighter.animYaw`
+on the group -- which turns the striking limb along with the whole chassis. `k.midKick` authored
+`ry: -58` at exactly its contact tick: the fighter turned 58 degrees away on the frame the blow
+landed and the foot left along the rotated axis, 67 mm short **in Z**. That is why every attempt to
+reason about horizontal reach came up empty.
+
+The pivot is innocent by itself -- `k.spinKick` pivots 249 degrees and connects every time, because
+its leg track comes round with the spin. The discriminator is **aim error**, not yaw: within 25
+degrees, 409/432 connect; beyond it, 186/296.
+
+Fixed with `strikeAim()`, a static per-move solve on the clip's own FK at its declared contact tick,
+negated and folded into `animYaw`. **744 moves probed: 611 -> 717 connecting, 8 dead moves -> 0.**
+
+**A third dead end, and the subtlest:** the active window is NOT the free variable when a clip
+declares a contact tick. `retimeFor` pins that tick onto the window's first frame, so re-authoring
+the window drags the clip with it. `sp.risingFang` survived every other fix for this reason -- its
+fist sat 1.2 m above the head and receding on every active frame, while the clip crossed the strike
+zone at clip frames 6-11. Fixed with a per-move `contact` override expressed in CLIP frames.
+
+**And one for anyone building an offline capsule tool:** a hand-rolled rig sample reported
+`k.midKick` *overlapping* the defender by 14 cm while the shipping game whiffed it at every range.
+The difference is the extracted root yaw, which only exists once `Fighter` applies it. Do not
+reconstruct the pose outside the Fighter -- step the real one.
