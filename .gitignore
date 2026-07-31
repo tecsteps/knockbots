@@ -11,3 +11,4 @@ ref/
 .env.*
 !.env.example
 .vercel
+shots/.capture-lock

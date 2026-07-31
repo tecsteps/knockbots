@@ -13,7 +13,7 @@
 
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -585,6 +585,45 @@ const SHOTS = [
   },
 ];
 
+/**
+ * Refuse to share an output directory with another capture run.
+ *
+ * Two agents running this concurrently with the same --out interleave their
+ * writes: one run's PNGs land beside another run's manifest, and because the
+ * manifest is written last it CERTIFIES FRAMES IT DID NOT PRODUCE. That is
+ * exactly what happened -- shots/13-announce-fight.png contained no banner
+ * while the manifest beside it recorded kind "fight", opacity 1, ink 553x153
+ * and defects []. The game was fine; a teammate replayed the shot's own gate
+ * three times out of three and got the banner at that precise rect. A critic
+ * then scored the interface axis down for a surface that renders correctly,
+ * and nothing flagged it, because the certification was real -- just not of
+ * that image.
+ *
+ * A stale lock is cleared rather than honoured: a killed run must not block the
+ * harness for ever.
+ */
+const LOCK_STALE_MS = 20 * 60 * 1000;
+
+function takeLock(dir) {
+  const f = resolve(dir, '.capture-lock');
+  if (existsSync(f)) {
+    let age = Infinity;
+    try { age = Date.now() - JSON.parse(readFileSync(f, 'utf8')).at; } catch { /* malformed: treat as stale */ }
+    if (age < LOCK_STALE_MS) {
+      console.error(`[capture] ANOTHER CAPTURE IS WRITING ${dir}.`);
+      console.error('[capture] Two runs sharing one directory produce a manifest that certifies');
+      console.error("[capture] frames it did not produce. Pass --out <your own dir>, or wait.");
+      process.exit(2);
+    }
+    console.warn('[capture] clearing a stale capture lock');
+  }
+  writeFileSync(f, JSON.stringify({ pid: process.pid, at: Date.now() }));
+  const drop = () => { try { rmSync(f, { force: true }); } catch { /* already gone */ } };
+  process.on('exit', drop);
+  process.on('SIGINT', () => { drop(); process.exit(130); });
+  return drop;
+}
+
 async function main() {
   if (!KEEP && existsSync(OUT)) rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
@@ -610,6 +649,7 @@ async function main() {
   });
   const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1 });
 
+  takeLock(OUT);
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
