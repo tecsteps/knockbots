@@ -460,6 +460,57 @@ const SHOTS = [
       (() => { const s = window.KB.bus.on('matchEnd', (e) => { window.__kbWin = { winner: e.winner }; s(); }); })();`,
   },
   {
+    name: '17-anim-strip',
+    note: 'One attack across startup, contact and recovery — the motion the animation axis is scored on.',
+    // The animation critic could not see its own axis: "capture the axis before
+    // iterating on it... right now neither I nor the implementing agent can see
+    // whether `whip` worked." Every animation frame in the shot list is a
+    // single instant, and a still cannot show timing -- which is exactly why a
+    // round of measured re-timing work landed as "nothing visible". Same
+    // reasoning that produced 08b-hud-motion for the HUD.
+    //
+    // Framed on the attacker rather than the pair, so limb arcs and weight
+    // transfer are large enough to read.
+    preRoll: true,
+    setup: `(() => {
+      const KB = window.KB, THREE = KB.THREE, a = KB.fighters[0];
+      // forceHit stages the pair at the right distance but fast-forwards the
+      // move to just before impact, so a strip armed after it can only ever
+      // show contact and recovery. Restart the move from tick 0 on the already
+      // staged pair to get the wind-up back -- the wind-up is half of what this
+      // axis is scored on.
+      KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });
+      const mv = a.currentMove;
+      if (mv) a.startMove(mv);
+      const t = a.position.clone(); t.y += 1.0;
+      // Wide enough to hold both fighters and the floor under them: weight
+      // transfer and airborne arcs are the axis, and neither reads if the
+      // camera is inside the attacker's shoulder.
+      const cam = KB.camera, D = 7.4, face = a.facing || 1;
+      const mid = a.position.clone().add(KB.fighters[1].position).multiplyScalar(0.5);
+      t.set(mid.x, a.position.y + 1.05, mid.z);
+      const pos = new THREE.Vector3(t.x + face * D * 0.30, t.y + D * 0.20, t.z + D * 0.94);
+      const park = () => {
+        cam.position.copy(pos);
+        cam.up.set(0, 1, 0);
+        cam.lookAt(t.x, t.y - 0.15, t.z);
+        cam.fov = 32; cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
+      };
+      window.__kbAnimRestore = { render: KB.fightCamera.render, simulate: KB.fightCamera.simulate };
+      KB.fightCamera.render = park;
+      KB.fightCamera.simulate = () => {};
+      park();
+    })()`,
+    tickStrip: [0, 5, 10, 15, 20, 26, 34],
+    stripCrop: 1,
+    stripLabel: 'ticks from move start — startup, contact, recovery',
+    settle: 0,
+    teardown: `(() => {
+      const r = window.__kbAnimRestore;
+      if (r) { window.KB.fightCamera.render = r.render; window.KB.fightCamera.simulate = r.simulate; }
+    })()`,
+  },
+  {
     name: '15-impact-light',
     note: 'A LIGHT hit at contact — the bottom of the weight ladder.',
     // The critic's complaint "no relationship between hit weight and effect
@@ -794,8 +845,13 @@ async function main() {
       const base = await page.evaluate(
         'window.__kbShotHit ? window.__kbShotHit.tick : window.KB.tick');
       const hitBased = await page.evaluate('!!window.__kbShotHit');
-      if (!hitBased) flaw(shot.name, 'tick strip offsets are measured from shot start, not from '
-        + 'contact — no hit was recorded, so the "ticks after damage" labels are not trustworthy');
+      // Only a strip whose caption CLAIMS damage-relative offsets is lying when
+      // it has no hit to measure from. A strip labelled "from move start" is
+      // telling the truth about a different origin.
+      if (!hitBased && !shot.stripLabel) {
+        flaw(shot.name, 'tick strip offsets are measured from shot start, not from contact — no hit '
+          + 'was recorded, so the "ticks after damage" labels are not trustworthy');
+      }
       verified[shot.name] = { baseTick: base, measuredFromContact: hitBased,
         offsets: shot.tickStrip.slice() };
       for (const off of shot.tickStrip) {
@@ -815,11 +871,11 @@ async function main() {
           + `p95 ${cellFrame.p95}, ${Math.round(cellFrame.blackFrac * 100)}% crushed to black`);
       }
 
-      const sheet = await page.evaluate(async ({ cells, label }) => {
+      const sheet = await page.evaluate(async ({ cells, label, crop }) => {
         const imgs = await Promise.all(cells.map((c) => new Promise((res) => {
           const im = new Image(); im.onload = () => res(im); im.src = 'data:image/png;base64,' + c.b64;
         })));
-        const w = imgs[0].width, h = Math.round(imgs[0].height * 0.34); // HUD lives in the top third
+        const w = imgs[0].width, h = Math.round(imgs[0].height * crop);
         const cv = document.createElement('canvas');
         cv.width = w; cv.height = h * imgs.length + 30;
         const g = cv.getContext('2d');
@@ -833,7 +889,7 @@ async function main() {
           g.fillText('+' + cells[i].t + 't', 8, i * h + 46);
         });
         return cv.toDataURL('image/jpeg', 0.86);
-      }, { cells: frames, label: `${shot.name}  ·  ticks after damage` });
+      }, { cells: frames, crop: shot.stripCrop ?? 0.34, label: `${shot.name}  ·  ${shot.stripLabel ?? 'ticks after damage'}` });
       writeFileSync(file.replace(/\.png$/, '.jpg'), Buffer.from(sheet.split(',')[1], 'base64'));
       await page.evaluate(`(() => { ${RESTORE_CLOCK} })()`);
       manifest.push({ name: shot.name, note: shot.note, file: file.replace(/\.png$/, '.jpg') });
