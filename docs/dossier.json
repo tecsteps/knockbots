@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.17.0",
-    "commits": "97",
+    "rev": "0.18.0",
+    "commits": "102",
     "modules": 64,
-    "lines": "56k",
+    "lines": "57k",
     "clips": 91,
     "moves": 191,
     "characters": 10
@@ -11,27 +11,27 @@
   "verdicts": [
     {
       "axis": "Interface craft",
-      "score": 74
-    },
-    {
-      "axis": "Stage detail",
-      "score": 72
+      "score": 76
     },
     {
       "axis": "Lighting & atmosphere",
-      "score": 66
+      "score": 71
     },
     {
-      "axis": "Impact & effects",
-      "score": 57
+      "axis": "Stage detail",
+      "score": 71
     },
     {
       "axis": "Character rendering",
-      "score": 64
+      "score": 68
+    },
+    {
+      "axis": "Impact & effects",
+      "score": 60
     },
     {
       "axis": "Animation quality",
-      "score": 42
+      "score": 54
     }
   ],
   "log": [
@@ -699,11 +699,28 @@
         "Character stayed flat and the critic was exact about why. The machining-lay work is the best-argued change the axis has had, and unlike previous rounds it produced a genuine measured delta rather than an assertion. But five per cent on a band that needs a hundred and thirty is below both the detection threshold and the frame’s own capture noise. The requirement stopped unmeasured work shipping. It did not make this work visible.",
         "Eighteen shots, eighteen certified, zero defects, 13.6 milliseconds median at 73.5fps with the 95th percentile improving from 30.7 to 18.6. Triangles stand at 915,870 against a 900,000 ceiling, which needs a decision rather than another round of drift."
       ]
+    },
+    {
+      "phase": "PHASE 23",
+      "when": "Round 17",
+      "rev": "rev 0.18.0",
+      "title": "Five of six axes up, and a frame that finally reproduces",
+      "paras": [
+        "Animation 54, up twelve. Lighting 71, up five. Character 68, up four. Impact 60, up three. Interface 76, up two. Stage 71, down one. The average moved 63.0 to 66.7 — the best round since the eleventh, and the first time five axes have risen together.",
+        "The animation round began by proving the previous one right. Re-measured against the rig, every figure from round sixteen’s uppercut rebuild reproduced: pelvis excursion 194mm against a claimed 188, hip-line break 55.4mm against 54, the knee angles exactly. That work was real all along — the instrument that failed to show it was the defect, and the defect was mine.",
+        "It then found the more damning fact. The uppercut is the only attack in the game whose hip line breaks at all. The straight moves 4.9mm, the hook 5.0, the jab 8.1, the roundhouse 18.1. The critic’s “both hip lines level” is still literally true of the other thirty-nine clips.",
+        "And a move called Skyward Uppercut, tagged as a launcher, had kept both boots within 2.2 millimetres of the concrete for all thirty-six ticks of its life. It now leaves the floor — seven airborne ticks, boot clearance from 2.2mm to 178mm — verified pointwise against a reconstructed pre-edit clip so that the entry, the contact pose and the exit all move exactly zero.",
+        "The instrument is now exact when it is valid, which is the other headline. Two further causes of the reproducibility failure were found. The grade pass hashes its film grain on screen position plus time, so the dither re-rolls on every rendered frame even with the simulation clock at zero — a floor no amount of pose pinning could ever touch. It was traced by a workstream that measured a 1.44 out of 255 difference between two grabs of an identical frozen configuration and refused to accept it as irreducible.",
+        "With that pinned, two of three runs produced identical pose signatures and frames differing by 0.235 out of 255 — bit-near-identical, a hundredfold improvement on the 24-to-29 baseline this project has lived with for five rounds. The third run’s pose was six millimetres out, about twelve pixels at that framing, and its frame was 15.8 out. The pose signature turned out to be a perfect predictor of whether a frame is worth differencing.",
+        "So the method is now written down: capture three times, read the pose signature from each manifest, and only difference frames whose signatures match. That converts a frame nobody could measure on into one that is exact when valid and self-declaring when not. Roughly one run in three still diverges and the cause is not yet found.",
+        "Three harness defects were also closed, all reported by workstreams measuring their own axes rather than by the orchestrator. Every contact frame this project has ever scored had rendered an unretimed clip, because the test harness installed a move’s retime and then discarded it one line later. The animation tick strip’s panels were not on the ticks they were labelled with — two runs put their “+20” panels sixty ticks apart. And a proposed camera fix was measured, found to make cross-run reproducibility worse rather than better, and not shipped; the finding behind it was correct but was about a different measurement.",
+        "Eighteen shots, eighteen certified, zero defects, 14.5 milliseconds median at 69fps. Triangles unchanged at 915,870 against a 900,000 ceiling."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.17.0",
+    "rev": "0.18.0",
     "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
   }
 }
