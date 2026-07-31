@@ -542,7 +542,12 @@ const SHOTS = [
       KB.fightCamera.simulate = () => {};
       park();
     })()`,
-    tickStrip: [0, 5, 10, 15, 20, 26, 34],
+    // Offsets requested by the animation workstream, which measured the clip:
+    // 15 and 20 straddled the contact tick (clip 16) and never photographed it,
+    // and 34 was dead recovery. 6/10 catch the coil (deepest pelvis at clip t9),
+    // 13 is the last frame a defender can act on, 16 is contact, 21/26 are the
+    // flight and the landing.
+    tickStrip: [0, 6, 10, 13, 16, 21, 26],
     stripCrop: 1,
     stripLabel: 'ticks from move start — startup, contact, recovery',
     settle: 0,
@@ -713,6 +718,22 @@ async function main() {
         if (window.__kbHit.frames >= off) {
           window.KB.paused = true;
           window.KB.clock.getDelta = () => 0;  // stop the effects ageing before the shutter
+          // NOT stubbing the camera here, on evidence. FightCamera.render floors
+          // its own dt (shake += max(dt, 0.0025), kick clamped to >= TICK_DT), so
+          // a "frozen" contact frame still advances the camera per rendered
+          // frame, and stubbing it makes two grabs of ONE frozen frame stable to
+          // 0.015/255 -- a real result, reported by the FX workstream.
+          //
+          // But that is a different measurement from run-to-run reproducibility,
+          // and run-to-run is what scores depend on. Measured on an identical
+          // three-shot list, one pair each way:
+          //     04-impact        26.1 -> 40.5
+          //     04b-impact-decay 31.1 -> 39.4
+          //     16-impact-heavy  40.8 -> 40.1
+          // No improvement and probably worse, because the cross-run variance is
+          // in WHICH frame gets frozen, not in the frame drifting after it is.
+          // Stabilising the frozen frame is still the right property for in-page
+          // A/B work -- do it in the probe, not in the shot.
           window.__kbHit.hitstopLeft = window.KB.hitstopTicks;
           window.__kbHit.frozen = true;
         } else {
@@ -929,10 +950,47 @@ async function main() {
       }
       verified[shot.name] = { baseTick: base, measuredFromContact: hitBased,
         offsets: shot.tickStrip.slice() };
+      // Land each panel on the EXACT tick it is labelled with.
+      //
+      // This waited from the driver and then took a 1920x1080 screenshot --
+      // 100-300ms -- while the unpinned sim kept running, so panel k actually
+      // landed at its requested tick plus all the accumulated shutter latency
+      // before it. Measured on an unchanged tree, two runs put their "+20t"
+      // panels about SIXTY ticks apart, with the round timer reading 57 in one
+      // and 56 in the other, and cross-run panel noise of 5-74/255. A strip
+      // whose panels are not on their own labels cannot resolve a pose edit.
+      //
+      // Same fix that worked for 02-closeup-face: pin the clock so one rendered
+      // frame is one tick, then wait AND freeze inside a single page-side
+      // callback so no ticks slip through the round trip, shoot, and resume.
+      await page.evaluate(`(() => { ${PIN_CLOCK} })()`);
+      // The FIRST panel defines the origin. Sampling `base` before the loop
+      // meant ticks slipped past between the sample and the first freeze --
+      // measured, panel +0t landed four ticks late -- and every later panel
+      // inherited that offset. Freezing first and reading the tick back makes
+      // the labels mean what they say.
+      let origin = null;
       for (const off of shot.tickStrip) {
-        await page.waitForFunction(`window.KB.tick >= ${base + off}`, null, { timeout: 15000 }).catch(() => {});
+        const target = origin === null ? null : origin + off;
+        const at = await page.evaluate(`(() => new Promise((res) => {
+          const KB = window.KB, target = ${target === null ? 'KB.tick' : target};
+          const step = () => {
+            if (KB.tick >= target) {
+              KB.paused = true;
+              KB.clock.getDelta = () => 0;
+              res(KB.tick);
+            } else requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        }))()`).catch(() => null);
+        if (origin === null) origin = at - off;
+        else if (at !== origin + off) {
+          flaw(shot.name, `panel +${off}t landed on tick ${at}, wanted ${origin + off}`);
+        }
         frames.push({ t: off, b64: (await page.screenshot()).toString('base64') });
+        await page.evaluate(`(() => { ${PIN_CLOCK} window.KB.paused = false; })()`);
       }
+      await page.evaluate(`(() => { ${RESTORE_CLOCK} window.KB.paused = false; })()`);
       // Certified on a RAW cell, not on the tiled sheet. This was the only shot
       // in the list with no delivered-pixel check at all, because the tickStrip
       // branch returns before the universal one -- so it could ship a strip of

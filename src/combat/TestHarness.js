@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { METER_MAX, MAX_HEALTH, GROUND_Y } from '../core/Constants.js';
 import { bus } from '../core/Bus.js';
 import { MOVES, findMoveByTag, getMove } from './Moves.js';
-import { STATE } from './Fighter.js';
+import { STATE, retimeFor } from './Fighter.js';
 
 /** Tag search order when a caller asks for a semantic move name. */
 const TAG_ALIASES = {
@@ -124,7 +124,18 @@ export function makeTestHarness(game) {
    */
   function armAtImpact(fighter, move, lead = 2) {
     fighter.startMove(move);
-    if (fighter.animator?.play) fighter.animator.play(move.clip, { blend: 0, loop: false });
+    // Carry the retime. `Animator.play` does `top.retime = opts.retime || null`,
+    // so this second call was DISCARDING the two-anchor retime that
+    // `Fighter#startMove` had just installed one line above -- and every shot
+    // driven through this helper therefore rendered the clip UNRETIMED. For
+    // straight3 the retime is inScale 0.889 / outScale 0.72, so the captures
+    // ran the startup about 12% and the recovery about 39% faster than any
+    // player ever sees. Every impact frame this project has scored was taken
+    // that way. Found by an agent that measured animator.time against moveTick
+    // and got an exact 1:1 where the retime says tick 22 should be clip 18.88.
+    if (fighter.animator?.play) {
+      fighter.animator.play(move.clip, { blend: 0, loop: false, retime: retimeFor(move) });
+    }
     fighter.fastForward(Math.max(0, move.startup - lead));
   }
 

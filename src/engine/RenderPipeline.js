@@ -1769,6 +1769,8 @@ class GradePass extends Pass {
       uLutStrength: { value: 1.0 },
       uExposure: { value: 1.0 },
       uShoulder: { value: 0.75 },
+      uLatitude: { value: 1.25 },
+      uLookFalloff: { value: 0.90 },
       uDistortion: { value: 0.028 },
       uChroma: { value: 0.0016 },
       uGrain: { value: 0.032 },
@@ -1790,6 +1792,8 @@ class GradePass extends Pass {
         uniform float uLutStrength;
         uniform float uExposure;
         uniform float uShoulder;
+        uniform float uLatitude;
+        uniform float uLookFalloff;
         uniform float uDistortion;
         uniform float uChroma;
         uniform float uGrain;
@@ -1859,13 +1863,44 @@ class GradePass extends Pass {
           // strictly monotonic all the way out, so the roll-off is the sigmoid's
           // own shoulder rather than a wall. Below uShoulder nothing moves, so
           // the mid-tones the rest of the grade is built on are untouched.
+          //
+          // 'uLatitude' scales that asymptote above 1.0. At exactly 1.0 the
+          // compressed log approaches the sigmoid's own top and never arrives,
+          // so no radiance — none, at any magnitude — can reach display white.
+          // Modelled through this whole chain at shoulder 0.90: neutral input
+          // 6, 13, 52, 400 and 1500 all land on 1.000/0.99/0.945. Twelve times
+          // the radiance on every emitter in the arena was measured by an
+          // earlier round to put *not one extra pixel* at white, and this is
+          // why. Above 1.0 the asymptote sits over the sigmoid's top, so a
+          // genuinely bright source clips instead of creeping toward a ceiling.
           col = max( col, 0.0 );
           vec3 over = max( col - uShoulder, 0.0 );
-          float span = 1.0 - uShoulder;
+          float span = ( 1.0 - uShoulder ) * uLatitude;
           col = min( col, vec3( uShoulder ) ) + span * ( 1.0 - exp( - over / span ) );
 
           col = agxContrast( col );
-          col = agxLook( col );
+          // Fade the look out at the top of the range.
+          //
+          // 'agxLook' is a per-channel slope/offset/power plus a saturation
+          // term, and it is applied uniformly across the whole range — so it
+          // also moves the white point. agxLook(1,1,1) is (1.025, 1.000,
+          // 0.965), and the blue is what caps this transform: every neutral
+          // above about 6 lands on a fixed 0.945 in blue no matter how bright
+          // it is. A display transform whose look breaks its own white point
+          // cannot emit a white pixel, which is exactly what the frame
+          // measured — 0.000% of pixels over 0.99 linear on both scored
+          // framings, against a Tekken 8 reference band of 0.00-3.24%.
+          //
+          // Ramping the look toward identity above 'uLookFalloff' fixes the
+          // white point and provably touches nothing else: the mix weight is
+          // zero below that luma, and at 0.90 that sits above the frame's own
+          // 99th percentile. Modelled over 16 radiances, everything at or
+          // below 3.0 is identical to three decimals on all three channels.
+          {
+            float lookY = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );
+            float plain = smoothstep( uLookFalloff, 1.0, lookY );
+            col = mix( agxLook( col ), col, plain );
+          }
           col = AGX_OUTSET * col;
           col = pow( max( col, vec3( 0.0 ) ), vec3( 2.2 ) );  // to linear Rec.2020
           col = LIN_REC2020_TO_LIN_SRGB * col;
@@ -2005,13 +2040,13 @@ export class RenderPipeline {
     this.renderer.setClearColor(0x000000, 1);
     this.renderer.shadowMap.enabled = true;
     // Driven manually, once per frame. three renders the shadow map at the top
-    // of *every* `renderer.render`, and this frame contains two of them: the
-    // beauty pass, and the planar reflection that `StageFloor.onBeforeRender`
-    // fires from inside it. With `autoUpdate` on, the identical 4096 map — same
+    // of *every* 'renderer.render', and this frame contains two of them: the
+    // beauty pass, and the planar reflection that 'StageFloor.onBeforeRender'
+    // fires from inside it. With 'autoUpdate' on, the identical 4096 map — same
     // light, same fitted ortho, same casters — was being drawn twice a frame
-    // for one usable copy. `render()` arms `needsUpdate` and the first draw of
+    // for one usable copy. 'render()' arms 'needsUpdate' and the first draw of
     // the frame clears it, so the mirror inherits the map the beauty pass just
-    // built. `Game.#frame` is the only caller, so there is no other render path
+    // built. 'Game.#frame' is the only caller, so there is no other render path
     // that could go a frame without one.
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
@@ -2126,7 +2161,8 @@ export class RenderPipeline {
      * lamp, not the chromatic aberration).
      */
     this.look = {
-      exposure: 0.95, shoulder: 0.90, lutStrength: 1.0, saturation: 1.0,
+      exposure: 0.95, shoulder: 0.90, latitude: 1.25, lookFalloff: 0.90,
+      lutStrength: 1.0, saturation: 1.0,
       chroma: 0.0009, distortion: 0.018, grain: 0.02, vignette: 0.3,
       bloomStrength: 0.22, bloomRadius: 0.35, bloomThreshold: 5.5,
       bloomKnee: 0.35, bloomClamp: 2.0,
@@ -2226,7 +2262,7 @@ export class RenderPipeline {
     composer.setSize(this._cssWidth, this._cssHeight);
 
     const tier = this.tier;
-    // OutputPass reads `renderer.toneMapping`. With the grade pass present the
+    // OutputPass reads 'renderer.toneMapping'. With the grade pass present the
     // display transform has already happened, so the output pass must only do
     // the sRGB transfer; without it, hand AgX back to three.
     this.renderer.toneMapping = (tier.grade && this.effects.grade)
@@ -2242,7 +2278,7 @@ export class RenderPipeline {
     if (wantsDepth) {
       passes.scene = new ScenePass(this.scene, this.camera, this.stats);
       passes.scene.setSize(w, h);
-      // `_passes.gbuffer.depthTexture` is the name EffectsDirector reads its
+      // '_passes.gbuffer.depthTexture' is the name EffectsDirector reads its
       // soft-particle depth from, and it must resolve to the scene-safe copy.
       passes.gbuffer = passes.scene;
       composer.addPass(passes.scene);
@@ -2330,8 +2366,8 @@ export class RenderPipeline {
     passes.output = new OutputPass();
     composer.addPass(passes.output);
 
-    // A chain without a `ScenePass` has nobody to undo the split's layer moves,
-    // and its `RenderPass` draws through the plain camera mask. Undo them here,
+    // A chain without a 'ScenePass' has nobody to undo the split's layer moves,
+    // and its 'RenderPass' draws through the plain camera mask. Undo them here,
     // before the first frame through the new chain can photograph an empty pit.
     if (!passes.scene) restoreSplitLayers(this.scene);
 
@@ -2410,6 +2446,11 @@ export class RenderPipeline {
    * for the stock AgX response. It is the knob that decides whether a bright
    * highlight has gradient or is a flat white shape.
    *
+   * `latitude` and `lookFalloff` are the two knobs that decide whether display
+   * white is reachable at all; both are documented at the shader. Leave them
+   * alone unless the frame's top end is being retuned, and re-measure the
+   * fraction of pixels over 0.99 linear if they move.
+   *
    * @param {Partial<RenderPipeline['look']>} values
    */
   setGrade(values = {}) {
@@ -2419,6 +2460,8 @@ export class RenderPipeline {
     const soft = this.quality === 'low' || this.quality === 'medium';
     g.uniforms.uExposure.value = this.look.exposure;
     g.uniforms.uShoulder.value = this.look.shoulder;
+    g.uniforms.uLatitude.value = this.look.latitude;
+    g.uniforms.uLookFalloff.value = this.look.lookFalloff;
     g.uniforms.uLutStrength.value = this.look.lutStrength;
     g.uniforms.uSaturation.value = this.look.saturation;
     g.uniforms.uChroma.value = soft ? this.look.chroma * 0.55 : this.look.chroma;
@@ -2538,7 +2581,7 @@ export class RenderPipeline {
 
     this.renderer.info.reset();
 
-    // Wall-clock, not the `dt` argument: that one is scaled during hitstop, and
+    // Wall-clock, not the 'dt' argument: that one is scaled during hitstop, and
     // what reprojection actually measured is real elapsed frames.
     this._passes.motionBlur?.setShutter(frameMs / 1000, this.look.motionBlur);
 
@@ -2583,7 +2626,7 @@ export class RenderPipeline {
     }
 
     if (this.composer) {
-      // `setSize` fans out to every pass at the effective device resolution,
+      // 'setSize' fans out to every pass at the effective device resolution,
       // which is where each of them derives its own working size from.
       this.composer.setPixelRatio(pr);
       this.composer.setSize(this._cssWidth, this._cssHeight);
