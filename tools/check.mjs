@@ -9,6 +9,7 @@
  */
 
 import { readdirSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -48,6 +49,28 @@ async function tryImport(rel) {
   }
 }
 
+/**
+ * Separate the file that is actually broken from the files that merely import
+ * it.
+ *
+ * A syntax error deep in a dependency fails every module that pulls it in, so
+ * one broken shader comment in SparkSystem.js reported as "import
+ * src/core/Game.js: Unexpected identifier" — pointing four levels away from the
+ * defect, with the real culprit buried in the middle of the list. That has cost
+ * three separate agents time across two files now, because the sane next step
+ * is to open the file the message names.
+ *
+ * The error object cannot help: Node prints the true location to stderr but
+ * does not attach it (no `url`, and the stack is all internal frames). So parse
+ * each failing file IN ISOLATION with `node --check`, which does not follow
+ * imports. A file that fails its own parse is a root cause; one that parses
+ * fine is collateral damage.
+ */
+function parsesAlone(rel) {
+  const r = spawnSync(process.execPath, ['--check', resolve(ROOT, rel)], { encoding: 'utf8' });
+  return r.status === 0;
+}
+
 function walk(dir, out = []) {
   if (!existsSync(dir)) return out;
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -62,16 +85,29 @@ console.log('— Knockbots integrity check —\n');
 
 // 1. Every module must import cleanly.
 const files = walk(resolve(ROOT, 'src'));
+const importErrors = [];
 for (const f of files) {
   const rel = f.slice(ROOT.length + 1);
   const r = await tryImport(rel);
   // Vite resolves `import './ui.css'` natively; bare node cannot. That is a
   // limitation of this checker, not a defect in the module.
   if (r.error && /Unknown file extension "\.css"/.test(r.error.message)) ok.push(rel);
-  else if (r.error) fail.push(`import ${rel}: ${r.error.message}`);
+  else if (r.error) importErrors.push({ rel, message: r.error.message });
   else ok.push(rel);
 }
-console.log(`modules: ${ok.length} imported, ${fail.length} failed`);
+// Attribute the failures before reporting them.
+if (importErrors.length) {
+  const roots = importErrors.filter((e) => !parsesAlone(e.rel));
+  const collateral = importErrors.filter((e) => parsesAlone(e.rel));
+  for (const e of roots) fail.push(`BROKEN FILE — ${e.rel}: ${e.message}`);
+  if (roots.length && collateral.length) {
+    warn.push(`${collateral.length} module(s) failed only because they import the above: `
+      + collateral.map((e) => e.rel).join(', '));
+  } else {
+    for (const e of collateral) fail.push(`import ${e.rel}: ${e.message}`);
+  }
+}
+console.log(`modules: ${ok.length} imported, ${importErrors.length} failed`);
 
 // 2. Clips validate against the skeleton.
 const skel = await tryImport('src/characters/Skeleton.js');
