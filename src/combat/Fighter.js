@@ -992,7 +992,10 @@ export class Fighter {
   }
 
   #updateGuard(cmd) {
-    const guardHeld = !!(cmd && cmd.back);
+    // Guard is its own key now (Q). Back stays a direction, so loco.walkBack --
+    // wired up but unreachable while this branch sat above the walk branch --
+    // finally plays. Touch has no spare key, so a pad still guards on back.
+    const guardHeld = !!(cmd && (cmd.guard || (cmd.back && cmd.touchGuard)));
     this.crouching = !!(cmd && cmd.down) && !this.airborne;
     const canGuard = this.#canGuard();
     this.isBlocking = guardHeld && canGuard;

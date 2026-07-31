@@ -27,11 +27,13 @@ const KEYMAP = {
   0: {
     up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'],
     b1: ['KeyJ'], b2: ['KeyK'], b3: ['KeyN'], b4: ['KeyM'], b5: ['KeyU'],
+    guard: ['KeyQ'],
   },
   // Player 2 — arrows + numpad
   1: {
     up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'],
     b1: ['Numpad4', 'KeyF'], b2: ['Numpad5', 'KeyG'], b3: ['Numpad1', 'KeyV'], b4: ['Numpad2', 'KeyB'], b5: ['Numpad7', 'KeyT'],
+    guard: ['Numpad0', 'KeyR'],
   },
 };
 
@@ -131,6 +133,20 @@ export class Input {
     return { x: Math.sign(x), y: Math.sign(y) };
   }
 
+  /**
+   * Is the dedicated guard key held?
+   *
+   * Touch keeps guard on back, because a thumbstick has no spare key and the
+   * pad's own layout already separates movement from the four limb buttons.
+   */
+  #guardHeld(player) {
+    if (player === 0 && this.touch?.active) return false;
+    const codes = KEYMAP[player]?.guard || [];
+    if (codes.some((k) => this.keys.has(k))) return true;
+    const pad = this.gamepads[player];
+    return !!(pad && pad.buttons[6]?.pressed);
+  }
+
   #buttons(player) {
     if (player === 0 && this.touch?.active) {
       return { held: new Set(this.touch.held), pressed: new Set(this.touch.pressed) };
@@ -168,6 +184,23 @@ export class Input {
     cmd.back = cmd.x < 0;
     cmd.up = cmd.y > 0;
     cmd.down = cmd.y < 0;
+    /*
+     * Guard is its own key, so BACK can be a direction again.
+     *
+     * Block used to be "hold back", which is the fighting-game default and is
+     * why a player reported being unable to walk backwards: Fighter#tickNeutral
+     * returns at the isBlocking branch above the walk branch, so loco.walkBack
+     * was wired up and unreachable. Measured -- holding back moved the fighter
+     * -0.040m and put it in blockHigh, while holding forward moved it +0.733m
+     * and played the walk.
+     *
+     * The player proposed Q and that is the right key: it frees the whole b+
+     * command column (roundhouse on b+4, spin kick on b+3) to be used while
+     * actually retreating, which is how those moves are meant to come out.
+     */
+    cmd.guard = this.#guardHeld(player);
+    // Touch has no spare key, so the pad keeps the classic hold-back guard.
+    cmd.touchGuard = player === 0 && !!this.touch?.active;
 
     const { held, pressed } = this.#buttons(player);
     cmd.held = held;
