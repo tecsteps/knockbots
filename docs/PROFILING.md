@@ -648,3 +648,38 @@ count. Whoever takes it should: confirm which member it is by hiding
 `arena.structure.foreground` and re-shooting; check whether the mast is cropped rather than
 misplaced, because *moving* it may beat *lighting* it; and measure the edge/background ratio on that
 member before and after, the same way the lighting axis measures silhouette separation.
+
+---
+
+# The texture-unit ceiling: what it is, and what it is not
+
+The lighting axis cannot get the thing it has been asking for since round 18 — a shadow-casting
+per-fighter key — because `kb.armor` already fails to compile with one added:
+`FRAGMENT shader texture image units count exceeds MAX_TEXTURE_IMAGE_UNITS(16)`.
+
+**The obvious fix is already done.** ORM packing is in place: `aoMap`, `roughnessMap` and
+`metalnessMap` all point at the same `shared.plateOrmPainted` texture, so three.js binds it once and
+those three slots cost one unit, not three. Anyone arriving at this problem will reach for that
+first; it is not available, because it was taken years of rounds ago.
+
+**So the pressure is the material's feature set, not its texture packing.** The armour binds, on top
+of ORM: base colour, normal, emissive, clearcoat, clearcoat roughness, clearcoat normal, anisotropy,
+one custom `kbGrungeMap`, the environment map, and one unit per shadow-casting light. A second
+shadowed light costs two more units — one per fighter — and that is the straw.
+
+**Which makes this a design trade, not a mechanical optimisation.** Freeing units means dropping a
+material feature. The candidates, in the order I would test them:
+
+1. **Anisotropy** (`anisotropyMap`). Four materials use it. It was added for the machining lay, and
+   the lay is also carried by the detail normal — so measure whether the map earns its unit
+   independently, or whether the normal already delivers it.
+2. **Clearcoat's three maps.** A previous round measured the coat lobe at 4% and found retiling its
+   normal did nothing (`clearcoat` retiling 3 -> 9, no effect). If a constant clearcoat reads the
+   same as a mapped one, that is two units for free.
+3. **`kbGrungeMap`** could fold into an unused ORM channel — the ORM's alpha is documented as sheen
+   roughness and may be spare.
+
+Each is a one-line ablation with the frozen-frame A/B this project already has: toggle through a
+uniform branch on the same compiled program, difference one frozen frame, and see whether the image
+moves at all. **Do that before anyone builds the light** — three of these could be worth nothing,
+and the answer decides whether the lighting the axis wants is reachable at all.
