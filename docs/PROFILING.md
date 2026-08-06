@@ -829,3 +829,41 @@ already documents.
 **Run this against the pit.** It is the highest-value unclaimed job on the stage axis: the pole is
 known, but nothing has ever swept that arena for the other three-quarters of the class, and by
 construction those defects are the ones no existing shot can see.
+
+## The sweep's verdict on all three arenas
+
+`scratchpad/occluders.mjs` — 80 framings per arena, 0.6–2.7 s each. It builds the arena's modules
+directly and projects triangles on the CPU against capsule proxies; **it has no renderer**, so it
+answers *"is it in the way"* and never *"does it look wrong"*.
+
+```
+cistern      clean    worst  1.5%
+skydeck      FAIL     worst 15.5%   arena.rooftop.foreground
+sublevel09   FAIL     worst  100%   arena.structure.foreground, 4.8% at WIDE
+```
+
+**The pit hides a fighter completely at a legal corner pose.** Pre-existing, in the arena every
+score in this project has been measured on, and worse than the pole that was found by luck. No shot
+in the list poses the fighters there, which is exactly why twenty-four rounds never saw it.
+
+**Four bugs in the tool itself, three of which only surfaced when it was run against arenas it was
+not written for** — the argument for running a harness somewhere new before trusting it:
+fill the triangle rather than its bounding box (the floor apron is a 160 m plane drawn as *two*
+triangles, so every fighter came back 85% occluded by the ground he stands on); interpolate depth
+perspective-correctly, since linear is wrong by metres on a plane seen at a grazing angle, which is
+how a floor is always seen; apply each mesh's object transform, or a fan positioned 13 m behind the
+pit is tested at its centre; and re-derive midpoint and separation after clamping fighters to the
+play bound, or the lens is placed for a pair that is not there — which reads exactly like a set
+defect.
+
+## A multiplicative wash cannot light a surface that is at zero
+
+The vault's soffit uplighters measured as doing nothing, and the cause was the operator, not the
+drive: `dst = dst * src` models *more incident light on something already lit*. **Three times
+nothing is nothing.** The measurement showing no movement was the correct output of a term that
+could not work.
+
+Converted to additive, with better physics than it was pretending to: the biggest, brightest surface
+in that room is standing water with strips raking across it, and **the first bounce off water goes
+up**. The ceiling now carries the moving caustic of the water below — which is the signature image
+of a flooded cistern, and it ties that band to a fourth hue bin because the deposit is blue-green.
