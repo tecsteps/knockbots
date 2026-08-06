@@ -1,7 +1,7 @@
 {
  "status": {
-  "rev": "0.25.0",
-  "commits": "141",
+  "rev": "0.26.0",
+  "commits": "146",
   "modules": 69,
   "lines": "63k",
   "clips": 92,
@@ -11,7 +11,7 @@
  "verdicts": [
   {
    "axis": "Stage detail",
-   "score": 74
+   "score": 72
   },
   {
    "axis": "Interface craft",
@@ -19,7 +19,7 @@
   },
   {
    "axis": "Lighting & atmosphere",
-   "score": 77
+   "score": 78
   },
   {
    "axis": "Character rendering",
@@ -27,7 +27,7 @@
   },
   {
    "axis": "Impact & effects",
-   "score": 68
+   "score": 69
   },
   {
    "axis": "Animation quality",
@@ -878,11 +878,53 @@
      "state": "charter"
     }
    ]
+  },
+  {
+   "phase": "PHASE 31",
+   "when": "Round 27",
+   "rev": "rev 0.26.0",
+   "title": "Two certified frames contained no game at all",
+   "paras": [
+    "Lighting 78, interface 74, stage 72, impact 69, character 70, animation 63. One axis up one, one up one, one down two. The scores are the least interesting thing that happened.",
+    "Two of the twenty certified captures contained no 3D scene whatsoever. The heavy-impact frame and the skydeck wide were the interface composited over a canvas that never drew — ninety-nine per cent of their scene rows a single colour, a hundred kilobytes each where a real frame is two and a half megabytes. The manifest recorded both as fine: verified, no defects, no errors, complete. Three critics found it independently. One lost the flagship shot of its own axis and could not evaluate it; another could not score the skydeck at all.",
+    "The cause was a single false premise, and it was mine to catch. A guard added earlier in the same round declared the dead-canvas case already handled and instructed the next reader not to add a second check — a conclusion reached by blanking a test frame to black. A dead canvas is not black. What shows through is the page's own background, whose luminance is more than twice the floor the guard tests against, and which sits above the threshold that counts a pixel as black — so the crushed-pixel fraction reads zero on a frame that is ninety-nine per cent one value. The top-of-frame check is inverted for the same failure, because the top of a dead frame is exactly where the surviving interface lives. Every gate passed. I read that change, confirmed it weakened no threshold, and missed that it forbade the fix.",
+    "The gate is a variance test now rather than a level test: the share of the scene occupied by a single quantised colour. At the check's own working resolution the two dead frames read 0.990 and 0.999 against a worst healthy frame of 0.017. Fifty-fold separation, so the threshold is not delicate. The lesson is more general than the bug — every previous defect in this class was about the output directory, and this one was in the certification itself, which is the thing every score depends on.",
+    "The round's headline change met all four of its own gates and was reverted anyway. Moving the arena's floor light into the one term that can cast a shadow took the shadow-casting share from thirty to fifty-four per cent and doubled shadow depth, at a floor brightness held to two thirds of one per cent. The stage axis went down two points regardless. It had been tuned on one arena and shipped to three: the cistern lost twenty-seven per cent of its peak tile contrast. And it cost separation on the axis whose named failure mode is fighters merging into the background — subject over set fell from 1.349 to 1.191, against an estimate of minus five to eight per cent that it had been approved on.",
+    "The recommended repair did not work, and finding that out was worth the attempt. Both the agent and the critic proposed paying the reduction out of the arena-only exposure rather than the shared one, so the fighters keep their image-based light. Measured, it changed nothing: the arena receives an identical product either way, so the brightening was never coming from there. It was the doubled directional lighting the set as well as the deck. Reverting it restores separation to 1.285 and keeps the floor two point eight per cent better articulated. The charter is explicit that an agent whose change measures worse ships the measurement rather than the feature, so that is what happened.",
+    "Three things it disproved on the way are worth more than the change was. The twelve-point-eight per cent figure this round was briefed on does not reproduce — the control arm measures twenty-eight to thirty-five, and the file's own earlier note agrees, so the number that justified the round was another unlocalised measurement. The hemisphere fill everyone has been arguing about for five rounds is eight hundredths of one per cent of the deck's light and has nothing to give. And every shadow setting in the environment file is dead code, overwritten every frame by the render pipeline; a sweep across bias, radius, map size and intensity returned byte-identical frames.",
+    "What shipped: the overdrive rescue, which took the money shot from eight times darker than the darkest reference to sitting below the ordinary-frame median and above both references that are themselves supers, with its colour back. The wash near-field, replacing a falloff with zero derivative at the tube — a plateau exactly where a real lamp is steepest — and buying thirty-seven per cent more modulation in the air above the strip. And a wall-falloff gate anchored to thirteen thousand fixed world points rather than a pixel rectangle, which holds to eleven per cent across seven framings where the old one swung fifty-seven. The old gate was reading a sign plate."
+   ],
+   "tags": [
+    {
+     "label": "dead-frame gate",
+     "state": "done"
+    },
+    {
+     "label": "overdrive",
+     "state": "done"
+    },
+    {
+     "label": "wash near-field",
+     "state": "done"
+    },
+    {
+     "label": "world-anchored gate",
+     "state": "done"
+    },
+    {
+     "label": "shadow share",
+     "state": "reverted"
+    },
+    {
+     "label": "per-arena tuning",
+     "state": "next"
+    }
+   ]
   }
  ],
  "deploy": {
   "url": "https://knockbots.vercel.app",
-  "rev": "0.25.0",
-  "note": "Deployed after round 26. Source on github.com/tecsteps/knockbots."
+  "rev": "0.26.0",
+  "note": "Deployed after round 27. Source on github.com/tecsteps/knockbots."
  }
 }
