@@ -12,3 +12,4 @@ ref/
 !.env.example
 .vercel
 shots/.capture-lock
+scratchpad/

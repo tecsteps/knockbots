@@ -867,3 +867,30 @@ Converted to additive, with better physics than it was pretending to: the bigges
 in that room is standing water with strips raking across it, and **the first bounce off water goes
 up**. The ceiling now carries the moving caustic of the water below — which is the signature image
 of a flooded cistern, and it ties that band to a fourth hue bin because the deposit is blue-green.
+
+
+### The pit's occluder, with the geometry to fix it
+
+`node tools/occluders.mjs sublevel09` — the harness now lives in `tools/`, not a scratch directory,
+because it is the only thing that can see this class of defect and it was one `rm` from being lost.
+
+```
+worst offender  arena.structure.foreground   100.0% worst, 4.8% at WIDE
+pose            fight  x -7.7  z +5.5  sep 1.8
+camera          -7.09, 1.31, 9.64   fov 33.3
+fighters        (-8.6, 5.5)  (-6.8, 5.5)
+offending tris  min(-7.69, 0.00, 7.06)  max(-6.11, 1.49, 9.08)
+```
+
+The stanchion-and-rope run sits at **z 7.06–9.08 with the camera at z 9.64 and the fighters at
+z 5.5** — directly between lens and subject — and spans **x −7.69 to −6.11**, which is inside the
+±9 play bound. A fighter driven into that corner stands behind it.
+
+The rule the vault workstream derived applies exactly: **outboard beats forward.** An object at
+lateral offset L leaves frame when L > 0.70·D, so moving it outboard of the play bound makes it
+*safer* as the camera closes, whereas pulling it back in z does nothing at a corner pose. The vault
+moved its own piers to ±10.9/11.2 for this reason.
+
+Not fixed here: moving set geometry changes the composition of `06-stage-wide`, which is the frame
+the highest-scoring axis is judged on, so it wants a before/after capture rather than a blind edit.
+The measurement above is everything needed to make it a small change.
