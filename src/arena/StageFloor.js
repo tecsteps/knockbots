@@ -703,12 +703,19 @@ function bakeFloorMaps(size) {
  *   G  cavity — spalled patches where the laitance has broken away, 25-40cm,
  *      plus the crack net; used as occlusion *and* as dirt in albedo
  *   B  roughness offset — a broken surface is rougher than a trowelled one
+ *   A  fissure — a sparse crack network, thin dark core inside a wider spalled
+ *      lip. **1.0 means "this bake has no fissure channel" and the shader reads
+ *      exactly zero from it**, which is what keeps the rooftop's and the vault's
+ *      own detail bakes (both of which write alpha 255) untouched by it.
  *
  * One fetch. It is deliberately not a normal map: a normal perturbation on a
  * dark, largely ambient-lit deck moves almost nothing (the existing detail
  * normal is proof — it is already there and the band still measures 0.118),
  * whereas albedo and cavity read under any lighting.
  */
+/** Width of the fissure net baked into the detail alpha; see the note below. */
+const FISS_W = 2.2;
+
 function deckDetail(size = 512) {
   const n = size * size;
   // 5-6cm aggregate at the 1.3m world tile: 24 cells across.
@@ -718,8 +725,19 @@ function deckDetail(size = 512) {
   const fine = fbm(size, 96, { octaves: 3, seed: 227 });
   const grime = fbm(size, 11, { octaves: 4, seed: 229 });
   const crk = fbm(size, 23, { octaves: 4, seed: 233, ridged: true });
+  // The fissure net, and its two scales are chosen against the framing rather
+  // than against concrete. At the wide framing one metre of near deck is about
+  // 70 screen pixels, so a 1cm hairline is 0.7px: it does not survive the
+  // mipmap, and what reaches the frame is a uniform darkening -- a level shift
+  // with no variance, which is the opposite of what this is for. So a fissure
+  // here is a thin core (about 1cm, for when the camera is 2m off the deck)
+  // sitting inside a broken LIP 8-15cm across, and the lip is the part that is
+  // still several pixels wide in the shot this axis is scored on.
+  const fissA = fbm(size, 9, { octaves: 4, seed: 239, ridged: true });
+  const fissB = fbm(size, 17, { octaves: 3, seed: 241, ridged: true });
   const data = new Uint8Array(n * 4);
   let cavSum = 0;
+  let fissSum = 0;
   for (let k = 0; k < n; k++) {
     // Stones sit proud and pale; the paste between them is darker and duller.
     const stone = smoothstep(0.30, 0.05, agg.f1[k]);
@@ -732,12 +750,29 @@ function deckDetail(size = 512) {
     const cav = clamp01(pit * 0.9 + crack * 0.7 + (1 - stone) * 0.16);
     const tone = clamp01(0.5 + stone * 0.34 + grit * 0.30 - pit * 0.22 - (grime[k] - 0.5) * 0.30);
     const rough = clamp01(0.5 + pit * 0.34 + crack * 0.22 - stone * 0.16);
+    // Ridged noise peaks along a curve, so a threshold on it is a LINE and not
+    // a blob — and it is a curve rather than a chord, because the field it
+    // thresholds is continuous everywhere. That is the difference between this
+    // and the construction the wetness block above is a monument to.
+    const ridge = Math.max(fissA[k], fissB[k] * 0.94);
+    const core = smoothstep(0.955, 0.998, ridge);
+    const lip = smoothstep(0.80, 0.94, ridge);
+    // FISS_W is folded in at BAKE time rather than left as a shader multiplier,
+    // and that is what makes the level compensation below exact: the mean of
+    // the darkening term can only be computed for one width, so the width has
+    // to be a property of the map. Swept live on the frozen wide frame at 1.0 /
+    // 1.6 / 2.2 / 3.0 -- see the round note; 3.0 reads as crazed mud and 1.0 is
+    // invisible at the wide framing.
+    const fiss = clamp01((core * 0.85 + lip * 0.42) * FISS_W);
     const o = k * 4;
     data[o] = Math.round(tone * 255);
     data[o + 1] = Math.round(clamp01(1 - cav) * 255);
     data[o + 2] = Math.round(rough * 255);
-    data[o + 3] = 255;
+    // Stored inverted, so a bake that never heard of this channel (alpha 255)
+    // reads as "no fissure anywhere" instead of "fissure everywhere".
+    data[o + 3] = Math.round(clamp01(1 - fiss) * 255);
     cavSum += clamp01(1 - cav);
+    fissSum += fiss;
   }
   const tex = makeTexture(data, size);
   // Occlusion has to redistribute value, not remove it. The first version of
@@ -747,6 +782,16 @@ function deckDetail(size = 512) {
   // normalised by the mean. The shader divides by this so the cavity term's
   // average is exactly one and only its variance reaches the frame.
   tex.userData.cavMean = cavSum / n;
+  // Same discipline as `cavMean`, for the same reason and off the back of a
+  // measurement that caught it doing the wrong thing. Swept live, the fissure
+  // net bought its high-frequency detail partly by DARKENING the deck: the
+  // floor band's mean linear luminance went 0.0525 -> 0.0480 at the width that
+  // ships and 0.0462 at 3x, and the dark-quartile local contrast -- a hard
+  // secondary gate on this change -- fell 6.889 -> 6.440 -> 6.366 with it. A
+  // contrast gain paid for with level is not a contrast gain. The shader
+  // divides the darkening term by its own mean, so the net contributes variance
+  // only and the band's level is untouched by construction.
+  tex.userData.fissMean = fissSum / n;
   return tex;
 }
 
@@ -819,9 +864,56 @@ const FRAG_NORMAL_HOOK = /* glsl */ `
     vec3 rip = ( texture2D( uRippleMap, r1 ).xyz + texture2D( uRippleMap, r2 ).xyz ) - 2.0;
     perturb += rip.xy * uRippleAmp * kbWetness * kbWetness;
 
+    // --- per-slab identity --------------------------------------------------
+    //
+    // The deck is poured and sawn into 2m bays. This block gives each bay its
+    // own tint, its own roughness, its own plane and its own crop of the history
+    // map, which is the difference between a floor and a tiled material.
+    //
+    // WHY A PIECEWISE-CONSTANT FIELD IS SAFE HERE, AND ONLY HERE. A per-slab
+    // hash is constant inside a slab and jumps at its edge, and this file
+    // already carries a long note on what happens when a value like that is
+    // thresholded somewhere the geometry does not change: a dead-straight chord
+    // at an arbitrary angle across the fighting plane. The identity below is
+    // floor( world / 2 ), whose discontinuities are the EVEN world lines --
+    // exactly the lines the analytic joint grid further down evaluates its
+    // groove on. Every step introduced here therefore lands inside a groove that
+    // is already dark, already rough and already three shades down, so the jump
+    // is co-located with a real feature rather than cutting across one. That
+    // co-location is the whole safety argument, and it is why this block is
+    // switched off (see uSlabVary) on any arena that has turned the joint grid
+    // off: without the grid there is nothing at the slab edge for the step to
+    // hide inside, and it would be the chord defect again.
+    vec2 kbDetUv = vKbWorld.xz * uDeckTile;
+    vec2 kbDetDx = dFdx( kbDetUv );
+    vec2 kbDetDy = dFdy( kbDetUv );
+    vec2 kbSlabId = floor( vKbWorld.xz * 0.5 );
+    vec4 kbSH = vec4( 0.5 );
+    if ( uSlabVary > 0.0 ) {
+      kbSH = kbSlabHash( kbSlabId );
+      // Placement: rotate this slab's crop of the history map about the slab
+      // centre and slide it. One fetch, same cost, but the aggregate, the spall
+      // and the fissures are in a different place and at a different angle in
+      // every bay, so the 1.3m tile has no visible period left. Rotation is
+      // about the CENTRE so the transform is continuous inside the slab; the
+      // gradients are rotated by the same matrix, which makes the mip selection
+      // exact rather than merely close (a rotation preserves the derivative
+      // magnitudes, so an unrotated gradient would pick the right level and the
+      // wrong anisotropy).
+      float kbAng = ( kbSH.x - 0.5 ) * 6.2831853 * uSlabPlace;
+      vec2 kbR = vec2( cos( kbAng ), sin( kbAng ) );
+      vec2 kbRel = vKbWorld.xz - ( kbSlabId * 2.0 + 1.0 );
+      vec2 kbLocal = vec2( kbRel.x * kbR.x - kbRel.y * kbR.y, kbRel.x * kbR.y + kbRel.y * kbR.x );
+      kbDetUv = ( kbLocal + kbSlabId * 2.0 + 1.0 ) * uDeckTile
+              + vec2( kbSH.z, kbSH.w ) * 7.31 * uSlabPlace;
+      kbDetDx = vec2( kbDetDx.x * kbR.x - kbDetDx.y * kbR.y, kbDetDx.x * kbR.y + kbDetDx.y * kbR.x );
+      kbDetDy = vec2( kbDetDy.x * kbR.x - kbDetDy.y * kbR.y, kbDetDy.x * kbR.y + kbDetDy.y * kbR.x );
+    }
+
     // --- deck history, world-space and therefore sharp at any magnification --
     float kbDry = 1.0 - kbWetness * 0.72;
-    vec3 hist = texture2D( uDeckDetail, vKbWorld.xz * uDeckTile ).rgb;
+    vec4 kbHist4 = textureGrad( uDeckDetail, kbDetUv, kbDetDx, kbDetDy );
+    vec3 hist = kbHist4.rgb;
     // Level compensation. The deck lost 16% of its band median between the
     // joint grooves, the cavity term and the rim budget moving off the
     // scene-wide directional -- and floor luminance was already at parity with
@@ -831,6 +923,43 @@ const FRAG_NORMAL_HOOK = /* glsl */ `
     diffuseColor.rgb *= 1.0 + ( hist.r - 0.5 ) * 2.0 * uDeckTone * kbDry;
     diffuseColor.rgb *= mix( 1.0, hist.g * uDeckCavNorm, uDeckCav * kbDry );
     roughnessFactor = clamp( roughnessFactor + ( hist.b - 0.5 ) * 2.0 * uDeckRough * kbDry, 0.04, 1.0 );
+
+    // --- fissures ----------------------------------------------------------
+    // Keyed off world position through the per-slab placement above, so the net
+    // does not repeat, and stored inverted so a detail bake without the channel
+    // (alpha 255) contributes exactly nothing. A crack is darker, rougher and
+    // holds water, which is three cues from one term.
+    // Clamped, and not for tidiness: the darkening below is 1 - 0.55 * kbFiss,
+    // so an unclamped mask past 1.8 multiplies the deck by a NEGATIVE number.
+    // Saturating instead means the strength control widens the net and hardens
+    // its core, which is what a wider crack is, rather than punching a hole in
+    // the frame that the display transform happens to clip back to black.
+    float kbFiss = clamp( ( 1.0 - kbHist4.a ) * uSlabCrack, 0.0, 1.0 );
+    if ( kbFiss > 0.0 ) {
+      // Level-compensated, exactly as the cavity term above is: uSlabFissNorm is
+      // the reciprocal of the mean of this same expression over the whole map,
+      // so the net's average is one and only its variance reaches the frame.
+      // Exact at uSlabCrack = 1, which is the shipping value; the control exists
+      // to A/B the term and to sweep it, not to be left somewhere else.
+      diffuseColor.rgb *= ( 1.0 - kbFiss * 0.55 ) * uSlabFissNorm;
+      roughnessFactor = clamp( roughnessFactor + kbFiss * uSlabCrackR, 0.04, 1.0 );
+      kbWetness = clamp( kbWetness + kbFiss * 0.06, 0.0, 1.0 );
+    }
+
+    if ( uSlabVary > 0.0 ) {
+      // Tint. Two pours never match, and this is the term that stops a run of
+      // bays reading as one surface with marks on it. Zero-mean by construction
+      // -- the hash is uniform on 0..1 and it enters as ( h - 0.5 ) * 2 -- so
+      // the band's median cannot move with it, only its variance.
+      diffuseColor.rgb *= 1.0 + ( kbSH.y - 0.5 ) * 2.0 * uSlabTone;
+      roughnessFactor = clamp( roughnessFactor + ( kbSH.z - 0.5 ) * 2.0 * uSlabRough, 0.04, 1.0 );
+      // Settlement. Each bay is its own plane, out by a fraction of a degree.
+      // Constant across the slab, so it adds no high frequency of its own; what
+      // it does is make two bays answer the same key, the same practicals and
+      // the same mirror differently, which is what stops them resolving as the
+      // same object even where they carry the same marks.
+      perturb += ( kbSH.xw - 0.5 ) * 2.0 * uSlabTilt;
+    }
 
     // --- practical colour in the DIFFUSE ------------------------------------
     //
@@ -903,6 +1032,40 @@ const FRAG_NORMAL_HOOK = /* glsl */ `
     vec2 tilt = -sign( s4 ) * face4 * uJointSlope
               - sign( s2 ) * face2 * solo * uJointSlope * sawn;
     perturb += tilt;
+
+    // --- the settlement step across a joint --------------------------------
+    //
+    // Two bays poured on different days do not sit flush; a few millimetres of
+    // differential settlement is normal and it is the most legible thing a slab
+    // floor does. What it produces is not a groove -- there is already a groove
+    // here -- but an ASYMMETRY across one: the high bay's arris catches the key
+    // along its whole length and the low bay's side of the joint sits in the
+    // step's own shadow. That is a hard, thin, continuous line at every slab
+    // edge in frame, which is the highest-frequency structure this floor can
+    // gain without a triangle.
+    //
+    // The sign comes from the two slabs' own heights, so it flips where the
+    // joint changes which bay is higher and the feature is continuous along the
+    // line rather than being a painted-on gradient. The sign of s2 is zero
+    // exactly on the centreline, where the neighbour lookup degenerates to this
+    // slab and
+    // the step therefore fades to nothing -- which is the right value at the
+    // bottom of the groove and is why the flip is invisible.
+    if ( uSlabVary > 0.0 && uSlabStep > 0.0 ) {
+      vec2 nbr = kbSlabId - sign( s2 );
+      float hX = kbSlabHash( vec2( nbr.x, kbSlabId.y ) ).y;
+      float hZ = kbSlabHash( vec2( kbSlabId.x, nbr.y ) ).y;
+      vec2 dh = vec2( kbSH.y - hX, kbSH.y - hZ );
+      vec2 lipW = 1.0 - smoothstep( vec2( 0.0 ), vec2( uSlabLip ), d2 );
+      vec2 low = max( vec2( 0.0 ), -dh ) * lipW;
+      vec2 high = max( vec2( 0.0 ), dh ) * lipW;
+      float lo = max( low.x, low.y );
+      float hi = max( high.x, high.y );
+      diffuseColor.rgb *= ( 1.0 - lo * uSlabStep ) * ( 1.0 + hi * uSlabStep * 0.55 );
+      // And it answers the light rather than being painted: the step face tilts
+      // the normal toward the joint on the low side and away on the high one.
+      perturb += -sign( s2 ) * dh * lipW * uSlabStepSlope;
+    }
 
     // Groove interior: dark, dirty, rough, and it must not mirror.
     vec2 core4 = 1.0 - smoothstep( w0 * 0.75, w0 * 1.3, d4 );
@@ -1113,9 +1276,29 @@ uniform float uFloorChroma;
 uniform vec3 uFloorWarm;
 uniform vec3 uFloorCool;
 uniform float uFoldAoIntensity;
+uniform float uSlabVary;
+uniform float uSlabPlace;
+uniform float uSlabTone;
+uniform float uSlabRough;
+uniform float uSlabTilt;
+uniform float uSlabStep;
+uniform float uSlabStepSlope;
+uniform float uSlabLip;
+uniform float uSlabCrack;
+uniform float uSlabFissNorm;
+uniform float uSlabCrackR;
 varying vec4 vKbReflCoord;
 varying vec3 vKbWorld;
-float kbWetness = 0.0;`,
+float kbWetness = 0.0;
+// Four decorrelated uniforms per slab. The ids this is called with are small
+// integers -- the pit is 16 bays by 14 -- so the classic sine hash is well
+// inside the range where it is stable in highp, and every draw that reads it
+// reads it at a slab centre-of-mass rather than per texel.
+vec4 kbSlabHash( vec2 id ) {
+  vec4 d = vec4( dot( id, vec2( 127.1, 311.7 ) ), dot( id, vec2( 269.5, 183.3 ) ),
+                 dot( id, vec2( 74.7, 246.1 ) ), dot( id, vec2( 419.2, 371.9 ) ) );
+  return fract( sin( d ) * 43758.5453 );
+}`,
       )
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>${FRAG_FOLD_METALNESS}`)
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>${FRAG_FOLD_AO}`)
@@ -1147,11 +1330,72 @@ export const PIT_SURFACE = {
   detailTile: 1.3,
   deckTone: 1.0,
   deckCav: 0.85,
-  deckGain: 1.14,
+  /**
+   * `uDeckGain`. 1.14 -> 1.22, and it is a level restoration rather than a
+   * brightening: it is sized to the level the fissure net costs.
+   *
+   * Measured on one frozen wide frame, in-page, null control 0.01%: the fissure
+   * layer's high-frequency gain arrives almost entirely through its ROUGHNESS
+   * channel and not through albedo (with the roughness coupling zeroed the
+   * band's hf reads 33.14 against 33.23 for the term switched off entirely --
+   * nothing), and a rougher deck mirrors less, so the same mechanism that buys
+   * the variance costs 3.6% of the band's mean. Level compensation on the
+   * albedo term alone cannot reach that, because it is not an albedo effect.
+   * On the shipping build, one frozen frame, null control 0.21%: the floor
+   * band's mean linear luminance is 0.0513 with the block on and 0.0513 with it
+   * off — level held to four decimals — and the dark-quartile local contrast,
+   * a hard secondary gate here, reads 6.289 against 6.192 **over the same pixel
+   * set**. It reads 6.120 against 6.192 when each frame is allowed its own
+   * quartile, and the difference between those two statements is the whole
+   * story: adding dark fissures moves the quartile BOUNDARY (34.48 -> 33.83),
+   * so the relative form is comparing two different populations. Quoted both
+   * ways rather than picked.
+   */
+  deckGain: 1.22,
   deckRough: 0.35,
   joint: new THREE.Vector3(0.016, 0.090, 0.6),
   jointSlope: 0.95,
   jointDark: 0.20,
+
+  /**
+   * Per-slab variation master. **`null` means "derive it", and that is not a
+   * convenience — it is the safety interlock.**
+   *
+   * Every term this switch gates is piecewise constant over the 2m bay grid, so
+   * every one of them steps at the even world lines. That is only legitimate
+   * where the analytic joint grid is drawing a groove on those same lines: the
+   * step then lands at the bottom of a feature that is already dark and rough.
+   * Both of the other two arenas turn the grid off (`jointSlope: 0`, see
+   * `ROOF_SURFACE.joint` and `VAULT_SURFACE.joint`) because their bays are baked
+   * on their own layout, and on those decks a bay-grid step would be a value
+   * jump with nothing at it — a straight line at an arbitrary place, which is
+   * the defect this file's wetness block exists to warn about.
+   *
+   * So the derived value is `jointSlope > 0 ? 1 : 0`, and because the other two
+   * surfaces spread this object they inherit `null` and therefore 0. An arena
+   * that bakes a matching grid into its own maps can state a number here.
+   */
+  slabVary: null,
+  /** Per-slab rotation and offset of the history map crop. 1 = full turn. */
+  slabPlace: 1.0,
+  /** Per-slab albedo trim, +/- this fraction. Zero-mean, see the hook. */
+  slabTone: 0.10,
+  /** Per-slab roughness trim, +/- this absolute. */
+  slabRough: 0.07,
+  /** Per-slab plane tilt, as an xz offset on the world normal. */
+  slabTilt: 0.012,
+  /** Depth of the settlement step at a joint, as an albedo fraction. */
+  slabStep: 0.30,
+  /** Normal tilt on the step face, same units as `jointSlope`. */
+  slabStepSlope: 0.50,
+  /** How far the step's lit arris and shadow reach from the joint, metres. */
+  slabLip: 0.055,
+  /**
+   * Fissure amount, read from the detail bake's alpha. Inherited harmlessly by
+   * the other two arenas: their detail bakes write alpha 255, which this hook
+   * reads as no fissure at all.
+   */
+  slabCrack: 1.0,
   reflStrength: 0.62,
   reflFresnelBase: 0.03,
   reflDistort: 0.028,
@@ -1314,6 +1558,22 @@ export class StageFloor {
       uFloorCool: { value: new THREE.Color(1, 1, 1) },
       /** `aoMapIntensity` for the folded occlusion read; see FRAG_FOLD_AO. */
       uFoldAoIntensity: { value: 1 },
+      // --- per-slab variation (see PIT_SURFACE.slabVary) --------------------
+      // The master is DERIVED from the joint grid when the surface does not
+      // state it, so an arena that has turned the grid off cannot inherit a
+      // bay-grid step it has no bays for.
+      uSlabVary: { value: S.slabVary != null ? S.slabVary : (S.jointSlope > 0.02 ? 1 : 0) },
+      uSlabPlace: { value: S.slabPlace },
+      uSlabTone: { value: S.slabTone },
+      uSlabRough: { value: S.slabRough },
+      uSlabTilt: { value: S.slabTilt },
+      uSlabStep: { value: S.slabStep },
+      uSlabStepSlope: { value: S.slabStepSlope },
+      uSlabLip: { value: S.slabLip },
+      uSlabCrack: { value: S.slabCrack },
+      /** 1 / mean of the fissure darkening term; see deckDetail's fissMean. */
+      uSlabCrackR: { value: 0.30 },
+      uSlabFissNorm: { value: 1 / Math.max(0.2, 1 - 0.55 * (this.deckDetail.userData.fissMean ?? 0)) },
     };
 
     /**

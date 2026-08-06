@@ -1102,8 +1102,78 @@ if (AB.grain !== null) GRAIN.height = AB.grain;
  * change under that, exactly as the charter records for the round-14 detail
  * normal. What can be said: no texture, no bake time, no triangle and no draw
  * call, and a fragment-shader delta that a 20ms-wide noise floor cannot find.
+ *
+ * --- Round 28: the table above does not reproduce, and it is now 0 -----------
+ *
+ * Re-measured on today's tree — the light rig has been rebuilt twice since
+ * round 15 — on the frozen 02-closeup framing, sim and grain stopped, renderScale
+ * pinned to 1, every armed arm BRACKETED by a null grab and reported against the
+ * mean of its two neighbours. Null-to-null noise on this rig: micro-contrast
+ * +-2.0%, 1px band +-0.8%, mean luma +-2.5%. Round 15's own instrument,
+ * `100 * RMS(L - box4(L)) / mean(L)`, taking the lobe OFF:
+ *
+ *     crop      micro     1px band   >code 200   saturation
+ *     chest     +7.7%      +17.2%      -4.1%       +7.9%
+ *     head      +0.7%       -2.1%     -27.7%       +6.6%
+ *     pauldron  +5.5%       -2.6%     -35.7%      +35.2%
+ *
+ * Round 15 measured +15% mean micro-contrast for turning the lobe ON. Today,
+ * turning it OFF gains micro-contrast on three crops out of three. **The sign is
+ * reversed on every crop that could be re-measured**, so the number this was
+ * shipped against is not evidence about the current frame either way.
+ *
+ * What survives measurement is what the lobe does to the paint. It is a
+ * `mix(pow2(roughness), 1.0, pow2(anisotropy))` widening of the tangential
+ * lobe plus a bent normal into the IBL, and on plates whose box-projected U
+ * axis runs across the form it lays one broad milky sheet over the whole panel:
+ * 20-35% of the pauldron crop sat above code 200, the paint under it desaturated
+ * by a third, and at 1:1 the panel lines, rivets and the dark structural plate
+ * beside them are veiled. It is the "one uniform metalness ... plastic-toy look"
+ * of docs/CRITIC.md produced by a lobe rather than by a map.
+ *
+ * Against the reference closeups — 01, 03, 04, 05, 08, 09, subject rects on the
+ * in-focus character surface, the only comparable subset for this axis — the
+ * chest was the crop furthest outside the set on both instruments, and it is the
+ * crop the lobe costs the most:
+ *
+ *     metric        ref min  ref median  ref max   ours, lobe on   lobe off
+ *     micro, chest    6.64      13.60     27.08        5.00          5.32
+ *     1px, chest      3.98       4.94      7.66        2.32          2.71
+ *     >200, pauldron  1.18       9.58     50.54       20.03         13.90
+ *
+ * Two properties of the knob that a future round should not have to rediscover:
+ *
+ * 1. **It is a step at zero, not a ramp.** Swept live on one frozen frame,
+ *    0.40 / 0.30 / 0.20 / 0.10 all sit inside the null band on every metric
+ *    (chest 1px band -1.1% to +0.3%), and so does 0.90 (-11.2% against -13.0%
+ *    for 0.40, measured from the other side). Only 0.00 moves, by +16.6%, and
+ *    it moves back when poked to 0.40 and back again — twice, agreeing to 0.5%.
+ *    So this knob has two states in practice and no useful intermediate value;
+ *    do not spend a round tuning it, and do not trust a live strength sweep to
+ *    tell you what it is worth.
+ *
+ *    The mechanism is NOT established and is recorded here as an open question.
+ *    Crossing zero is what `MeshPhysicalMaterial`'s setter bumps `version` on,
+ *    so 0 -> nonzero and nonzero -> 0 recompile the program with and without
+ *    `USE_ANISOTROPY` while 0.4 -> 0.2 does not; but `WebGLMaterials` does
+ *    refresh `anisotropyVector` for any positive value, and at these roughnesses
+ *    `mix(pow2(roughness), 1.0, pow2(anisotropy))` should still separate 0.2
+ *    from 0.4 by more than the null band. Something else in three's anisotropic
+ *    path — most likely `getIBLAnisotropyRadiance`, which is the term that would
+ *    explain a change this large on plates lit mostly by the environment — is
+ *    carrying the difference. Whoever needs the strength to be continuous should
+ *    start there rather than at the material.
+ * 2. **It is invisible at fighting range.** Same rig at the default fight
+ *    framing, where the fighter covers 255k pixels instead of 866k: every metric
+ *    within +-1.0%, and figure/ground inside its own 5% null drift. Nothing the
+ *    lighting axis is scored on can see this change, which is the same thing
+ *    round 15 said and the one part of its note that does reproduce.
+ *
+ * `kb.worn` keeps its 0.28. It is bare rolled steel rather than paint over
+ * steel, a directional lay is what that surface physically has, and it is the
+ * one plate material no critic has ever called flat.
  */
-const PLATE_ANISOTROPY = 0.4;
+const PLATE_ANISOTROPY = 0;
 
 const DETAIL_CACHE = new Map();
 const SHARED_TEXTURES = new Set();

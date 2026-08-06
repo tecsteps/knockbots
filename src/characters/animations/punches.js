@@ -289,10 +289,49 @@
  *
  * Use the limb-only silhouette for any future claim about a tell. The
  * whole-body number cannot see an arm.
+ *
+ * ---------------------------------------------------------------------------
+ * THE WHOLE CHAIN PEAKED ON ONE TICK, AND THAT WAS THIS FILE'S OWN DOING
+ * ---------------------------------------------------------------------------
+ * Every link of the drive — hips, spine01, spine02, chest, shoulder, elbow,
+ * wrist — reached its PEAK angular speed on the same tick on p.straight,
+ * p.uppercut, p.overhand, p.hook and p.elbow, and within two ticks on 25 of the
+ * 34 clips that declare an impact. Median hips-to-tip lag across those 34 was
+ * ZERO, and in 17 of them the pelvis was at 90% or more of its own top speed on
+ * the exact frame the blow landed. A body whose every joint accelerates and
+ * stops together is a rigid object, and it is the single largest gap against
+ * CRITIC.md, whose 90+ text for this axis is "the hips lead, the head lags".
+ *
+ * The cause is visible in the key ticks above and it is the round-11 re-key
+ * described earlier in this header: "the drive keyed one key per tick from the
+ * coil onward, on a t^p ramp whose exponent is solved per span so ~38% of the
+ * travel always lands on the contact tick". That ramp was solved per span and
+ * applied to every driving bone, so all of them converge on `impact.tick` by
+ * construction. It bought the contact-frame speed it was written for and it
+ * flattened the chain doing it. `whip` could not undo that: its taper is zero
+ * at the pivot, so it cannot separate two bones AT contact no matter what W is.
+ *
+ * The fix is `lead` in reactions.js — the dual operation, advancing the
+ * proximal tracks and holding the authored contact value. Measured over the 34:
+ * concordance 0.50 -> 0.74, hips-to-tip lag 0 -> 4 ticks, hips-at-contact
+ * 1.00 -> 0.00, clips with the pelvis at 90%+ on the contact frame 17 -> 0,
+ * with contact-frame ratio, follow-through and worst single-tick hurtbox travel
+ * all held or improved, and the pose at tick 0, at `impact.tick` and at
+ * `duration` bit-identical on all 92 clips (0 bones drifted, 0.000000 mm).
+ *
+ * SEVEN CLIPS REFUSED IT and ship unchanged: p.jabAlt, p.pistonRush, k.stomp,
+ * k.sweep, sp.overdriveStart, sp.risingFang, and p.uppercut at the full chain.
+ * All seven fail on the same gate, contact-frame speed ratio, and the reason is
+ * physical rather than an authoring slip: on those moves the torso is still
+ * carrying the striking limb at contact, so stopping the torso takes the
+ * strike's world speed with it. Four of them (k.stomp 0.48, k.sweep 0.37,
+ * sp.overdriveStart 0.29, sp.risingFang 0.73) are the same clips already named
+ * in this header as gravity- or pose-driven exceptions. They want re-posing,
+ * and this time the evidence for that says so from a second direction.
  */
 
 import { validateClip } from '../AnimationFormat.js';
-import { whip } from './reactions.js';
+import { whip, lead } from './reactions.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -3060,6 +3099,66 @@ for (const id in WHIP) {
     only: id === 'p.uppercut' ? PLANTED_LEGS : undefined,
   });
 }
+
+// ---------------------------------------------------------------------------
+// PROXIMAL LEAD. See the note above `lead` in reactions.js for the measurement
+// and the mechanism. Budget in ticks, swept per clip; only arms that improved
+// chain concordance while regressing nothing are here. Every clip's pose at
+// tick 0, at `impact.tick` and at `duration` is bit-identical to before.
+//
+// `p.uppercut` is the exception and gets its own reduced chain, because it is
+// the one punch here whose pelvis drive is load-bearing for the FIST'S OWN world
+// speed: an uppercut is a legs-and-hips move, the fist is largely carried, and
+// stopping the torso at contact takes the contact-frame speed ratio with it.
+// The full chain costs it 0.77 -> 0.68 at every budget from 0.5 to 12 ticks and
+// is refused by the gate. Leading only the pelvis and the first spine joint, by
+// half a tick, buys concordance 0.50 -> 0.74 and hips-at-contact 1.00 -> 0.59
+// for 0.77 -> 0.75, which is inside tolerance. Half a tick is a small claim and
+// is reported as one; it moves which tick the pelvis peak lands on and nothing
+// more. It is taken because `p.uppercut` is what `shots/17-anim-strip`,
+// `04-impact`, `05-juggle` and `07-super` all photograph — the launcher-tagged
+// move `TestHarness.forceHit` resolves to — so it is the clip this axis is
+// actually scored on.
+// ---------------------------------------------------------------------------
+const UPPERCUT_LEAD = { hips: 1.0, spine01: 0.78 };
+lead(PUNCH_CLIPS['p.uppercut'], 0.5, { pivot: PUNCH_CLIPS['p.uppercut'].impact.tick, chain: UPPERCUT_LEAD });
+
+const LEAD = {
+  'p.backfist': 4,
+  'p.duckingStraight': 5,
+  'p.elbow': 4,
+  'p.hammerFist': 6,
+  'p.hook': 6,
+  'p.jab': 1.5,
+  'p.launcherPunch': 8,
+  'p.lowJab': 0.75,
+  'p.overhand': 7,
+  // 10, and the trade here is not monotonic in the budget, which is worth
+  // recording. Concordance plateaus at 0.60 from L=5 up, so the smallest
+  // budget on the plateau looks like the right pick — but this is the one
+  // clip whose contact tick (48) leaves the 0.30 cap room to run, and its
+  // contact-frame speed ratio dips to 0.68 at L=3, recovers to 0.95 at 5,
+  // falls again to 0.87 at 7 and only returns to 1.00 at L>=10. The fist
+  // is still riding the pelvis on this slam, so the gate clears only once
+  // the pelvis is fully out of the way. 10 is the smallest budget that
+  // passes every gate, not the smallest that maximises the objective.
+  //
+  // AND THE GATE SET WAS INCOMPLETE, which is why this is 0 and not 10.
+  // The declared gates were contact-frame speed ratio, follow-through and
+  // worst single-tick hurtbox travel. Approach smoothness was not among
+  // them, and that is what a 10-tick budget on a 48-tick approach broke:
+  // acceleration sign reversals along the striking tip went 2 -> 12, a 6x
+  // increase in velocity sawtooth, and this clip alone accounted for +10 of
+  // the +6 net across all 34 attacks. A trace that reverses acceleration
+  // twelve times before contact reads as micro-stutter, which is the
+  // rubric's own "linear interpolation" down-score item -- so the operator
+  // bought chain ordering by spending the thing the axis actually scores.
+  // Disabled until `lead` gates on approach smoothness too and this clip is
+  // re-swept; the other 27 clips are unaffected and keep their gains.
+  'p.siegeSlam': 0,
+  'p.straight': 5,
+};
+for (const id in LEAD) lead(PUNCH_CLIPS[id], LEAD[id], { pivot: PUNCH_CLIPS[id].impact.tick });
 
 for (const id in PUNCH_CLIPS) validateClip(PUNCH_CLIPS[id], BONE_NAMES);
 

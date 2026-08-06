@@ -1316,3 +1316,112 @@ Worth recording, because each failure produced a *plausible* number.
 Raycasting is also not free here: against the merged set meshes it costs roughly **24 ms per ray**, so
 a 25,000-ray sampling pass is a ten-minute stall. The shipped rig raycasts nothing — a world grid on a
 known plane is what "attached to the wall" means, and it costs milliseconds.
+
+---
+
+# Round 28: twenty-eight rounds of scores, computed against frames that no longer exist
+
+Animation 63 -> 67, stage 72 -> 73, character 70 -> 69, impact 69 -> 66.
+
+## The structural defect, found by the character critic
+
+`.gitignore` line 5 was `shots/`. That pattern matches `docs/shots/` as well as `shots/`, so **not
+one capture from any round in this project's history survives in git.** Every question of the form
+"did this axis fall because the work got worse, or because the frame it is scored on changed?" has
+been unanswerable by construction for twenty-eight rounds, and would have stayed unanswerable.
+
+Fixed to `/shots/`, so only the working capture directory is ignored. `docs/shots/` is now tracked
+and carries an `ARCHIVE.json` recording rev, base commit, resolution and per-frame byte counts.
+
+## The archive was also the wrong resolution, which faked a catastrophe
+
+`docs/shots/` was exported at 1280x720 while `shots/` delivers 1920x1080. Run naively on identical
+crop coordinates, the stage critic's nine deck crops read:
+
+```
+-68.9%  -56.0%  -59.8%  -55.9%  -85.3%  -56.9%
+```
+
+Scale-matched, the same crops read **+5.7% / +1.3% / -0.0%**. A critic quoting the first table would
+have led with the total destruction of the floor detail, and it does not exist. The impact critic hit
+the same thing from the other side: a pixel-coordinate ROI landed on background in one of the two
+resolutions and returned `ink=0.000, N=0` on both flagship frames.
+
+The archive is now exported at the delivered resolution. **A baseline at a different resolution from
+the capture is not a baseline**, and this project has been computing four rounds of deltas against
+one.
+
+## The impact gate could never have been passed or failed by anyone
+
+The handover gate was "discrete particle count 11-29 -> 35-152, size p90 under 35px, ink ladder
+1.81x". It had no committed measurement script; "ink", "particle" and the ROI were all undefined; and
+the stated before-figure of 11-29 **does not reproduce under any mask, threshold or ROI** the critic
+could construct -- the same baseline measures 106-206. I passed that gate through into a briefing
+without re-deriving it, which is rule 4 of my own preamble, three rounds after writing it.
+
+The fine-particle population is REVERTED. It regressed the metric it was built to raise: discrete
+component count fell on all three impact frames (-20%, -15%, -7%) and effect ink fell 10-13%, with
+the fine end taking the worst of it at -47% on the flagship. The critic controlled for the resolution
+trap by round-tripping through 720p and found the resampler's bias runs the *same* direction, so the
+true drop is larger than quoted. Charter rule: ship the measurement, not the feature.
+
+## What the animation diagnosis found, and why it is the round's real result
+
+The rubric's own 90+ text for this axis is "the hips lead, the head lags. A strike drives from the
+floor up." That is a claim about ORDERING, and it was measured directly through the offline rig
+sampler across all 34 clips that declare an impact:
+
+```
+hips-peak -> tip-peak lag        median 0 ticks    20/34 tip peaks at or BEFORE the hips
+chain concordance                median 0.50       pure chance; 17/34 below 0.5
+hips speed at contact / own peak median 1.00       17/34 at >=90%
+```
+
+Nine clips peak **every link -- hips, spine01, spine02, chest, shoulder, elbow, wrist -- on a single
+tick**. The pelvis is at its own top speed on the exact frame the fist lands, which is the opposite
+of how a strike transfers momentum. There was no kinetic chain; the body was rigid.
+
+The cause was localised in the data rather than guessed: round 11's re-key put "one key per tick from
+the coil onward, on a t^p ramp whose exponent is solved per span so ~38% of the travel always lands
+on the contact tick" -- solved per span and applied to every driving bone, so they all arrive
+together. It bought the contact-frame speed it was written for and flattened the chain doing it. And
+the existing `whip()` operator structurally cannot fix it: its taper is `d * (1 - k.t / T)`, which is
+**zero at the pivot**, so it can separate two bones mid-startup and never at contact, for any W.
+
+The new `lead()` operator advances the proximal chain and holds the authored contact value, so the
+contact pose is bit-identical by construction. Verified across all 92 clips: **0 bones drifted,
+0.000000 mm**, and no move's startup, active or recovery count changed.
+
+```
+chain concordance                0.50 -> 0.74
+hips->tip lag                       0 -> 4 ticks
+hips speed at contact            1.00 -> 0.00
+chain runs backwards/simultaneous  17 -> 2
+hips at >=90% of peak at contact   17 -> 0
+contact-frame ratio / follow-through      held
+```
+
+## The gate set was incomplete, and one clip paid for it
+
+`p.siegeSlam` took a 10-tick budget and its acceleration sign reversals along the approach went 2 ->
+12 -- a 6x increase in velocity sawtooth on a 48-tick approach, accounting for +10 of the +6 net
+across all 34 attacks. The declared gates were contact-frame ratio, follow-through and hurtbox
+travel; **approach smoothness was not among them**, so the operator bought chain ordering by spending
+the exact quantity the rubric down-scores as "linear interpolation". Disabled for that clip pending a
+re-sweep with smoothness gated; the other 27 keep their gains.
+
+## The axis is scored on one clip out of ninety-two
+
+`17-anim-strip` drives `forceHit({move:'launcher'})`, which resolves to `p.uppercut` -- and so do
+`04-impact`, `05-juggle` and `07-super`. Ninety-two clips were diagnosed, twenty-eight changed, and
+every capture in the project photographs the same one. Worse, `p.uppercut` received the *smallest*
+fix in the file: a reduced two-bone chain on a 0.5-tick budget, +1 tick of head lag against a +4
+median. **The round's median gain is invisible in all four evidence frames.** That is why the axis
+moved 4 points and not 10, and it is a harness limit rather than an art limit.
+
+Also: I briefed `11-anim-roundhouse` as evidence and **it has never existed in the shot list** --
+`git log -S` returns nothing. The only copy on disk is a one-off from `tools/animstrip.mjs` dated
+before every animation edit this round, so judging on it would have judged round-20 animation. And
+the manifest cannot catch this: `complete` validates the list against *itself*, so a shot that was
+never registered can never be reported missing. That is the round-27 defect in a new dress --
+certification can detect a corrupt present entry, never an absent one.

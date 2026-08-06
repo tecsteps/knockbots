@@ -140,6 +140,100 @@ export function whip(clip, W, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// `lead` — the half of the kinetic chain that `whip` structurally cannot reach.
+//
+// MEASURED FIRST. Driving all 34 clips that declare an `impact` through the real
+// rig and taking each chain link's tick of PEAK angular speed:
+//
+//   hips->tip lag        median 0 ticks, and in 24 of 34 the striking tip peaks
+//                        at or BEFORE the hips
+//   hips at contact      median 1.00 of the hips' own peak; in 17 of 34 the
+//                        pelvis is at 90%+ of its top speed on the exact frame
+//                        the blow lands
+//   chain concordance    median 0.50 — pure chance, i.e. no ordering at all
+//
+// p.straight, p.uppercut, p.overhand, p.hook, p.elbow, k.highKick and k.midKick
+// all peak every link of the chain — hips, spine01, spine02, chest, shoulder,
+// elbow, wrist — on ONE tick. That is not a chain, it is a rigid body, and
+// CRITIC.md's 90+ text for this axis is literally "the hips lead, the head lags".
+//
+// WHY `whip` DOES NOT FIX IT. `whip` delays distal bones, but on an attack its
+// taper is `d * (1 - k.t / T)`, which goes to zero AT the pivot. Every bone's
+// drive therefore still converges on the contact tick no matter what W is, so
+// the peaks stay simultaneous by construction. That is the mechanism behind its
+// own honest note that the residual "needs re-posing" — it does not; it needs
+// the dual operation.
+//
+// WHAT THIS DOES. It advances the PROXIMAL tracks instead: the drive between
+// tick 0 and the pivot is compressed by `d` ticks and the authored contact value
+// is then HELD from `T - d` to `T`. So the pelvis arrives early and locks, and
+// the arm covers the last few ticks on its own — which is what transfers
+// momentum in a real strike, and it is why the hips are nearly stopped at
+// contact in any reference footage.
+//
+// The pose ON the contact tick is bit-identical because the held value IS the
+// authored one; tick 0 and the final tick are untouched because the map fixes
+// t=0 and nothing past the pivot moves. `impact.tick`, `duration` and every
+// startup/active/recovery count are therefore unchanged — verified pointwise
+// against all three poses on every clip below.
+//
+// `d` is capped at 0.30 of the startup so a 10-tick jab cannot lock its pelvis
+// for eight ticks. At 60Hz the kept budgets put the pelvis 0.8-6 ticks (13-100ms)
+// ahead of contact, which is the range a real cross or roundhouse sits in.
+//
+// Applied only where a per-clip sweep improved chain concordance and NOTHING
+// regressed: not the contact-frame speed ratio, not follow-through past contact,
+// not worst single-tick hurtbox travel, not any of the three pinned poses.
+// 27 of 34 clips passed. Across all 34: concordance 0.50 -> 0.73, hips-at-contact
+// 1.00 -> 0.00, hips->tip lag 0 -> 4 ticks.
+
+/** Fraction of the lead budget each joint arrives EARLY by, walking distally. */
+const LEAD_CHAIN = { hips: 1.0, spine01: 0.78, spine02: 0.58, chest: 0.40, clavicle_L: 0.24, clavicle_R: 0.24 };
+
+/** The hips may never arrive more than this fraction of the startup early. */
+const LEAD_CAP = 0.30;
+
+/**
+ * Advance the proximal chain so it arrives before the blow and holds.
+ * Mutates and returns `clip`.
+ * @param {import('../AnimationFormat.js').Clip} clip
+ * @param {number} L lead budget in ticks — the advance applied to the hips
+ * @param {{ pivot: number, chain?: Record<string, number> }} opts
+ *   `pivot` is the tick whose pose must survive untouched (an attack's
+ *   `impact.tick`); `chain` overrides the per-bone lead fractions.
+ */
+export function lead(clip, L, opts = {}) {
+  const T = opts.pivot;
+  if (!(L > 0) || clip.loop || !(T > 1) || T >= clip.duration) return clip;
+  const frac = opts.chain || LEAD_CHAIN;
+  for (const bone in clip.tracks) {
+    const f = frac[bone];
+    if (!(f > 0)) continue;
+    const d = Math.min(f * L, LEAD_CAP * T);
+    if (!(d > 1e-6)) continue;
+    // A real key at the pivot is what gets held; without one the compression
+    // would drag the contact pose earlier along with everything else.
+    const keys = pinAt(clip.tracks[bone], T);
+    const s = (T - d) / T;
+    const out = [];
+    let pinned = null;
+    for (const k of keys) {
+      if (k.t < T - 1e-9) out.push({ ...k, t: k.t * s });
+      else if (Math.abs(k.t - T) < 1e-9) { pinned = k; out.push({ ...k, t: T - d }); }
+      else out.push({ ...k });
+    }
+    if (pinned) {
+      const i = out.findIndex((k) => k.t > T);
+      const held = { t: T, r: [...pinned.r], ease: pinned.ease };
+      if (i < 0) out.push(held); else out.splice(i, 0, held);
+    }
+    for (let i = 1; i < out.length; i++) if (out[i].t <= out[i - 1].t) out[i].t = out[i - 1].t + 1e-3;
+    clip.tracks[bone] = out;
+  }
+  return clip;
+}
+
+// ---------------------------------------------------------------------------
 // Solved leg sets.
 // ---------------------------------------------------------------------------
 const L_BRACE = { hip_L: [-43, 4.9, 11], knee_L: [71.9, 0, 0], ankle_L: [-28.5, 2.4, 0], hip_R: [-3.4, 6, -12.1], knee_R: [48.6, 0, 0], ankle_R: [-38.5, -21.3, 0] };

@@ -1,0 +1,99 @@
+{
+ "rev": "0.26.0",
+ "baseCommit": "7ac3fb2",
+ "resolution": "1920x1080",
+ "quality": 72,
+ "note": "Per-round frame archive. Exported at the DELIVERED resolution so cross-round comparisons do not measure a resize -- a 1280x720 archive against 1920x1080 captures read as a 56-85% detail collapse that did not exist. Tracked in git: .gitignore was `shots/`, which matched this directory too, so 28 rounds of scores were computed against frames that survived nowhere.",
+ "shots": {
+  "01-hero-idle": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 270142
+  },
+  "02-closeup-face": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 307044
+  },
+  "03-full-body": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 285452
+  },
+  "04-impact": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 271766
+  },
+  "04b-impact-decay": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 285608
+  },
+  "05-juggle": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 268335
+  },
+  "06-stage-wide": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 264151
+  },
+  "07-super": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 218104
+  },
+  "08-hud": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 283844
+  },
+  "09-roster": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 303959
+  },
+  "10-ko": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 232509
+  },
+  "12-select-screen": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 205726
+  },
+  "13-announce-fight": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 266299
+  },
+  "14-victory": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 172824
+  },
+  "15-impact-light": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 257866
+  },
+  "16-impact-heavy": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 259243
+  },
+  "18-skydeck-wide": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 236395
+  },
+  "19-cistern-wide": {
+   "w": 1920,
+   "h": 1080,
+   "bytes": 232091
+  }
+ }
+}

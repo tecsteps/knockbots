@@ -74,7 +74,7 @@
  */
 
 import { validateClip } from '../AnimationFormat.js';
-import { whip } from './reactions.js';
+import { whip, lead } from './reactions.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -1864,6 +1864,27 @@ const WHIP = {
   'k.diveKick': 6,
 };
 for (const id in WHIP) whip(KICK_CLIPS[id], WHIP[id], { pivot: KICK_CLIPS[id].impact.tick });
+
+// ---------------------------------------------------------------------------
+// PROXIMAL LEAD. See the note above `lead` in reactions.js for the measurement
+// and the mechanism. Budget in ticks, swept per clip; only arms that improved
+// chain concordance while regressing nothing are here. Every clip's pose at
+// tick 0, at `impact.tick` and at `duration` is bit-identical to before.
+// ---------------------------------------------------------------------------
+const LEAD = {
+  'k.axeKick': 6,
+  'k.diveKick': 1.25,
+  'k.highKick': 5,
+  'k.jumpKick': 5,
+  'k.kneeStrike': 4,
+  'k.launcherKick': 5,
+  'k.lowKick': 8,
+  'k.midKick': 5,
+  'k.roundhouse': 6,
+  'k.sideKick': 4,
+  'k.spinKick': 5,
+};
+for (const id in LEAD) lead(KICK_CLIPS[id], LEAD[id], { pivot: KICK_CLIPS[id].impact.tick });
 
 for (const id in KICK_CLIPS) validateClip(KICK_CLIPS[id], BONE_NAMES);
 
