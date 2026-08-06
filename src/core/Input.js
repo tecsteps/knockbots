@@ -250,7 +250,34 @@ export class Input {
 
   /** Recognise classic motions from the recent direction history. */
   #motion(hist) {
-    const recent = hist.filter((h) => this.tick - h.tick <= MOTION_WINDOW_TICKS).map((h) => h.dir);
+    /*
+     * CONSECUTIVE DUPLICATE DIRECTIONS ARE COLLAPSED, AND WITHOUT THAT A HELD
+     * DIRECTION SYNTHESISED A MOTION THAT NOBODY ENTERED.
+     *
+     * `commandsFor` pushes a fresh history entry on ANY tick a button is
+     * pressed, not only when the direction changes. So holding down and
+     * pressing a button wrote `2` twice, `/2.*2/` matched, and the input came
+     * out as `dd` -- a double-tap-down motion the player never made. Measured
+     * through real key events: holding down and pressing 2 produced
+     * `siegeSlam`, an 86-frame UNBLOCKABLE, where the player asked for
+     * `duckingStraight`; holding down and pressing 3 produced `groundSpike`
+     * instead of `lowKick`. The same duplicate turned a held back into `bb`,
+     * which is why back+RP and back+RK were reported as not working -- they
+     * were resolving, just to the wrong move.
+     *
+     * A real double-tap passes through neutral -- `6,5,6` -- so it survives the
+     * dedupe. A held direction is `6,6` and collapses to one. That is exactly
+     * the distinction the motion test needs and was not making.
+     *
+     * WHY MY OWN AUDIT MISSED IT: I verified the state/button matrix by driving
+     * `findMove` with a hand-built buffer and reported 12/12. A synthesised
+     * buffer cannot contain this defect, because the defect is created upstream
+     * in the history the real input path writes. Testing the matcher is not
+     * testing the game.
+     */
+    const recent = hist.filter((h) => this.tick - h.tick <= MOTION_WINDOW_TICKS)
+      .map((h) => h.dir)
+      .filter((d, i, a) => d !== a[i - 1]);
     const s = recent.join('');
     // Directions here are already facing-relative: 6 = forward, 4 = back.
     if (/2[\s]*3[\s]*6/.test(s)) return 'qcf';

@@ -558,7 +558,27 @@ export class TouchControls {
         this._drags.set(t.identifier, { x0: t.clientX, y0: t.clientY, limb: id });
         if (id) this.#down(id);
       }
-      if (e.touches.length >= 2) this.#down(5); // two-finger overdrive
+      /*
+       * TWO FINGERS ON THE CLUSTER IS A THROW, NOT AN OVERDRIVE.
+       *
+       * It used to be overdrive, and that made throws UNREACHABLE on a handset:
+       * every throw in the game is a chord -- `1+2`, `b+1+2`, `f+1+3` -- and any
+       * two-finger tap was swallowed as a super before the two buttons could be
+       * read. A whole mechanic was unreachable on the platform most people play
+       * on, and the player asked for throws without knowing that was why.
+       *
+       * Overdrive does not lose anything: it has its own pad, and that pad now
+       * works -- the move was `qcf+5` until this session, so a tap sent the
+       * button with no motion and the gesture was the only way to throw a super
+       * at all. With `5` as a bare input the pad is the honest affordance and
+       * the gesture is redundant.
+       *
+       * `#limbAt` has already resolved each finger to its nearest button, so the
+       * chord comes out of the two limbs actually touched rather than being
+       * hardcoded to 1+2 -- which is what makes `f+1+3` reachable too. The move
+       * matcher gathers a chord across up to 4 ticks (CHORD_TICKS), so two
+       * fingers landing a frame apart is still one throw.
+       */
       e.preventDefault();
     }, opt);
 
@@ -582,10 +602,11 @@ export class TouchControls {
           this.#up(d.limb);
         }
       }
-      // Only drop overdrive once the second finger is genuinely gone. Releasing
-      // every button on any lift used to cancel a held limb the other thumb was
-      // still on.
-      if (e.touches.length < 2) this.#up(5);
+      // The paired release for the old two-finger overdrive gesture is gone with
+      // it. Leaving it would have raised button 5 on every second lift anywhere
+      // on the cluster, cancelling an overdrive the OD pad was legitimately
+      // holding -- the pad and the gesture shared one button and only one of
+      // them still exists.
     };
     this.cluster.addEventListener('touchend', endCluster, opt);
     this.cluster.addEventListener('touchcancel', endCluster, opt);

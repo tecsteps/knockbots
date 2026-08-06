@@ -27,11 +27,12 @@ import {
   HEIGHT, WEIGHT, REACTION, HITSTOP, COMBO_SCALING, MIN_COMBO_SCALE,
   JUGGLE_DECAY, MIN_JUGGLE_SCALE, WALL_SPLAT_SPEED, MAX_HEALTH,
   METER_ON_DEAL, GROUND_Y, ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, TICK_HZ,
+  ROUNDS_TO_WIN,
 } from '../core/Constants.js';
 import { bus } from '../core/Bus.js';
 import { Rng } from '../core/Rng.js';
 import { isActive } from './MoveSchema.js';
-import { STATE } from './Fighter.js';
+import { STATE, FINISHER_HEALTH_DEFAULT } from './Fighter.js';
 
 const COUNTER_DAMAGE = 1.28;
 const COUNTER_STUN = 7;
@@ -110,7 +111,35 @@ export class CombatSystem {
     /** Per-attacker combo bookkeeping. */
     this.combos = fighters.map(() => ({ hits: 0, damage: 0, lastTick: -999 }));
 
+    /**
+     * Rounds won, tracked here rather than read off `Game`.
+     *
+     * A finisher's condition can say "final round", and this is the only object
+     * that can answer that question at the tick the health threshold is crossed.
+     * It is incremented in exactly the two places that emit `roundEnd`, so it
+     * cannot drift from the score the HUD shows, and `roundStart` with round 1
+     * is an unambiguous new-match signal — `Game.#resetRound` emits it after
+     * `startMatch` has put the counter back to 1.
+     */
+    this.wins = [0, 0];
+    this._offRoundStart = bus.on('roundStart', (e) => {
+      if ((e?.round ?? 1) <= 1) { this.wins[0] = 0; this.wins[1] = 0; }
+    });
+
     this.applyBounds();
+  }
+
+  /**
+   * Could this round decide the match? The finisher's `finalRoundOnly` rule
+   * reads this, and "final round" is taken at its plain meaning: a round after
+   * which somebody may have won.
+   */
+  isFinalRound() {
+    return this.wins[0] >= ROUNDS_TO_WIN - 1 || this.wins[1] >= ROUNDS_TO_WIN - 1;
+  }
+
+  dispose() {
+    if (this._offRoundStart) { this._offRoundStart(); this._offRoundStart = null; }
   }
 
   /** Push the stage's real dimensions into both fighters. */
@@ -160,7 +189,40 @@ export class CombatSystem {
     this.#resolveWalls(f1);
     this.#separatePair();
     this.#updateCombos();
+    this.#updateFinisherWindows();
     this.#checkKO();
+  }
+
+  /**
+   * Open a finisher window the tick its condition becomes true.
+   *
+   * The condition is authored per character (docs/CONTRACT-character-moves.md)
+   * and this is the whole of its machine-readable half: the opponent under
+   * `healthPct` of MAX_HEALTH, alive, and — if `finalRoundOnly` — on a round
+   * that can decide the match. Two integer comparisons on state the sim already
+   * owns, so it is reproducible tick-for-tick.
+   *
+   * It runs BEFORE `#checkKO` on purpose: a hit that takes the opponent to
+   * exactly zero has already ended the round, and offering a finisher on a
+   * corpse would be the window opening and closing on the same tick.
+   */
+  #updateFinisherWindows() {
+    if (this.roundOver) return;
+    for (let i = 0; i < 2; i++) {
+      const a = this.fighters[i];
+      const d = this.fighters[1 - i];
+      if (!a?.canOpenFinisher?.()) continue;
+      const spec = a.finisherSpec;
+      if (!spec) continue;
+      if (d.health <= 0 || d.state === STATE.KO) continue;
+      if (a.health <= 0 || a.state === STATE.KO) continue;
+      const pct = typeof spec.healthPct === 'number' ? spec.healthPct : FINISHER_HEALTH_DEFAULT;
+      if (d.health > pct * MAX_HEALTH) continue;
+      if (spec.finalRoundOnly && !this.isFinalRound()) continue;
+      const cost = a.finisher?.move?.meterCost || 0;
+      if (cost > 0 && a.meter < cost) continue;
+      a.openFinisherWindow();
+    }
   }
 
   /**
@@ -234,7 +296,29 @@ export class CombatSystem {
 
     const move = boxes[0].move;
     const grounded = defender.state === STATE.KNOCKDOWN || defender.state === STATE.WAKEUP;
-    if (grounded && !move.props.hitsGrounded) return null;
+    // A finisher reaches a fighter who is already down. Its window opens on a
+    // near-dead opponent, which is exactly the opponent most likely to be on the
+    // floor, and a finisher that whiffs on the reason it exists is not one.
+    if (grounded && !move.props.hitsGrounded && !move.props.finisher) return null;
+
+    /*
+     * A GRAB MUST NEVER RESOLVE DOWN THE STRIKE PATH.
+     *
+     * `#resolveThrow` refuses an airborne, juggled or backdashing defender and
+     * returns WITHOUT consuming the window -- and `#findConnection` then ran on
+     * the same tick with the same move. `#guardResult` answers 'hit' for
+     * `props.throw` before it tests guard, because a throw is unblockable by
+     * design. So a grab that the throw system had explicitly rejected paid out
+     * as unblockable damage: `1+2` into a juggle was free, guaranteed, and
+     * un-defendable.
+     *
+     * The move data was fixed in the same round -- the vestigial capsule now
+     * sits behind the fighter's own spine, which makes the connection
+     * geometrically impossible. This makes it STRUCTURALLY impossible, because
+     * a hitbox that is only unreachable by geometry is one anchor edit away
+     * from being reachable again, and nothing would fail if it were.
+     */
+    if (move.props.throw) return null;
 
     let best = null;
     let bestDepth = -Infinity;
@@ -292,6 +376,9 @@ export class CombatSystem {
   #guardResult(move, snap) {
     if (move.height === HEIGHT.UNBLOCKABLE) return 'hit';
     if (move.props.throw) return 'hit';
+    // Unblockable by definition, whatever height the data gives it. The cost of
+    // a finisher is the window, not a guess about the defender's guard.
+    if (move.props.finisher) return 'hit';
     // A full crouch ducks highs whether or not the defender is guarding.
     if (move.height === HEIGHT.HIGH && snap.crouching && !snap.airborne) return 'whiff';
     if (!snap.blocking || snap.airborne) return 'hit';
@@ -337,6 +424,12 @@ export class CombatSystem {
     };
 
     defender.isCounterHit = counter;
+    // Before `applyHit`, deliberately: a finisher's connect KOs inside that call
+    // and emits `finisherKO`, so raising this afterwards would tell every
+    // listener the round ended before it was told the blow landed.
+    if (move.props.finisher) {
+      bus.emit('finisherHit', { attacker, defender, move, point: hit.point.clone() });
+    }
     const applied = defender.applyHit(move, attacker, hit.point, info);
 
     combo.hits++;
@@ -367,7 +460,12 @@ export class CombatSystem {
     bus.emit('hitstop', { ticks: stopTicks });
     bus.emit('shake', { amount: shake, ticks: Math.max(6, Math.round(stopTicks * 1.3)) });
 
-    if (move.props.super) {
+    if (move.props.finisher) {
+      // The same `superHit` the camera and FX already answer; `finisherHit` was
+      // raised above, before the blow was applied.
+      bus.emit('superHit', { attacker, defender, move });
+      bus.emit('timeScale', { scale: 0.2, ticks: 40 });
+    } else if (move.props.super) {
       bus.emit('superHit', { attacker, defender, move });
       bus.emit('timeScale', { scale: 0.3, ticks: 22 });
     } else if (counter && move.weight !== WEIGHT.LIGHT) {
@@ -586,7 +684,20 @@ export class CombatSystem {
       this.stage.impact(_pt, 2.2);
     }
     if (winner >= 0) this.fighters[winner].celebrate();
+    this.#scoreRound(winner);
     bus.emit('roundEnd', { round: this.round, winner, ko: true, perfect });
+  }
+
+  /**
+   * Book the round, so `isFinalRound` can answer next round. A match that ends
+   * here is cleared immediately: nothing tells this object when a new match
+   * begins except `roundStart` with round 1, and a stale score would make the
+   * opening round of the next match look like a decider.
+   */
+  #scoreRound(winner) {
+    if (winner < 0) return;
+    this.wins[winner]++;
+    if (this.wins[winner] >= ROUNDS_TO_WIN) { this.wins[0] = 0; this.wins[1] = 0; }
   }
 
   /** The clock ran out: whoever has more health left takes the round. */
@@ -596,6 +707,7 @@ export class CombatSystem {
     const [a, b] = this.fighters;
     const winner = a.health === b.health ? -1 : (a.health > b.health ? 0 : 1);
     if (winner >= 0) this.fighters[winner].celebrate();
+    this.#scoreRound(winner);
     bus.emit('timeScale', { scale: 0.4, ticks: 60 });
     bus.emit('roundEnd', { round: this.round, winner, ko: false, perfect: false });
   }
