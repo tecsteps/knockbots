@@ -1,7 +1,7 @@
 {
  "status": {
-  "rev": "0.24.0",
-  "commits": "137",
+  "rev": "0.25.0",
+  "commits": "141",
   "modules": 69,
   "lines": "63k",
   "clips": 92,
@@ -19,7 +19,7 @@
   },
   {
    "axis": "Lighting & atmosphere",
-   "score": 74
+   "score": 77
   },
   {
    "axis": "Character rendering",
@@ -835,11 +835,54 @@
      "state": "next"
     }
    ]
+  },
+  {
+   "phase": "PHASE 30",
+   "when": "Round 26",
+   "rev": "rev 0.25.0",
+   "title": "The black was the grade curve, and the 48fps was the harness",
+   "paras": [
+    "Lighting 74 to 77, stage 74 unchanged. The lighting move is the largest single-axis gain in eleven rounds, and it came from discovering that five rounds of lighting work had been aimed at the wrong subsystem entirely.",
+    "The finding that started it was the first in eight rounds to hold against the whole reference set rather than one member of it: 8.3 per cent of the wide frame sat at or below linear 3e-4, against a range of 0.000 to 1.633 across all ten references. The critic called it “there is no fill light”. That was wrong, and so was every candidate in the brief. The hemisphere fill is on the global layer and both halves of the split see it. Zeroing the environment intensity moved the metric from 3.9 to 4.1 per cent. Killing ambient occlusion moved it the wrong way. Multiplying the fill by ten moved it from 3.89 to 3.74 — no leverage at any strength.",
+    "It was the grade curve. The shadow segment is a straight line clamped at zero, so with a pivot of 0.42 and contrast 1.45 it reaches zero at thirteen per cent of the display range, where the file’s own comment claimed the bottom two per cent. Every scene-linear radiance below 1.94e-2 left the pass as exactly black, at any exposure: 127,051 pure-black pixels in one frame against 645 in the blackest reference. The fill was delivering about a twentieth of the clip threshold, which is the complete explanation for why adding light did nothing and why the axis had not moved in five rounds. Nothing upstream of a clamp can be seen through it, and a black frame looks like missing light whether or not that is what it is.",
+    "The forty-eight frames a second was never the game either. The capture harness pinned the render scale to one for a single shot that needed a frozen pose and restored nothing — and that shot is the second of twenty, so every remaining frame and the end-of-run performance probe rendered at native 1080p instead of the quality tier’s 1632 by 918. Not accumulation, a step change at shot two, which is exactly why none of the subsets tested reproduced it. The whole gap was 5.8 milliseconds of resolution. The full pass now reports 60.6 fps, and the manifest carries the resolution beside the number.",
+    "Two of my own claims were retracted this round. The texture-leak hypothesis was disproved four ways, most directly by orphaning three hundred textures — twenty-five times the observed leak — and measuring 18.00 milliseconds against 17.60 with identical program counts. The leak is real and entirely innocent: Three.js allocates a bone texture that only an explicit skeleton dispose frees, and nothing in the codebase had ever called it. It is fixed as a correctness matter with the measured benefit, zero, written into each comment so nobody later re-derives it as a performance win.",
+    "Then both critics caught the instruments lying again, in two different subsystems in one round. The headline number — black pixels down from 8.300 to 0.072 per cent — is not a scene measurement. Those 1,494 pixels are identical across every shipped shot and all of them sit on one scanline: a one-pixel rule inside the interface nameplate bar. The scene’s own figure is zero. So the fix is better than it was reported and the gate is dead as an instrument, because it has a floor set by a UI element the renderer cannot influence. Separately, the round gave the frame-rate figure a resolution label and stopped one step short: the frames themselves were taken with the adaptive controller live at 1555 by 874, not the 1632 by 918 the probe pinned afterwards. Every shot now records its own scale.",
+    "The stage axis did not move, and its critic explained why better than the lighting score did. The toe traded a clipped shadow for a plateaued one: dark-region local contrast fell twenty-eight per cent on the wide and thirty on the hero, and both figures crossed from just inside the matched-framing reference floor to below it. The eighty-one thousand recovered pixels carry a local contrast of 1.264 codes against 3.338 frame-wide. The black was not hiding stage geometry. It was hiding an unlit flat.",
+    "And a correction to round 25’s own lesson, which was “report the distribution, not one member”. The sharper form is that the distribution has to be over a comparable subset. Only three of the ten references are wide or full-body in-match framings; six are closeups with a deliberately defocused backdrop and one is a hub screen. On dark-region contrast our shots pass against the full-set floor and fail against the matched-framing floor. Averaging a bokeh backdrop into a stage-detail reference flatters us by about a point.",
+    "For the first time two axes have converged on one mechanism from different directions. Only 12.79 per cent of the arena floor’s light comes from a source that can cast a shadow — everything else is shadowless by construction — so contact darkening is bounded at about thirteen per cent of contrast before anyone authors any, and it lands at 8.68. The stage critic says the same thing in its own vocabulary: a uniform fill adds level, not modulation. The fighters are not standing in the arena’s light; they are composited onto it."
+   ],
+   "tags": [
+    {
+     "label": "grade toe",
+     "state": "done"
+    },
+    {
+     "label": "fps 60.6",
+     "state": "done"
+    },
+    {
+     "label": "per-shot resolution",
+     "state": "done"
+    },
+    {
+     "label": "texture leak",
+     "state": "retracted"
+    },
+    {
+     "label": "shadow-casting share",
+     "state": "next"
+    },
+    {
+     "label": "peak density",
+     "state": "charter"
+    }
+   ]
   }
  ],
  "deploy": {
   "url": "https://knockbots.vercel.app",
-  "rev": "0.24.0",
-  "note": "Deployed after round 25. Source on github.com/tecsteps/knockbots."
+  "rev": "0.25.0",
+  "note": "Deployed after round 26. Source on github.com/tecsteps/knockbots."
  }
 }
