@@ -238,6 +238,38 @@ const CSS = `
 }
 .kbt-od.kbt-down { transform: scale(.92); }
 
+/* BLOCK.
+   Holding back guards, and on a keyboard that is free because the hand is
+   already on the direction keys. On glass it is not: the left thumb is on a
+   floating stick, so blocking means finding and holding a precise direction
+   while the right thumb attacks, and letting go of it to walk forward drops the
+   guard. Reported from play as simply missing, and it was -- there was no block
+   affordance on the pad at all.
+
+   It sits on the LEFT, above the stick zone, for the reason the header's reach
+   note gives for putting overdrive where it is: four 10.9mm limb buttons plus
+   their gutters already consume the whole bottom-right quadrant of a 64.6mm
+   display, and overdrive is at 34.8mm, exactly on the edge of a comfortable
+   35mm sweep. There is no room on the right. The left thumb, by contrast, rests
+   on a stick that has no fixed position and therefore no fixed obstruction, and
+   guard is the input it holds rather than taps -- so it belongs on that hand.
+
+   Holding back still guards. This does not replace it; it gives the mechanic a
+   surface for players who never discover that back is also block. */
+.kbt-blk {
+  position: absolute;
+  left: calc(var(--kbt-edge) + var(--kbt-sa-l));
+  bottom: calc(var(--kbt-floor) + var(--kbt-sa-b) + var(--kbt-btn) + var(--kbt-pitch) + 12px);
+  width: 84px; height: 38px; border-radius: 19px; pointer-events: auto;
+  display: grid; place-items: center; letter-spacing: .18em; font-size: 10px;
+  color: #cfd8e6; background: rgba(14,20,30,.85); border: 1px solid rgba(150,170,200,.4);
+  opacity: .55; transition: opacity .2s ease, transform .06s ease;
+}
+.kbt-blk.kbt-down {
+  transform: scale(.92); opacity: 1;
+  color: #0b1420; background: linear-gradient(180deg, #dfe8f4, #9fb3cc); border-color: #eef4ff;
+}
+
 /* Fires on a successful swipe so the player learns the gesture landed. Offset by
    the cluster's own width rather than a tuned constant, which puts it entirely
    to the left of both the limbs and the overdrive pad: at the old 96px its right
@@ -267,6 +299,7 @@ const CSS = `
 .kbt-root.kbt-portrait .kbt-stickzone,
 .kbt-root.kbt-portrait .kbt-cluster,
 .kbt-root.kbt-portrait .kbt-od,
+.kbt-root.kbt-portrait .kbt-blk,
 .kbt-root.kbt-portrait .kbt-flash { display: none; }
 .kbt-phone {
   width: 58px; height: 96px; margin: 0 auto 26px; border-radius: 11px;
@@ -287,7 +320,7 @@ const CSS = `
 @media (min-height: 500px) {
   .kbt-root { --kbt-btn: 82px; --kbt-gap: 14px; --kbt-edge: 22px; --kbt-floor: 20px; }
   .kbt-btn b { font-size: 25px; }
-  .kbt-od { width: 96px; height: 44px; border-radius: 22px; }
+  .kbt-od, .kbt-blk { width: 96px; height: 44px; border-radius: 22px; }
 }
 `;
 
@@ -302,6 +335,8 @@ export class TouchControls {
     // `#applyLiveness`.
     this.active = false;
     this.axis = { x: 0, y: 0 };
+    /** Held while the BLOCK pad is down. Read by Input.commandsFor as `cmd.guard`. */
+    this.guard = false;
     this.held = new Set();
     this.pressed = new Set();
     this.motion = null;
@@ -441,6 +476,7 @@ export class TouchControls {
       <div class="kbt-stickzone"><div class="kbt-ring"></div><div class="kbt-nub"></div></div>
       <div class="kbt-cluster"></div>
       <div class="kbt-od">OD</div>
+      <div class="kbt-blk">BLOCK</div>
       <div class="kbt-flash"></div>
       <div class="kbt-rotate"><div>
         <div class="kbt-phone"></div>
@@ -455,6 +491,7 @@ export class TouchControls {
     this.nub = root.querySelector('.kbt-nub');
     this.cluster = root.querySelector('.kbt-cluster');
     this.odEl = root.querySelector('.kbt-od');
+    this.blkEl = root.querySelector('.kbt-blk');
     this.flashEl = root.querySelector('.kbt-flash');
 
     // Position comes from the grid cell alone; the pitch that separates the
@@ -556,6 +593,20 @@ export class TouchControls {
     this.odEl.addEventListener('touchstart', (e) => {
       this.#down(5); this.odEl.classList.add('kbt-down'); e.preventDefault();
     }, opt);
+    /*
+     * BLOCK is a HELD state, not a button press, so it does not go through
+     * `#down`/`#up` -- there is no limb 6. It sets a flag that
+     * `Input.commandsFor` reads straight into `cmd.guard`, which is the same
+     * field the keyboard's Q sets, so combat never learns where a guard came
+     * from. `touchcancel` matters here more than anywhere else on the pad: a
+     * guard stuck on because a call arrived mid-round would be unlosable.
+     */
+    const blkDown = (e) => { this.guard = true; this.blkEl.classList.add('kbt-down'); e.preventDefault(); };
+    const blkUp = (e) => { this.guard = false; this.blkEl.classList.remove('kbt-down'); e.preventDefault(); };
+    this.blkEl.addEventListener('touchstart', blkDown, opt);
+    this.blkEl.addEventListener('touchend', blkUp, opt);
+    this.blkEl.addEventListener('touchcancel', blkUp, opt);
+
     const endOd = (e) => { this.#up(5); this.odEl.classList.remove('kbt-down'); e.preventDefault(); };
     this.odEl.addEventListener('touchend', endOd, opt);
     this.odEl.addEventListener('touchcancel', endOd, opt);

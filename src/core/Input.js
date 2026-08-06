@@ -198,8 +198,16 @@ export class Input {
      * command column (roundhouse on b+4, spin kick on b+3) to be used while
      * actually retreating, which is how those moves are meant to come out.
      */
-    cmd.guard = this.#guardHeld(player);
-    // Touch has no spare key, so the pad keeps the classic hold-back guard.
+    // The touch pad now has a real BLOCK button, so it feeds the same field Q
+    // does rather than relying on hold-back alone. Reported from play as a
+    // missing control, and it was: on a keyboard the guard is free because the
+    // hand is already on the direction keys, but on glass the left thumb is on a
+    // FLOATING stick, so blocking meant holding a precise direction that has no
+    // fixed position while the other thumb attacks -- and releasing it to walk
+    // forward dropped the guard.
+    cmd.guard = this.#guardHeld(player) || (player === 0 && !!this.touch?.guard);
+    // Hold-back still guards on touch. The pad is an addition, not a
+    // replacement: players who already know back-to-block keep it.
     cmd.touchGuard = player === 0 && !!this.touch?.active;
 
     const { held, pressed } = this.#buttons(player);

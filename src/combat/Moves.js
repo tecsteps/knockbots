@@ -373,6 +373,37 @@ function coreMoves(mv, cfg) {
     knockback: [1.6, 0, 0], blockPush: [1.5, 0, 0], meterGain: 4,
     props: { crushHigh: true },
   });
+
+  // Crouching 4. THE RIGHT KICK HAD NO CROUCHING MOVE: `d+4` resolved only to
+  // `diveKick`, which carries `requireAir`, so ducking and pressing 4 matched a
+  // move that could never pass `canUse` on the ground and the fighter just sat
+  // there. Ducking 3 worked, which is what made it read as a side-specific bug
+  // from play rather than a missing entry.
+  //
+  // The two coexist on `d+4` safely because `findMove`'s `tryMatch` tests
+  // `canUse` BEFORE matching the buffer and continues on failure, so the air
+  // gate picks between them: airborne gets the dive, grounded gets this.
+  //
+  // Deliberately a sweep rather than another poke -- 3 already owns the fast
+  // low, so 4 gets the slow one that knocks down, which is the standard
+  // fighting-game split and gives crouch a reason to hold two buttons.
+  //
+  // ANCHORED TO THE LEFT LEG DESPITE BEING A RIGHT-BUTTON MOVE, and that is
+  // correct rather than a slip: `k.sweep` swings the left leg and plants the
+  // right. My first pass anchored SHIN_R to match the button and the anchor
+  // guard rejected it -- knee_R+foot_R travel 0.45m at the impact tick while
+  // hand_L travels 1.34m, i.e. the capsule would have sat on the planted leg
+  // while the other one swept through the opponent. That is the same defect
+  // that put 27 hitboxes on the wrong limb, and the guard exists because of it.
+  // The button a move is bound to says nothing about which limb its clip moves.
+  mv({
+    id: 'lowSweep', name: 'Servo Sweep', input: 'd+4', clip: 'k.sweep', tag: 'low',
+    active: [W(20, 23, [B('knee_L', 0.25, [0, -0.04, 0.04], 0.44), B('foot_L', 0.26, [0, -0.02, 0.06]), B('hand_L', 0.23, [0, -0.05, 0])])], total: 44,
+    height: HEIGHT.LOW, weight: WEIGHT.MEDIUM, damage: 19,
+    adv: { block: -18, hit: 4 }, reaction: REACTION.SWEEP,
+    knockback: [2.4, 0, 0], blockPush: [1.8, 0, 0], meterGain: 5, trail: 'foot_L',
+    props: { crushHigh: true },
+  });
   mv({
     id: 'sweep', name: 'Rotor Sweep', input: 'db+3', clip: 'k.sweep', tag: 'sweep',
     active: [W(19, 21, [B('knee_L', 0.25, [0, -0.04, 0.04], 0.44), B('foot_L', 0.27, [0, -0.02, 0.06]), B('hand_L', 0.24, [0, -0.05, 0])])], total: 47,
@@ -506,6 +537,56 @@ function coreMoves(mv, cfg) {
     height: HEIGHT.MID, weight: WEIGHT.MEDIUM, damage: 17,
     adv: { block: -13, hit: 2 }, reaction: REACTION.KNOCKDOWN,
     knockback: [3.0, 0.2, 0], blockPush: [2.4, 0, 0], meterGain: 6, trail: 'foot_R',
+    props: { requireAir: true, crushLow: true },
+  });
+
+  // Bare 3 in the air. THE LEFT KICK HAD NO AIR MOVE AT ALL, so jumping and
+  // pressing 3 did nothing while 4 worked -- reported from play, and the move
+  // table shows it plainly: `requireAir` appeared on exactly two moves, both of
+  // them on 4 (`airKick` on `4`, `diveKick` on `d+4`). The gate was written
+  // symmetric and the content was not.
+  //
+  // It is not a copy of the drop kick. A left air kick that traded identically
+  // would just be a second button for the same option, so this one is faster
+  // and shorter-ranged with a flatter arc: it beats the drop kick to the punch
+  // in the air and loses the knockdown, which is the trade that makes having
+  // both worth it.
+  // The two air punches. Jumping and pressing either punch did NOTHING -- the
+  // whole airborne row of the state/button matrix was two-thirds empty:
+  //
+  //   airborne   LP: none   RP: none   LK: none   RK: airKick
+  //
+  // Three of four buttons dead in the air, which is why it read from play as
+  // "left kick does nothing in the jump" -- the one that worked was the only
+  // one that existed. Ground moves are rejected in the air by canUse's
+  // `st.airborne && !m.followUp` branch, so an air option has to be authored
+  // deliberately; nobody had.
+  mv({
+    id: 'airJab', name: 'Air Rivet', input: '1', clip: 'p.jab', tag: 'air',
+    active: [W(7, 10, FIST_L(0.23))], total: 26,
+    height: HEIGHT.MID, weight: WEIGHT.LIGHT, damage: 10,
+    adv: { block: -9, hit: 3 }, reaction: REACTION.FLINCH_MID,
+    knockback: [1.8, 0.1, 0], blockPush: [1.5, 0, 0], meterGain: 4, trail: 'hand_L',
+    props: { requireAir: true },
+  });
+
+  // The heavy air option: slower, and the only air punch that carries a real
+  // downward arc, so it beats an air jab trade and loses to anti-air.
+  mv({
+    id: 'airHammer', name: 'Anvil Drop', input: '2', clip: 'p.hammerFist', tag: 'air',
+    active: [W(12, 16, FIST_R(0.25))], total: 34,
+    height: HEIGHT.MID, weight: WEIGHT.MEDIUM, damage: 18,
+    adv: { block: -14, hit: 4 }, reaction: REACTION.KNOCKDOWN,
+    knockback: [2.8, 0.2, 0], blockPush: [2.2, 0, 0], meterGain: 6, trail: 'hand_R',
+    props: { requireAir: true, groundBounce: 0.4 },
+  });
+
+  mv({
+    id: 'airSideKick', name: 'Air Lance', input: '3', clip: 'k.sideKick', tag: 'air',
+    active: [W(9, 12, FOOT_L(0.25))], total: 30,
+    height: HEIGHT.MID, weight: WEIGHT.LIGHT, damage: 13,
+    adv: { block: -11, hit: 3 }, reaction: REACTION.FLINCH_MID,
+    knockback: [2.2, 0.1, 0], blockPush: [1.9, 0, 0], meterGain: 5, trail: 'foot_L',
     props: { requireAir: true, crushLow: true },
   });
 
@@ -652,7 +733,20 @@ function coreMoves(mv, cfg) {
 
   // --- overdrive -----------------------------------------------------------
   mv({
-    id: 'overdrive', name: 'Overdrive Cascade', input: 'qcf+5', clip: 'sp.overdriveStart', tag: 'super',
+    // INPUT IS A BARE BUTTON, NOT `qcf+5`, AND THAT IS WHY OD DID NOTHING ON
+    // MOBILE. The pad is wired correctly -- `.kbt-od` has its own touchstart
+    // calling `#down(5)` -- but a tap sends the button with NO motion, so the
+    // move could never match and the pad silently did nothing. The bug was in
+    // the notation, not the control.
+    //
+    // A quarter-circle was also the wrong ask on glass by this file's own
+    // reasoning: TouchControls' header says drawing a clean qcf with no tactile
+    // feedback is "the single hardest thing to ask of a thumb", which is why
+    // motions there are swipes rather than arcs. And it is wrong against the
+    // reference too -- Tekken 8's Rage Art, the move this is modelled on, is a
+    // single button press. It costs the full meter, so it cannot come out by
+    // accident regardless of how easy the input is.
+    id: 'overdrive', name: 'Overdrive Cascade', input: '5', clip: 'sp.overdriveStart', tag: 'super',
     active: [
       W(8, 11, [B('hand_R', 0.3, [0, -0.1, 0])], 18),
       W(20, 24, [B('hand_L', 0.32, [0, -0.1, 0])], 18),
