@@ -1,11 +1,11 @@
 {
  "status": {
-  "rev": "0.27.0",
-  "commits": "148",
+  "rev": "0.28.0",
+  "commits": "156",
   "modules": 69,
   "lines": "63k",
   "clips": 92,
-  "moves": 195,
+  "moves": 777,
   "characters": 10
  },
  "verdicts": [
@@ -27,11 +27,11 @@
   },
   {
    "axis": "Impact & effects",
-   "score": 66
+   "score": 67
   },
   {
    "axis": "Animation quality",
-   "score": 67
+   "score": 66
   }
  ],
  "log": [
@@ -963,11 +963,54 @@
      "state": "next"
     }
    ]
+  },
+  {
+   "phase": "PHASE 33",
+   "when": "Rounds 29–30",
+   "rev": "rev 0.28.0",
+   "title": "The instruments were lying, and the game could not be played on a phone",
+   "paras": [
+    "Lighting 78, interface 74, stage 73, character 69, impact 67, animation 66. Round 29 moved nothing and was worth more than several rounds that did, because four critics independently established that a great deal of what this project has measured was measured wrongly.",
+    "Twenty of twenty-five scored frames were rendered below native and compared against native references. Eight distinct render scales across one pass, from 0.72 to 1.00, with the adaptive controller live on seventeen of eighteen shots — one arena rendered at 1382 by 777 and written out as 1920 by 1080 by the screenshot, then judged beside a Tekken press capture. Because the controller was live, the scale was set by whatever the machine's frame timing happened to be, so it was not even reproducible between two runs of the same build. The cause was mine: a round-26 change that handed renderer settings back after a frozen shot, made to stop one shot corrupting the frame-rate probe. It protected the performance instrument and silently degraded the evidence instrument for every other frame, with nothing watching the second. Every shot now renders at native with the controller off.",
+    "The kinetic-chain metric awarded its maximum score to the exact failure it existed to catch. Its ordering test accepted equality, so two links peaking on the same tick counted as correctly ordered — meaning a body whose every joint fires simultaneously, the purest possible robotic motion, scored a flawless one. Verified on the straight punch: perfect under the old rule with all ten pairs tied, zero under a strict one. Across two hundred and eleven moves the tie rule reads a median of 0.70 where strict reads 0.10. Essentially the whole of the previous round's apparent improvement lived in the tie. And that round's headline — median lag zero rising to four ticks — does not reproduce; the true median is zero and four is near the maximum. A maximum reported as a median, the fourth consecutive round launched on a figure that did not survive re-derivation.",
+    "The frame archive had been fixed twice and had taken neither time. The ignore rule was corrected, but the archive was still exported by hand afterwards, so it drifted to certifying a commit ninety minutes older than the frames beside it, holding eighteen shots where the run had twenty-five, and recording every frame at the size it was written rather than the size it was rendered. A hand-exported archive drifts by construction. It is now written by the capture run itself, with the commit read from git rather than declared, and a flag marking whether the tree was dirty.",
+    "The impact gate was measuring armour. Its definition of an effect pixel scored a precision of 0.019 to 0.375 against a per-pixel ground truth built by rendering the same frozen frame with the effects visible and hidden — five pixels in eight it counted were not effects, and it missed four fifths of what was. The mask was landing on a white robot's plates, panel speculars and the damage badge. The previous round's number did not reproduce; this one reproduces exactly and measures the wrong object, which is worse. Every figure the axis carried is withdrawn, including the deltas that justified reverting a change which may simply have been noise.",
+    "Then the player reported bugs, and they were worse than they sounded. Three quarters of the airborne moveset did not exist: the requirement flag appeared on exactly two moves in the entire game, both bound to right kick, so jumping and pressing anything else did nothing. Ducking and pressing right kick matched a move that could never fire on the ground. Overdrive on mobile was a notation bug — the move was authored as a quarter-circle plus a button, so a tap on the pad sent the button with no motion and could never match.",
+    "And an audit of mine was wrong in the most instructive way. I reported the state and button matrix as twelve of twelve on every archetype, having driven the matcher with a hand-built buffer. A synthesised buffer cannot contain the defect, because the defect is created upstream in the history the real input path writes: a held direction wrote itself into that history twice, so the motion test read a double-tap nobody entered. Holding down and pressing right punch produced an eighty-six frame unblockable instead of a poke, and holding back turned every back move into a dash — which is precisely why back and right punch were reported as broken while my test showed them resolving perfectly. Testing the matcher is not testing the game.",
+    "Throws had the same shape: three existed, and none could be pressed, because a chord required both buttons inside the same sixteen milliseconds. On a handset they were unreachable entirely, since any two-finger tap was swallowed as an overdrive before the buttons could be read — an entire mechanic absent on the platform most people play on. A rejected grab also paid out through the strike path as guaranteed unblockable damage during a juggle.",
+    "What shipped: ten robot-specific finishers, one per machine, each with a condition stated in words on screen because an input the player cannot trigger reads as broken. Thirty-one signature moves that make two robots sharing an archetype stop being the same fighter. A move list reachable from pause and character select, verified at four viewports down to a 390-pixel handset. And a menu button on the touch HUD, because until now a phone player who started a match could not leave it."
+   ],
+   "tags": [
+    {
+     "label": "native capture",
+     "state": "done"
+    },
+    {
+     "label": "self-written archive",
+     "state": "done"
+    },
+    {
+     "label": "strict concordance",
+     "state": "done"
+    },
+    {
+     "label": "finishers",
+     "state": "done"
+    },
+    {
+     "label": "throws",
+     "state": "done"
+    },
+    {
+     "label": "impact gate",
+     "state": "rebuilt"
+    }
+   ]
   }
  ],
  "deploy": {
   "url": "https://knockbots.vercel.app",
-  "rev": "0.27.0",
-  "note": "Deployed after round 28. Source on github.com/tecsteps/knockbots."
+  "rev": "0.28.0",
+  "note": "Deployed after round 30. Source on github.com/tecsteps/knockbots."
  }
 }
