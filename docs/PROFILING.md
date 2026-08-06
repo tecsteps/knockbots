@@ -657,10 +657,13 @@ The lighting axis cannot get the thing it has been asking for since round 18 —
 per-fighter key — because `kb.armor` already fails to compile with one added:
 `FRAGMENT shader texture image units count exceeds MAX_TEXTURE_IMAGE_UNITS(16)`.
 
-**The obvious fix is already done.** ORM packing is in place: `aoMap`, `roughnessMap` and
-`metalnessMap` all point at the same `shared.plateOrmPainted` texture, so three.js binds it once and
-those three slots cost one unit, not three. Anyone arriving at this problem will reach for that
-first; it is not available, because it was taken years of rounds ago.
+**CORRECTED — I had this backwards, and the correction is the whole answer.** I wrote that ORM
+packing was already done and therefore spent, because `aoMap`, `roughnessMap` and `metalnessMap`
+all point at the same `shared.plateOrmPainted` texture. **Sharing the texture does not share the
+sampler.** They are three separate `uniform sampler2D` declarations and they cost three units, not
+one. Measured: nulling `aoMap` and `metalnessMap` while leaving `roughnessMap` bound to the *same*
+texture takes `kb.armor` from 17 samplers to 15 — two free units from a texture that is still bound
+and still sampled. The avenue I called spent is the cheapest one on the board.
 
 **So the pressure is the material's feature set, not its texture packing.** The armour binds, on top
 of ORM: base colour, normal, emissive, clearcoat, clearcoat roughness, clearcoat normal, anisotropy,
@@ -683,3 +686,34 @@ Each is a one-line ablation with the frozen-frame A/B this project already has: 
 uniform branch on the same compiled program, difference one frozen frame, and see whether the image
 moves at all. **Do that before anyone builds the light** — three of these could be worth nothing,
 and the answer decides whether the lighting the axis wants is reachable at all.
+
+
+## Measured answer (compile-tested against the real app, MAX_TEXTURE_IMAGE_UNITS = 16)
+
+**The gap is ONE unit, not two.** `kb.armor` sits at 15 fragment samplers today with the single
+shadowed directional; adding two shadowed spots takes it to 17, because `spotShadowMap` is declared
+as a `[2]` array and costs 2 while the directional stays at 1.
+
+| candidate | compiles with 2 spots | units freed |
+|---|---|---|
+| `anisotropyMap` | **no** | 0 — *it does not exist on this material* |
+| clearcoat's three maps | yes | 3 |
+| `kbGrungeMap` | yes | 1 (lands exactly on 16) |
+| `clearcoatNormalMap` alone | yes | 1 — cheapest verified |
+
+Note the first row: `kb.armor` sets scalar `anisotropy`/`anisotropyRotation` and no map at all — the
+`anisotropyMap` lives on `kb.metal*`. My first candidate did not exist on the material that is over
+budget.
+
+**THE FIX THAT COSTS NOTHING VISUALLY:** fold AO and metalness into the roughness texel inside the
+`StoryPhysicalMaterial` fragment patch, which already rewrites all three channels. Two units, no
+material feature dropped, visually neutral by construction. Do this before considering any ablation.
+
+**`kb.armor` is not the only blocker.** `arena.floorWet` sits at 16 today and 17 with two spots, and
+fails identically. Freeing a unit on the armour alone still leaves the floor failing; freeing one on
+each gives **0 failing programs across all 69 in the scene**. Next in line: `kb.carbon` 15,
+`kb.darkMetal` 14, `kb.piston` 14 — a *third* shadowed light breaks all of them.
+
+**And one shadowed spot needs no ablation at all.** With a single shared key rather than one per
+fighter, `kb.armor` and `arena.floorWet` both land exactly on 16 and nothing fails. If the lighting
+axis can accept one key for the pair, the light it has wanted since round 18 is reachable today.
