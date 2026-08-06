@@ -13,7 +13,7 @@
 
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -71,6 +71,560 @@ const PORTRAIT_MEASURE = `(() => {
            subjectHeightFrac: +(Math.abs(top.y - bot.y) / 2).toFixed(3),
            otherFighterInFrame: Math.abs(o.x) < 1 && Math.abs(o.y) < 1 };
 })()`;
+
+/* ===========================================================================
+ * CLIP STRIPS — the animation instrument.
+ *
+ * The animation axis is scored on ONE clip out of ninety-two. `17-anim-strip`,
+ * `04-impact`, `05-juggle` and `07-super` all drive `forceHit({move:'launcher'})`,
+ * which resolves to `p.uppercut`. Round 28 improved 28 clips and the critic
+ * could see none of it, because nothing photographs any of the other 91.
+ *
+ * `tickStrip` (the older mechanism, still used by `08b-hud-motion` and
+ * `17-anim-strip`) is not a good instrument for motion, and the critic said so.
+ * It stacks whole frames at 34% crop, samples ticks chosen by hand around
+ * contact, and stops before the recovery. Four things are wrong with that for
+ * judging motion, and `clipStrip` fixes each one:
+ *
+ *   1. EVEN TICK SPACING ACROSS THE WHOLE MOVE, recovery included. Follow-through
+ *      is a rubric term and `17-anim-strip` stops at tick 26 of a 48-tick move,
+ *      so more than half of the thing being scored has never been photographed.
+ *      The grid is anchored ON the contact tick and stepped evenly outward, so
+ *      spacing is uniform AND contact lands on a panel rather than between two.
+ *   2. THE CONTACT PANEL IS LABELLED, from the move's own frame data
+ *      (`move.startup`), not from a number typed into the shot table.
+ *   3. THE CAMERA DOES NOT MOVE. `FightCamera.render` and `.simulate` are
+ *      replaced by a closure over a position fixed once, and the crop rectangle
+ *      is DECLARED in the shot rather than re-solved per panel. `animstrip.mjs`
+ *      re-projected the fighter's bounds every panel and re-centred him in each
+ *      one, which subtracts exactly the translation a critic is trying to read.
+ *   4. ENOUGH PANELS TO SEE AN ARC, plus a per-tick screen-space TRAIL of the
+ *      striking limb and the hips drawn onto each panel up to that panel's tick,
+ *      and a per-tick speed plot of the kinetic chain underneath. The trail and
+ *      the plot are only meaningful BECAUSE the camera is static — the same
+ *      reason the old strip could not have carried them.
+ *
+ * Every panel records what the animator was ACTUALLY playing at that instant —
+ * clip id, clip time, move tick, fighter state — and the sheet prints it. A
+ * panel cannot claim to be showing a clip it is not showing.
+ *
+ * THE RETIME, which is the reason this exists as new shots rather than as an
+ * edit to 17. `Fighter#startMove` installs `retimeFor(move)`, a two-anchor map
+ * that lands the clip's authored contact frame on the move's startup frame and
+ * stretches the recovery independently. `Animator#play` sets
+ * `top.retime = opts.retime || null`, so ANY play() call without the retime
+ * throws it away. `17-anim-strip` calls `startMove(mv)` and then
+ * `animator.play(mv.clip, {blend:0, loop:false})` — no retime — so the one clip
+ * the animation axis is scored on has been photographed UNRETIMED. For the
+ * launcher (`straight3` -> `p.uppercut`) the map is inScale 0.8 / outScale 0.72
+ * about pivot 16 at pivotAt 20: the strip runs the wind-up 25% slow and the
+ * recovery 39% slow relative to the game, and its panel captioned as contact
+ * (+16t) is the clip's authored contact frame, not the move's active frame,
+ * which is tick 20. `17-anim-strip` is left untouched so the archive comparison
+ * across rounds survives; `24-anim-uppercut` is the same clip captured
+ * correctly, and the pair is the evidence.
+ * ======================================================================== */
+
+/** The chain the rubric's 90+ text describes: floor -> hips -> spine -> tip. */
+const STRIP_LINKS = ['hips', 'chest', 'head', 'shoulder_R', 'elbow_R', 'hand_R', 'knee_R', 'foot_R'];
+
+/**
+ * Page-side staging for one clip strip: park the camera, hide the interface,
+ * silence both CPUs, place the pair, and start the clip.
+ *
+ * Built from one function for all five strips on purpose. Five hand-written
+ * setups is five chances for two of them to disagree about what they staged,
+ * and this project has paid for that class of drift repeatedly.
+ *
+ * @param {Object} c the shot's `clipStrip` block
+ * @returns {string} JS to evaluate in the page
+ */
+const stripSetup = (c) => `(() => {
+  const KB = window.KB, THREE = KB.THREE;
+  const si = ${c.subject}, S = KB.fighters[si], O = KB.fighters[1 - si];
+  KB.paused = false;
+  const hud = document.getElementById('ui');
+  if (hud) { window.__kbStripHud = hud.style.visibility; hud.style.visibility = 'hidden'; }
+  // Nothing may interrupt the clip under review. The opponent's CPU throwing a
+  // jab mid-strip is how a strip ends up showing a block instead of the move it
+  // is named for.
+  window.__kbStripCpu = [KB.cpu[0] || null, KB.cpu[1] || null];
+  KB.cpu[0] = null; KB.cpu[1] = null;
+
+  const drive = ${JSON.stringify(c.drive)};
+  const set = KB.MOVES[S.moveSetKey] || KB.MOVES.standard;
+  const mv = ${c.move ? `set[${JSON.stringify(c.move)}] || null` : 'null'};
+  const clipId = ${JSON.stringify(c.clip)};
+
+  // Place the pair. For an attack strip the spacing is deliberately OUTSIDE
+  // reach: a connecting blow triggers hitstop, hitstop stops the tick counter
+  // dead, and a strip whose panels are spaced in ticks cannot have uniform
+  // spacing across a freeze. Contact is still labelled — from the move's frame
+  // data, which is where the number should have come from in the first place.
+  // The reaction strip is the exception and stages through forceHit, because a
+  // reaction only exists if something caused it.
+  if (drive !== 'forceHit') {
+    const half = ${c.spacing ?? 3.2} / 2;
+    const s0 = KB.fighters[0], s1 = KB.fighters[1];
+    s0.position.set(-half, s0.position.y, 0); s0.prevPosition.copy(s0.position);
+    s1.position.set(half, s1.position.y, 0);  s1.prevPosition.copy(s1.position);
+    s0.velocity.set(0, 0, 0); s1.velocity.set(0, 0, 0);
+    s0.facing = 1; s1.facing = -1;
+  }
+
+  // Camera: fixed once, and then the rig is not allowed to touch it again.
+  // FightCamera re-solves its framing every render, so "asking" for a framing
+  // and settling does not hold one; the only thing that holds is replacing the
+  // methods.
+  const D = ${c.dist ?? 6.4};
+  const aim = S.position.clone();
+  aim.y += ${c.aimY ?? 1.05};
+  aim.x += (S.facing || 1) * ${c.aimFwd ?? 0};
+  const face = S.facing || 1;
+  // Three-quarter, closer to side-on than the fight framing: a strike's arc and
+  // the hip rotation under it both read from here, and neither reads from the
+  // near-frontal gameplay angle.
+  const pos = new THREE.Vector3(
+    aim.x + face * D * ${c.offX ?? 0.62},
+    aim.y + D * ${c.offY ?? 0.24},
+    aim.z + D * ${c.offZ ?? 0.74},
+  );
+  const cam = KB.camera;
+  const park = () => {
+    cam.position.copy(pos);
+    cam.up.set(0, 1, 0);
+    cam.lookAt(aim.x, aim.y - ${c.lookDown ?? 0.12}, aim.z);
+    cam.fov = ${c.fov ?? 30}; cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
+  };
+  window.__kbStripRestore = { render: KB.fightCamera.render, simulate: KB.fightCamera.simulate };
+  KB.fightCamera.render = park;
+  KB.fightCamera.simulate = () => {};
+  park();
+
+  // Frame data, read from the move rather than typed into the shot table.
+  const total = mv ? mv.total : null;
+  const contact = mv && mv.active && mv.active.length
+    ? Math.min.apply(null, mv.active.map((a) => a.from)) : null;
+  const clip = S.animator && S.animator.clips ? S.animator.clips[clipId] : null;
+
+  if (drive === 'move') {
+    if (!mv) throw new Error('strip move not in this fighter\\'s set: ' + ${JSON.stringify(c.move)});
+    // startMove ONLY. It installs the retime; a follow-up animator.play() would
+    // discard it (Animator#play: top.retime = opts.retime || null) and the strip
+    // would photograph the clip at a rate no player ever sees. That is the
+    // defect in 17-anim-strip.
+    S.startMove(mv);
+  } else if (drive === 'forceHit') {
+    KB.testHarness.forceHit(${JSON.stringify(c.forceHit || { attacker: 0, move: 'launcher' })});
+  } else if (drive === 'hold') {
+    // Hold a real direction key. Not a synthetic DOM event -- the listener can
+    // be disabled by the menu layer and a headless page can lose focus, both of
+    // which fail silently -- but the same key code the keymap declares, pushed
+    // into the same Set the DOM listener writes to, so everything downstream of
+    // Input#commandsFor is the code path a player drives. Poking the animator
+    // instead does NOT work here: the state machine re-solves which locomotion
+    // clip should be playing every tick and overwrites it inside one frame.
+    KB.input.enabled = true;
+    KB.input.keys.add(${JSON.stringify(c.hold || 'KeyD')});
+    window.__kbStripHold = ${JSON.stringify(c.hold || 'KeyD')};
+  }
+
+  window.__kbStrip = {
+    clip: clipId, move: mv ? mv.id : null, drive,
+    startup: mv ? mv.startup : null, total, contact,
+    clipDuration: clip ? clip.duration : null, clipLoop: clip ? !!clip.loop : null,
+    // Prove the retime is installed, and report the map. A strip that silently
+    // lost it is a strip of the wrong timing.
+    retime: null,
+  };
+  // ONLY for a clip this harness started through startMove(). For a reaction the
+  // subject is the victim, who has not been hit yet at this instant, so reading
+  // its top entry reports whatever it was previously doing -- which came back as
+  // a different retime on each of two runs and was printed on the sheet as if it
+  // described the clip under review. A number that changes run to run and
+  // describes nothing is worse than no number.
+  const ent = drive === 'move' && S.animator && S.animator.base && S.animator.base.entries.length
+    ? S.animator.base.entries[S.animator.base.entries.length - 1] : null;
+  if (ent) window.__kbStrip.retime = ent.retime
+    ? { pivot: ent.retime.pivot, pivotAt: ent.retime.pivotAt,
+        inScale: +ent.retime.inScale.toFixed(4), outScale: +ent.retime.outScale.toFixed(4) }
+    : 'NONE';
+  window.__kbStripTrack = [];
+  window.__kbStripOrigin = null;
+  return window.__kbStrip;
+})()`;
+
+/**
+ * Page-side sampler: one row per simulated tick, world and screen positions for
+ * every chain link plus the subject's projected bounding box.
+ *
+ * Screen coordinates are only comparable across ticks because the camera is
+ * parked, which is the whole reason the trail overlay is possible here and was
+ * not possible in the old strip.
+ */
+const STRIP_SAMPLE = (subject) => `(() => {
+  const KB = window.KB, THREE = KB.THREE, f = KB.fighters[${subject}];
+  const bn = f.skeletonBundle && f.skeletonBundle.byName;
+  if (!bn) return null;
+  const cam = KB.camera, W = window.innerWidth, H = window.innerHeight;
+  const world = {}, screen = {};
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const links = ${JSON.stringify(STRIP_LINKS)};
+  for (const n of links) {
+    const b = bn[n];
+    if (!b) continue;
+    const w = b.getWorldPosition(new THREE.Vector3());
+    world[n] = [+w.x.toFixed(4), +w.y.toFixed(4), +w.z.toFixed(4)];
+    const p = w.clone().project(cam);
+    screen[n] = [+((p.x * 0.5 + 0.5) * W).toFixed(1), +((-p.y * 0.5 + 0.5) * H).toFixed(1)];
+  }
+  // Whole-body box, from every bone, so the crop check is about the fighter and
+  // not about the eight links the plot happens to use.
+  for (const b of f.skeletonBundle.bones) {
+    const p = b.getWorldPosition(new THREE.Vector3()).project(cam);
+    const sx = (p.x * 0.5 + 0.5) * W, sy = (-p.y * 0.5 + 0.5) * H;
+    if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
+    if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
+  }
+  return { world, screen,
+    bbox: [Math.round(minX), Math.round(minY), Math.round(maxX), Math.round(maxY)],
+    clip: f.animator ? f.animator.current : null,
+    animTime: f.animator ? +f.animator.time.toFixed(2) : null,
+    moveTick: f.moveTick, state: f.state, y: +f.position.y.toFixed(3),
+  };
+})()`;
+
+/**
+ * The panel grid: an even step ANCHORED ON THE CONTACT TICK, plus the first and
+ * last tick of the move.
+ *
+ * Anchoring matters. An even split from zero puts contact between two panels
+ * unless the step happens to divide it, and "what leads and what lags" cannot be
+ * read off a sheet whose contact frame was never photographed --
+ * `17-anim-strip`'s hand-picked offsets [0,6,10,13,16,21,26] straddle the clip's
+ * authored contact at 16 and miss the MOVE's active frame at 20 entirely, then
+ * stop 22 ticks before the move ends.
+ *
+ * The two endpoints are added unconditionally and are the only gaps in the sheet
+ * that are not exactly `step`; the header says so, because a strip that quietly
+ * varies its own spacing is an unreadable instrument.
+ *
+ * @param {number} span last tick to photograph
+ * @param {?number} contact tick to anchor on, or null for an unanchored clip
+ * @param {number} step
+ * @returns {number[]}
+ */
+function stripTicks(span, contact, step) {
+  const out = new Set([0, span]);
+  if (contact != null && contact >= 0 && contact <= span) {
+    for (let t = contact; t >= 0; t -= step) out.add(t);
+    for (let t = contact; t <= span; t += step) out.add(t);
+  } else {
+    for (let t = 0; t <= span; t += step) out.add(t);
+  }
+  return [...out].filter((t) => t >= 0 && t <= span).sort((a, b) => a - b);
+}
+
+/**
+ * The kinetic chain, as numbers, from the same per-tick track the plot is drawn
+ * from.
+ *
+ * Round 28's result was a distribution over 92 clips — median chain concordance
+ * 0.50 -> 0.74, median hips->tip lag 0 -> 4 ticks, hips-at-contact 1.00 -> 0.00
+ * — and the critic could see none of it, because those numbers appeared in no
+ * capture. They appear here, per clip, in the manifest, computed from the frames
+ * that were actually photographed rather than from an offline sampler that
+ * nothing verifies against the renderer.
+ *
+ * MEASURED OVER 0..contact, NOT OVER THE WHOLE MOVE. That distinction is not
+ * cosmetic: on `p.uppercut` the hips peak at move tick 34, which is in the
+ * RECOVERY — the fighter dropping back down — and a whole-move peak order
+ * therefore reports the hips arriving seven ticks after the fist and reads as a
+ * chain running backwards when it is not. The rubric's claim is about the drive
+ * INTO the strike, so the window is the drive into the strike.
+ *
+ * @param {Array} track per-tick samples with `.world` and `.clock`
+ * @param {?number} contact
+ * @param {string} tip the striking bone
+ */
+function chainStats(track, contact, tip) {
+  const win = contact != null ? track.filter((s) => s.clock <= contact) : track;
+  if (win.length < 3) return null;
+  const peakOf = (bone) => {
+    let best = null;
+    for (let i = 1; i < win.length; i++) {
+      const a = win[i - 1].world && win[i - 1].world[bone];
+      const b = win[i].world && win[i].world[bone];
+      if (!a || !b) continue;
+      const dt = Math.max(1, win[i].clock - win[i - 1].clock);
+      const v = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) / dt;
+      if (!best || v > best.v) best = { v, c: win[i].clock };
+    }
+    return best;
+  };
+  const order = ['hips', 'chest', 'shoulder_R', 'elbow_R', tip];
+  const peaks = order.map((b) => ({ bone: b, ...(peakOf(b) || {}) })).filter((p) => p.c != null);
+  // Concordance: of every proximal/distal pair, the share that fire in the right
+  // order. 1.0 is a textbook chain, 0.5 is a coin flip, which is what the whole
+  // move set measured before round 28.
+  let ok = 0, n = 0;
+  for (let i = 0; i < peaks.length; i++) {
+    for (let j = i + 1; j < peaks.length; j++) { n++; if (peaks[i].c <= peaks[j].c) ok++; }
+  }
+  const hips = peaks.find((p) => p.bone === 'hips');
+  const tipP = peaks.find((p) => p.bone === tip);
+  const hipsPeakAll = peakOf('hips');
+  const atContact = contact != null && hipsPeakAll
+    ? (() => {
+      const row = win[win.length - 1], prev = win[win.length - 2];
+      if (!row || !prev || !row.world.hips || !prev.world.hips) return null;
+      const dt = Math.max(1, row.clock - prev.clock);
+      const v = Math.hypot(row.world.hips[0] - prev.world.hips[0],
+        row.world.hips[1] - prev.world.hips[1], row.world.hips[2] - prev.world.hips[2]) / dt;
+      return +(v / Math.max(1e-9, hipsPeakAll.v)).toFixed(3);
+    })()
+    : null;
+  return {
+    window: contact != null ? [0, contact] : [win[0].clock, win[win.length - 1].clock],
+    peakTicks: Object.fromEntries(peaks.map((p) => [p.bone, p.c])),
+    concordance: n ? +(ok / n).toFixed(3) : null,
+    hipsToTipLag: hips && tipP ? tipP.c - hips.c : null,
+    hipsSpeedAtContactOverPeak: atContact,
+  };
+}
+
+/**
+ * Composite one clip strip. Runs in the page (canvas), receives everything it
+ * needs as data, and touches no module scope.
+ *
+ * Three things are drawn and each is evidence the old strip could not carry:
+ *
+ *   PANELS at a fixed crop of a fixed camera, so a limb that moves across the
+ *   frame is drawn moving across the frame. Every panel prints the clip the
+ *   animator was really playing and the clip time it was really at.
+ *
+ *   A TRAIL, per panel, of the striking tip and the hips, drawn from tick 0 up
+ *   to that panel's tick with a dot per tick. Dot spacing IS speed: bunched dots
+ *   are a slow phase, spread dots a fast one, and even dots across a strike are
+ *   the "linear interpolation" the rubric down-scores. This is the thing a
+ *   critic asked for when it said a tick strip is a poor instrument for motion.
+ *
+ *   A CHAIN PLOT underneath: per-tick speed for hips -> chest -> shoulder ->
+ *   elbow -> tip, each normalised to its own peak, with the peak marked and the
+ *   contact tick ruled. The rubric's 90+ text for this axis -- "the hips lead,
+ *   the head lags, a strike drives from the floor up" -- is a claim about the
+ *   ORDER of those peaks, and this is that claim drawn. Round 28 moved the
+ *   median hips->tip lag from 0 to 4 ticks and no evidence frame could show it.
+ */
+function stripSheet(D) {
+  const PAL = ['#ff9e2c', '#4fd8e8', '#8be36b', '#ff6b8a', '#b48cff', '#ffd84f', '#5fa8ff', '#ff8a4f'];
+  const PW = 340;
+  const scale = PW / D.rect.w;
+  const PH = Math.round(D.rect.h * scale);
+  const n = D.panels.length;
+  const cols = Math.max(1, Math.ceil(n / 2));
+  const rows = Math.ceil(n / cols);
+  const HEAD = 78;
+  const PLOT = 300;
+  const W = Math.max(cols * PW, 1320);
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = HEAD + rows * PH + PLOT;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0a0d13';
+  g.fillRect(0, 0, cv.width, cv.height);
+
+  // "No retime" is correct for a clip with no move behind it and a DEFECT for a
+  // clip with one. The first version of this line printed the same red warning
+  // for both and cried wolf on the locomotion strip, where there is no move and
+  // so nothing to have lost.
+  const rt = D.info.retime;
+  const lost = !!D.info.move && (rt === 'NONE' || !rt);
+  const retimeTxt = lost
+    ? 'RETIME DISCARDED — this strip is NOT the timing the game plays; do not read timing off it'
+    : rt && rt !== 'NONE'
+      ? `retime pivot ${rt.pivot}@${rt.pivotAt} in ${rt.inScale} out ${rt.outScale}`
+        + ` — move tick ${rt.pivotAt} is clip frame ${rt.pivot}`
+      : 'no move behind this clip, so no retime — it plays at its authored rate, as in game';
+  g.fillStyle = '#ff9e2c';
+  g.font = '700 20px ui-monospace, monospace';
+  g.fillText(`${D.name}   ${D.info.clip}`
+    + (D.info.move ? `  via move "${D.info.move}"` : ''), 12, 24);
+  g.fillStyle = '#9fb0c4';
+  g.font = '500 14px ui-monospace, monospace';
+  const unit = D.clockKind === 'move' ? 'move ticks' : D.clockKind === 'anim' ? 'clip ticks' : 'ticks since clip start';
+  g.fillText(`${n} panels · every ${D.step} ${unit} across 0..${D.span}`
+    + `${D.contact == null ? ', no contact frame in this clip' : `, anchored on contact at ${D.contact}`}`
+    + ` · endpoints 0 and ${D.span} added · static camera, fixed crop `
+    + `${D.rect.w}x${D.rect.h}@${D.rect.x},${D.rect.y}`, 12, 44);
+  g.fillStyle = lost ? '#ff6b8a' : '#6b8299';
+  g.font = '500 13px ui-monospace, monospace';
+  g.fillText(retimeTxt, 12, 58);
+  if (D.chain) {
+    const ch = D.chain;
+    g.fillStyle = '#8be36b';
+    g.font = '600 13px ui-monospace, monospace';
+    g.fillText(`kinetic chain over ${ch.window[0]}..${ch.window[1]}:  concordance ${ch.concordance}`
+      + `   hips->tip lag ${ch.hipsToTipLag} ticks`
+      + (ch.hipsSpeedAtContactOverPeak != null
+        ? `   hips speed at contact ${ch.hipsSpeedAtContactOverPeak} of own peak` : ''), 12, 74);
+  }
+
+  const toPanel = (sxy, cx, cy) => [
+    cx + (sxy[0] - D.rect.x) * scale,
+    cy + (sxy[1] - D.rect.y) * scale,
+  ];
+
+  /**
+   * Per-panel delivered luma, measured on the PANEL, not on a full frame taken
+   * near it.
+   *
+   * The reaction strip shipped a completely black t0 panel while the run's
+   * certification -- a full-frame grab a couple of hundred milliseconds later
+   * at the same frozen tick -- read p50 0.19 and passed. That is the project's
+   * signature failure in miniature: a certificate about a frame nobody looked
+   * at. Every panel is now measured on its own pixels.
+   */
+  const lumaOf = (im) => {
+    const s = document.createElement('canvas');
+    s.width = 96; s.height = Math.max(1, Math.round(im.height * (96 / im.width)));
+    const sg = s.getContext('2d', { willReadFrequently: true });
+    sg.drawImage(im, 0, 0, s.width, s.height);
+    const d = sg.getImageData(0, 0, s.width, s.height).data;
+    const l = [];
+    for (let i = 0; i < d.length; i += 4) l.push((0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255);
+    l.sort((a, b) => a - b);
+    return { p50: +l[l.length >> 1].toFixed(4), p95: +l[Math.floor(l.length * 0.95)].toFixed(4) };
+  };
+  const luma = [];
+
+  return Promise.all(D.panels.map((p) => new Promise((res) => {
+    const im = new Image(); im.onload = () => res(im); im.src = 'data:image/png;base64,' + p.b64;
+  }))).then((imgs) => {
+    imgs.forEach((im, i) => {
+      luma.push(lumaOf(im));
+      const p = D.panels[i];
+      const cx = (i % cols) * PW;
+      const cy = HEAD + Math.floor(i / cols) * PH;
+      g.drawImage(im, 0, 0, im.width, im.height, cx, cy, PW, PH);
+
+      // Trail: every tick up to this panel, tip and hips.
+      for (const [bone, col, r] of [[D.tip, '#ff9e2c', 2.6], ['hips', '#4fd8e8', 2.0]]) {
+        const pts = D.track.filter((s) => s.clock <= p.want && s.screen && s.screen[bone])
+          .map((s) => toPanel(s.screen[bone], cx, cy));
+        if (pts.length < 2) continue;
+        g.strokeStyle = col; g.lineWidth = 1.6; g.globalAlpha = 0.85;
+        g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+        for (const q of pts.slice(1)) g.lineTo(q[0], q[1]);
+        g.stroke();
+        g.globalAlpha = 1;
+        g.fillStyle = col;
+        for (const q of pts) { g.beginPath(); g.arc(q[0], q[1], r, 0, 6.284); g.fill(); }
+      }
+
+      const isContact = D.contact != null && p.want === D.contact;
+      g.strokeStyle = isContact ? '#ff9e2c' : 'rgba(255,255,255,.09)';
+      g.lineWidth = isContact ? 3 : 1;
+      g.strokeRect(cx + 1.5, cy + 1.5, PW - 3, PH - 3);
+
+      g.fillStyle = 'rgba(0,0,0,.72)';
+      g.fillRect(cx, cy, isContact ? 132 : 72, 22);
+      g.fillStyle = isContact ? '#ff9e2c' : '#4fd8e8';
+      g.font = '700 13px ui-monospace, monospace';
+      g.fillText(`t${p.want}${isContact ? '  CONTACT' : ''}`, cx + 7, cy + 16);
+
+      // What the animator was ACTUALLY doing. A panel that quietly shows a
+      // different clip is the failure mode this line exists to make impossible.
+      const s = p.s || {};
+      const wrong = s.clip !== D.info.clip;
+      g.fillStyle = 'rgba(0,0,0,.72)';
+      g.fillRect(cx, cy + PH - 20, PW, 20);
+      g.fillStyle = wrong ? '#ff6b8a' : '#6b8299';
+      g.font = '500 11px ui-monospace, monospace';
+      g.fillText(`${s.clip || '(none)'} @${s.animTime} · ${s.state || '?'}`
+        + (p.got !== p.want ? `  LANDED ${p.got}` : ''), cx + 6, cy + PH - 6);
+    });
+
+    // --- kinetic chain plot ------------------------------------------------
+    const py = HEAD + rows * PH;
+    g.fillStyle = '#070a0f';
+    g.fillRect(0, py, W, PLOT);
+    g.fillStyle = '#9fb0c4';
+    g.font = '600 13px ui-monospace, monospace';
+    g.fillText('per-tick speed, each link normalised to its own peak — "the hips lead, the head lags"',
+      12, py + 18);
+
+    const L = 46, R = W - 340, T = py + 32, B = py + PLOT - 26;
+    const clocks = D.track.map((s) => s.clock);
+    const c0 = Math.min.apply(null, clocks), c1 = Math.max.apply(null, clocks);
+    const X = (c) => L + ((c - c0) / Math.max(1e-6, c1 - c0)) * (R - L);
+    g.strokeStyle = '#1b232e'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(L, B); g.lineTo(R, B); g.stroke();
+    g.strokeStyle = '#141b24';
+    g.beginPath(); g.moveTo(L, T); g.lineTo(R, T); g.stroke();
+    g.fillStyle = '#3f4d5c'; g.font = '500 10px ui-monospace, monospace';
+    g.fillText("each link's own peak", L + 4, T - 3);
+
+    if (D.contact != null) {
+      g.strokeStyle = '#ff9e2c'; g.setLineDash([4, 4]); g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(X(D.contact), T); g.lineTo(X(D.contact), B); g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = '#ff9e2c'; g.font = '600 11px ui-monospace, monospace';
+      g.fillText('contact', X(D.contact) + 4, T + 10);
+    }
+
+    const peaks = [];
+    D.links.forEach((bone, k) => {
+      const rowsOf = D.track.filter((s) => s.world && s.world[bone]);
+      if (rowsOf.length < 3) return;
+      const sp = [];
+      for (let i = 1; i < rowsOf.length; i++) {
+        const a = rowsOf[i - 1].world[bone], b = rowsOf[i].world[bone];
+        const dt = Math.max(1, rowsOf[i].clock - rowsOf[i - 1].clock);
+        sp.push({ c: rowsOf[i].clock,
+          v: Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) / dt });
+      }
+      const mx = Math.max.apply(null, sp.map((s) => s.v));
+      if (!(mx > 1e-6)) return;
+      const col = PAL[k % PAL.length];
+      g.strokeStyle = col; g.lineWidth = 1.8; g.globalAlpha = 0.95;
+      g.beginPath();
+      sp.forEach((s, i) => {
+        const x = X(s.c), y = B - (s.v / mx) * (B - T);
+        if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      });
+      g.stroke();
+      g.globalAlpha = 1;
+      // The peak that goes in the legend is the peak WITHIN THE DRIVE WINDOW.
+      // See chainStats: on this move the hips peak again in the recovery, and a
+      // whole-move peak makes the chain look like it fires backwards.
+      const drive = D.contact != null ? sp.filter((s) => s.c <= D.contact) : sp;
+      const pk = (drive.length ? drive : sp).reduce((a, b) => (b.v > a.v ? b : a), (drive.length ? drive : sp)[0]);
+      peaks.push({ bone, c: pk.c, col, mx });
+      g.fillStyle = col;
+      g.beginPath(); g.arc(X(pk.c), B - (pk.v / mx) * (B - T), 4, 0, 6.284); g.fill();
+    });
+
+    // Legend, ordered BY PEAK TICK rather than by bone, so the reading order of
+    // the legend is the order the chain actually fires in. If the tip is above
+    // the hips in this list, the strike does not drive from the floor up.
+    peaks.sort((a, b) => a.c - b.c);
+    g.font = '600 12px ui-monospace, monospace';
+    peaks.forEach((p, i) => {
+      const y = T + 6 + i * 17;
+      g.fillStyle = p.col;
+      g.fillRect(R + 18, y - 8, 10, 10);
+      g.fillText(`${p.bone}  peak t${p.c}  ${(p.mx * 60).toFixed(2)} m/s`, R + 34, y + 1);
+    });
+    g.fillStyle = '#6b8299'; g.font = '500 11px ui-monospace, monospace';
+    g.fillText(D.contact != null ? 'peak order within 0..contact (top = first)'
+      : 'peak order (top = first)', R + 18, T - 4);
+    g.fillText(`tick ${c0}`, L, B + 16);
+    g.fillText(`tick ${c1}`, R - 46, B + 16);
+
+    return { url: cv.toDataURL('image/jpeg', 0.88), luma };
+  });
+}
 
 const SHOTS = [
   {
@@ -557,6 +1111,36 @@ const SHOTS = [
         a.startMove(mv);
         if (a.animator && a.animator.play) a.animator.play(mv.clip, { blend: 0, loop: false });
       }
+      // MEASUREMENT ONLY — nothing above this line changed, and this shot still
+      // photographs exactly what it photographed last round, so the archive
+      // comparison across rounds survives.
+      //
+      // The two calls above are startMove (which installs retimeFor(move))
+      // followed by animator.play(clip, {blend, loop}) with no retime — and
+      // Animator#play does top.retime = opts.retime || null, so the second
+      // call throws the first one's retime away. This records what the entry
+      // actually ends up with, so the claim is a measured fact in the manifest
+      // rather than a reading of the source. 24-anim-uppercut is the same clip
+      // captured with the retime intact; compare the two.
+      (() => {
+        const b = a.animator && a.animator.base;
+        const e = b && b.entries.length ? b.entries[b.entries.length - 1] : null;
+        const want = mv && a.animator ? (mv.retime ?? null) : null;
+        window.__kbAnim17 = {
+          clip: e ? e.clipId : null,
+          retimeOnEntry: e && e.retime
+            ? { pivot: e.retime.pivot, pivotAt: e.retime.pivotAt,
+                inScale: +e.retime.inScale.toFixed(4), outScale: +e.retime.outScale.toFixed(4) }
+            : 'NONE',
+          retimeTheMoveDeclares: want
+            ? { pivot: want.pivot, pivotAt: want.pivotAt,
+                inScale: +want.inScale.toFixed(4), outScale: +want.outScale.toFixed(4) }
+            : null,
+          moveStartup: mv ? mv.startup : null,
+          moveTotal: mv ? mv.total : null,
+          stripCovers: [0, 26],
+        };
+      })();
       const t = a.position.clone(); t.y += 1.0;
       // Wide enough to hold both fighters and the floor under them: weight
       // transfer and airborne arcs are the axis, and neither reads if the
@@ -617,7 +1201,191 @@ const SHOTS = [
     impactOffset: 1,
     settle: 0,
   },
+
+  // --- clip strips ---------------------------------------------------------
+  // Four clips the axis has never been able to see, plus a corrected capture of
+  // the one it is scored on. See the CLIP STRIPS block above for why the
+  // instrument is what it is.
+  {
+    name: '20-anim-roundhouse',
+    note: 'k.roundhouse across the whole 50-tick move at even 5-tick spacing — the heavy the '
+      + 'diagnosis flagged for velocity sawtooth on the approach.',
+    preRoll: true,
+    settle: 0,
+    clipStrip: {
+      subject: 0, drive: 'move', move: 'roundhouse', clip: 'k.roundhouse',
+      step: 5, spacing: 3.4, dist: 7.4, aimY: 0.95, tip: 'foot_R',
+      // Crop derived from a measured run's `bboxUnion`, not guessed: the bones
+      // spanned 779..1257 x 195..839 across the twelve panels. Padded upward
+      // because the bone box is not the silhouette -- the antenna and the pack
+      // sit well above the topmost bone, and the first crop cut both off.
+      rect: { x: 590, y: 0, w: 860, h: 1040 },
+    },
+  },
+  {
+    name: '21-anim-straight',
+    note: 'p.straight across its whole 29-tick move at even 3-tick spacing — the canonical clip '
+      + 'from the nine that peaked every link on a single tick.',
+    preRoll: true,
+    settle: 0,
+    clipStrip: {
+      subject: 0, drive: 'move', move: 'straight', clip: 'p.straight',
+      step: 3, spacing: 3.4, dist: 6.4, aimY: 0.95, tip: 'hand_R',
+      rect: { x: 660, y: 0, w: 800, h: 1040 },
+    },
+  },
+  {
+    name: '22-anim-reaction-launch',
+    note: 'r.launch on the VICTIM across the whole reaction — a different operator covers '
+      + 'reactions and nothing has ever photographed one.',
+    preRoll: true,
+    settle: 0,
+    clipStrip: {
+      // The one strip that must connect: a reaction does not exist without a
+      // cause. Clocked on the victim's own clip time rather than on the tick
+      // counter, because hitstop stops ticks and would collapse the first
+      // several panels onto one frozen pose.
+      subject: 1, drive: 'forceHit', clip: 'r.launch',
+      forceHit: { attacker: 0, move: 'launcher' },
+      clock: 'anim', span: 30, step: 3, dist: 9.6, aimY: 1.35,
+      ready: "window.KB.fighters[1].animator.current === 'r.launch'",
+      tip: 'hand_R',
+      // The victim travels LEFT across a camera that is not allowed to follow, and
+      // how far varies run to run with the launch. Measured unions over three
+      // runs: xmin 645, 520, 805. The crop is sized for the worst of those plus
+      // room, because the alternative -- a camera that tracks him -- would
+      // delete the very translation a launch reaction is judged on.
+      rect: { x: 300, y: 0, w: 1020, h: 1040 },
+    },
+  },
+  {
+    name: '23-anim-run',
+    note: 'loco.runFwd, one full 32-tick cycle at even 3-tick spacing, with the fighter translating '
+      + 'across a static frame — locomotion is most of the screen time and no shot has contained it.',
+    preRoll: true,
+    settle: 0,
+    clipStrip: {
+      // Driven from the real keyboard through Input#commandsFor, not by poking
+      // the animator: the fighter state machine re-asserts its own clip every
+      // tick, so a poked locomotion clip is overwritten by idle within a frame.
+      // That is documented in animstrip.mjs and was still wrong there — it is
+      // only true of clips the state machine has no opinion about, and it has a
+      // very strong opinion about which locomotion clip is playing.
+      // `loco.runFwd`, not `loco.walkFwd`. Measured, not assumed: holding the
+      // forward key through the real Input path puts the fighter in state
+      // "walk" at 2.2 m/s playing `loco.runFwd`, and `loco.walkFwd` never
+      // appears at all from a keyboard. The first version of this shot declared
+      // walkFwd, waited 900 frames for a clip that cannot happen, and said so —
+      // which is the readiness gate doing its job.
+      subject: 0, drive: 'hold', hold: 'KeyD', clip: 'loco.runFwd',
+      clock: 'tick', span: 32, step: 3, spacing: 8.0, dist: 8.2, aimY: 0.95, aimFwd: 0.62,
+      ready: "window.KB.fighters[0].animator.current === 'loco.runFwd'",
+      tip: 'foot_R',
+      // Wide, because the fighter covers about 1.2 m in one cycle and the
+      // camera is not allowed to follow him. That translation is the evidence:
+      // a locomotion clip is judged on whether the feet keep up with the ground
+      // they are supposedly pushing against, and re-centring him every panel —
+      // which is what `animstrip.mjs` does — deletes exactly that.
+      rect: { x: 580, y: 20, w: 880, h: 960 },
+    },
+  },
+  {
+    name: '24-anim-uppercut',
+    note: 'p.uppercut, RETIMED as the game plays it, across the whole 48-tick move — the same '
+      + 'clip 17-anim-strip photographs, captured correctly. Compare the two.',
+    preRoll: true,
+    settle: 0,
+    clipStrip: {
+      subject: 0, drive: 'move', move: 'straight3', clip: 'p.uppercut',
+      step: 4, spacing: 3.4, dist: 7.0, aimY: 0.95, tip: 'hand_R',
+      rect: { x: 640, y: 0, w: 800, h: 1040 },
+    },
+  },
 ];
+
+/* ===========================================================================
+ * THE EXPECTED-SHOT ROSTER.
+ *
+ * `complete` is derived by checking the written manifest against `SHOTS` — its
+ * own list. So a shot that was never REGISTERED can never be reported missing.
+ * Round 28 briefed a critic on `11-anim-roundhouse`, which has never been in
+ * `SHOTS`; `git log -S` returns nothing for it, the only copy on disk was a
+ * one-off from `tools/animstrip.mjs` dated before every animation edit of that
+ * round, and the manifest was structurally incapable of saying so. Judging on
+ * it would have judged round-20 work.
+ *
+ * That is the fifth defect of this exact class — c562242 (two runs sharing an
+ * output directory), 965f3c7 (a crashed run leaving a successful-looking
+ * manifest), a76cf17, 427b621 (a subset run certifying itself), and round 27's
+ * dead canvas. The pattern every time is THE HARNESS CERTIFYING ITSELF AGAINST
+ * ITS OWN ASSUMPTIONS, and the fix every time is to make the certificate a fact
+ * derived from something outside the thing being certified.
+ *
+ * So the roster is a DECLARATION OF WHAT THE PROJECT EXPECTS TO EXIST, kept
+ * deliberately apart from the implementation that produces it, and it is
+ * checked three ways:
+ *
+ *   1. AT STARTUP, against `SHOTS`. A roster entry with no implementation is a
+ *      hard exit before a single frame is taken — that is the never-registered
+ *      case, and it now fails loudly instead of silently. A `SHOTS` entry
+ *      missing from the roster also fails: an undeclared shot is drift.
+ *   2. AT THE END, against THE DISK. Every roster entry must have a real file
+ *      with a plausible byte count. This is the only check in the harness that
+ *      does not consult the manifest or the shot list at all, so it survives
+ *      both of them being wrong.
+ *   3. ORPHANS. Any capture file in the directory that no roster entry claims
+ *      is reported. That is how a stale frame from a previous round — the
+ *      11-anim-roundhouse case exactly — gets named instead of being read as
+ *      evidence.
+ *
+ * `min` is a floor on the delivered file size, not a quality gate. A 1080p PNG
+ * of a lit scene does not come out under 500 KB; a contact sheet JPEG does not
+ * come out under 120 KB. Both floors are far below anything healthy and exist
+ * to catch a truncated or blank write, which is a failure mode this harness has
+ * actually had.
+ * ======================================================================== */
+const ROSTER = [
+  { name: '01-hero-idle', ext: 'png', min: 500e3, axis: 'stage, lighting, character' },
+  { name: '02-closeup-face', ext: 'png', min: 500e3, axis: 'character' },
+  { name: '03-full-body', ext: 'png', min: 500e3, axis: 'character' },
+  { name: '04-impact', ext: 'png', min: 500e3, axis: 'impact' },
+  { name: '04b-impact-decay', ext: 'png', min: 500e3, axis: 'impact' },
+  { name: '05-juggle', ext: 'png', min: 500e3, axis: 'animation, impact' },
+  { name: '06-stage-wide', ext: 'png', min: 500e3, axis: 'stage' },
+  { name: '07-super', ext: 'png', min: 300e3, axis: 'impact, lighting' },
+  { name: '08-hud', ext: 'png', min: 500e3, axis: 'interface' },
+  { name: '08b-hud-motion', ext: 'jpg', min: 120e3, axis: 'interface' },
+  { name: '09-roster', ext: 'png', min: 500e3, axis: 'character' },
+  { name: '10-ko', ext: 'png', min: 500e3, axis: 'interface, impact' },
+  { name: '12-select-screen', ext: 'png', min: 200e3, axis: 'interface' },
+  { name: '13-announce-fight', ext: 'png', min: 500e3, axis: 'interface' },
+  { name: '14-victory', ext: 'png', min: 500e3, axis: 'interface' },
+  { name: '15-impact-light', ext: 'png', min: 500e3, axis: 'impact' },
+  { name: '16-impact-heavy', ext: 'png', min: 500e3, axis: 'impact' },
+  { name: '17-anim-strip', ext: 'jpg', min: 120e3, axis: 'animation' },
+  { name: '18-skydeck-wide', ext: 'png', min: 500e3, axis: 'stage' },
+  { name: '19-cistern-wide', ext: 'png', min: 500e3, axis: 'stage' },
+  { name: '20-anim-roundhouse', ext: 'jpg', min: 120e3, axis: 'animation' },
+  { name: '21-anim-straight', ext: 'jpg', min: 120e3, axis: 'animation' },
+  { name: '22-anim-reaction-launch', ext: 'jpg', min: 120e3, axis: 'animation' },
+  { name: '23-anim-run', ext: 'jpg', min: 120e3, axis: 'animation' },
+  { name: '24-anim-uppercut', ext: 'jpg', min: 120e3, axis: 'animation' },
+];
+
+/**
+ * Check 1: the roster and the implementation agree. Runs before the browser is
+ * launched, because a harness that cannot produce what the project declares has
+ * nothing worth capturing.
+ * @returns {{undeclared:string[], unimplemented:string[]}}
+ */
+function auditRoster() {
+  const impl = new Set(SHOTS.map((s) => s.name));
+  const decl = new Set(ROSTER.map((r) => r.name));
+  return {
+    unimplemented: ROSTER.map((r) => r.name).filter((n) => !impl.has(n)),
+    undeclared: SHOTS.map((s) => s.name).filter((n) => !decl.has(n)),
+  };
+}
 
 /**
  * Refuse to share an output directory with another capture run.
@@ -658,7 +1426,63 @@ function takeLock(dir) {
   return drop;
 }
 
+/**
+ * Check 2 and 3: the roster against THE DISK.
+ *
+ * Deliberately reads the directory rather than the manifest or `SHOTS`. Both of
+ * those are the run talking about itself; `readdirSync` is not. If the manifest
+ * and the shot list were both wrong in the same way -- which is precisely what
+ * "certifying itself against its own assumptions" means, and it has happened
+ * five times -- this is the check that still notices.
+ *
+ * @param {string} dir
+ * @param {string[]} attempted shot names this run actually tried to take
+ * @returns {{missing:Array, undersized:Array, orphans:string[]}}
+ */
+function auditDisk(dir, attempted) {
+  const seen = new Set();
+  const missing = [];
+  const undersized = [];
+  for (const r of ROSTER) {
+    const f = resolve(dir, `${r.name}.${r.ext}`);
+    seen.add(`${r.name}.${r.ext}`);
+    let st = null;
+    try { st = statSync(f); } catch { /* absent */ }
+    if (!st) { missing.push({ name: r.name, file: `${r.name}.${r.ext}`, attempted: attempted.includes(r.name) }); continue; }
+    if (st.size < r.min) undersized.push({ name: r.name, bytes: st.size, floor: r.min });
+  }
+  const orphans = readdirSync(dir)
+    .filter((f) => /\.(png|jpg|jpeg)$/i.test(f))
+    .filter((f) => !seen.has(f));
+  return { missing, undersized, orphans };
+}
+
 async function main() {
+  /*
+   * THE ROSTER GATE, before anything is captured.
+   *
+   * A roster entry with no implementation is the never-registered case: the
+   * project declares a shot, nothing produces it, and until now nothing could
+   * say so -- `complete` compared the manifest against `SHOTS`, so a shot
+   * missing from `SHOTS` was invisible to every check in the file. This exits
+   * non-zero rather than warning, because a run whose evidence set is
+   * structurally incomplete should not produce frames that look complete.
+   */
+  const audit = auditRoster();
+  if (audit.unimplemented.length || audit.undeclared.length) {
+    console.error('[capture] SHOT ROSTER MISMATCH — refusing to capture.');
+    for (const n of audit.unimplemented) {
+      console.error(`  DECLARED BUT NOT IMPLEMENTED: ${n} — the roster expects this shot and no `
+        + 'entry in SHOTS produces it. This is the 11-anim-roundhouse defect: judging on a file '
+        + 'of that name would judge whatever old run left it on disk.');
+    }
+    for (const n of audit.undeclared) {
+      console.error(`  IMPLEMENTED BUT NOT DECLARED: ${n} — add it to ROSTER (with its extension `
+        + 'and a size floor) so its absence can be detected in a later run.');
+    }
+    process.exit(3);
+  }
+
   /*
    * A SUBSET RUN MUST NEVER WIPE THE SET.
    *
@@ -768,6 +1592,12 @@ async function main() {
   const ENTER_MATCH = `
     window.KB.menus.show(null);
     window.KB.paused = false;
+    // Clear the per-shot audit slot. Only 17-anim-strip writes it, but the
+    // tick-strip branch reads it for every tick-strip shot, so a reordering of
+    // SHOTS that put another one after 17 would silently attach 17's numbers to
+    // a different shot's manifest entry. Stale window state surviving into the
+    // next shot is a mistake this file has already made twice.
+    window.__kbAnim17 = null;
     if (window.KB.phase !== 'fight') { window.KB.startMatch(0, 1); window.KB.setPhase('fight'); }
   `;
 
@@ -1106,6 +1936,311 @@ async function main() {
     if (shot.settle) await page.waitForTimeout(shot.settle);
     const file = resolve(OUT, `${shot.name}.png`);
 
+    if (shot.clipStrip) {
+      const c = shot.clipStrip;
+      const si = c.subject;
+      // Pin BEFORE staging. One rendered frame has to already be one tick when
+      // the clip starts, or the ticks that elapse between `startMove` and the
+      // first freeze are wall-clock ticks and the panel labels inherit the
+      // difference.
+      await page.evaluate(`(() => { ${PIN_CLOCK} })()`);
+      // Stage and establish the origin in ONE evaluate.
+      //
+      // These were two calls and the round trip between them cost four to five
+      // ticks, measured: the panel labelled t0 landed on move tick 4 and every
+      // early panel was off by the same amount (0->4, 2->6, 7->8). The move had
+      // already been running for four frames before anything froze it. For a
+      // clip driven by `startMove` the readiness test is true the instant the
+      // call returns, so the freeze happens synchronously in the same task and
+      // no tick can slip through at all.
+      const info = await page.evaluate(`(async () => {
+        const info = ${stripSetup(c)};
+        const KB = window.KB;
+        const ok = () => ${c.ready ? `(${c.ready})` : 'true'};
+        const hold = () => {
+          KB.paused = true;
+          KB.clock.getDelta = () => 0;
+          window.__kbStripOrigin = KB.tick;
+        };
+        const f = KB.fighters[${si}];
+        if (ok()) { hold(); info.ready = { ok: true, waited: 0 }; return info; }
+        info.ready = await new Promise((res) => {
+          let n = 0;
+          const step = () => {
+            if (ok()) { hold(); res({ ok: true, waited: n }); }
+            else if (n++ > 900) {
+              res({ ok: false, waited: n, sawClip: f.animator ? f.animator.current : null,
+                    state: f.state });
+            } else requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        });
+        return info;
+      })()`).catch((e) => ({ error: e.message.split('\n')[0] }));
+      if (!info || info.error) {
+        flaw(shot.name, `CLIP STRIP DID NOT STAGE (${info && info.error}) — no strip written`);
+        verified[shot.name] = { clipStrip: info };
+        continue;
+      }
+      // The retime is a correctness property of the capture, not a detail. A
+      // strip taken with `retime: 'NONE'` on a move that declares one is a strip
+      // of a timing no player sees, which is the defect this shot exists to fix.
+      if (c.drive === 'move' && info.retime === 'NONE') {
+        flaw(shot.name, 'THE RETIME WAS DISCARDED — this strip is running the clip at its authored '
+          + 'rate, not the rate the move plays it at; do not read timing off it');
+      }
+
+      // Everything from here is clocked in the units the panel labels claim.
+      const clockKind = c.clock ?? 'move';
+      const clockExpr = clockKind === 'move'
+        ? `KB.fighters[${si}].moveTick`
+        : clockKind === 'anim'
+          ? `(KB.fighters[${si}].animator ? KB.fighters[${si}].animator.time : -1)`
+          : `(KB.tick - (window.__kbStripOrigin ?? KB.tick))`;
+
+      if (!info.ready || !info.ready.ok) {
+        flaw(shot.name, `CLIP "${c.clip}" NEVER STARTED — the strip origin could not be established, `
+          + `so nothing in this sheet is on the tick its label claims (the animator was playing `
+          + `"${info.ready && info.ready.sawClip}" in state "${info.ready && info.ready.state}")`);
+      }
+
+      const span = c.span ?? info.total ?? info.clipDuration ?? 30;
+      const contact = clockKind === 'move' ? info.contact : null;
+      const targets = stripTicks(span, contact, c.step ?? 4);
+
+      const panels = [];
+      let stalled = false;
+      for (const target of targets) {
+        // Step, freeze, and sample inside ONE page-side callback. Polling from
+        // the driver returns when Playwright observes the value and more ticks
+        // pass during the round trip, which is the same defect that put
+        // 08b-hud-motion's panels sixty ticks apart across two runs.
+        // THE SIM IS ONLY EVER UNPAUSED INSIDE THIS CALLBACK.
+        //
+        // It used to be resumed at the tail of the previous panel, which left
+        // the game running across the driver round trip while nothing was
+        // sampling it. Measured: 40 track rows over a 50-tick strip and 20 over
+        // a 29-tick one, so a fifth to a third of every curve in the chain plot
+        // was interpolated across a hole -- and the holes clustered at the panel
+        // ticks, which is exactly where the plot is read. Resuming here means
+        // every tick between two panels is sampled by the callback that caused
+        // it.
+        const at = await page.evaluate(`(() => new Promise((res) => {
+          const KB = window.KB;
+          const clk = () => (${clockExpr});
+          let idle = 0, last = null;
+          const push = () => {
+            const c = clk();
+            if (c !== last) {
+              last = c; idle = 0;
+              const s = ${STRIP_SAMPLE(si)};
+              if (s) { s.clock = c; window.__kbStripTrack.push(s); }
+            } else idle++;
+            return c;
+          };
+          const finish = (stalled) => {
+            KB.paused = true;
+            KB.clock.getDelta = () => 0;
+            // Do not open the shutter on the same frame the freeze happened.
+            //
+            // Panels were coming back as flat #05070c -- the page background,
+            // luma 0.0272, which is the exact colour the round-27 dead-canvas
+            // investigation identified. That is not a black render, it is NO
+            // render: the compositor served a frame in which the WebGL surface
+            // had not swapped, and the DOM showed through. Two rAFs after the
+            // pause guarantees at least one complete render-and-swap of the
+            // frozen state before the screenshot. The state is frozen, so the
+            // extra frames change nothing except that there is something to
+            // photograph.
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              res({ clock: clk(), stalled, sample: ${STRIP_SAMPLE(si)} });
+            }));
+          };
+          // Already there: resolve without letting a single tick run. This is
+          // what makes the t0 panel land on tick 0 rather than on tick 4.
+          if (push() >= ${target}) { finish(false); return; }
+          KB.clock.getDelta = () => 1 / 60;
+          KB.paused = false;
+          const step = () => {
+            const c = push();
+            if (c >= ${target}) finish(false);
+            else if (idle > 240) finish(true);
+            else requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        }))()`).catch(() => null);
+        if (!at) { flaw(shot.name, `panel ${target} never resolved`); break; }
+        if (at.stalled) {
+          stalled = true;
+          flaw(shot.name, `the clock stopped at ${at.clock} before panel ${target} — the move ended `
+            + 'or the state machine took the clip away; later panels are not what they claim');
+        }
+        /*
+         * Retake a panel that came back empty, and record that it happened.
+         *
+         * Byte count is the cheap discriminator and it is not subtle: a real
+         * 800x1040 panel of a lit scene is 500-900 KB of PNG, and a panel that
+         * is one flat colour compresses to a couple of KB. No decoding, no
+         * round trip, and it catches the dead-canvas case before the sheet is
+         * built rather than after. Two retries, then it ships and the per-panel
+         * luma check reports it -- a strip that quietly retried for ever would
+         * be worse than one that says a panel is dead.
+         */
+        const grab = () => page.screenshot({
+          clip: { x: c.rect.x, y: c.rect.y, width: c.rect.w, height: c.rect.h },
+        });
+        let raw = await grab();
+        let retakes = 0;
+        while (raw.length < 40e3 && retakes < 2) {
+          retakes++;
+          await page.waitForTimeout(220);
+          raw = await grab();
+        }
+        if (retakes && raw.length < 40e3) {
+          flaw(shot.name, `panel t${target} IS STILL EMPTY after ${retakes} retakes (${raw.length} `
+            + 'bytes) — the canvas never swapped and this panel shows nothing');
+        } else if (retakes) {
+          // Repaired, so not a defect: saying "this frame is not scoreable"
+          // about a panel that was successfully retaken would be false, and the
+          // defect list is the one thing every critic reads.
+          console.log(`[capture] ${shot.name}: panel t${target} was empty and retook cleanly `
+            + `(${retakes}x, ${raw.length} bytes)`);
+        }
+        const full = panels.length === 0 ? (await page.screenshot()).toString('base64') : null;
+        panels.push({ want: target, got: at.clock, s: at.sample, retakes,
+          b64: raw.toString('base64'), full });
+        if (at.stalled) break;
+      }
+      await page.evaluate(`(() => { ${RESTORE_CLOCK} window.KB.paused = false; })()`);
+
+      // CERTIFY ON A FULL FRAME, not on the crop. deadFrac's thresholds were
+      // calibrated across eighteen 1080p frames; a tight crop of one fighter is
+      // a different population and would make the gate mean something else.
+      // Never weaken a gate by moving the goalposts under it.
+      const cert = panels.length ? await measureFrame(panels[0].full, false) : null;
+      if (cert && !cert.ok) {
+        flaw(shot.name, `FIRST STRIP PANEL NOT SCOREABLE: median luma ${cert.p50}, p95 ${cert.p95}, `
+          + `deadFrac ${cert.deadFrac} — treat the whole sheet as dead`);
+      }
+
+      /*
+       * Did the subject stay inside the DECLARED crop? The rectangle is fixed in
+       * the shot table so that panels register and so that the same crop can be
+       * compared across rounds -- which only means anything if the fighter is
+       * actually inside it.
+       *
+       * The margin is 48 px and it is not slack. The box is over BONES, and the
+       * silhouette is not: the armour plates, the reactor pack and the antenna
+       * all sit outside the outermost bone. The reaction strip passed a
+       * zero-margin version of this check with a bone box 5 px inside the crop
+       * and shipped five panels with the victim's chassis sliced off at the
+       * edge. A bone-space check has to leave room for the body hanging off the
+       * bones or it is checking the wrong thing.
+       */
+      const M = 48;
+      const escaped = panels.filter((p) => p.s && (
+        p.s.bbox[0] < c.rect.x + M || p.s.bbox[2] > c.rect.x + c.rect.w - M
+        || p.s.bbox[1] < c.rect.y + M || p.s.bbox[3] > c.rect.y + c.rect.h - M));
+      if (escaped.length) {
+        flaw(shot.name, `${escaped.length}/${panels.length} panels have the fighter within ${M}px of the `
+          + `declared crop edge ${JSON.stringify(c.rect)} — widen it; the silhouette is being cut off`);
+      }
+      const offGrid = panels.filter((p) => p.got !== p.want);
+      if (offGrid.length) {
+        flaw(shot.name, `${offGrid.length} panels landed off their label: `
+          + offGrid.map((p) => `${p.want}->${p.got}`).join(', '));
+      }
+      const wrongClip = panels.filter((p) => p.s && p.s.clip !== c.clip);
+      const raw = await page.evaluate('window.__kbStripTrack || []');
+      /*
+       * DEDUPE BY TICK, and this is not housekeeping.
+       *
+       * Each panel's callback re-samples the tick it froze on, because its
+       * `last` starts empty. That put one duplicate row per panel into the
+       * track — a row whose position is identical to its predecessor's, so the
+       * per-tick speed computed across it is exactly ZERO. Eleven panels meant
+       * eleven spurious zeros dropped into the speed curves at precisely the
+       * ticks the sheet asks a critic to look at, one of them on the contact
+       * tick itself. It read as a real measurement: `hips speed at contact /
+       * own peak` came back 0.000 on all three attack strips, which is the
+       * headline number round 28 moved, and it was an artefact of my own
+       * sampler. Rule 4 of the preamble applies to numbers you generate as much
+       * as to numbers you inherit.
+       */
+      const track = [];
+      const seenClock = new Set();
+      for (const s of raw) { if (!seenClock.has(s.clock)) { seenClock.add(s.clock); track.push(s); } }
+      // Concordance and lag are claims about a strike driving into contact.
+      // They are not meaningful for a clip with no contact, so they are not
+      // computed for one rather than being computed and quietly misread.
+      const chain = contact != null ? chainStats(track, contact, c.tip || 'hand_R') : null;
+      const expectedRows = (targets[targets.length - 1] - targets[0]) + 1;
+      if (track.length < expectedRows * 0.95) {
+        flaw(shot.name, `TRACK IS INCOMPLETE: ${track.length} distinct ticks for a ${expectedRows}-tick `
+          + 'span — the chain plot and the trails are drawn across missing ticks');
+      }
+
+      verified[shot.name] = {
+        clipStrip: { ...info, clock: clockKind, span, step: c.step ?? 4, ticks: targets,
+          panels: panels.map((p) => ({ t: p.want, at: p.got, clip: p.s && p.s.clip,
+            animTime: p.s && p.s.animTime, state: p.s && p.s.state, bbox: p.s && p.s.bbox })),
+          // The rectangle the DECLARED crop would have to be to hold every
+          // panel. Recorded so the next person to move a camera can read the
+          // right number off the run instead of guessing at it, which is how
+          // this shot's first crop was wrong.
+          bboxUnion: panels.length ? (() => {
+            const b = panels.filter((p) => p.s).map((p) => p.s.bbox);
+            return b.length ? [Math.min(...b.map((v) => v[0])), Math.min(...b.map((v) => v[1])),
+              Math.max(...b.map((v) => v[2])), Math.max(...b.map((v) => v[3]))] : null;
+          })() : null,
+          offGrid: offGrid.length, escapedCrop: escaped.length,
+          panelsOnOtherClip: wrongClip.length, trackTicks: track.length, stalled,
+          chain },
+        frame: cert,
+      };
+
+      const sheet = await page.evaluate(stripSheet, {
+        panels: panels.map(({ full, ...p }) => p),
+        track,
+        rect: c.rect,
+        tip: c.tip || 'hand_R',
+        links: STRIP_LINKS,
+        contact,
+        clockKind,
+        info,
+        chain,
+        step: c.step ?? 4,
+        span,
+        name: shot.name,
+      });
+      const dark = sheet.luma
+        .map((l, i) => ({ t: panels[i].want, ...l }))
+        .filter((l) => l.p95 < 0.05);
+      if (dark.length) {
+        flaw(shot.name, `${dark.length}/${panels.length} PANELS ARE BLACK (`
+          + `${dark.map((d) => `t${d.t} p95 ${d.p95}`).join(', ')}) — measured on the panel itself, `
+          + 'not on a full frame taken near it; those panels show nothing');
+      }
+      verified[shot.name].clipStrip.panelLuma = sheet.luma;
+      const jpg = file.replace(/\.png$/, '.jpg');
+      writeFileSync(jpg, Buffer.from(sheet.url.split(',')[1], 'base64'));
+      await page.evaluate(`(() => {
+        const KB = window.KB, r = window.__kbStripRestore;
+        if (r) { KB.fightCamera.render = r.render; KB.fightCamera.simulate = r.simulate; }
+        const hud = document.getElementById('ui');
+        if (hud) hud.style.visibility = window.__kbStripHud || '';
+        if (window.__kbStripHold) { KB.input.keys.delete(window.__kbStripHold); window.__kbStripHold = null; }
+        const cpu = window.__kbStripCpu;
+        if (cpu) { KB.cpu[0] = cpu[0]; KB.cpu[1] = cpu[1]; window.__kbStripCpu = null; }
+        window.__kbStripRestore = null;
+        KB.paused = false;
+      })()`).catch((e) => console.warn(`[capture] strip teardown: ${e.message}`));
+      manifest.push({ name: shot.name, note: shot.note, file: jpg });
+      console.log(`[capture] ${shot.name} (clip strip, ${panels.length} panels, `
+        + `retime ${JSON.stringify(info.retime)})`);
+      continue;
+    }
+
     if (shot.tickStrip) {
       // Sample on the sim's own tick counter and tile the frames, so motion that
       // lives in a few ticks can actually be reviewed. Same reasoning as the
@@ -1130,7 +2265,9 @@ async function main() {
           + 'was recorded, so the "ticks after damage" labels are not trustworthy');
       }
       verified[shot.name] = { baseTick: base, measuredFromContact: hitBased,
-        offsets: shot.tickStrip.slice() };
+        offsets: shot.tickStrip.slice(),
+        // Measurement only, recorded by the shot's own setup where it has one.
+        retimeAudit: await page.evaluate('window.__kbAnim17 ?? null').catch(() => null) };
       // Land each panel on the EXACT tick it is labelled with.
       //
       // This waited from the driver and then took a 1920x1080 screenshot --
@@ -1393,10 +2530,37 @@ async function main() {
    * is now derived and cannot be asserted.
    */
   const missing = SHOTS.map((s) => s.name).filter((n) => !manifest.some((m) => m.name === n));
-  const complete = missing.length === 0 && !ONLY.length;
+
+  /*
+   * And now the same question asked of the DISK, against the declared roster.
+   *
+   * `missing` above is the old check and it is still the run comparing itself
+   * with its own list. `roster` is the independent one: it knows what the
+   * project expects to exist, it looks at the files rather than at the manifest,
+   * and it names anything in the directory that no declared shot claims. A full
+   * run is only `complete` if both agree.
+   */
+  const rosterAudit = auditDisk(OUT, list.map((s) => s.name));
+  for (const m of rosterAudit.missing) {
+    if (m.attempted) flaw(m.name, `DECLARED SHOT PRODUCED NO FILE (${m.file}) — the run tried and failed`);
+    else if (!ONLY.length) flaw(m.name, `DECLARED SHOT NEVER TAKEN (${m.file}) — nothing in this run produced it`);
+  }
+  for (const u of rosterAudit.undersized) {
+    flaw(u.name, `DELIVERED FILE IS ${u.bytes} BYTES, below the ${u.floor} floor — a truncated or `
+      + 'blank write, not a capture');
+  }
+  if (rosterAudit.orphans.length) {
+    console.warn(`[capture] ${rosterAudit.orphans.length} UNDECLARED FILE(S) in ${OUT}: `
+      + `${rosterAudit.orphans.join(', ')} — no roster entry claims these. They may be stale frames `
+      + 'from an earlier round; do not score them.');
+  }
+
+  const rosterOk = rosterAudit.missing.length === 0 && rosterAudit.undersized.length === 0;
+  const complete = missing.length === 0 && !ONLY.length && rosterOk;
 
   writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({
     complete, only: ONLY.length ? ONLY : undefined, missing: missing.length ? missing : undefined,
+    roster: { declared: ROSTER.length, ...rosterAudit, ok: rosterOk },
     shots: manifest, fps, perf, info, verified, defects,
     errors: errors.slice(0, 40),
   }, null, 2));

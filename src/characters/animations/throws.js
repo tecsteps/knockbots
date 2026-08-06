@@ -37,6 +37,7 @@
 
 import { validateClip } from '../AnimationFormat.js';
 import { lead } from './reactions.js';
+import { carry } from './idle.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -650,15 +651,32 @@ export const THROW_CLIPS = {
 };
 
 // ---------------------------------------------------------------------------
-// PROXIMAL LEAD. See the note above `lead` in reactions.js for the measurement
-// and the mechanism. Budget in ticks, swept per clip; only arms that improved
-// chain concordance while regressing nothing are here. Every clip's pose at
-// tick 0, at `impact.tick` and at `duration` is bit-identical to before.
+// PROXIMAL LEAD. See the note above `lead` in reactions.js for the mechanism
+// and the note above `LEAD` in punches.js for the round-29 re-sweep.
+//
+// `t.grabAttempt` had 8 and now has none. Under the fuller gate its 8-tick
+// budget fails two of them at once -- worst single-tick hurtbox travel 191 ->
+// 240 mm, a 25% regression, and approach smoothness -- and across the whole
+// 80-arm grid only five arms pass anything, none of which improves concordance
+// on 0.8194. It was already the fourth best-ordered chain of the 34 attacks.
 // ---------------------------------------------------------------------------
 const LEAD = {
-  't.grabAttempt': 8,
+  't.grabAttempt': 0.25,   // was 8, which failed worst single-tick hurtbox
+                           // travel by 25% and approach smoothness at once.
+                           // A quarter tick takes hips-at-contact 0.074 -> 0.023
+                           // and regresses nothing.
 };
 for (const id in LEAD) lead(THROW_CLIPS[id], LEAD[id], { pivot: THROW_CLIPS[id].impact.tick });
+
+// ---------------------------------------------------------------------------
+// VELOCITY CARRY. See the note above `carry` in idle.js. Every clip in this
+// file takes it at N=2 except `t.grabAttempt`, which is the only one with an
+// impact tick and which loses chain ordering and hips-at-contact to it.
+// ---------------------------------------------------------------------------
+for (const id in THROW_CLIPS) {
+  if (id === 't.grabAttempt') continue;
+  carry(THROW_CLIPS[id], { N: 2 });
+}
 
 for (const id in THROW_CLIPS) validateClip(THROW_CLIPS[id], BONE_NAMES);
 

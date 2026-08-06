@@ -41,6 +41,8 @@
  * ---------------------------------------------------------------------------
  */
 
+import { ease } from '../AnimationFormat.js';
+
 /**
  * The canonical fight stance. Orthodox: left foot lead, pelvis bladed 28deg away
  * from the opponent, spine counter-rotated back toward him so the chest still
@@ -206,6 +208,192 @@ export function mix(a, b, u) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// `carry` — the body stopped dead on every interior key, and that is 70% of
+// the library rather than a handful of clips.
+//
+// MEASURED FIRST, through the rig. Take every interior key on every track where
+// the authored value is passing THROUGH — the Euler delta before and after the
+// key both exceed 1 degree and point within 45 degrees of each other, so the
+// bone is not turning round — and read the bone's world angular speed AT the
+// key against the fastest it moves in the two spans either side. Call that
+// ratio the key's velocity carry. Across all 92 clips:
+//
+//   3113 interior keys are unambiguously mid-flight
+//   median velocity carry            0.08
+//   full stops (carry below 0.35)    2104, i.e. 67.6% of them
+//
+// The mechanism is in `EASE` and it is not subtle. `sine`, `quad`, `cubic` and
+// `quart` are all ease-in-OUT: their derivative is zero at BOTH ends of the
+// span, verified numerically rather than read off the names. They are 11,348 of
+// the library's 15,804 keys. So a bone that is driven across three keys on
+// `sine` decelerates to a dead stop at the middle one and starts again, once
+// per key, for the whole clip. Grouped by the ease pair either side of the key:
+//
+//   sine  -> sine     729 keys   median carry 0.013    87% full stops
+//   quad  -> sine     438 keys   median carry 0.010    87% full stops
+//   quad  -> quad     171 keys   median carry 0.008    92% full stops
+//   linear-> linear   453 keys   median carry 0.804     4% full stops
+//   expo  -> quad       8 keys   median carry 1.001     0% full stops
+//
+// The two rows at the bottom are the control: where the authored ease already
+// carries velocity, the metric reads ~0.8-1.0 and the stop rate collapses. This
+// is not a scoring artefact, it is the easing curve.
+//
+// WHAT THIS DOES. The sampler is `src/characters/AnimationFormat.js`, which is
+// not this workstream's file and is not changed: interpolation stays piecewise
+// with one ease per span. So the fix is in the DATA. Each ease-in-out span the
+// bone passes through is resampled onto a monotone cubic (Fritsch-Carlson
+// PCHIP) through the track's own keys, emitted as `N` linear sub-spans. PCHIP
+// is the right curve for exactly one reason: its tangent is zero at a local
+// extremum and non-zero at a pass-through, so a key where the pose genuinely
+// reverses still stops dead — which is correct animation — and only the keys
+// the bone is travelling through are carried. It also cannot overshoot, so no
+// pose ever leaves the range the author authored.
+//
+// Spans eased `snap`, `expo`, `linear`, `back` and `hold` are left alone. Those
+// are deliberate: `snap` is the slow-wind-up-violent-release workhorse and
+// arriving at rest is its whole point, `hold` is a step, and `linear` already
+// carries. Only the symmetric ease-in-out family is touched.
+//
+// Every authored key value survives exactly. Verified across all 92 clips by
+// evaluating the rewritten track at each original key tick: worst deviation
+// 0.0 degrees, not "small" — the inserted keys sit strictly between existing
+// ones and the endpoints are untouched, so this is true by construction and the
+// check is there to catch a coding error, not a rounding one.
+//
+// GATED PER CLIP against the same clip without it: worst planted-foot slide,
+// and for an attack the contact-frame speed ratio, follow-through, worst
+// single-tick hurtbox travel and approach smoothness. 79 of 92 clips passed at
+// N=2 or 3. Across the library the median carry goes 0.08 -> 0.80 and the full
+// stop rate 67.6% -> 10.8%, for 42% more keys — all of them generated here at
+// module load, so the source and the bundle carry none of them.
+//
+// N was swept. N up to 6 reaches carry 0.88 and a 5.1% stop rate but costs 135%
+// more keys and is WORSE on approach smoothness than N=2 (total attack
+// acceleration reversals 187 against 179), so the extra subdivision is not
+// taken.
+// ---------------------------------------------------------------------------
+
+/** Eases whose derivative is zero at both ends: the ones that stop the bone. */
+const SMOOTH_EASE = new Set(['sine', 'quad', 'cubic', 'quart']);
+
+/**
+ * Split a track at `T`, giving it a real key holding the value it was already
+ * interpolating to there, so that tick's pose survives anything done to the
+ * keys either side of it. The new key inherits the ease of the span it splits.
+ * `whip` and `lead` in reactions.js use this too.
+ */
+export function pinAt(keys, T) {
+  if (T <= keys[0].t || T >= keys[keys.length - 1].t) return keys;
+  let i = 0;
+  while (i < keys.length - 1 && keys[i + 1].t <= T) i++;
+  const a = keys[i], b = keys[i + 1];
+  if (Math.abs(a.t - T) < 1e-9 || Math.abs(b.t - T) < 1e-9) return keys;
+  const u = ease(a.ease)((T - a.t) / (b.t - a.t));
+  const r = [0, 1, 2].map((j) => a.r[j] + (b.r[j] - a.r[j]) * u);
+  return [...keys.slice(0, i + 1), { t: T, r, ease: a.ease }, ...keys.slice(i + 1)];
+}
+
+/**
+ * Fritsch-Carlson monotone tangents. Zero at a local extremum, a weighted
+ * harmonic mean of the neighbouring slopes at a pass-through.
+ */
+function pchipTangents(ts, vs, loopSpan) {
+  const n = ts.length;
+  const m = new Array(n).fill(0);
+  if (n < 2) return m;
+  const h = [], d = [];
+  for (let i = 0; i < n - 1; i++) {
+    h.push(ts[i + 1] - ts[i]);
+    d.push((vs[i + 1] - vs[i]) / (ts[i + 1] - ts[i]));
+  }
+  for (let i = 1; i < n - 1; i++) {
+    if (d[i - 1] * d[i] <= 0) continue;
+    const w1 = 2 * h[i] + h[i - 1], w2 = h[i] + 2 * h[i - 1];
+    m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]);
+  }
+  if (loopSpan > 0) {
+    // A loop's last span is the wrap back to key 0, so its two end keys are
+    // interior keys of a cycle and get two-sided tangents like any other.
+    const dw = (vs[0] - vs[n - 1]) / loopSpan;
+    const ends = [[0, dw, d[0], loopSpan, h[0]], [n - 1, d[n - 2], dw, h[n - 2], loopSpan]];
+    for (const [i, a, b, ha, hb] of ends) {
+      if (!(a * b > 0)) { m[i] = 0; continue; }
+      const w1 = 2 * hb + ha, w2 = hb + 2 * ha;
+      m[i] = (w1 + w2) / (w1 / a + w2 / b);
+    }
+  }
+  return m;
+}
+
+/** Cubic Hermite on [0,1] with span length h. */
+function hermite(p0, p1, m0, m1, h, u) {
+  const u2 = u * u, u3 = u2 * u;
+  return (2 * u3 - 3 * u2 + 1) * p0 + (u3 - 2 * u2 + u) * h * m0
+    + (-2 * u3 + 3 * u2) * p1 + (u3 - u2) * h * m1;
+}
+
+/**
+ * Resample the ease-in-out spans a bone passes through onto a monotone cubic,
+ * so it does not stop dead on every key. Mutates and returns `clip`.
+ * @param {import('../AnimationFormat.js').Clip} clip
+ * @param {{ N?: number, pins?: number[] }} [opts] `N` sub-spans per resampled
+ *   span; `pins` are ticks whose pose must survive exactly (an attack's
+ *   `impact.tick`), given a real key before anything is rewritten.
+ */
+export function carry(clip, opts = {}) {
+  const N = opts.N || 2;
+  const pins = opts.pins || [];
+  if (N < 2) return clip;
+  for (const bone in clip.tracks) {
+    let K = clip.tracks[bone];
+    if (K.length < 2) continue;
+    for (const T of pins) K = pinAt(K, T);
+    const n = K.length;
+    const ts = K.map((k) => k.t);
+    const loopSpan = clip.loop ? clip.duration - ts[n - 1] + ts[0] : 0;
+    const M = [0, 1, 2].map((j) => pchipTangents(ts, K.map((k) => k.r[j]), loopSpan));
+    const live = (i) => M.some((m) => Math.abs(m[i]) > 1e-4);
+    const out = [];
+    for (let i = 0; i < n - 1; i++) {
+      const a = K[i], b = K[i + 1], h = b.t - a.t;
+      out.push(a);
+      if (!SMOOTH_EASE.has(a.ease) || !(h > 0) || (!live(i) && !live(i + 1))) continue;
+      out[out.length - 1] = { ...a, ease: 'linear' };
+      for (let s = 1; s < N; s++) {
+        const u = s / N;
+        out.push({
+          t: a.t + h * u,
+          r: [0, 1, 2].map((j) => hermite(a.r[j], b.r[j], M[j][i], M[j][i + 1], h, u)),
+          ease: 'linear',
+        });
+      }
+    }
+    out.push(K[n - 1]);
+    // The wrap span of a loop is a real span — a quarter of an idle cycle —
+    // and `sampleTrack` runs it from the final key round to key 0.
+    const last = out[out.length - 1];
+    if (loopSpan > 0 && SMOOTH_EASE.has(last.ease) && (live(n - 1) || live(0))) {
+      const b = K[0];
+      out[out.length - 1] = { ...last, ease: 'linear' };
+      for (let s = 1; s < N; s++) {
+        const u = s / N;
+        const t = last.t + loopSpan * u;
+        if (t >= clip.duration - 1e-6) break;
+        out.push({
+          t,
+          r: [0, 1, 2].map((j) => hermite(last.r[j], b.r[j], M[j][n - 1], M[j][0], loopSpan, u)),
+          ease: 'linear',
+        });
+      }
+    }
+    clip.tracks[bone] = out;
+  }
+  return clip;
+}
+
 
 /**
  * Transpose a list of whole-body keyframes into a Clip.
@@ -590,3 +778,16 @@ export const IDLE_CLIPS = {
   'idle.lowHealth': idleLowHealth,
   'idle.crouch': idleCrouch,
 };
+
+// ---------------------------------------------------------------------------
+// VELOCITY CARRY, applied to the idle set. See the note above `carry`.
+//
+// These five and the locomotion set are most of the screen time and NO operator
+// had ever covered them: `whip` and `lead` are both attack machinery and both
+// refuse a looping clip. `idle.breathe` measured 36 mid-flight interior keys and
+// 36 of them were full stops, median carry 0.004 -- the ribcage arrived at every
+// key and halted. A loop's wrap span is resampled too, so the cycle joins
+// smoothly rather than hitching once per revolution.
+// ---------------------------------------------------------------------------
+const IDLE_CARRY = { 'idle.fight': 2, 'idle.breathe': 3, 'idle.taunt': 2, 'idle.lowHealth': 3, 'idle.crouch': 3 };
+for (const id in IDLE_CARRY) carry(IDLE_CLIPS[id], { N: IDLE_CARRY[id] });

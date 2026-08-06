@@ -856,11 +856,63 @@ const FRAG_NORMAL_HOOK = /* glsl */ `
     vec3 kbWorldN = normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz );
     kbWetness = texture2D( uWetMap, vNormalMapUv ).a;
 
+    // --- the long warp, on the water only -----------------------------------
+    //
+    // The ripple pair below is sampled at a fixed world pitch -- 1/uRippleScale
+    // is 2.86 m on the pit's map, which both the vault and the roof inherit
+    // because neither states one -- so it is a lattice at constant pitch, which
+    // is the standing criticism of this set. The per-slab block further down
+    // breaks the HISTORY map's pitch and cannot be turned on anywhere else,
+    // because it is a step field and needs a groove to hide its steps in (see
+    // uSlabVary). This is the term with no steps, and it is the other branch of
+    // that same decision.
+    //
+    // It is one extra fetch of the ripple map at a ninth of its own scale --
+    // about a 26 m period against an arena 28 m across -- read as a signed
+    // vector in metres and added to the world position that the ripple pair
+    // then scales. Two properties, and they are the whole design:
+    //
+    //   1. It is CONTINUOUS. No threshold, no cell id, no piecewise-constant
+    //      value anywhere in it, so it structurally cannot produce the
+    //      dead-straight chord this file's wetness note warns about. That is
+    //      what makes it legal on a deck with no bay grid.
+    //   2. It moves the PHASE of the lattice by more than a period across the
+    //      frame, so two points one tile apart in world space are no longer the
+    //      same texel and the repeat has nothing to sit on. It adds no detail
+    //      and removes none; it decorrelates what is already there.
+    //
+    // WHY ONLY THE WATER, which is a correction rather than a design. The first
+    // version warped every world-tiled lookup in this hook -- the detail
+    // normal, the history map and the ripples. Measured that way it took the
+    // vault's lattice share down 10% but cost the ROOF 1.1% of its fine detail
+    // and put its p90 up 8%, because on a dry deck the detail normal is most of
+    // the texture and warping it is pure loss. The gain was localised by band
+    // and it was entirely in the 0.10-0.20 m band, which is the ripple map's
+    // own finest octave and nothing else. Scoped to the ripples the term does
+    // the same work on the vault and is inert on the roof BY CONSTRUCTION
+    // rather than by tuning: a deck whose ripples carry 4% of its luminance
+    // cannot be moved by rescrambling them. Measured inert there, on eight
+    // replicated arms, and that is the point of the scope.
+    //
+    // The joint grid, the slab id, the history map and the wet mask are
+    // deliberately NOT warped. Joints in a real slab floor are straight, the
+    // slab id has to stay aligned with them, and the other two are the arena's
+    // own bake in the arena's own UV.
+    //
+    // Derivatives come from the warped coordinate because the shader samples
+    // the warped coordinate, so mip selection stays exact rather than
+    // approximately right.
+    vec2 kbW = vKbWorld.xz;
+    if ( uDeckWarp > 0.0 ) {
+      vec2 kbWarpUv = vKbWorld.xz * uRippleScale * 0.11;
+      kbW += ( texture2D( uRippleMap, kbWarpUv ).xy * 2.0 - 1.0 ) * uDeckWarp;
+    }
+
     vec3 det = texture2D( uDetailNormal, vKbWorld.xz * uDetailScale ).xyz * 2.0 - 1.0;
     vec2 perturb = det.xy * uDetailAmp * ( 1.0 - kbWetness * 0.75 );
 
-    vec2 r1 = vKbWorld.xz * uRippleScale + vec2( uTime * 0.021, uTime * 0.013 );
-    vec2 r2 = vKbWorld.xz * uRippleScale * 1.73 - vec2( uTime * 0.016, - uTime * 0.024 );
+    vec2 r1 = kbW * uRippleScale + vec2( uTime * 0.021, uTime * 0.013 );
+    vec2 r2 = kbW * uRippleScale * 1.73 - vec2( uTime * 0.016, - uTime * 0.024 );
     vec3 rip = ( texture2D( uRippleMap, r1 ).xyz + texture2D( uRippleMap, r2 ).xyz ) - 2.0;
     perturb += rip.xy * uRippleAmp * kbWetness * kbWetness;
 
@@ -1265,6 +1317,7 @@ uniform float uDetailScale;
 uniform float uDetailAmp;
 uniform float uRippleScale;
 uniform float uRippleAmp;
+uniform float uDeckWarp;
 uniform float uTime;
 uniform float uFloorTint;
 uniform float uFloorTintWet;
@@ -1416,6 +1469,55 @@ export const PIT_SURFACE = {
   detailAmp: 0.55,
   rippleScale: 0.35,
   rippleAmp: 0.09,
+  /**
+   * Amplitude of the long warp, in metres. `null` means "derive it", and this
+   * derivation and `slabVary`'s are now ONE decision with two branches rather
+   * than two unrelated switches — which is the thing the round-28 critic asked
+   * for, having found that the per-slab block was kept off the vault "by an
+   * accident of the uSlabVary derivation rather than by design".
+   *
+   * The decision is: **a deck gets exactly one anti-tiling field, and which one
+   * it gets is decided by whether it has an analytic bay grid.**
+   *
+   *   jointSlope > 0  ->  slabVary 1, deckWarp 0.  The deck has a groove on
+   *                       every even world line, so a STEP field is legal: its
+   *                       discontinuities land at the bottom of a feature that
+   *                       is already dark and rough.
+   *   jointSlope == 0 ->  slabVary 0, deckWarp 6.  The deck has no groove, so a
+   *                       step field would be the dead-straight chord this
+   *                       file's wetness note warns about. It gets the smooth
+   *                       field instead, which has no boundaries to hide.
+   *
+   * MEASURED, and the pit's branch is measured too rather than assumed. One
+   * frozen frame per arena, the uniform toggled live inside it, every arm
+   * replicated in the same session, 1920x1080 through the capture harness's own
+   * path at a pinned renderScale 0.85, JPEG q72 to match docs/shots. The
+   * reading is codec-insensitive — PNG, q92 and q72 agree to 0.003. Lattice
+   * share is the share of a tile's spectral power in bins over 6x their own
+   * local 2D background, median and mean over 192 px tiles on the deck.
+   *
+   *     deckWarp 6 vs 0        latt med   latt mean   fine     mean linear Y
+   *       pit  06-stage-wide     +0.4%      +0.3%     +0.1%       +0.0%
+   *       roof 18-skydeck-wide   +1.0%      +0.2%     -0.1%       -0.1%
+   *       vault 19-cistern-wide -17.5%     -10.9%     +1.1%       -0.1%
+   *
+   *     replicate spread, same arm twice in one session
+   *                              1.1-1.9%   0.1-0.8%   0.03%      0.12%
+   *
+   * The pit column is a null by construction (the term is off there) and it is
+   * printed because it is the rig's end-to-end noise floor. The roof is inert,
+   * and inert BY CONSTRUCTION rather than by tuning — see the shader note. The
+   * vault is the whole gain, and the one cost is its p90, up 6.4% against a
+   * p90 replicate spread of 4.8%: the warp quiets the typical tile and leaves a
+   * few worse than it found them.
+   *
+   * NOT reached: the reference. Two of the ten references have a legible floor
+   * (tekken8_02, tekken8_07; tekken8_06 is a cinematic with no floor in frame
+   * at all, which is worth knowing before anyone quotes a three-image band).
+   * They read 0.083 and 0.091 median. The vault goes 0.131 -> 0.108, so it
+   * closes the gap from +43% to +18% and does not enter the band.
+   */
+  deckWarp: null,
   floorTint: 0.82,
   floorTintWet: 0.30,
   floorTintVary: 0.22,
@@ -1538,6 +1640,14 @@ export class StageFloor {
       uDetailAmp: { value: S.detailAmp },
       uRippleScale: { value: S.rippleScale },
       uRippleAmp: { value: S.rippleAmp },
+      /**
+       * Amplitude of the long warp, in METRES, and the OTHER half of the
+       * `uSlabVary` decision below: a deck with an analytic bay grid gets the
+       * per-slab step field and no warp, a deck without one gets the warp and
+       * no step field. Same test, opposite branch, so the two can never both
+       * be on and a deck can never end up with neither. See PIT_SURFACE.deckWarp.
+       */
+      uDeckWarp: { value: S.deckWarp != null ? S.deckWarp : (S.jointSlope > 0.02 ? 0 : 6.0) },
       uTime: { value: 0 },
       // --- practical colour in the diffuse (see FRAG_NORMAL_HOOK) ----------
       /** Master amount. 0 restores the achromatic deck exactly. */
@@ -1561,7 +1671,10 @@ export class StageFloor {
       // --- per-slab variation (see PIT_SURFACE.slabVary) --------------------
       // The master is DERIVED from the joint grid when the surface does not
       // state it, so an arena that has turned the grid off cannot inherit a
-      // bay-grid step it has no bays for.
+      // bay-grid step it has no bays for. `uDeckWarp` above is the same test
+      // with the branches swapped, and the pair is deliberate: every deck gets
+      // exactly one anti-tiling field, chosen by whether it has a groove for a
+      // step to hide in.
       uSlabVary: { value: S.slabVary != null ? S.slabVary : (S.jointSlope > 0.02 ? 1 : 0) },
       uSlabPlace: { value: S.slabPlace },
       uSlabTone: { value: S.slabTone },

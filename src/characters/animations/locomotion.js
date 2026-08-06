@@ -15,7 +15,7 @@
  * Axis conventions and the pose helpers live in ./idle.js.
  */
 
-import { STANCE, STANCE_Y, CROUCH, CROUCH_Y, add, over, makeClip } from './idle.js';
+import { STANCE, STANCE_Y, CROUCH, CROUCH_Y, add, over, makeClip, carry } from './idle.js';
 
 /** Fold a solved leg set and a torso offset onto the fight stance. */
 const step = (legs, torso) => (torso ? add(over(STANCE, legs), torso) : over(STANCE, legs));
@@ -352,3 +352,54 @@ export const LOCOMOTION_CLIPS = {
   'loco.runBack': runBack,
   'loco.stopShort': stopShort,
 };
+
+// ---------------------------------------------------------------------------
+// VELOCITY CARRY. See the note above `carry` in idle.js. `loco.jumpStart` is
+// absent because no bone in it passes through an interior key -- it is two
+// poses and a launch, and there is nothing to carry.
+// ---------------------------------------------------------------------------
+const LOCO_CARRY = {
+  'loco.walkFwd': 3, 'loco.walkBack': 3, 'loco.dashFwd': 2, 'loco.dashBack': 2,
+  'loco.sidestepLeft': 2, 'loco.sidestepRight': 2, 'loco.jumpAir': 3,
+  'loco.jumpLand': 2, 'loco.crouchWalk': 2, 'loco.runFwd': 2, 'loco.runBack': 2,
+  'loco.stopShort': 2,
+};
+for (const id in LOCO_CARRY) carry(LOCOMOTION_CLIPS[id], { N: LOCO_CARRY[id] });
+
+// ---------------------------------------------------------------------------
+// loco.walkFwd AND loco.walkBack ARE UNREACHABLE, AND THEY SHOULD STAY. This is
+// a decision with a measurement behind it, so that the next person does not
+// re-open it.
+//
+// Fighter.js:1186 plays `loco.runFwd`/`loco.runBack` on the walk branch, so
+// nothing in the game can ever play these two. That is correct and deliberate:
+// WALK_FWD is 2.75 m/s and WALK_BACK 2.00, and the authored gaits measure 0.46
+// and 0.41 -- playing a walk at the driven speed skated the fighter at six times
+// its own stride, which is what the runFwd/runBack substitution fixed.
+//
+// The case for deleting them was that they are "the only two clips with both
+// feet in contact 43 of 49 ticks and no swing phase, a 16cm shuffle". That does
+// not reproduce. Measured through the rig at quarter-tick resolution:
+//
+//   clip             dur  both feet down   airborne   foot swing   keys
+//   loco.walkFwd      48   27/48 ticks        0        202 mm       94
+//   loco.walkBack     48   26/48              0        191 mm       76
+//   loco.crouchWalk   56   38/56              0        148 mm       58
+//   loco.runFwd       32    0/32              9        739 mm      112
+//   loco.runBack      42    1/42             16        743 mm      112
+//
+// 27 of 48 both-down means 21 ticks of SINGLE support -- a real swing phase, a
+// 20 cm stride and a 44% double-support fraction, which is what a walk is. The
+// clip that actually shuffles is `loco.crouchWalk` at 68% double support, and
+// that one is reachable and ships. These two are correct walk cycles; the game
+// simply has no speed at which a walk is the right gait.
+//
+// So the fix is not in this file. It is a design decision in Fighter.js -- give
+// the game a slow-walk speed near 0.5 m/s (a modifier, or automatic inside
+// striking range, which is where a Tekken fighter walks) and point the walk
+// branch at these clips at that speed. Rate-scaling is not an option: reaching
+// 2.75 m/s from a 0.46 m/s stride needs a playback rate of 6.0, which runs the
+// 48-tick cycle in 8 ticks. Until that decision is made they cost 170 keys of
+// source and nothing at runtime, and re-authoring them to match a speed nobody
+// drives would be the same mistake in a new coat.
+// ---------------------------------------------------------------------------

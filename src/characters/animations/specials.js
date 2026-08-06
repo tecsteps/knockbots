@@ -38,6 +38,7 @@
 
 import { validateClip } from '../AnimationFormat.js';
 import { whip, lead } from './reactions.js';
+import { carry } from './idle.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -1086,22 +1087,93 @@ export const SPECIAL_CLIPS = {
 const WHIP = {
   'sp.plasmaBurst': 6,
   'sp.chargeShoulder': 6,
+  // THE OPERATOR FOR A CHAIN THAT PEAKS AFTER THE PIVOT. These two are the
+  // clips `lead` cannot touch at any budget or chain, because every proximal
+  // link peaks in the RECOVERY -- sp.rocketPunch's torso at tick 25.5 against an
+  // impact on 19, sp.overdriveStart's at 13 against an impact on 9. `lead`
+  // compresses ticks 0..pivot only. `whip` splits its taper either side of the
+  // pivot, so its second half re-times exactly the span that is broken here, and
+  // it turns out to reach them: measured, not assumed.
+  //
+  //   sp.rocketPunch     concordance 0.139 -> 0.181, contact-frame speed ratio
+  //                      0.245 -> 0.266, approach reversals 6 -> 4, worst
+  //                      planted-foot slide 364 -> 332 mm/tick. Every gate
+  //                      improves. It is still the worst-ordered chain in the
+  //                      library and it needs re-posing, not re-timing, to get
+  //                      further -- the arm peaks six ticks before the torso and
+  //                      no amount of re-timing inverts that on its own.
+  //   sp.overdriveStart  concordance 0.222 -> 0.333 at W=4, everything else held.
+  //
+  // CAUTION for whoever raises these. `whip`'s pivot pin is only exact while a
+  // bone's delay stays under the pivot tick: its pre-pivot map is
+  // t + d*(1 - t/T), whose slope is 1 - d/T, so at d > T it folds and the
+  // re-sort nudges the pinned key with it. On sp.overdriveStart, whose impact is
+  // on tick 9, the contact pose drifts 5.2 mm at W=10 and 340 mm at W=16. Round
+  // 28's "0.00 mm across all 33 striking clips" is true of its budgets and is
+  // not a property of the operator.
+  'sp.rocketPunch': 2,
+  'sp.overdriveStart': 4,
 };
 for (const id in WHIP) whip(SPECIAL_CLIPS[id], WHIP[id], { pivot: SPECIAL_CLIPS[id].impact.tick });
 
 // ---------------------------------------------------------------------------
-// PROXIMAL LEAD. See the note above `lead` in reactions.js for the measurement
-// and the mechanism. Budget in ticks, swept per clip; only arms that improved
-// chain concordance while regressing nothing are here. Every clip's pose at
-// tick 0, at `impact.tick` and at `duration` is bit-identical to before.
+// PROXIMAL LEAD. See the note above `lead` in reactions.js for the mechanism
+// and the note above `LEAD` in punches.js for what the round-29 re-sweep
+// changed. Budgets are per clip; a clip at 0 has no arm on the grid that
+// improves chain concordance without regressing a gate.
+//
+// TWO OF THE SIX CLIPS ROUND 28 REPORTED AS "REFUSING ON CONTACT-FRAME SPEED
+// RATIO" ARE HERE, AND THAT IS NOT WHY THEY REFUSED. Measured through the rig
+// with the tip taken from the move's own hitbox anchors:
+//
+//   sp.risingFang    refused on worst single-tick hurtbox travel, not speed.
+//                    On the floor-lead chain at 1.5 ticks it passes every gate
+//                    for concordance 0.736 -> 0.903. It is fixed, not refused.
+//
+//   sp.overdriveStart is structurally out of reach. Its impact is on tick 9 and
+//                    hips, all three spine joints and the clavicle all peak at
+//                    tick 13 -- AFTER the pivot -- while the arm peaks at 9. The
+//                    chain runs backwards in the RECOVERY. `lead` compresses
+//                    ticks 0..pivot and cannot touch a peak that lives past it,
+//                    which is the exact dual of the taper that made `whip`
+//                    powerless AT the pivot. All 80 arms measure 0.2222,
+//                    unchanged to four decimals. No budget and no chain fixes
+//                    this and re-posing the contact frame would not either: the
+//                    defect is in the recovery, and the operator that reaches it
+//                    is `whip` with a pivot, not `lead`.
 // ---------------------------------------------------------------------------
+
+/** Pelvis and plant leg lead, arm covers the last ticks. See punches.js. */
+const FLOOR_LEAD_L = { hips: 1.0, spine01: 0.78, spine02: 0.58, chest: 0.40, clavicle_L: 0.24, clavicle_R: 0.24, hip_L: 0.70, knee_L: 0.45 };
+
 const LEAD = {
-  'sp.chargeShoulder': 10,
-  'sp.groundSpike': 5,
-  'sp.plasmaBurst': 0.5,
-  'sp.rocketPunch': 5,
+  'sp.plasmaBurst': [0.25, FLOOR_LEAD_L],  // was 0.5: 0.500 -> 0.750
+  'sp.risingFang': [0.25],                 // was 0 -- see above: 0.081 -> 0.004
+                                           // hips-at-contact, and it was never
+                                           // refusing on contact speed
+  'sp.groundSpike': [0.5],                 // was 5, which failed approach
+  // 'sp.rocketPunch'    was 5. 0.139 with or without it, the worst chain in the
+  //                     library, and for the same reason as sp.overdriveStart:
+  //                     torso peaks at tick 25.5 against an impact on 19.
+  // 'sp.chargeShoulder' was 10. Every budget fails approach smoothness. Its tip
+  //                     was being read as the HEAD; it is the shoulder.
+  // 'sp.overdriveStart' structurally out of reach, see above.
 };
-for (const id in LEAD) lead(SPECIAL_CLIPS[id], LEAD[id], { pivot: SPECIAL_CLIPS[id].impact.tick });
+for (const id in LEAD) lead(SPECIAL_CLIPS[id], LEAD[id][0], { pivot: SPECIAL_CLIPS[id].impact.tick, chain: LEAD[id][1] });
+
+// ---------------------------------------------------------------------------
+// VELOCITY CARRY. See the note above `carry` in idle.js. None of the six clips
+// in this file that declare an impact can take it: sp.plasmaBurst, sp.risingFang
+// and sp.groundSpike fail worst single-tick hurtbox travel, and sp.rocketPunch,
+// sp.chargeShoulder and sp.overdriveStart lose chain ordering or hips-at-contact.
+// The four non-attack clips take it; `sp.counterStance` has no interior key any
+// bone passes through.
+// ---------------------------------------------------------------------------
+const CARRY = {
+  'sp.overdriveHit': 2, 'sp.overdriveFinish': 2, 'sp.parrySuccess': 2,
+  'sp.armorAbsorb': 2,
+};
+for (const id in CARRY) carry(SPECIAL_CLIPS[id], { N: CARRY[id] });
 
 for (const id in SPECIAL_CLIPS) validateClip(SPECIAL_CLIPS[id], BONE_NAMES);
 

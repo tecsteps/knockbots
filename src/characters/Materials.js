@@ -3004,6 +3004,101 @@ const STORY_INK = {
   dark: 0x14161a,
 };
 
+/**
+ * ROUND 29, MEASURED: THE PANEL GAPS ARE NOT THE PROBLEM, AND THEY CANNOT BE.
+ *
+ * Round 28's character critic handed this file a named cause -- "our deepest
+ * crevice ratio is 0.357 against a reference median of 0.261 and 0.125-0.127 on
+ * the two armour-analogue reference rects, 2.8x shallower than the closest
+ * comparable material" -- with the instruction to deepen the gaps in the
+ * material so they survive the grade's power toe. Re-derived before building on
+ * it, per the standing rule, and it does not survive the re-derivation. Nothing
+ * below changes any arithmetic; it exists so the next round does not spend
+ * itself finding the same floor.
+ *
+ * ## The floor is the toe's, and no term in this file can reach past it
+ *
+ * One frozen 1920x1080 hero frame, sim / camera / FX / grain frozen and adaptive
+ * resolution pinned, so an untouched pair of grabs differs by EXACTLY 0/255
+ * (verified nine times across four sessions -- every restore arm returned a
+ * byte-identical PNG). Statistics over the TRUE fighter mask, taken as the
+ * pixels that change when both fighter groups are hidden, eroded by 7px so the
+ * silhouette's own antialiased rim is out: 313,689 px, 15.1% of the frame.
+ *
+ *   arm                     darkest fighter px   share <= 12 codes
+ *   shipped                       10.791               0.486%
+ *   whole panel lattice OFF       10.791               0.369%
+ *   halo reach x4                 10.791               0.536%
+ *   baked-AO exponent 1.7 -> 3    10.791               0.592%
+ *   seam + hollow x2              10.791               0.542%
+ *   grade BLACK 0.044 -> 0.022     5.791               5.146%
+ *   grade BLACK 0.044 -> 0          1.004               7.035%
+ *
+ * The darkest pixel on the fighter is 10.791 codes in EVERY material arm, to
+ * three decimals, including the arm with the entire panel-gap term switched off.
+ * It is the grade's BLACK (0.044 x 255 = 11.22) and nothing else. "Deepen the
+ * gaps so they survive the toe" is not an executable instruction: the toe maps
+ * scene-linear zero to 0.044 unconditionally, so there is nothing below it for a
+ * material to survive into. Every gap-darkening lever here, at full travel,
+ * moves the fighter's share of near-black pixels by 0.12pp; the toe moves it by
+ * 6.5pp. A factor of 54, and it is not our knob.
+ *
+ * ## We are not short of shadow. We are short of FINE shadow
+ *
+ * Ratio-of-local-max, micro-contrast and p99/p50 all divide by the material's
+ * own level, and the only hard-surface panelled armour in ref/tekken8 is one
+ * character in one image (tekken8_06) whose armour is 2.4x darker than our
+ * robots -- so all three flatter the reference by construction. Two 40x40
+ * control rects on continuous reference armour containing NO panel division at
+ * all score DEEPER on the critic's ratio than any gap-bearing rect we have.
+ * That metric is reading gloss and level, not gaps.
+ *
+ * In log2 luminance, where a uniform gain is a DC offset and cancels (verified:
+ * our own frame at 0.5x gain reproduces to three decimals), over each figure's
+ * own mask:
+ *
+ *                     lc3     lc9    lc25   lc3/lc25    IQR
+ *   ours             0.266   0.741   1.182    0.225    3.60 stops
+ *   tekken8_06       0.408   0.781   1.064    0.384    1.04 stops
+ *
+ * We match the reference at 9px, EXCEED it at 25px, and are 35% short at 3px.
+ * Our figure carries 3.5x its interquartile spread. The axis's complaint is a
+ * fine-scale one and our contrast is in the wrong band -- broad form-scale
+ * swings where the reference has crisp surface incident. Quote lc3 and lc3/lc25
+ * on this axis, in log space, over a mask; the level-normalised family cannot
+ * tell our orange plate from their black lacquer.
+ *
+ * ## Every lever in this file, and its full travel on lc3
+ *
+ *   lattice master 1.0 -> 1.4              +3.8%   SIGN-INVERTS, see below
+ *   halo reach x0.25 with master 1.4       +5.3% / +6.8% (two sessions)
+ *   halo reach alone, x0.25 .. x4          +0.4%
+ *   specular chamfer entirely off          -0.0%
+ *   machining lay x2 / x4                  +1.2% / +6.6%  past the recorded ceiling
+ *   normalScale x1.5 / x2.5                +2.9% / +6.4%  and it BRIGHTENS the figure
+ *   base roughness x0.70 .. x1.30          +1.0%
+ *   clearcoatRoughness x0.60               +2.9%
+ *   story ink (grime/oxide/fade/mark) x2  +20.0%   broadband, -8 codes of level
+ *
+ * Nothing safe reaches +1%. The arms that reach +5-8% each break something
+ * already documented: the master drives the halo through a sign flip, the lay at
+ * x2 and x4 is past the "reads as corrugated sheet" ceiling the sweep at
+ * kbSlope already recorded, normalScale x2.5 raises median level, and the story
+ * ink is broadband dirt (lc3/lc25 barely moves) rather than surface incident.
+ * SO NOTHING SHIPPED. That is the charter outcome, not a failure.
+ *
+ * ## Two cliffs in the lattice constants, found by stepping off them
+ *
+ * 1. `lattice` above about 1.72 takes `1.0 - 0.58 * kbLat` negative. Worse, it
+ *    is unsafe from 1.0: kbLatH carries a `( 1.0 - kbLat )` factor, so any master
+ *    over 1 inverts the halo's sign inside the gap core, where it then BRIGHTENS.
+ *    Treat this as a 0..1 master.
+ * 2. `latticeOcclusion / latticeGap` below 1 inverts the halo's smoothstep
+ *    (e1 < e0), which returns 0 everywhere outside the gap and applies the halo
+ *    to the WHOLE plate. An arm at 0.125x read as a 5.2pp gain in dark share and
+ *    a 9-code drop in level -- a very convincing number produced by a degenerate
+ *    branch. Keep that ratio above 1; it is 5.78 as shipped.
+ */
 const STORY_DEFAULTS = {
   scale: 0.8,     // grunge tiles per metre of object space
   grime: 1,

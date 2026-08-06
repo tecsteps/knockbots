@@ -11,7 +11,7 @@
  * Axis conventions and the pose helpers live in ./idle.js.
  */
 
-import { STANCE, STANCE_Y, UPRIGHT, UPRIGHT_Y, add, over, makeClip } from './idle.js';
+import { STANCE, STANCE_Y, UPRIGHT, UPRIGHT_Y, add, over, makeClip, carry } from './idle.js';
 import { STRIDE_LEGS } from './locomotion.js';
 
 // ---------------------------------------------------------------------------
@@ -159,3 +159,9 @@ export const INTRO_CLIPS = {
   'i.stanceSet': stanceSet,
   'i.pointTaunt': pointTaunt,
 };
+
+// ---------------------------------------------------------------------------
+// VELOCITY CARRY. See the note above `carry` in idle.js. `i.walkOn` had 64
+// mid-flight interior keys and 64 of them were full stops, median carry 0.01.
+// ---------------------------------------------------------------------------
+for (const id in INTRO_CLIPS) carry(INTRO_CLIPS[id], { N: 2 });

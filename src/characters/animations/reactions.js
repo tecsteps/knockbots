@@ -18,7 +18,7 @@
  */
 
 import { ease } from '../AnimationFormat.js';
-import { STANCE, STANCE_Y, CROUCH, add, over, makeClip } from './idle.js';
+import { STANCE, STANCE_Y, CROUCH, add, over, makeClip, pinAt, carry } from './idle.js';
 
 // ---------------------------------------------------------------------------
 // OVERLAPPING ACTION — `whip`.
@@ -86,22 +86,6 @@ const CHAIN = (() => {
   }
   return f;
 })();
-
-/**
- * Split a track at `T`, giving it a real key holding the value it was already
- * interpolating to there. Returns a new key array. The new key inherits the
- * ease of the segment it splits so both halves keep that segment's shape.
- */
-function pinAt(keys, T) {
-  if (T <= keys[0].t || T >= keys[keys.length - 1].t) return keys;
-  let i = 0;
-  while (i < keys.length - 1 && keys[i + 1].t <= T) i++;
-  const a = keys[i], b = keys[i + 1];
-  if (Math.abs(a.t - T) < 1e-9 || Math.abs(b.t - T) < 1e-9) return keys;
-  const u = ease(a.ease)((T - a.t) / (b.t - a.t));
-  const r = [0, 1, 2].map((j) => a.r[j] + (b.r[j] - a.r[j]) * u);
-  return [...keys.slice(0, i + 1), { t: T, r, ease: a.ease }, ...keys.slice(i + 1)];
-}
 
 /**
  * Push each track later down the kinetic chain. Mutates and returns `clip`.
@@ -232,6 +216,12 @@ export function lead(clip, L, opts = {}) {
   }
   return clip;
 }
+
+// `carry` — the operator that stops the body stopping dead on every interior
+// key — lives in idle.js, next to `makeClip`. It is general authoring machinery
+// and idle.js is the only file in this directory with no imports of its own, so
+// putting it there is what lets idle.js and locomotion.js use it too. Those two
+// are most of the screen time and no operator had ever covered them.
 
 // ---------------------------------------------------------------------------
 // Solved leg sets.
@@ -791,3 +781,21 @@ export const REACTION_CLIPS = {
   'r.koFall': koFall,
   'r.koSlump': koSlump,
 };
+
+// ---------------------------------------------------------------------------
+// VELOCITY CARRY. See the note above `carry` in idle.js. Three clips are
+// absent: `r.stagger` (12 of 12 mid-flight keys are full stops, median carry
+// 0.002, and it is the worst clip in the library by that measure -- but every N
+// raises its worst planted-foot slide from 188 to 207-227 mm/tick, which is a
+// stagger sliding rather than stumbling), `r.launch` (246 -> 389 mm/tick) and
+// `r.airFlail` (36 -> 42). All three are the same failure: the smoothing moves
+// velocity into the span where a foot is nominally planted.
+// ---------------------------------------------------------------------------
+const REACTION_CARRY = {
+  'r.blockHigh': 2, 'r.blockLow': 2, 'r.blockImpact': 3, 'r.flinchHigh': 3,
+  'r.flinchMid': 3, 'r.flinchLow': 3, 'r.crumple': 3, 'r.spinFall': 2,
+  'r.knockdownBack': 3, 'r.knockdownFace': 3, 'r.sweepFall': 2,
+  'r.wallSplat': 3, 'r.wallSlide': 3, 'r.getUp': 2, 'r.getUpRoll': 2,
+  'r.groundBounce': 2, 'r.koFall': 3, 'r.koSlump': 2,
+};
+for (const id in REACTION_CARRY) carry(REACTION_CLIPS[id], { N: REACTION_CARRY[id] });

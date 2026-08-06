@@ -13,7 +13,7 @@
  * Axis conventions and the pose helpers live in ./idle.js.
  */
 
-import { STANCE, STANCE_Y, UPRIGHT, UPRIGHT_Y, add, over, makeClip } from './idle.js';
+import { STANCE, STANCE_Y, UPRIGHT, UPRIGHT_Y, add, over, makeClip, carry } from './idle.js';
 
 // ---------------------------------------------------------------------------
 // Arm sets, solved against an opened-up torso.
@@ -182,3 +182,8 @@ export const VICTORY_CLIPS = {
   'v.systemsNominal': systemsNominal,
   'v.roundWin': roundWin,
 };
+
+// ---------------------------------------------------------------------------
+// VELOCITY CARRY. See the note above `carry` in idle.js.
+// ---------------------------------------------------------------------------
+for (const id in VICTORY_CLIPS) carry(VICTORY_CLIPS[id], { N: 2 });

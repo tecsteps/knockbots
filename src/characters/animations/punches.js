@@ -332,6 +332,7 @@
 
 import { validateClip } from '../AnimationFormat.js';
 import { whip, lead } from './reactions.js';
+import { carry } from './idle.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -3106,59 +3107,114 @@ for (const id in WHIP) {
 // chain concordance while regressing nothing are here. Every clip's pose at
 // tick 0, at `impact.tick` and at `duration` is bit-identical to before.
 //
-// `p.uppercut` is the exception and gets its own reduced chain, because it is
-// the one punch here whose pelvis drive is load-bearing for the FIST'S OWN world
-// speed: an uppercut is a legs-and-hips move, the fist is largely carried, and
-// stopping the torso at contact takes the contact-frame speed ratio with it.
-// The full chain costs it 0.77 -> 0.68 at every budget from 0.5 to 12 ticks and
-// is refused by the gate. Leading only the pelvis and the first spine joint, by
-// half a tick, buys concordance 0.50 -> 0.74 and hips-at-contact 1.00 -> 0.59
-// for 0.77 -> 0.75, which is inside tolerance. Half a tick is a small claim and
-// is reported as one; it moves which tick the pelvis peak lands on and nothing
-// more. It is taken because `p.uppercut` is what `shots/17-anim-strip`,
-// `04-impact`, `05-juggle` and `07-super` all photograph — the launcher-tagged
-// move `TestHarness.forceHit` resolves to — so it is the clip this axis is
-// actually scored on.
+// RE-SWEPT IN ROUND 29 AGAINST A FULLER GATE AND A REPAIRED INSTRUMENT. Three
+// things changed and all three moved budgets:
+//
+//   APPROACH SMOOTHNESS is now a gate. Acceleration sign reversals of the
+//   striking tip along ticks 0..impact, on the 60Hz grid, may not increase.
+//   Round 28 declared contact-frame ratio, follow-through and hurtbox travel
+//   and left this out, and its budget set spent 217 reversals across the 34
+//   attacks against a 191 control. This set spends 190.
+//
+//   THE STRIKING TIP IS THE MOVE'S OWN HITBOX ANCHOR. It used to be whichever
+//   limb travelled furthest from stance to contact, which picks the HAND on
+//   k.stomp, the wrong FOOT on k.jumpKick and the HEAD on sp.chargeShoulder --
+//   6 of the 34 attacks measured a limb that is not striking.
+//
+//   THE CHAIN IS THE SKELETON'S PARENT WALK from `hips` to that tip. It used to
+//   be hard-coded hips->spine->clavicle->shoulder->elbow->wrist, so on all
+//   twelve kicks the chain being scored belonged to the arm that is not kicking.
+//
+// Under the repaired instrument, median chain concordance across the 34 attacks
+// is 0.59 with no lead, 0.71 on round 28's budgets and 0.81 on these, with
+// hips-at-contact 0.68 -> 0.02 and clips scoring at or below chance 15 -> 7.
+// Concordance counts a tie at HALF credit: counting ties as ordered scores a
+// perfectly rigid body 1.00, which inverts the metric on the clips it exists to
+// catch.
+//
+// `p.uppercut` still gets its own reduced chain -- an uppercut is a legs-and-
+// hips move, the fist is largely carried, and stopping the whole torso at
+// contact takes the contact-frame speed ratio with it. It is also the clip this
+// axis is actually scored on: `shots/17-anim-strip`, `04-impact`, `05-juggle`
+// and `07-super` all photograph the launcher-tagged move, which resolves here.
+// The budget goes 0.5 -> 2.5 ticks, which the repaired gate passes, for
+// concordance 0.67 -> 0.89 and hips-to-tip lag 5 -> 7.25 ticks.
 // ---------------------------------------------------------------------------
 const UPPERCUT_LEAD = { hips: 1.0, spine01: 0.78 };
-lead(PUNCH_CLIPS['p.uppercut'], 0.5, { pivot: PUNCH_CLIPS['p.uppercut'].impact.tick, chain: UPPERCUT_LEAD });
+
+/**
+ * A punch driven from the FLOOR rather than from the ribcage: the pelvis, thigh
+ * and shin on the striking side arrive early and the whole arm covers the last
+ * ticks alone. The rubric's 90+ text is "a strike drives from the floor up",
+ * and `LEAD_CHAIN` contains no leg bone at all.
+ */
+const FLOOR_LEAD_L = { hips: 1.0, hip_L: 0.70, knee_L: 0.45 };
+const FLOOR_LEAD_R = { hips: 1.0, hip_R: 0.70, knee_R: 0.45 };
 
 const LEAD = {
-  'p.backfist': 4,
-  'p.duckingStraight': 5,
-  'p.elbow': 4,
-  'p.hammerFist': 6,
-  'p.hook': 6,
-  'p.jab': 1.5,
-  'p.launcherPunch': 8,
-  'p.lowJab': 0.75,
-  'p.overhand': 7,
-  // 10, and the trade here is not monotonic in the budget, which is worth
-  // recording. Concordance plateaus at 0.60 from L=5 up, so the smallest
-  // budget on the plateau looks like the right pick — but this is the one
-  // clip whose contact tick (48) leaves the 0.30 cap room to run, and its
-  // contact-frame speed ratio dips to 0.68 at L=3, recovers to 0.95 at 5,
-  // falls again to 0.87 at 7 and only returns to 1.00 at L>=10. The fist
-  // is still riding the pelvis on this slam, so the gate clears only once
-  // the pelvis is fully out of the way. 10 is the smallest budget that
-  // passes every gate, not the smallest that maximises the objective.
-  //
-  // AND THE GATE SET WAS INCOMPLETE, which is why this is 0 and not 10.
-  // The declared gates were contact-frame speed ratio, follow-through and
-  // worst single-tick hurtbox travel. Approach smoothness was not among
-  // them, and that is what a 10-tick budget on a 48-tick approach broke:
-  // acceleration sign reversals along the striking tip went 2 -> 12, a 6x
-  // increase in velocity sawtooth, and this clip alone accounted for +10 of
-  // the +6 net across all 34 attacks. A trace that reverses acceleration
-  // twelve times before contact reads as micro-stutter, which is the
-  // rubric's own "linear interpolation" down-score item -- so the operator
-  // bought chain ordering by spending the thing the axis actually scores.
-  // Disabled until `lead` gates on approach smoothness too and this clip is
-  // re-swept; the other 27 clips are unaffected and keep their gains.
-  'p.siegeSlam': 0,
-  'p.straight': 5,
+  'p.jab': [0.25, FLOOR_LEAD_L],      // was 1.5
+  'p.jabAlt': [4],                    // was 0 -- round 28 read this as refusing
+                                      // on contact-frame speed. It does not: it
+                                      // takes 4 ticks for concordance
+                                      // 0.319 -> 0.403 and three fewer reversals.
+  'p.straight': [0.75],               // was 5
+  'p.hook': [0.25],                   // was 6
+  'p.uppercut': [2.5, UPPERCUT_LEAD], // was 0.5
+  'p.overhand': [0.25],               // was 7
+  'p.elbow': [0.75, FLOOR_LEAD_R],    // was 4
+  'p.backfist': [0.25],               // was 4
+  'p.pistonRush': [0.25],             // was 0
+  'p.lowJab': [0.75],
+  'p.siegeSlam': [2.5, FLOOR_LEAD_R], // was 10, then 0 as a stopgap. See below.
+  // 'p.hammerFist'      was 6. No arm on the 57-arm grid clears the foot-slide
+  //                     gate: its plant foot slides 39.7 mm/tick in the control
+  //                     and any budget over 0.25 pushes it past 71.
+  // 'p.launcherPunch'   was 8. Fails contact-frame speed AND hurtbox travel at
+  //                     every budget once the tip is the hand the hitbox rides
+  //                     rather than the foot that happens to travel furthest.
+  // 'p.duckingStraight' was 5. Fails contact speed, approach and foot slide.
 };
-for (const id in LEAD) lead(PUNCH_CLIPS[id], LEAD[id], { pivot: PUNCH_CLIPS[id].impact.tick });
+for (const id in LEAD) lead(PUNCH_CLIPS[id], LEAD[id][0], { pivot: PUNCH_CLIPS[id].impact.tick, chain: LEAD[id][1] });
+
+// ---------------------------------------------------------------------------
+// p.siegeSlam, which is the clip round 28 disabled and the reason this file was
+// re-swept.
+//
+// Its 10-tick budget did break approach smoothness. But the figure that was
+// reported for it -- "acceleration sign reversals 2 -> 12, a 6x increase" --
+// DOES NOT REPRODUCE. Re-derived against the round-27 tree under 42 constructed
+// variants of the metric (two signals, seven epsilons, three bones), the control
+// arm measures 4 to 12 reversals on its 48-tick approach and never 2, and L=10
+// measures 10 to 24 and never 12. The net across all 34 attacks was +12 to +36,
+// not +6. The direction was right and the magnitude was UNDER-reported by
+// roughly a factor of three, so the collateral damage across the other clips was
+// larger than the note claimed, not smaller.
+//
+// At 2.5 ticks on the floor chain every gate passes and four of them improve:
+// concordance 0.611 -> 0.778, hips-at-contact 0.199 -> 0.007, worst planted-foot
+// slide 87.3 -> 71.6 mm/tick, approach reversals 12 -> 12 (held). It is a better
+// arm than L=10 on every axis, including the one L=10 was chosen for.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// VELOCITY CARRY. See the note above `carry` in idle.js. Sub-span count per
+// clip; a clip absent from this table failed a gate at every N and ships
+// without it. The gate that blocks each one:
+//
+//   p.jab, p.overhand           approach smoothness
+//   p.straight, p.hook          planted-foot slide
+//   p.hammerFist                foot slide, and it un-orders the chain
+//   p.jabAlt, p.lowJab, p.siegeSlam   hips-at-contact
+//   p.duckingStraight           contact-frame speed, approach and foot slide
+//
+// Smoothing moves peak ticks, so it can undo the ordering `lead` just bought;
+// concordance and hips-at-contact are therefore gates on this pass as well.
+// ---------------------------------------------------------------------------
+const CARRY = {
+  'p.uppercut': 2, 'p.elbow': 2, 'p.backfist': 2, 'p.pistonRush': 2,
+  'p.launcherPunch': 3,
+};
+for (const id in CARRY) carry(PUNCH_CLIPS[id], { N: CARRY[id], pins: [PUNCH_CLIPS[id].impact.tick] });
 
 for (const id in PUNCH_CLIPS) validateClip(PUNCH_CLIPS[id], BONE_NAMES);
 

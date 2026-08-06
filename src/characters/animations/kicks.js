@@ -75,6 +75,7 @@
 
 import { validateClip } from '../AnimationFormat.js';
 import { whip, lead } from './reactions.js';
+import { carry } from './idle.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -1867,24 +1868,58 @@ for (const id in WHIP) whip(KICK_CLIPS[id], WHIP[id], { pivot: KICK_CLIPS[id].im
 
 // ---------------------------------------------------------------------------
 // PROXIMAL LEAD. See the note above `lead` in reactions.js for the measurement
-// and the mechanism. Budget in ticks, swept per clip; only arms that improved
-// chain concordance while regressing nothing are here. Every clip's pose at
-// tick 0, at `impact.tick` and at `duration` is bit-identical to before.
+// and the mechanism, and the note above `LEAD` in punches.js for what the
+// round-29 re-sweep changed. Budgets here moved most of any file, for one
+// reason: the chain being scored used to be the ARM.
+//
+// A kick's kinetic chain is hips -> hip -> knee -> ankle -> foot. The metric
+// walked hips -> spine -> clavicle -> shoulder -> elbow -> wrist instead, on
+// all twelve of these clips, so every concordance number round 28 quoted for a
+// kick described the limb that is not kicking. `lead`'s own chain has the same
+// hole from the other side: LEAD_CHAIN contains no leg bone, so on a kick the
+// operator advances exactly ONE of the five links. Chain variants that include
+// `hip` and `knee` were swept alongside the budgets and one clip takes one.
+//
+// The tip is now the move's hitbox anchor. On k.stomp that changes it from the
+// HAND to the foot, and on k.jumpKick from foot_L to foot_R -- the wrong leg.
 // ---------------------------------------------------------------------------
+
+/** Pelvis, thigh and shin lead; the shin and foot cover the last ticks. */
+const FLOOR_LEAD_R = { hips: 1.0, hip_R: 0.70, knee_R: 0.45 };
+
 const LEAD = {
-  'k.axeKick': 6,
-  'k.diveKick': 1.25,
-  'k.highKick': 5,
-  'k.jumpKick': 5,
-  'k.kneeStrike': 4,
-  'k.launcherKick': 5,
-  'k.lowKick': 8,
-  'k.midKick': 5,
-  'k.roundhouse': 6,
-  'k.sideKick': 4,
-  'k.spinKick': 5,
+  'k.lowKick': [0.25],        // was 8
+  'k.midKick': [0.5],         // was 5
+  'k.highKick': [1.5],        // was 5
+  'k.roundhouse': [0.25],     // was 6
+  'k.axeKick': [0.25],        // was 6
+  'k.kneeStrike': [0.25],     // was 4
+  'k.sideKick': [0.25],       // was 4
+  'k.jumpKick': [0.25],       // was 5
+  'k.launcherKick': [3],      // was 5
+  'k.stomp': [0.25],          // was 0
+  'k.diveKick': [1, FLOOR_LEAD_R],  // was 1.25 on the torso chain
+  // 'k.sweep'    0.90 concordance and hips at 7% of peak at contact with no
+  //              operator at all -- the second best-ordered chain of the 34.
+  // 'k.spinKick' 0.95, the best. Round 28 gave both a budget and read them as
+  //              failures; they were being scored along the ARM.
 };
-for (const id in LEAD) lead(KICK_CLIPS[id], LEAD[id], { pivot: KICK_CLIPS[id].impact.tick });
+for (const id in LEAD) lead(KICK_CLIPS[id], LEAD[id][0], { pivot: KICK_CLIPS[id].impact.tick, chain: LEAD[id][1] });
+
+// ---------------------------------------------------------------------------
+// VELOCITY CARRY. See the note above `carry` in idle.js. Five clips are absent.
+// k.midKick, k.highKick and k.roundhouse all pivot on a planted support foot,
+// and smoothing the spin moves velocity into the span where that foot is down:
+// worst planted-foot slide 157 -> 187, 153 -> 179 and 190 -> 230 mm/tick. That
+// is the rubric's "floaty feet" bought with the rubric's "linear interpolation",
+// which is not a trade. k.sweep and k.kneeStrike lose chain ordering, k.jumpKick
+// loses both.
+// ---------------------------------------------------------------------------
+const CARRY = {
+  'k.lowKick': 2, 'k.axeKick': 2, 'k.sideKick': 2, 'k.launcherKick': 2,
+  'k.stomp': 2, 'k.diveKick': 2,
+};
+for (const id in CARRY) carry(KICK_CLIPS[id], { N: CARRY[id], pins: [KICK_CLIPS[id].impact.tick] });
 
 for (const id in KICK_CLIPS) validateClip(KICK_CLIPS[id], BONE_NAMES);
 
