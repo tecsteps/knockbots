@@ -1,8 +1,8 @@
 {
   "status": {
-    "rev": "0.21.0",
-    "commits": "127",
-    "modules": 64,
+    "rev": "0.22.0",
+    "commits": "121",
+    "modules": 65,
     "lines": "60k",
     "clips": 91,
     "moves": 195,
@@ -10,28 +10,28 @@
   },
   "verdicts": [
     {
-      "axis": "Lighting & atmosphere",
-      "score": 77
+      "axis": "Stage detail",
+      "score": 78
     },
     {
-      "axis": "Stage detail",
-      "score": 74
+      "axis": "Lighting & atmosphere",
+      "score": 75
     },
     {
       "axis": "Interface craft",
-      "score": 74
+      "score": 75
     },
     {
       "axis": "Character rendering",
-      "score": 73
+      "score": 72
     },
     {
       "axis": "Impact & effects",
-      "score": 68
+      "score": 65
     },
     {
       "axis": "Animation quality",
-      "score": 65
+      "score": 64
     }
   ],
   "log": [
@@ -761,11 +761,27 @@
         "Two more things in the same round. There was no air attack in the game at all: the flag that gates one had been supported since the code was written and nothing had ever set it. And blocking was bound to holding back, which is why walking backwards was impossible, because the guard branch sat above the walk branch and the walk-backwards clip was wired up and unreachable. Guard moved to its own key and back became a direction again, measured at 0.213 metres of retreat where it had been 0.040 and a block.",
         "That last change also handed the player something he had asked for by name without knowing it already existed: roundhouse and spin kick live on back-plus-kick, and had been unusable purely because holding back just blocked."
       ]
+    },
+    {
+      "phase": "PHASE 27",
+      "when": "Round 23",
+      "rev": "rev 0.22.0",
+      "title": "A round whose scores had to be thrown away, and what it caught anyway",
+      "paras": [
+        "Round 23 has no trustworthy scores. Its fix agents completed and are committed; its first critic pass died on a weekly rate limit, and the second ran during a machine-wide disk failure. The numbers it produced — average 70.8 — are discarded. The last scores worth quoting remain round 22: stage 78, lighting 75, interface 75, character 72, impact 65, animation 64, average 71.5.",
+        "The critics discarded themselves, which is the part worth recording. One wrote: I could not randomise, could not withhold the key, and could not magnify. Every finding is from the native-resolution frame. Treat this as a 1x review, which is the exact review this project has repeatedly shown to be insufficient. They were also scoring a partial set — ten of eighteen frames, with no manifest — so three of them were judging axes whose primary shots did not exist.",
+        "The fix work itself was strong. Every move in the game now connects: 717 of 744 forced attempts, zero dead moves, verified a third time. Two defects were found inside the measuring instrument rather than the game, in opposite directions — meter-gated moves were being scored as whiffs because the super could only ever fire once, and air-only moves were being driven from the ground with the striking foot a metre below where any player would see it.",
+        "The lighting workstream established what the axis had actually been failing on, after five rounds of circling it. Subject over background luminance 1.03. Silhouette band over background 1.08. The top one per cent of frame luminance landing on the fighters 13.3 per cent, when the fighters occupy 12.2 per cent of the frame — highlights distributed at chance. That is the rubric’s failure line verbatim, and it explains why the previous round’s saturation and contrast targets were met with no movement: both were measured on a background that had been allowed to own the top of the range.",
+        "A defect it would not fix, because the fix leaves its files: there is no neutral game. From the round-start gap, opposed inputs reach contact in 1.68 seconds with the defender holding back the whole time and not even cornered. Retreat cancels twenty per cent of an advance. Walking backwards is wired up, verified, and still buys nothing — forward has two gaits and back has one.",
+        "Two things were fixed afterwards, outside any round. Telemetry was added and deployed, because the game had been published and nothing recorded whether anyone played it: page views cannot separate a bounce on the loading screen from a ten-round session, so the events are match started, character chosen, round decided, match finished, with a bucketed duration. It excludes headless and localhost, so the capture harness cannot drown the real sessions it exists to count.",
+        "And the harness can no longer disguise a truncated run as a successful one. The manifest was written last, so a run that died left a directory of valid-looking frames and no certification at all — indistinguishable from success, which is precisely how six critics came to score a partial set. An incomplete manifest is now written before the first shot and rewritten at the end.",
+        "One open defect is recorded rather than fixed: a dead-black vertical member runs from the top of frame through a fighter’s torso in the wide stage shot, receiving no rim while standing directly in front of the brightest object in the scene. It was found at 1x, by a critic stripped of magnification, after twenty-three rounds of magnified review had missed it. The likely cause is a cropped rigging mast rather than a misplaced one, which would make moving it the better fix than lighting it — and that is why it was left open, since a rim change made blind would be exactly the unmeasured fix this project does not ship."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.21.0",
-    "note": "Redeployed each iteration. Source on github.com/tecsteps/knockbots."
+    "rev": "0.22.0",
+    "note": "Deployed with telemetry. Source on github.com/tecsteps/knockbots."
   }
 }
