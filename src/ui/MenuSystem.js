@@ -754,8 +754,14 @@ export class MenuSystem {
       // The last machine out of the queue lifts the sheet immediately instead
       // of waiting out `RosterPortraits`' own debounce.
       const next = () => { if (!queue.length) this._portraits?.flush(); idle(step); };
+      // Cost breakdown per machine, so the loop can be argued about from
+      // attributed numbers rather than one aggregate. See `RosterPortraits#timings`.
+      const _t0 = performance.now();
+      (this._warmLog ||= []).push({ id: def.id, at: +_t0.toFixed(0) });
+      const _log = this._warmLog[this._warmLog.length - 1];
       try {
         const robot = buildRobot(def, createSkeleton(def.proportions), this.game.environment);
+        _log.build = +(performance.now() - _t0).toFixed(1);
         // The build is already being paid for; photograph it on the way to the
         // bin so the roster tiles can show the real machine instead of a
         // pictogram. `capture` resolves once the DRAW is done — the picture
@@ -796,6 +802,7 @@ export class MenuSystem {
             // charge and nothing else.
             if (!this._programAnchor) this._programAnchor = robot;
             else { try { robot.dispose(); } catch { /* already gone */ } }
+            _log.step = +(performance.now() - _t0).toFixed(1);
             next();
           });
       } catch {
@@ -1128,14 +1135,40 @@ export class MenuSystem {
     //     idle  200ms 5/6/4/6   1400ms 5/6/4/7   3400ms  5/6/9/10
     //
     // Indistinguishable, and both arms sit on the same count for seconds at a
-    // stretch — which is the tell. The queue is not waiting to be scheduled, it
-    // is busy: `RosterPortraits#capture` is 230-755 ms per machine and its own
-    // comment says so, nearly all of it `buildRobot` plus the first draw with
-    // eight new materials. Ten of those is 2.3-7.5 s no matter who asks for
-    // them. Removing the wait between units of work that large is arithmetic
-    // that never mattered. If the tiles are to be full at 1400 ms, the capture
-    // has to get cheaper or the portraits have to outlive the session — the
-    // scheduler is not where the time is.
+    // stretch — which is the tell. The queue was not waiting to be scheduled,
+    // it was busy.
+    //
+    // AND THEN IT STOPPED BEING BUSY, which is the part that was never
+    // re-measured and is why this note kept being read as an open defect.
+    //
+    // The "230-755 ms per machine" figure above predates the program anchor in
+    // `#warmRoster`'s `finally`. Re-measured with the anchor in place, from
+    // `RosterPortraits#timings` and `this._warmLog` on a live boot, ten
+    // machines, ms:
+    //
+    //     machine    build   capture (setup / compile / draw)
+    //     vulkan      48.9   626.9  (37.0 / 127.2 / 462.7)   <- first draw, once
+    //     kestrel     29.3    42.0  (23.1 /   0.7 /  18.2)
+    //     anvil      120.3    58.7  (31.5 /   0.7 /  26.5)
+    //     seraph      98.3    44.7  (24.6 /   1.1 /  19.0)
+    //     ronin      101.8    46.8  (25.5 /   0.9 /  20.4)
+    //     mantis      93.4    43.8  (23.9 /   0.8 /  19.1)
+    //     nyx        103.5    64.8  (36.6 /   1.1 /  27.1)
+    //     bastion    100.4    53.9  (29.0 /   0.9 /  24.0)
+    //     axiom       99.0    44.2  (24.5 /   0.8 /  18.9)
+    //     volta       98.4    53.5  (29.8 /   0.7 /  23.0)
+    //
+    // One machine costs 626.9 ms and the other nine cost 42-65 ms. The whole
+    // queue is ~1.5 s of work, not 2.3-7.5 s, and the anchor is what did it:
+    // `compileAsync` drops from 127 ms to under 1.1 ms after the first machine
+    // and the draw follows it down. Nothing here needs to get cheaper and
+    // nothing needs to outlive the session.
+    //
+    // Confirmed in the frame it is scored on rather than in the counter: a full
+    // `tools/capture.mjs` run photographs `12-select-screen` with **10 of 10**
+    // tiles carrying a rendered portrait and zero monograms. Verified at 3x on
+    // the capture, not from `.kbs-por--on`, because the count going up is not
+    // the same claim as the picture being there.
     // Anything already drawn onto the portrait sheet develops NOW rather than
     // on its own debounce: the grid is the thing being looked at from this
     // instant, and a readback that has already been paid for should not land a

@@ -63,8 +63,45 @@
    * system sans, letterspaced, is what actually stays legible at label size. */
   --kb-font-label: 'Bank Gothic', 'Eurostile Extended', 'Segoe UI Semibold',
     'Arial Narrow', 'Helvetica Neue', Impact, sans-serif;
-  --kb-font-mono: 'Chivo Mono', 'JetBrains Mono', 'SF Mono', 'Consolas',
-    'Roboto Mono', monospace;
+  /*
+   * THE DATA FACE, AND THE FIVE NAMES THAT WERE NEVER THERE.
+   *
+   * This stack used to end `'Chivo Mono', 'JetBrains Mono', 'SF Mono',
+   * 'Consolas', 'Roboto Mono', monospace` — and on the machine every capture is
+   * taken on, NOT ONE of those five families exists. The whole token fell
+   * through to the generic `monospace`, which Chromium on macOS resolves to
+   * **Courier**: a 1955 typewriter face with slab serifs and a hairline stem.
+   * Every number and unit label in the game was being set in it.
+   *
+   * Measured, not guessed. Chromium's own `CSS.getPlatformFontsForNode` over
+   * the select screen reports the face actually rasterised per element:
+   *
+   *     .kbs-head-count   "10 UNITS ONLINE"        Courier
+   *     .kbs-tile-frame   "HEAVY FRAME · 507 KG"   Courier   (x10 tiles)
+   *     .kbs-tile-no      the tile index numerals  Courier   (x10 tiles)
+   *     .kbs-spark-k      the P S R W D stat keys  Courier   (x50 cells)
+   *     .kbs-stat-num     the dossier's 10/3/7/9/5 Courier
+   *     .kbs-hint kbd     the key legend           Courier + Menlo
+   *
+   * and `.callout--damage` in this file — the damage numeral, the single
+   * loudest piece of type in a fight — is on the same token.
+   *
+   * Probed the same way, the faces that DO exist here are Menlo, Monaco,
+   * Andale Mono, PT Mono and Courier New. Rendered side by side through this
+   * variable on one frozen select screen, Courier is the thinnest and the only
+   * serifed one of the five; at `.kbs-tile-frame`'s 9.5 px it is a whisper with
+   * feet on it. Menlo has an even, load-bearing stem at that size and no
+   * serifs, so it is what the mac branch lands on.
+   *
+   * The aspirational names stay in front — if a future build ever ships one of
+   * them, it wins — but a stack whose only reachable entry is the generic is
+   * not a typographic choice, it is an accident. Every branch below now names a
+   * face that is actually installed on the platform it is there for:
+   * Menlo/Monaco (macOS, since 10.6), Consolas (Windows), DejaVu Sans Mono and
+   * Liberation Mono (Linux). `monospace` is the floor, not the plan.
+   */
+  --kb-font-mono: 'Chivo Mono', 'JetBrains Mono', 'SF Mono', 'Menlo', 'Monaco',
+    'Consolas', 'DejaVu Sans Mono', 'Liberation Mono', 'Roboto Mono', monospace;
 
   /* Geometry */
   --kb-cut: 0.9em;

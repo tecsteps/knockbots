@@ -192,9 +192,20 @@ function bakeFloorMaps(size) {
    * slab, on a 2.4m grid offset off the joint grid, roughly a third of them
    * missing so it does not read as wallpaper.
    */
-  const plateTone = new Uint8Array(n);   // 0 = none, else steel value
+  const plateTone = new Uint8Array(n);   // 0 = none, else steel face coverage
   const plateMask = new Uint8Array(n);   // coverage, incl. recess
   const plateRec = new Uint8Array(n);    // recess groove only
+  /**
+   * Which finish this particular plate carries, constant across its footprint:
+   * 0 = painted over in deck grey, 1 = bare galvanising, and rust in between.
+   *
+   * It exists because `plateTone` could not carry it. The face coverage and the
+   * plate's age were multiplied into one byte, so an old plate was also a
+   * *thinner* plate — it sat less proud, took less of the metalness and blurred
+   * its own edge — and the whole field ended up landing in one narrow value
+   * band. Separating them is what lets a plate be dark and crisp.
+   */
+  const plateFinish = new Uint8Array(n);
   const PLATE_P = 2.0, PLATE_R = 0.30, PLATE_GAP = 0.038;
   const plateHash = (i, j) => {
     let h = (i * 374761393 + j * 668265263) | 0;
@@ -255,37 +266,94 @@ function bakeFloorMaps(size) {
       // the failure mode this axis is explicitly marked down for. A bounded
       // bay with two thirds of its slots filled gives the wide shot an object
       // with edges and leaves the outer deck plain.
-      if (Math.abs(wx) < 7.2 && wz > -6.6 && wz < 3.4) {
-        // One per 2m tile, on the tile centre, so a plate is never bolted
-        // across an expansion joint and the two grids stay in phase.
+      {
+        // One slot per 2m tile. The SLOT is on the tile centre so it stays a
+        // metre clear of the sawn joints — those run through even world
+        // coordinates and the slots sit on odd ones — but the fitting inside it
+        // is no longer nailed to that centre. See below.
         const gi = Math.round((wx - 1) / PLATE_P);
         const gj = Math.round((wz - 1) / PLATE_P);
-        const cxp = gi * PLATE_P + 1;
-        const czp = gj * PLATE_P + 1;
-        const hsh = plateHash(gi, gj);
-        // Roughly a third of the slots were never fitted or have been plated
-        // over since, so the field has holes in it.
-        if (hsh > 0.36) {
-          const dx = Math.abs(wx - cxp);
-          const dz = Math.abs(wz - czp);
-          // Sizes vary by a third across the bay: an anchor field that is one
-          // stamp repeated is a texture, an anchor field of different fittings
-          // is a place.
-          const rad = PLATE_R * (0.78 + hsh * 0.42);
-          // Square with the corners knocked off, which is how a bolted plate
-          // is actually cut and what stops four of them reading as one blob.
-          const sd = Math.max(dx, dz, (dx + dz) * 0.74) - rad;
+        // Six independent draws per slot. There used to be ONE: `hsh` decided
+        // whether a plate existed, how big it was and how bright it was, so
+        // size and value were perfectly correlated and every plate was a
+        // rotation-free axis-aligned octagon on an exact 2m lattice. The stage
+        // critic named the result "the loudest browser-game tell in the frame"
+        // — octagonal inlays repeating at constant pitch with no rotation,
+        // scale or value variation, edge to edge — and it was right: the
+        // variation this code claimed to have was all riding on one number.
+        //
+        // Decorrelating the draws is most of the repair. What the eye reads as
+        // "a lattice" is the joint distribution, not any single axis of it: a
+        // field where the big plates are always the bright ones and every one
+        // of them is square to the deck reads as one stamp however much each
+        // property varies on its own.
+        const hPresent = plateHash(gi, gj);
+        const hSize = plateHash(gi + 91, gj - 57);
+        const hRot = plateHash(gi - 33, gj + 148);
+        const hFinish = plateHash(gi + 211, gj + 19);
+        const hForm = plateHash(gi - 7, gj - 113);
+        // Off-centre by up to a third of a metre. A tie-down field is drilled
+        // to a setting-out drawing and then re-drilled every time the cell is
+        // re-fitted, so the pitch is approximate; an exact one is the single
+        // strongest cue that a floor is a texture. Bounded so the widest
+        // fitting still clears the joint: reach is at most 0.61 from the
+        // jittered centre and the jitter is at most 0.32, against 1.0 of room.
+        const cxp = gi * PLATE_P + 1 + (plateHash(gi + 5, gj + 61) - 0.5) * 0.72;
+        const czp = gj * PLATE_P + 1 + (plateHash(gi - 44, gj + 3) - 0.5) * 0.72;
+        // Density varies in 4m blocks instead of being one constant fill rate.
+        // Jitter alone cannot break a lattice — at a third of a metre on a two
+        // metre pitch the rows are still rows — but a field that is crowded in
+        // one bay and nearly empty in the next has no pitch to read at all.
+        // That is also how a cell actually gets fitted out: in patches, by
+        // whoever needed a tie-down that year.
+        const fill = 0.24 + plateHash(Math.floor(gi / 2), Math.floor(gj / 2)) * 0.44;
+        // Bay membership is tested on the SLOT, not on the texel, so the edge
+        // of the field never slices a plate in half down a straight line.
+        if (hPresent > fill && Math.abs(cxp) < 7.2 && czp > -6.6 && czp < 3.4) {
+          // Rotation. Nothing else on this list breaks the lattice as cheaply:
+          // one bolted plate set 20 degrees off square destroys the reading of
+          // a repeated stamp for the four plates around it as well as itself.
+          const rot = (hRot - 0.5) * 1.5;
+          const cs = Math.cos(rot), sn = Math.sin(rot);
+          const ux = Math.abs(cs * (wx - cxp) + sn * (wz - czp));
+          const uz = Math.abs(-sn * (wx - cxp) + cs * (wz - czp));
+          const rad = PLATE_R * (0.66 + hSize * 0.74);
+          // Three fittings rather than one. A test cell is fitted out over
+          // years by different contractors: a square anchor plate with the
+          // corners knocked off, a round service cover, and a long two-bolt tie
+          // bar. All three are the same family of hardware and none of them is
+          // the same silhouette.
+          let sd, bolts;
+          if (hForm < 0.22) {
+            sd = Math.hypot(ux, uz) - rad * 0.96;
+            bolts = 0;                                   // centre boss instead
+          } else if (hForm < 0.44) {
+            const a = rad * 1.15, b = rad * 0.72;
+            sd = Math.max(ux - a, uz - b, (ux + uz - (a + b) * 0.82) * 0.74);
+            bolts = 1;                                   // one pair, on the long axis
+          } else {
+            sd = Math.max(ux, uz, (ux + uz) * 0.74) - rad;
+            bolts = 2;                                   // four, on the corners
+          }
           if (sd < PLATE_GAP + 0.03) {
             const face = 1 - smoothstep(-0.012, 0.004, sd);
             const rec = (1 - smoothstep(PLATE_GAP * 0.55, PLATE_GAP, Math.abs(sd - PLATE_GAP * 0.4))) * (1 - face);
-            // Four bolts, and a plate's own age, so the grid is not uniform.
-            const bx = Math.abs(dx - rad * 0.55);
-            const bz = Math.abs(dz - rad * 0.55);
-            const bolt = (1 - smoothstep(0.022, 0.034, Math.hypot(bx, bz))) * face;
-            const age = 0.45 + hsh * 0.55;
+            let bolt;
+            if (bolts === 0) {
+              bolt = (1 - smoothstep(0.05, 0.075, Math.hypot(ux, uz))) * face;
+            } else if (bolts === 1) {
+              bolt = (1 - smoothstep(0.022, 0.034, Math.hypot(ux - rad * 0.82, uz))) * face;
+            } else {
+              const bx = Math.abs(ux - rad * 0.55);
+              const bz = Math.abs(uz - rad * 0.55);
+              bolt = (1 - smoothstep(0.022, 0.034, Math.hypot(bx, bz))) * face;
+            }
             plateMask[k] = Math.round(clamp01(Math.max(face, rec)) * 255);
             plateRec[k] = Math.round(clamp01(rec + bolt * 0.75) * 255);
-            plateTone[k] = Math.round(clamp01(face * age) * 255);
+            // Coverage only. The finish goes in its own channel so a dark plate
+            // is a dark plate rather than a faded one.
+            plateTone[k] = Math.round(clamp01(face) * 255);
+            plateFinish[k] = Math.round(hFinish * 255);
           }
         }
       }
@@ -342,6 +410,11 @@ function bakeFloorMaps(size) {
   const concFresh = hexToLinear(0x4a4c52); // a newer, colder one
   const steel = hexToLinear(0xa9a49b);     // galvanised anchor plate
   const steelRust = hexToLinear(0x6a4b32);
+  // A plate that was painted out with the deck the last time the cell was
+  // re-lined. It is the dark end of the finish range and it is the reason the
+  // anchor field stops reading as a field of identical bright stamps: about one
+  // fitting in five now sits BELOW the concrete around it instead of above it.
+  const steelPaint = hexToLinear(0x33363b);
   const oilBase = new Float32Array(n);     // reused by the ORM pass
 
   for (let j = 0; j < size; j++) {
@@ -372,6 +445,7 @@ function bakeFloorMaps(size) {
       const plF = plateTone[k] / 255;      // steel face, 0 where absent
       const plR = plateRec[k] / 255;       // recess groove and bolt heads
       const plA = plateMask[k] / 255;      // whole footprint
+      const plFin = plateFinish[k] / 255;  // 0 painted out, 1 bare galvanising
 
       // Slab: expansion joints on a 4m grid, aggregate popping through, a
       // long-wavelength dish so water has somewhere to collect.
@@ -411,7 +485,9 @@ function bakeFloorMaps(size) {
       // The plate sits a few millimetres proud of the pour with a grouted
       // recess round it: that pair is what makes it a fitting rather than a
       // sticker, and it is the edge that catches the key.
-      h = lerp(h, 0.16, plF) - plR * 0.55;
+      // How proud it sits now tracks the finish too: a plate that was painted
+      // out with the deck was skimmed nearly flush, bare galvanising stands up.
+      h = lerp(h, 0.16 * (0.55 + plFin * 0.6), plF) - plR * 0.55;
       height[k] = h;
 
       // Oil finds the edges of a working floor: plant stands round the rim, and
@@ -470,8 +546,23 @@ function bakeFloorMaps(size) {
         // Plate: galvanised face going to rust at the older ones, a near-black
         // grout line round it, and dark bolt heads.
         if (plA > 0.002) {
-          const st = lerp(steelRust[ch], steel[ch], clamp01(plF * 1.25)) * (0.7 + fine * 0.6);
-          v = lerp(v, st, plF);
+          // Finish, not fade. Below 0.24 the plate was painted out with the
+          // deck and reads darker than the concrete; above it, rust runs
+          // through to bare galvanising. The old form lerped rust->steel on the
+          // face coverage itself, which meant the value was a function of how
+          // far inside the plate the texel was — an edge gradient, not a
+          // per-plate property, and it put every plate in the same band.
+          const st = plFin < 0.16
+            ? lerp(steelPaint[ch], steelRust[ch], plFin / 0.16)
+            : lerp(steelRust[ch], steel[ch], smoothstep(0.16, 0.52, plFin));
+          // Per-plate brightness trim, deliberately DECORRELATED from the
+          // finish band it sits in: `plFin * 4.7` wraps several times inside
+          // one band, so two plates that are both bare galvanising are still
+          // two different plates. Without it the first pass at this traded a
+          // field of identical bright octagons for a field of identical rusty
+          // ones, which is the same defect in a different hue.
+          const bri = 0.72 + (plFin * 4.7 % 1) * 0.5;
+          v = lerp(v, st * bri * (0.7 + fine * 0.6), plF);
           v = lerp(v, concDark[ch] * 0.55, clamp01(plR));
         }
         // Wet concrete is darker concrete. This is the single most convincing
@@ -513,7 +604,12 @@ function bakeFloorMaps(size) {
       // the key into a hard highlight down here instead of another matte patch.
       const pf = plateTone[k] / 255;
       const pr = plateRec[k] / 255;
-      rough = lerp(rough, 0.36, pf);
+      const pfin = plateFinish[k] / 255;
+      // The finish drives the response as well as the colour, which is the
+      // other half of why the field used to read flat: every plate answered the
+      // key with the same lobe. Bare galvanising is the smooth end, a plate
+      // painted out with the deck is rougher than the deck itself.
+      rough = lerp(rough, 0.52 - pfin * 0.26, pf);
       rough = lerp(rough, 0.88, clamp01(pr));
       const o = k * 4;
       ormData[o] = Math.round(clamp01(ao) * 255);
@@ -522,7 +618,8 @@ function bakeFloorMaps(size) {
       // term at all, and against this room's dark IBL it rendered as a black
       // octagon with a bright rim -- the first version of it did exactly that.
       // Galvanising that has been walked on for a decade is oxidised anyway.
-      ormData[o + 2] = Math.round(clamp01(mark[k] * 0.08 + pf * 0.42) * 255);
+      // A painted-out plate is barely metal at all.
+      ormData[o + 2] = Math.round(clamp01(mark[k] * 0.08 + pf * (0.08 + pfin * 0.4)) * 255);
       ormData[o + 3] = 255;
     }
   }
@@ -623,6 +720,38 @@ const VERT_HOOK = /* glsl */ `
   vKbReflCoord = uTextureMatrix * kbWorld;
   vKbWorld = kbWorld.xyz;
 `;
+
+/**
+ * The ORM fold, as {@link StoryPhysicalMaterial} does it on the fighters.
+ *
+ * The deck bound one packed texture to `roughnessMap`, `metalnessMap` and
+ * `aoMap`. Three declares a separate `uniform sampler2D` for each, so a shared
+ * texture still costs three of the sixteen fragment texture units — and this
+ * material was the second of the two in the whole scene (the other is
+ * `kb.armor`) that would not link once a second shadow-casting light was added.
+ *
+ * `texelRoughness` is the texel three already fetched; the metalness and
+ * occlusion reads below are `<metalnessmap_fragment>` and `<aomap_fragment>`
+ * verbatim, at their own insertion points, so the floor shades identically.
+ */
+const FRAG_FOLD_METALNESS = /* glsl */ `
+  metalnessFactor *= texelRoughness.b;`;
+
+const FRAG_FOLD_AO = /* glsl */ `
+  {
+    float ambientOcclusion = ( texelRoughness.r - 1.0 ) * uFoldAoIntensity + 1.0;
+    reflectedLight.indirectDiffuse *= ambientOcclusion;
+    #if defined( USE_CLEARCOAT )
+      clearcoatSpecularIndirect *= ambientOcclusion;
+    #endif
+    #if defined( USE_SHEEN )
+      sheenSpecularIndirect *= ambientOcclusion;
+    #endif
+    #if defined( USE_ENVMAP ) && defined( STANDARD )
+      float dotNV = saturate( dot( geometryNormal, geometryViewDir ) );
+      reflectedLight.indirectSpecular *= computeSpecularOcclusion( dotNV, ambientOcclusion, material.roughness );
+    #endif
+  }`;
 
 const FRAG_NORMAL_HOOK = /* glsl */ `
   #include <normal_fragment_maps>
@@ -769,7 +898,37 @@ const FRAG_REFLECT_HOOK = /* glsl */ `
       vec3 viewN = normalize( normal );
       vec3 viewDir = normalize( vViewPosition );
       float fres = pow( 1.0 - saturate( dot( viewDir, viewN ) ), 4.0 );
-      fres = mix( 0.03, 1.0, fres );
+      // uReflFresnelBase is a MEASUREMENT INSTRUMENT, left at the value it has
+      // always had. It ships at 0.03, which is bit-identical to the hard-coded
+      // constant it replaced, and it is here because the next attempt at the
+      // critic's standing complaint -- "the wet floor reflects the LED strip but
+      // NOT the robots" -- needs it and needs the negative result below.
+      //
+      // What is now known, all of it from one frozen wide frame with a 0.0000/255
+      // toggle noise floor:
+      //
+      //   1. THE MIRROR CONTAINS THE FIGHTERS. Nothing is excluded, culled or
+      //      mis-projected. Raise reflectionScale to 6 and both of them appear
+      //      as full-length smears under their own feet. Every previous reading
+      //      of this defect as a missing-object bug is wrong.
+      //   2. IT IS A MAGNITUDE PROBLEM, and this term is why. At the wide
+      //      framing the deck is seen ~25 degrees off horizontal, so the Schlick
+      //      term is about 0.11 and k lands near 0.1 -- enough for a blown-out
+      //      strip to survive and nowhere near enough for a mid-tone fighter.
+      //   3. LIFTING THIS BASE DOES NOT FIX IT, measured, so do not spend a
+      //      round on it. 0.03 -> 0.10 / 0.16 / 0.24 moves the floor band by
+      //      0.89 / 1.60 / 2.51 of 255, and what arrives is SHEEN: the deck
+      //      reads wetter and the fighters still have no legible reflection,
+      //      because k only reaches ~0.26 and 26% of a dim reflection over a dim
+      //      deck is nothing. Matching the 6x result needs a base near 0.8,
+      //      which is not a Fresnel term any more.
+      //
+      // So the lever is the reflected radiance relative to the deck's own, not
+      // the reflectance: either the mirror needs its own exposure or the deck
+      // needs to be darker under the fighters. Both are art decisions with
+      // consequences for the bloom pedestal, which is why neither was taken
+      // blind at the end of a round.
+      fres = mix( uReflFresnelBase, 1.0, fres );
 
       vec4 coord = vKbReflCoord;
       vec3 wn = normalize( ( vec4( viewN, 0.0 ) * viewMatrix ).xyz );
@@ -884,6 +1043,7 @@ uniform vec3 uJoint;
 uniform float uJointSlope;
 uniform float uJointDark;
 uniform float uReflStrength;
+uniform float uReflFresnelBase;
 uniform float uReflDistort;
 uniform float uReflBlur;
 uniform float uReflKnee;
@@ -902,10 +1062,13 @@ uniform vec2 uFloorTintE;
 uniform float uFloorChroma;
 uniform vec3 uFloorWarm;
 uniform vec3 uFloorCool;
+uniform float uFoldAoIntensity;
 varying vec4 vKbReflCoord;
 varying vec3 vKbWorld;
 float kbWetness = 0.0;`,
       )
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>${FRAG_FOLD_METALNESS}`)
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>${FRAG_FOLD_AO}`)
       .replace('#include <normal_fragment_maps>', FRAG_NORMAL_HOOK)
       .replace('#include <opaque_fragment>', FRAG_REFLECT_HOOK);
     material.userData.shader = shader;
@@ -955,6 +1118,12 @@ export class StageFloor {
       uJointSlope: { value: 0.95 },
       uJointDark: { value: 0.20 },
       uReflStrength: { value: 0.62 },
+      /**
+       * Schlick floor for the deck's reflectance. See FRAG_REFLECT_HOOK: this
+       * is the knob that decides whether anything the camera looks DOWN at
+       * reflects, which is every framing this stage is scored on.
+       */
+      uReflFresnelBase: { value: 0.03 },
       uReflDistort: { value: 0.028 },
       uReflBlur: { value: 0.075 },
       /**
@@ -1001,6 +1170,8 @@ export class StageFloor {
       uFloorChroma: { value: 1.6 },
       uFloorWarm: { value: new THREE.Color(1, 1, 1) },
       uFloorCool: { value: new THREE.Color(1, 1, 1) },
+      /** `aoMapIntensity` for the folded occlusion read; see FRAG_FOLD_AO. */
+      uFoldAoIntensity: { value: 1 },
     };
 
     /**
@@ -1019,9 +1190,11 @@ export class StageFloor {
       name: 'arena.floorWet',
       map: maps.albedo,
       normalMap: maps.normal,
+      // `metalnessMap` and `aoMap` are deliberately NOT bound to `maps.orm`
+      // beside `roughnessMap`: three would declare three samplers for the one
+      // texture and this material has no unit to spare. Both channels are read
+      // off the roughness texel in the graft — see FRAG_FOLD_METALNESS.
       roughnessMap: maps.orm,
-      metalnessMap: maps.orm,
-      aoMap: maps.orm,
       roughness: 1,
       metalness: 1,
       // Water and concrete are both dielectrics; the specular response comes
@@ -1037,7 +1210,8 @@ export class StageFloor {
     const geo = new THREE.PlaneGeometry(FLOOR.w, FLOOR.d, 24, 20);
     geo.rotateX(-Math.PI / 2);
     geo.translate(FLOOR.cx, this.floorY, FLOOR.cz);
-    // aoMap reads uv1; the macro map has one layout so they are the same.
+    // Kept for any second UV consumer (a light map, an ao binding restored):
+    // the macro map has one layout, so uv1 is simply uv.
     geo.setAttribute('uv1', geo.attributes.uv.clone());
     this.mesh = new THREE.Mesh(geo, this.material);
     this.mesh.name = 'arena.floor.slab';

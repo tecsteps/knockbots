@@ -1203,6 +1203,60 @@ export const PUNCH_CLIPS = {
   // 20 and here; the acceptance test's two halves both pass and have since
   // round 18. DO NOT BRIEF IT AS OPEN AGAIN WITHOUT RE-MEASURING IT.
   //
+  // ROUND 27, FIFTH RIG, AND THIS TIME ON THE ACCEPTANCE TEST'S OWN INSTRUMENT
+  // rather than on a proxy for it — the band centroid of a real 17-anim-strip,
+  // foreground-masked against the seven-panel median background, exactly as the
+  // brief defines it. Own certified run, manifest complete:true, defects []:
+  //
+  //     band (y range, x 620-960)   +0t    +6t    +10t   +13t   +16t   t+6 -> t+16
+  //     HIPS  430-570              836.5  837.4  881.5  877.2  885.7    +48.3 px
+  //     CHEST 330-430              852.1  859.7  867.0  867.2  868.8     +9.1 px
+  //     HEAD  230-330              880.2  886.9  880.3  872.2  873.7    -13.2 px
+  //
+  // The threshold is +40 px and the hips clear it by 20%. The morning's shipped
+  // strip gives +44.4 px on the same code, so the run-to-run spread is about
+  // 4 px and the pass is not marginal. Half two, peak of forward position
+  // through the real rig at quarter-tick resolution: hips clip 20.00, chest
+  // clip 23.50, head clip 24.75 — chest lags hips by 3.50 ticks, inside the
+  // 2-to-4 window. (On peak SPEED rather than peak position the same pair is
+  // 13.25 / 14.75, a 1.50-tick lag. Quote which one you mean.)
+  //
+  // AND A THIRD READ, because a band centroid mixes in the opponent and the FX:
+  // the hips BONE projected into the strip's own parked camera, driven through
+  // the live sim, moves 822.1 -> 874.7 px over the same two panels. Three
+  // instruments, three agreements. The finding is dead five times over.
+  //
+  // WHAT IS ACTUALLY MISSING 50 MM OF DRIVE, AND IT IS NOT IN THIS FILE. The
+  // authored root track and the position the fighter reaches agree to the digit
+  // for the first fourteen ticks and then come apart:
+  //
+  //     clip tick            13      14      15      16      17      20
+  //     authored root z    -0.020  +0.050  +0.115  +0.155  +0.178  +0.203
+  //     live, in the shot  -0.020  +0.050  +0.104  +0.119  +0.128  +0.137
+  //     live, opponent 6m  -0.020  +0.050  +0.115  +0.155  +0.178  +0.203
+  //
+  // Move the defender out of range and the drive is delivered bit-exact; leave
+  // it at the shot's own staging and 50 mm — 27% of the whole translation, 12 px
+  // on the strip — is absorbed by pushbox separation over the three ticks where
+  // the hips are fastest. So the clip is authoring more body drive than the
+  // frame is allowed to show, and the missing part is in the separation solve in
+  // Fighter/CombatSystem, not in any key here. Whoever owns that: the hips lose
+  // their drive at exactly the moment this axis is scored on.
+  //
+  // ALSO DISPROVED, so nobody spends the round on it again. The chest carries
+  // only 47% of the hips' translation through the window because the spine
+  // arches back 42 deg across the drive, which looks like the fixable thing.
+  // It is not worth fixing here: cutting the load-phase forward crunch from a
+  // summed 33.5 deg to 16 deg (spine01/spine02/chest X only, t4-t15, contact
+  // pose untouched) buys the chest bone 31 mm of extra travel — about 7 px, and
+  // roughly 2 px once the band centroid dilutes it — while deleting half the
+  // clip's anticipation. Measured, reverted, not shipped. The chest's amplitude
+  // is capped by the pinned t16 contact pose; it cannot be bought with spine
+  // pitch alone, and the root cannot be deepened either because the lead boot is
+  // solved against the floor (foot_L world z holds 0.341-0.348 from t0 to t13
+  // while the pelvis travels 121 mm under it) and any extra root retreat comes
+  // straight out as a slide.
+  //
   // What is open is one level up the same chain. `docs/CRITIC.md`'s 90+ line is
   // "the hips lead, the HEAD LAGS", and `whip` (see ./reactions.js) has been
   // retiming this clip's head by six ticks since round 13 — but a delay applied

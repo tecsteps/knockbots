@@ -84,6 +84,41 @@ const HEIGHT_HISTORY_CAP = 40;
 
 const PERCEPTION_BUFFER = 48; // ticks of history; comfortably covers the reaction range below
 
+// ---------------------------------------------------------------------------
+// Spacing decisions have a duration.
+//
+// Every retreat in this file used to be an independent per-tick coin flip, and
+// that was survivable only because retreating did nothing: back walked the body
+// at 0.55 m/s, so a 30%-of-ticks dice roll at close range came out as a 0.16 m/s
+// drift that read as standing still. `loco.runBack` drives back at 2.0, and the
+// same dice roll became a 0.6 m/s vibration — measured, the two bots stopped
+// fighting: hits over a 900-tick round fell from 24 to 1 at level 10 and the
+// mean gap opened from 2.43 m to 2.82.
+//
+// So a retreat is now rolled ONCE PER DECISION and then committed for 10-19
+// ticks — one or two steps of the backpedal — rather than re-rolled every frame.
+// The difficulty rate keeps its numeric value and gains the meaning it always
+// claimed to have.
+//
+// The rate is applied per decision and NOT scaled down, and both of those were
+// measured rather than guessed. `#neutralGame` is reached on far fewer ticks
+// than it looks: against a live opponent the bot spends the round inside
+// attacks, blockstun and hitstun, and a 900-tick round leaves it roughly 60
+// neutral decisions. Two ways of thinning the trigger were tried on that
+// population and both switched the behaviour off completely — gating the roll on
+// a fixed 12-tick beat gave 0 retreats at levels 1 and 10, and dividing the rate
+// by the length of the commitment window gave 0 at every level. Undivided, a
+// 900-tick round at level 5 spends 50-62 ticks giving ground and the mean gap
+// sits at 2.5 m against a 2.3 baseline, which is a bot that spaces rather than
+// one that runs.
+// ---------------------------------------------------------------------------
+const RETREAT_MIN = 10;         // committed retreat window, ticks
+const RETREAT_SPAN = 10;        // ... plus 0..9
+/** Share of close-range decisions spent breaking off to reset the spacing. */
+const BREAK_OFF_RATE = 0.18;
+/** Metres of clearance behind the fighter below which retreating is pointless. */
+const CORNER_MARGIN = 0.35;
+
 const BLANK_PERCEIVED = Object.freeze({ state: STATE.IDLE, moveId: null, moveTick: 0, moveInstance: -1, airborne: false });
 
 export class CPU {
@@ -102,8 +137,15 @@ export class CPU {
 
     // The Command object. Reused every tick — Fighter only ever reads it, and
     // nothing downstream retains it past the tick it was issued.
+    // `guard` is not optional padding. Guard moved off back onto its own key,
+    // and this object never grew the field — so `Fighter#updateGuard` read
+    // `cmd.guard` as undefined on every CPU tick and the bot has not blocked a
+    // single attack since. It looked like it was blocking because `#tryBlock`
+    // held BACK, which under the old wiring guarded and under the new one just
+    // walks away: measured over 900 ticks at level 10, `blockRate` 0.94 produced
+    // 0 blocked hits, 0 ticks of `isBlocking` and 442 ticks of `loco.walkBack`.
     this.cmd = {
-      x: 0, y: 0, up: false, down: false, fwd: false, back: false,
+      x: 0, y: 0, up: false, down: false, fwd: false, back: false, guard: false,
       pressed: new Set(), held: new Set(), notation: '', buffer: [], motion: null,
     };
 
@@ -130,6 +172,7 @@ export class CPU {
     this._guardDecision = null;        // { instance, willBlock, willCrouch }
     this._heightHist = { high: 0, mid: 0, low: 0 };
 
+    this._retreatUntil = -1;           // local tick a committed retreat ends on
     this._techGrab = null;             // the throwData object we've already rolled tech for
     this._willTech = false;
     this._wakeupDecided = false;
@@ -177,6 +220,7 @@ export class CPU {
     this.pendingRouteTrigger = false;
     this.route = null;
     this._guardDecision = null;
+    this._retreatUntil = -1;
     this._techGrab = null;
     this._wakeupDecided = false;
     this._cancelAttempted = -1;
@@ -370,7 +414,8 @@ export class CPU {
       const mv = getMove(set, 'jab') || findMoveByTag(set, 'poke');
       if (mv) this.#press(mv);
     } else {
-      this.cmd.back = true; this.cmd.x = -1;
+      // The non-aggressive wake-up is a guard, not a sprint out of the corner.
+      this.cmd.guard = true;
     }
   }
 
@@ -412,7 +457,10 @@ export class CPU {
       };
     }
     if (!this._guardDecision.willBlock) return false;
-    this.cmd.back = true; this.cmd.fwd = false; this.cmd.x = -1;
+    // Guard, and hold ground while doing it. Blocking is not a retreat: back is
+    // pure movement now, and holding it here would have sent the bot 2 m/s
+    // backwards every time it decided to defend.
+    this.cmd.guard = true;
     if (this._guardDecision.willCrouch) { this.cmd.down = true; this.cmd.y = -1; }
     return true;
   }
@@ -434,9 +482,43 @@ export class CPU {
 
   // --- neutral game --------------------------------------------------------
 
+  /**
+   * Is there still floor behind us worth retreating into? Backing into the wall
+   * is not spacing, it is losing the corner for nothing, and the bot used to do
+   * it because 0.55 m/s never got far enough to notice.
+   */
+  #cornered() {
+    const s = this.self;
+    const half = s.bounds?.halfWidth ?? 9;
+    return -s.facing * s.position.x > half - s.radius - CORNER_MARGIN;
+  }
+
+  /**
+   * Roll for a committed retreat at `rate`, the share of decisions that should
+   * end up giving ground.
+   *
+   * The roll happens before the corner test so the RNG stream does not fork on
+   * where the fighter is standing — the sim has to stay reproducible from a seed.
+   */
+  #maybeRetreat(rate) {
+    if (this.rng.next() >= rate) return false;
+    if (this.#cornered()) return false;
+    this._retreatUntil = this._localTick + RETREAT_MIN + Math.floor(this.rng.next() * RETREAT_SPAN);
+    this.cmd.back = true; this.cmd.x = -1;
+    return true;
+  }
+
   #neutralGame(dist) {
     const self = this.self;
     const set = MOVES[self.moveSetKey] || MOVES.standard;
+
+    // Finish a retreat already under way. The window is held as an expiry tick
+    // rather than a countdown so that a block or a hit in the middle of it eats
+    // into the retreat instead of postponing it.
+    if (this._localTick < this._retreatUntil) {
+      if (!this.#cornered()) { this.cmd.back = true; this.cmd.x = -1; return; }
+      this._retreatUntil = -1;
+    }
 
     if (self.meter >= 100 && dist < FOOTSIE_RANGE && this.rng.next() < this.aggression * 0.5) {
       const overdrive = getMove(set, 'overdrive');
@@ -449,12 +531,9 @@ export class CPU {
       return;
     }
 
-    // Whiff-bait: hang at the edge of range and retreat instead of always
+    // Whiff-bait: hang at the edge of range and give ground instead of always
     // pressing forward — this is what makes an opponent throw the first move.
-    if (dist > THROW_RANGE && dist < APPROACH_RANGE && this.rng.next() < this.sidestepRate) {
-      this.cmd.back = true; this.cmd.x = -1;
-      return;
-    }
+    if (dist > THROW_RANGE && dist < APPROACH_RANGE && this.#maybeRetreat(this.sidestepRate)) return;
 
     if (dist <= THROW_RANGE) {
       if (this.rng.next() < this.throwRate) {
@@ -465,7 +544,11 @@ export class CPU {
         const mv = getMove(set, 'jab');
         if (mv) { this.#press(mv); return; }
       }
-      if (this.rng.next() < 0.3) { this.cmd.back = true; this.cmd.x = -1; }
+      // Break off and reset the spacing. The old form was a flat 0.3 re-rolled
+      // every tick, which at 0.55 m/s came out as a 0.16 m/s drift and at 2.0
+      // would have been 0.6 — the same constant meaning two different behaviours
+      // is exactly how this went wrong. One roll, then a committed window.
+      this.#maybeRetreat(BREAK_OFF_RATE);
       return;
     }
 
@@ -484,6 +567,7 @@ export class CPU {
 
   #neutralCmd() {
     this.cmd.fwd = false; this.cmd.back = false; this.cmd.up = false; this.cmd.down = false;
+    this.cmd.guard = false;
     this.cmd.x = 0; this.cmd.y = 0; this.cmd.motion = null; this.cmd.notation = '';
     this.cmd.pressed.clear();
     this.cmd.held.clear();

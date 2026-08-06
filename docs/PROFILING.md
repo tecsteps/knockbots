@@ -739,3 +739,62 @@ buy a shadowed key would take back part of what the key is being added for.
 pointing at the texture `roughnessMap` already binds, and the fragment patch already rewrites all
 three from that texel. Two free units, one more than the light needs, and bit-identical output by
 construction.
+
+## The ORM fold, shipped and measured: "bit-identical by construction" is 3 pixels
+
+The two units are freed. `Materials.js` drops the `aoMap` and `metalnessMap` bindings on every
+`StoryPhysicalMaterial` whose ORM texture they shared with `roughnessMap`, and `StageFloor.js` does
+the same for `arena.floorWet`; both read the occlusion and metalness channels out of
+`texelRoughness` in the fragment patch that was already rewriting all three values.
+
+| | kb.armor | arena.floorWet |
+|---|---|---|
+| before, in the fight scene | 15 | 15 |
+| after | **13** | **13** |
+
+**"By construction" was worth checking, and it is very nearly literal.** One page session, one frozen
+frame, sim clock zero, `setGrade({grain: 0, chroma: 0})`, pixels read straight off the drawing
+buffer with `gl.readPixels` so nothing is resampled or re-encoded on the way out. The shader is
+toggled between the folded build and a control arm that puts the bindings back and suppresses the
+folded reads — the material exactly as it was — and the pose cannot move because the frame never
+unfreezes. Grabs A / B / A':
+
+| | mean | pixels differing by >= 1, of 2,073,600 | max |
+|---|---|---|---|
+| 02-closeup-face, fold vs control | 0.00001 / 255 | **3** | 4.3 |
+| 01-hero-idle, fold vs control | 0.00028 / 255 | **89** | 62.3 |
+| either shot, fold vs fold | **0.0000 / 255** | 0 | 0 |
+
+The same-arm floor is *exactly* zero, so those handful of pixels are real and not session noise.
+They are isolated 2-6 pixel clumps sitting on specular highlights, and their count varies run to run
+(89 and 118 on two hero runs) — the signature of a last-bit difference in a varying slot or a fused
+multiply-add landing on a knife-edge highlight, not of a shading change. For scale, the best
+frame-to-frame reproducibility this harness has ever reached on a matched pose is 0.235/255; this is
+three orders of magnitude under it.
+
+**Method note worth reusing: toggle in ONE session rather than comparing two runs.** The pose lottery
+of round 17 cannot enter, and the noise floor is zero rather than 0.235.
+
+**Two corrections to the round brief.**
+
+1. **`arena.floorWet` was never the second blocker it looked like.** It fails only against a shadowed
+   light that reaches the arena — which is how it was first measured, with probe spots on the default
+   layer. The keys that actually shipped live on `SPLIT_LIGHT_LAYER`, and the split beauty pass masks
+   that layer out of the arena half, so no arena program ever compiles a spot shadow sampler. Its
+   fold is headroom, not a prerequisite. Freeing a unit on a material is only worth anything if the
+   light can reach it.
+2. **The units were the cheap half.** Two shadowed spot keys fit comfortably (`kb.armor` 15 of 16,
+   0 of 184 programs over) and three still fit (16 of 16, exactly). The frame does not. On
+   01-hero-idle, three runs a side:
+
+   | | median | fps | draws | tris |
+   |---|---|---|---|---|
+   | fold only, keys off | 13.8 / 14.0 / 14.1 ms | 71-73 | 275 | 936k |
+   | fold + two shadowed keys | 15.3 / 16.7 ms | 60-65 | 327 | 1316k |
+
+   The fold itself is free — slightly faster than the 14.4 ms baseline, which is what two fewer
+   texture fetches per fragment should do. The keys are not: +52 draws and +380k triangles for the
+   two extra shadow passes, and one run of the pair landed on **59.9 fps**, under the constraint.
+   (Several agents were driving browsers on this machine, so read these as an upper bound on cost.)
+   A third shadowed light is reachable in samplers and should be assumed unaffordable in milliseconds
+   until someone measures it.

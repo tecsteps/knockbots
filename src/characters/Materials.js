@@ -2128,6 +2128,7 @@ uniform vec3 kbHeatColor;
 uniform vec3 kbSteelColor;
 uniform vec3 kbInkLight;
 uniform vec3 kbInkDark;
+uniform float kbAoIntensity;  // only read under KB_FOLD_AO; see the ORM fold note
 varying vec3 vKbObjPos;
 varying vec3 vKbObjNrm;
 varying vec4 vKbFrame;
@@ -2175,12 +2176,26 @@ vec4 kbG = kbTriplanar( kbGrungeMap, vKbObjPos, kbN, kbW, kbGrungeScale );
 float kbEdge = 0.4;
 float kbHeatM = 0.0;
 float kbCavity = 0.0;
+// The ORM fold. See {@link StoryPhysicalMaterial}: when the occlusion and
+// metalness bindings pointed at the same texture as roughness they were three
+// separate sampler declarations costing three texture units, so two of them are
+// dropped on the JS side and read out of texelRoughness here instead. Nothing
+// between three's own metalnessmap_fragment and this point touches
+// metalnessFactor, so the arithmetic is the one three would have done, in the
+// order it would have done it.
+float kbFoldAo = 1.0;
 #ifdef USE_MAP
 	kbEdge = mix( kbEdge, sampledDiffuseColor.a, kbStoryB.w );
 #endif
 #ifdef USE_ROUGHNESSMAP
 	kbCavity = clamp( ( 1.0 - texelRoughness.r ) * 1.6, 0.0, 1.0 );
 	kbHeatM = texelRoughness.a * kbStoryB.w;
+	#ifdef KB_FOLD_METALNESS
+		metalnessFactor *= texelRoughness.b;
+	#endif
+	#ifdef KB_FOLD_AO
+		kbFoldAo = ( texelRoughness.r - 1.0 ) * kbAoIntensity + 1.0;
+	#endif
 #endif
 diffuseColor.a = 1.0;
 
@@ -2857,13 +2872,31 @@ if ( kbLattice.x > 0.0 && kbPitch > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 
  * each other and nothing gets in between them.
  */
 const STORY_OCCLUSION_FRAGMENT = /* glsl */`
+// Under the ORM fold three's own <aomap_fragment> expanded to nothing, because
+// the aoMap binding is gone. This is that chunk, verbatim, off the folded texel
+// — same operations in the same order, so the result is the same float.
+#ifdef KB_FOLD_AO
+	reflectedLight.indirectDiffuse *= kbFoldAo;
+	#if defined( USE_CLEARCOAT )
+		clearcoatSpecularIndirect *= kbFoldAo;
+	#endif
+	#if defined( USE_SHEEN )
+		sheenSpecularIndirect *= kbFoldAo;
+	#endif
+	#if defined( USE_ENVMAP ) && defined( STANDARD )
+		reflectedLight.indirectSpecular *= computeSpecularOcclusion( saturate( dot( geometryNormal, geometryViewDir ) ), kbFoldAo, material.roughness );
+	#endif
+#endif
+
 // Only the butted half of the perimeter occludes. A free ground edge has open
 // air on the other side of it and shadowing it is what made a stack of lames
 // read as one lump — the recess term was being applied to plates that are not
 // in a recess.
 float kbSeamOcc = clamp( 1.0 - kbJoint * 0.52 - kbHaloJ * 0.19 - kbLat * 0.70 - kbLatH * 0.30, 0.0, 1.0 );
 float kbOcc = kbSeamOcc;
-#ifdef USE_AOMAP
+#if defined( KB_FOLD_AO )
+	kbOcc *= mix( 1.0, pow( clamp( kbFoldAo, 0.0, 1.0 ), kbSurfaceB.z ), kbSurfaceB.y );
+#elif defined( USE_AOMAP )
 	kbOcc *= mix( 1.0, pow( clamp( ambientOcclusion, 0.0, 1.0 ), kbSurfaceB.z ), kbSurfaceB.y );
 #endif
 reflectedLight.directDiffuse *= kbOcc;
@@ -2973,6 +3006,32 @@ const STORY_DEFAULTS = {
  * `Material.copy` does not carry an own-property compile hook across. On the
  * prototype it survives any number of clones, and `copy` brings the per-material
  * story settings with it.
+ *
+ * --- The ORM fold ----------------------------------------------------------
+ *
+ * Every material in the library binds ONE packed occlusion/roughness/metalness
+ * texture to `aoMap`, `roughnessMap` and `metalnessMap` at once. That looks
+ * like it costs one texture unit and it does not: three declares three separate
+ * `uniform sampler2D`, and a shared texture does not share a sampler. It costs
+ * three.
+ *
+ * `kb.armor` is the material that decides how many shadow-casting lights this
+ * game may have — it sat at 15 of the 16 fragment samplers the device allows,
+ * and one extra shadowed light (a spot costs two, because `spotShadowMap` is
+ * declared `[NUM_SPOT_LIGHT_SHADOWS]`) failed to link outright:
+ *
+ *     FRAGMENT shader texture image units count exceeds MAX_TEXTURE_IMAGE_UNITS(16)
+ *
+ * So the occlusion and metalness bindings are dropped and their channels are
+ * read out of the roughness texel instead, in the fragment patch that was
+ * already rewriting all three of those values. Two units, no feature lost: the
+ * texture is still bound and still sampled, once instead of three times.
+ *
+ * This is meant to be invisible, and it is measured rather than asserted —
+ * `#include <metalnessmap_fragment>` and `#include <aomap_fragment>` are
+ * reproduced verbatim off the folded texel, in their original order, so the
+ * arithmetic is identical float for float. See KB_FOLD_AO / KB_FOLD_METALNESS
+ * below and the frozen-frame A/B in docs/PROFILING.md.
  */
 class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
   /**
@@ -2983,29 +3042,48 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
    */
   constructor(params = {}) {
     const { story, ...rest } = params;
+    // The fold only works where the story patch runs, because the patch is what
+    // reads the folded channels back out. A material with no grunge map leaves
+    // the shader stock and must keep its own bindings.
+    const patched = !!(story && story.grunge);
+    const fold = {
+      ao: patched && !!rest.roughnessMap && rest.aoMap === rest.roughnessMap,
+      metalness: patched && !!rest.roughnessMap && rest.metalnessMap === rest.roughnessMap,
+      aoIntensity: rest.aoMapIntensity ?? 1,
+    };
+    if (fold.ao) rest.aoMap = null;
+    if (fold.metalness) rest.metalnessMap = null;
     super(rest);
     this.kbStory = { ...STORY_DEFAULTS, grunge: null, ...(story || {}) };
+    this.kbFold = fold;
   }
 
   copy(source) {
     super.copy(source);
     if (source.kbStory) this.kbStory = { ...source.kbStory };
+    if (source.kbFold) this.kbFold = { ...source.kbFold };
     return this;
   }
 
   /**
    * A material whose grunge map never arrived leaves the shader untouched, so
    * it must not be allowed to share a program with one that patched it — that
-   * would bind a story shader to a material carrying none of its uniforms.
+   * would bind a story shader to a material carrying none of its uniforms. The
+   * fold flags join it for the same reason: they change the source, and three's
+   * own cache key cannot see them.
    */
   customProgramCacheKey() {
-    return this.kbStory?.grunge ? 'kb-story' : 'kb-story-off';
+    if (!this.kbStory?.grunge) return 'kb-story-off';
+    const f = this.kbFold || {};
+    return `kb-story${f.ao ? '-fao' : ''}${f.metalness ? '-fmet' : ''}`;
   }
 
   onBeforeCompile(shader) {
     const s = this.kbStory;
     if (!s || !s.grunge) return;
     const u = shader.uniforms;
+    const fold = this.kbFold || {};
+    u.kbAoIntensity = { value: fold.aoIntensity ?? 1 };
     u.kbGrungeMap = { value: s.grunge };
     u.kbGrungeScale = { value: s.scale };
     u.kbStory = { value: new THREE.Vector4(s.grime, s.oxide, s.fade, s.marking) };
@@ -3056,7 +3134,9 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
     // touches — diffuseColor, roughnessFactor, metalnessFactor and the two
     // texel samples — is declared at function scope further up and is still
     // live there.
-    shader.fragmentShader = STORY_PARS_FRAGMENT + shader.fragmentShader
+    const foldDefines = (fold.ao ? '#define KB_FOLD_AO\n' : '')
+      + (fold.metalness ? '#define KB_FOLD_METALNESS\n' : '');
+    shader.fragmentShader = foldDefines + STORY_PARS_FRAGMENT + shader.fragmentShader
       .replace('#include <normal_fragment_maps>',
         `#include <normal_fragment_maps>\n${STORY_BODY_FRAGMENT}\n${STORY_FORM_FRAGMENT}`)
       .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>\n${STORY_CLEARCOAT_FRAGMENT}`)

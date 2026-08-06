@@ -264,6 +264,65 @@ const runFwd = makeClip('loco.runFwd', { duration: 32, loop: true, blendIn: 5, b
 ]);
 
 // ---------------------------------------------------------------------------
+// loco.runBack — the retreat, and the reason there is a neutral game.
+//
+// Forward had two gaits and back had one. Held forward drove the body at 2.75
+// m/s on loco.runFwd while held back drove it at 0.55 on loco.walkBack, so from
+// the round-start gap an advance beat a full-time retreat to contact in 101
+// ticks and retreating cancelled a fifth of it. A defender needs a gait that
+// costs the attacker real time, and there was no clip to play one on.
+//
+// Built the way loco.walkBack is built, from the forward clip's own solved
+// contacts run in reverse — which is not a trick, it is what a backpedal is.
+// The planted foot lands behind the body, the body rolls back over it, it ends
+// up in front, and the leg swings back out. That is exactly loco.runFwd's stance
+// arc traversed the other way, so the six contacts are reused unchanged and the
+// ground solve comes with them: a pose's feet sit on the floor for its own root
+// height regardless of which direction time is running.
+//
+// RETIMED, not rescaled. The stride is fixed by the contacts, so the only knob
+// that sets the speed a clip implies is the cycle length: 32 ticks over these
+// contacts is 2.69 m/s, and 42 measures 2.03, against the 2.00 the body is
+// driven at. Scaling the leg sets down instead would have shortened the stride
+// and broken every contact with it. Measured through the rig the same way
+// loco.runFwd's 2.69 was, and the contact profile came across intact — 61% of
+// the cycle with a sole on the floor against the run's 72%, and a 46mm peak lift
+// against its 53mm.
+//
+// What is NOT reversed is everything above the hips. A sprint squares the pelvis
+// 20 degrees and throws the arms through 85 degrees of shoulder travel; a
+// fighter giving ground does neither. The hips stay half-bladed, the chest rides
+// behind them, the chin tucks, and the guard never opens — the arms only counter
+// -swing 14 degrees around the stance, so the fists stay by the face the whole
+// way back. Backing off is a defensive act and it has to read as one.
+// ---------------------------------------------------------------------------
+const BACKRUN_TORSO = {
+  hips: [-3, 10, 0], spine01: [-3, -1, 0], spine02: [-3, -1, 0], chest: [-4, -2, 0],
+  neck: [3, -1, 0], head: [4, -1, 0],
+};
+// Additive, unlike the run's pump: these ride on top of the stance guard rather
+// than replacing it, which is the whole difference between a sprint and a
+// retreat in silhouette.
+const BACKRUN_ARM_A = {
+  clavicle_L: [0, -3, -2], shoulder_L: [14, 0, -3], elbow_L: [10, 0, 0],
+  clavicle_R: [0, 3, 2], shoulder_R: [-10, 0, 3], elbow_R: [-8, 0, 0],
+};
+const BACKRUN_ARM_B = {
+  clavicle_L: [0, 3, 2], shoulder_L: [-10, 0, 3], elbow_L: [-8, 0, 0],
+  clavicle_R: [0, -3, -2], shoulder_R: [14, 0, -3], elbow_R: [10, 0, 0],
+};
+const backRun = (legs, arms, extra) => add(over(STANCE, legs), add(BACKRUN_TORSO, arms, extra || {}));
+
+const runBack = makeClip('loco.runBack', { duration: 42, loop: true, blendIn: 5, blendOut: 5 }, [
+  { t: 0, ease: 'quad', pose: backRun(R_L_STRIKE, BACKRUN_ARM_A, { hips: [2, -4, -2], chest: [1, 5, 2], head: [-1, -3, -1] }), root: [0, -0.07, 0] },
+  { t: 5, ease: 'quad', pose: backRun(R_R_PUSH, BACKRUN_ARM_A, { hips: [0, -2, -1], chest: [0, 2, 1], head: [0, -1, 0] }), root: [0, -0.05, 0] },
+  { t: 13, ease: 'sine', pose: backRun(R_R_STANCE, BACKRUN_ARM_B, { hips: [-2, 2, 1], chest: [-1, -3, -1] }), root: [0, -0.025, 0] },
+  { t: 21, ease: 'quad', pose: backRun(R_R_STRIKE, BACKRUN_ARM_B, { hips: [2, 4, 2], chest: [1, -5, -2], head: [-1, 3, 1] }), root: [0, -0.07, 0] },
+  { t: 26, ease: 'quad', pose: backRun(R_L_PUSH, BACKRUN_ARM_B, { hips: [0, 2, 1], chest: [0, -2, -1], head: [0, 1, 0] }), root: [0, -0.05, 0] },
+  { t: 34, ease: 'sine', pose: backRun(R_L_STANCE, BACKRUN_ARM_A, { hips: [-2, -2, -1], chest: [-1, 3, 1] }), root: [0, -0.025, 0] },
+]);
+
+// ---------------------------------------------------------------------------
 // loco.stopShort — killing a run. The lead foot stabs out well ahead of the
 // centre of mass and the whole body keeps travelling over it for four ticks
 // before the torso finally rocks back; the arms are thrown forward and then
@@ -290,5 +349,6 @@ export const LOCOMOTION_CLIPS = {
   'loco.jumpLand': jumpLand,
   'loco.crouchWalk': crouchWalk,
   'loco.runFwd': runFwd,
+  'loco.runBack': runBack,
   'loco.stopShort': stopShort,
 };

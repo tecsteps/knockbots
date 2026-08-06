@@ -27,7 +27,7 @@ import { Rng } from '../core/Rng.js';
 import {
   bevelBox, place, mergeAll, worldUv, truss, railing, pipeRun, tube,
   hydraulicRam, crowdFigure, CROWD_ARCHETYPES, insetPanel, boltRow, catenary, spanX,
-  portalCrane, chimney, cableTray,
+  portalCrane, chimney, cableTray, segment,
 } from './GeoKit.js';
 import { BANNER_ROWS } from './StageMaterials.js';
 
@@ -1632,14 +1632,7 @@ export class StageStructure {
       parts.push(place(bevelBox(brace.length, 0.07, 0.07, 0.016), { pos: brace.pos, rot: brace.rot }));
     }
 
-    // --- chain hoist dropped off the roof ----------------------------------
-    {
-      const x = 2.55, z = 6.25, bottom = 2.35;
-      parts.push(place(new THREE.CylinderGeometry(0.028, 0.028, ROOF_Y - bottom, 6), { pos: [x, (ROOF_Y + bottom) / 2, z] }));
-      parts.push(place(new THREE.CylinderGeometry(0.02, 0.02, ROOF_Y - bottom - 0.5, 5), { pos: [x + 0.075, (ROOF_Y + bottom) / 2 + 0.25, z + 0.03] }));
-      parts.push(place(bevelBox(0.2, 0.34, 0.16, 0.02), { pos: [x, bottom + 0.17, z] }));
-      parts.push(place(new THREE.TorusGeometry(0.1, 0.026, 6, 14, Math.PI * 1.5), { pos: [x, bottom - 0.08, z], rot: [0, Math.PI / 2, 0.6] }));
-    }
+    parts.push(...this.#hoist());
 
     // --- stanchion run on the front apron, outside the combat bound ---------
     const posts = [];
@@ -1707,6 +1700,78 @@ export class StageStructure {
     mesh.matrixAutoUpdate = false;
     this.foreground = mesh;
     this.group.add(mesh);
+  }
+
+  /**
+   * Chain hoist, rigged off the right-hand mast's cross-arm.
+   *
+   * It used to drop straight off the roof at x = 2.55 on the open apron, and at
+   * `06-stage-wide` framing that put a five-pixel dead-black rod from the top of
+   * frame down to the deck **through the near fighter's torso**: one collar box
+   * two thirds of the way down, no luminaire above it, no flange below it, and
+   * nothing else of its kind anywhere in the frame for it to belong to. It
+   * survived twenty-three rounds of magnified review and was caught at 1x,
+   * because at `01-hero-idle` framing it is not in shot at all.
+   *
+   * Lighting it is the obvious repair and it is the wrong one. It stands
+   * directly in front of the blown-out LED strip, so nothing short of a light
+   * dedicated to it puts an edge on it, and an analytic light costs ~1.5ms at
+   * 1080p (docs/PROFILING.md). Moving it costs nothing and fixes the
+   * composition rather than the value: hung under the mast's cross-arm it has a
+   * visible top, it is one member of a rigging group instead of the only
+   * vertical in the frame, it sits clear of the fighters' silhouette band, and
+   * it tracks the mast toward the frame edge when the wide camera pans with the
+   * pair rather than sweeping across the pit independently.
+   *
+   * Budget: the triangle count is deliberately at or under what the roof drop
+   * cost, because the scene is already over the 900k ceiling. The old version's
+   * single largest item was a 6x14 torus hook (336 triangles for an object
+   * eleven metres from the lens); this one draws its hook as two tapered
+   * segments and spends the saving on the trolley that makes it read.
+   * @returns {THREE.BufferGeometry[]}
+   */
+  #hoist() {
+    const out = [];
+    // Inboard end of the right mast's cross-arm (see #foreground: x 4.45,
+    // z 7.0, h 3.55, arm +1.2 -> the beam spans x 3.85..6.25 at y 3.37).
+    const x = 3.99, z = 7.0, armY = 3.37;
+    const bodyY = armY - 0.30;      // gearcase centre
+    const blockY = 1.82;            // hook block centre
+
+    // Trolley: two side plates straddling the beam, four flanged wheels, and
+    // the drop link the body hangs from. This is the "visible top" the frame
+    // was missing -- the object now starts somewhere instead of leaving frame.
+    // Plain boxes and open-ended wheels, not bevelled ones: at eleven metres
+    // these are five pixels across and a chamfer costs 32 triangles to render
+    // nothing. The bevels are spent on the gearcase and the hook block, which
+    // are the two parts that own a silhouette.
+    for (const s of [-1, 1]) {
+      out.push(place(new THREE.BoxGeometry(0.23, 0.2, 0.022), { pos: [x, armY - 0.02, z + s * 0.078] }));
+      for (const dx of [-0.07, 0.07]) {
+        out.push(place(new THREE.CylinderGeometry(0.038, 0.038, 0.026, 6, 1, true),
+          { pos: [x + dx, armY + 0.055, z + s * 0.062], rot: [Math.PI / 2, 0, 0] }));
+      }
+    }
+    out.push(place(new THREE.BoxGeometry(0.075, 0.12, 0.075), { pos: [x, armY - 0.16, z] }));
+    // Gearcase and motor drum, across the beam so the silhouette is wider than
+    // it is deep and cannot be mistaken for more pipe.
+    out.push(place(bevelBox(0.2, 0.22, 0.26, 0.014), { pos: [x, bodyY, z] }));
+    out.push(place(new THREE.CylinderGeometry(0.082, 0.082, 0.19, 8, 1),
+      { pos: [x - 0.16, bodyY + 0.01, z], rot: [0, 0, Math.PI / 2] }));
+
+    // Two chain falls to the hook block. Two is what makes it read as a hoist:
+    // one line is a rod, a pair converging on a block is a lifting tackle.
+    for (const dx of [-0.055, 0.055]) {
+      out.push(segment([x + dx, bodyY - 0.11, z], [x + dx * 0.55, blockY + 0.09, z], 0.016, 0.016, 5));
+    }
+    out.push(place(bevelBox(0.15, 0.17, 0.11, 0.012), { pos: [x, blockY, z] }));
+    // Hook: a shank and a canted tip. Two tapered segments instead of a torus.
+    out.push(segment([x, blockY - 0.085, z], [x, blockY - 0.2, z], 0.026, 0.02, 5));
+    out.push(segment([x, blockY - 0.2, z], [x + 0.055, blockY - 0.29, z], 0.02, 0.008, 5));
+    // Hand chain, looped back up to the body -- the slack is what says the
+    // thing is operated rather than welded in place.
+    out.push(tube(catenary([x + 0.09, bodyY - 0.06, z + 0.03], [x + 0.14, bodyY - 0.02, z - 0.03], 1.35, 6), 0.011, 4, 7));
+    return out;
   }
 
   // -------------------------------------------------------------------------

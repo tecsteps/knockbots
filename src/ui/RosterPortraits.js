@@ -184,6 +184,43 @@ const HEADROOM_SPANS = 0.46;
 const BULK_BASE = 0.42;
 const BULK_GAIN = 3.2;
 
+/*
+ * DISPROVED — ANVIL AND BASTION ARE NOT A LENS PROBLEM. STOP SWEEPING.
+ *
+ * Three of the ten tiles read as abstract hardware rather than a machine, and
+ * every note above this line is a previous round moving the camera to fix it.
+ * Swept properly this time, through `this.tune` so one page session covers the
+ * whole grid against one set of compiled programs:
+ *
+ *   - **Direction.** Anvil, Bastion and Volta at azimuth {0, 20, 40, 60} x
+ *     elevation {-14, -4, 6, 18, 30, 42} — 24 frames each, 72 total. Anvil has
+ *     no head in ANY of the 24: its C-shaped shoulder collar closes over the
+ *     head module from every angle, and looking under it at -14 degrees gets
+ *     the underside of the collar rather than a face. Bastion has none either;
+ *     what fills the frame at every direction is the pair of pauldrons, with a
+ *     gap between them where a head would be. Volta's head is present at all 24
+ *     and is largest at low elevation.
+ *   - **Scale.** The full cast at bulkGain {0, 1.6, 3.2} x frameSpans
+ *     {1.25, 1.4, 1.62} x elevation {2, 17.8}, judged through the tile's own
+ *     `object-fit: cover` crop rather than the raw square. No combination puts a
+ *     head on Anvil or Bastion. Tightening the frame makes their existing
+ *     hardware bigger, which is the same picture at a larger scale.
+ *
+ * The frame is already aimed correctly and says so: `headUV.y` is 0.29-0.54 on
+ * all ten, well inside the 0.2-0.8 band this file asserts. The camera is
+ * pointed at the head bone. The head bone is behind armour.
+ *
+ * Confirmed against `09-roster`, which photographs the cast in the arena at
+ * full size: Anvil's head is a recessed module inside its collar and Bastion's
+ * sits between two plates most of its own height. Neither reads as a head at
+ * full size in a lit line-up, so neither can read as one at 88x138 CSS px.
+ *
+ * Whatever is left here is `RobotBuilder`/`roster` work — give those two
+ * chassis a head that survives a bust crop — and no constant in this file
+ * reaches it. The seven machines that do have a readable head are framed
+ * correctly and should not be disturbed to chase the two that do not.
+ */
+
 /** Floor for the span, so a degenerate rig cannot put the lens inside the mesh. */
 const MIN_SPAN = 0.22;
 
@@ -304,6 +341,33 @@ export class RosterPortraits {
     this._camera = null;
     this._canvas = null;
     this._buf = null;
+    /**
+     * Per-machine cost breakdown, in ms, in capture order.
+     *
+     * Kept because every round that tried to shorten this loop argued from a
+     * single aggregate number ("230-755 ms per machine") that nobody could
+     * attribute, and the three candidate causes — program link, texture upload,
+     * readback — want completely different fixes. `{ setup, compile, draw }`
+     * says which one it is.
+     * @type {Array<{id: string, setup: number, compile: number, draw: number, total: number}>}
+     */
+    this.timings = [];
+    /**
+     * Framing overrides, for sweeping the lens without rebuilding the module.
+     *
+     * Every constant above was settled by rendering the cast through a range of
+     * values and looking at the contact sheet, and each of those sweeps had to
+     * edit this file and reload the game — which is why two of them only ever
+     * covered two elevations. Reading the numbers off an instance field instead
+     * lets one page session render the whole grid against ONE set of compiled
+     * programs and ONE set of uploaded textures, so a sweep is seconds rather
+     * than minutes and the arms differ by nothing but the camera.
+     *
+     * `null` in shipping. Nothing in the game writes it.
+     * @type {?{dir?: THREE.Vector3, frameSpans?: number, headroom?: number,
+     *          bulkBase?: number, bulkGain?: number, pose?: Record<string, number[]>}}
+     */
+    this.tune = null;
   }
 
   #ensure() {
@@ -377,6 +441,9 @@ export class RosterPortraits {
     if (this._drawing) return false;
     this._drawing = true;
 
+    const _t0 = performance.now();
+    let _t1 = _t0, _t2 = _t0;
+
     this.#ensure();
     const slot = this._slots.size;
 
@@ -404,20 +471,26 @@ export class RosterPortraits {
       const headTop = bones?.headTop ?? bones?.head;
       const chest = bones?.chest ?? bones?.spine02;
       const box = _box.setFromObject(group);
-      const bulk = 1 + BULK_GAIN * Math.max(0,
-        (box.max.x - box.min.x) / Math.max(box.max.y - box.min.y, 1e-3) - BULK_BASE);
+      const t = this.tune;
+      const dir = t?.dir ?? DIR;
+      const bulkBase = t?.bulkBase ?? BULK_BASE;
+      const bulkGain = t?.bulkGain ?? BULK_GAIN;
+      const frameSpans = t?.frameSpans ?? FRAME_SPANS;
+      const headroomSpans = t?.headroom ?? HEADROOM_SPANS;
+      const bulk = 1 + bulkGain * Math.max(0,
+        (box.max.x - box.min.x) / Math.max(box.max.y - box.min.y, 1e-3) - bulkBase);
       let frameH;
       if (headTop && chest) {
         headTop.getWorldPosition(_a);
         chest.getWorldPosition(_b);
         const span = Math.max(_a.y - _b.y, MIN_SPAN);
-        frameH = span * FRAME_SPANS * bulk;
+        frameH = span * frameSpans * bulk;
         // The head sits in the upper band of the frame, the way a portrait
         // photographer would place it, rather than dead centre. Measured from
         // `headTop` and not from the frame, so opening the frame for a bulky
         // machine drops the extra room BELOW the head rather than around it —
         // which is where its hardware actually is.
-        this._aim.set(_a.x, _a.y + span * HEADROOM_SPANS - frameH * 0.5, _a.z);
+        this._aim.set(_a.x, _a.y + span * headroomSpans - frameH * 0.5, _a.z);
       } else {
         box.getCenter(this._aim);
         this._aim.y = box.max.y - CROWN_DROP;
@@ -427,7 +500,7 @@ export class RosterPortraits {
       // Distance derived from the framing rather than guessed: at this FOV the
       // vertical extent of the frame at the aim point is exactly `frameH`.
       const dist = (frameH * 0.5) / Math.tan(THREE.MathUtils.degToRad(FOV) * 0.5);
-      this._camera.position.copy(this._aim).addScaledVector(DIR, dist);
+      this._camera.position.copy(this._aim).addScaledVector(dir, dist);
       this._camera.lookAt(this._aim);
       this._camera.updateProjectionMatrix();
       this._camera.updateMatrixWorld(true);
@@ -472,9 +545,11 @@ export class RosterPortraits {
       // extension resolves it by polling instead, which is slower but never
       // wrong. If it is missing entirely we simply draw and pay what we paid
       // before — a portrait is still not allowed to be a hard dependency.
+      _t1 = performance.now();
       if (typeof this.renderer.compileAsync === 'function') {
         await this.renderer.compileAsync(this._scene, this._camera).catch(() => {});
       }
+      _t2 = performance.now();
 
       // Transparent background.
       //
@@ -510,6 +585,15 @@ export class RosterPortraits {
       this.renderer.render(this._scene, this._camera);
       this.renderer.setRenderTarget(prevTarget);
       this.renderer.setClearColor(_clear, prevClearAlpha);
+
+      const _t3 = performance.now();
+      this.timings.push({
+        id,
+        setup: +(_t1 - _t0).toFixed(1),
+        compile: +(_t2 - _t1).toFixed(1),
+        draw: +(_t3 - _t2).toFixed(1),
+        total: +(_t3 - _t0).toFixed(1),
+      });
 
       this._slots.set(id, slot);
       this._dirty.add(slot);
@@ -648,7 +732,7 @@ export class RosterPortraits {
     const bones = robot?.parts?.byName;
     if (!bones) return null;
     const restored = [];
-    for (const [name, [rx, ry, rz]] of Object.entries(POSE)) {
+    for (const [name, [rx, ry, rz]] of Object.entries(this.tune?.pose ?? POSE)) {
       const bone = bones[name];
       if (!bone?.rotation) continue;
       const { x, y, z } = bone.rotation;

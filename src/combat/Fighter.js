@@ -67,14 +67,41 @@ export const STATE = {
 // each one, measured by sampling the clips through the real rig. A mismatch
 // here reads as skating and no amount of animation polish hides it.
 //   forward 2.75 -> loco.runFwd  (authored 2.69, ratio 1.02)
-//   back    0.55 -> loco.walkBack (authored 0.41, ratio 1.34, inside the band
-//                                  where playback scaling is invisible)
+//   back    2.00 -> loco.runBack (authored 2.03, ratio 0.99)
 //   crouch  0.32 -> loco.crouchWalk (authored 0.27, ratio 1.19)
+// Those ratios are against the NOMINAL constant. The body actually travels 0.8x
+// of it, because GROUND_FRICTION is applied to the velocity this branch just
+// set before the position integrates — measured, a held forward covers 2.20 m/s
+// and a held back 1.61. So every gait in this table is really striding about
+// 1.22-1.26x its own travel, and matching the new one to the constant the way
+// the others are matched keeps it in the same place as the forward run (1.26
+// against 1.22) rather than making it uniquely correct against a convention
+// nothing else follows.
 // Backward and crouch speeds were previously 2.25 and 1.25 against clips
 // authored for a fifth of that. Slowing them is also the correct fighting-game
 // choice — retreating should not outrun advancing.
+//
+// THERE WAS NO NEUTRAL GAME, and it was an asset gap rather than a tuning one.
+// Forward had two gaits and back had one, so back was pinned to the only clip
+// that existed for it: 2.75 against 0.55 meant a full-time retreat cancelled a
+// fifth of an advance, and opposed inputs from the round-start gap reached
+// contact in 101 ticks — 1.68 seconds — with the defender still 8 metres from
+// the wall it never got pushed into. Walking backwards was wired up and
+// verified, and bought nothing, which is why a verified input is not a working
+// neutral game.
+//
+// `loco.runBack` is the missing gait (see locomotion.js). Retreat now costs the
+// attacker 2.4x the time and costs the defender the whole arena: 2.75 against
+// 2.00 closes at 0.75 m/s, so the defender who never stops giving ground is
+// pinned against the back wall by the time contact happens. That is the trade
+// the neutral game is made of — ground for time — and it did not exist before.
+//
+// Back is deliberately NOT ramped from a walk into the retreat the way a real
+// run builds. Forward is not ramped either, and the asymmetry is the whole
+// defect; a break-in window on one side only would have re-created it in
+// miniature. Fine spacing is bought with tap length, which is symmetric.
 const WALK_FWD = 2.75;
-const WALK_BACK = 0.55;
+const WALK_BACK = 2.00;
 const CROUCH_WALK = 0.32;
 const DASH_SPEED = 7.4;
 const DASH_TICKS = 14;
@@ -1135,10 +1162,11 @@ export class Fighter {
       this.velocity.x = this.facing * (cmd.fwd ? WALK_FWD : -WALK_BACK);
       // Pick the clip whose authored stride matches the speed we actually drive
       // the body at, rather than always playing the walk. Measured authored
-      // ground speeds: walkFwd 0.46 m/s, walkBack 0.41, runFwd 2.69. Playing
-      // walkFwd at WALK_FWD made the fighter skate at six times its stride in
-      // every neutral-game frame; runFwd matches it to within 2%.
-      this.#play(cmd.fwd ? 'loco.runFwd' : 'loco.walkBack', 6, true);
+      // ground speeds: walkFwd 0.46 m/s, walkBack 0.41, runFwd 2.69, runBack
+      // 2.03. Playing walkFwd at WALK_FWD made the fighter skate at six times
+      // its stride in every neutral-game frame; each gait now matches the speed
+      // it is driven at to within 2%.
+      this.#play(cmd.fwd ? 'loco.runFwd' : 'loco.runBack', 6, true);
       return;
     }
     this.#idle();

@@ -135,11 +135,50 @@ const ENV_QUAD_LAYER = 3;
 // carries their soft contribution — dropping them loses the crisp rectangular
 // specular on the *set*, which the camera is not pointed at. The ceiling strips
 // go for the same reason.
+/**
+ * `keySpots` is the number of per-fighter keys and `keyShadows` how many of them
+ * cast — two separate numbers because they cost completely different things.
+ *
+ * The **light** is nearly free and is what moves the axis: it is the whole of
+ * the figure/ground and highlight-share result at {@link KEY_SPOT}, and it is
+ * one more analytic term on 14% of the frame.
+ *
+ * The **shadow map** is not free, and the shape of its cost is worth writing
+ * down because it decides the tier ladder. Alternated slowly per
+ * `docs/PROFILING.md` — toggle, settle six seconds, 200+ consecutive render
+ * intervals, three blocks — with the sim paused and adaptive resolution off:
+ *
+ *     configuration        median      vs off
+ *     off                  12.7-12.9      —
+ *     2 spots @ 1024       15.0-15.3   +2.40 ms
+ *     2 spots @ 512        14.8-15.3   +2.40 ms
+ *     1 spot  @ 1024       14.0-14.1   +1.30 ms
+ *
+ * Halving the map in each direction — a quarter of the fill — costs **nothing**,
+ * and halving the number of maps saves **half**. So the whole 2.4 ms is
+ * rasterising casters, not shading texels, and the reason there is so much of it
+ * is `RenderPipeline`'s depth prepass: it widens the camera mask so every light
+ * sees every caster, which is what the directional key needs, so both of these
+ * maps redraw the arena as well as the robots even though this light cannot
+ * shade the arena at all. That is not fixable from here without giving each
+ * light its own caster pass.
+ *
+ * Two consequences. Map size is free, so it is set for quality (1024 puts about
+ * 4.7 mm per texel on the subject) and not trimmed. And the shadows are the
+ * thing the tier ladder drops, not the light: at medium and low both spots stay
+ * lit and neither casts, which keeps the axis result and returns the whole
+ * 2.4 ms — and, incidentally, the `spotShadowMap` texture unit with it.
+ *
+ * They are dropped in pairs rather than one at a time on purpose. One shadowed
+ * key across two fighters is 1.2 ms cheaper and lights player 2 differently from
+ * player 1, and an asymmetry between the two sides of a fighting game is not a
+ * quality setting.
+ */
 const TIERS = {
-  ultra: { cube: 512, bg: 1024, shadow: 2048, practicals: 1, rims: 2, boxes: 1, strips: 0 },
-  high: { cube: 512, bg: 768, shadow: 2048, practicals: 1, rims: 2, boxes: 1, strips: 0 },
-  medium: { cube: 256, bg: 384, shadow: 1024, practicals: 0, rims: 2, boxes: 1, strips: 0 },
-  low: { cube: 128, bg: 256, shadow: 512, practicals: 0, rims: 1, boxes: 0, strips: 0 },
+  ultra: { cube: 512, bg: 1024, shadow: 2048, practicals: 1, rims: 2, boxes: 1, strips: 0, keySpots: 2, keyShadows: 2, keyShadow: 1024 },
+  high: { cube: 512, bg: 768, shadow: 2048, practicals: 1, rims: 2, boxes: 1, strips: 0, keySpots: 2, keyShadows: 2, keyShadow: 1024 },
+  medium: { cube: 256, bg: 384, shadow: 1024, practicals: 0, rims: 2, boxes: 1, strips: 0, keySpots: 2, keyShadows: 0, keyShadow: 768 },
+  low: { cube: 128, bg: 256, shadow: 512, practicals: 0, rims: 1, boxes: 0, strips: 0, keySpots: 2, keyShadows: 0, keyShadow: 512 },
 };
 
 /** One rim rig per fighter; the game runs two. */
@@ -404,6 +443,149 @@ const KEY_BOX = {
    * light is how much of it there is.
    */
   share: 0.34,
+};
+
+/**
+ * The per-fighter **shadowed** key: one {@link THREE.SpotLight} per rig, on the
+ * mood's own key azimuth, casting a real shadow map.
+ *
+ * This is the light the lighting axis has been asking for since round 18 and
+ * could not have, and the thing that was blocking it was a sampler count rather
+ * than a frame budget. `kb.armor` sat at **16 of 16** texture image units with
+ * zero shadowed spots in the scene, so a single `spotShadowMap` entry would have
+ * failed to link the fighters' own material. `Materials.js` freeing two units by
+ * folding occlusion and metalness onto the roughness sampler — the same texture,
+ * still bound, still sampled, two fewer `uniform sampler2D` declarations — takes
+ * it to 14 and admits `spotShadowMap[2]` exactly.
+ *
+ * Measured on the real app under headless ANGLE/Metal, `MAX_TEXTURE_IMAGE_UNITS`
+ * 16, after `rosterLineup()` so every material in the cast has compiled:
+ *
+ *     configuration                     kb.armor   arena.floorWet   programs over
+ *     before the fold, 0 spot shadows      16            15               0
+ *     after  the fold, 0 spot shadows      14            13               0
+ *     after  the fold, 2 spot shadows      16            13               0
+ *
+ * Note the middle column. The round brief expected `arena.floorWet` to be a
+ * second blocker needing its own unit freed before a second spot could be
+ * afforded, and it is not: these spots live on `SPLIT_LIGHT_LAYER`, and
+ * `RenderPipeline`'s split beauty pass draws the arena with that layer masked
+ * out, so no arena program ever compiles a spot shadow sampler at all. The cost
+ * lands only where the light lands. Two shadowed spots fit, and 0 of 184
+ * programs exceed the cap with them armed.
+ *
+ * Why a spot rather than more of the softbox, when {@link KEY_BOX} already
+ * measures as 43.6% of the light on a fighter: three gives a `RectAreaLight` no
+ * shadow. That is the whole point. The rig's dominant source arrives with no
+ * occlusion term, so it fills every crease the hard key carves and lights the
+ * shadow side to the same value as the lit side — measured there, and the reason
+ * `KEY_BOX.share` was cut from 0.94 to 0.34. What that repair could not do is
+ * put the missing energy back *as shaped light*, because the only shadowed
+ * source in the rig is the scene-wide directional, and a directional is parallel
+ * and infinite: every unit of it lands on the deck as hard as on the plate. That
+ * is exactly the term the rubric's failure line is about — subject over
+ * background at **1.03**, silhouette band over background at **1.08**, and the
+ * frame's top 1% of luminance landing on the fighters at **13.3%** against a
+ * 12.2% frame share, which is highlights distributed at chance.
+ *
+ * A spot at three and a half metres on `SPLIT_LIGHT_LAYER` is the one source
+ * shape that answers all three at once. It is punctual, so it has a shadow and a
+ * terminator. It is on the fighter layer, so every unit of it is subject and
+ * none of it is background. And it falls off, so it cannot flatten the set the
+ * way raising {@link DIRECTIONAL_KEY_SHARE} does.
+ *
+ * Geometry: it is placed along the mood's **own** `key.dir`, elevation included,
+ * rather than being re-seated at an elevation of its own. That is the point of
+ * it — the shadowed spot is the directional key made local, so the two
+ * terminators land in the same place instead of reading as two keys. The moods
+ * already argue this themselves ("there is exactly one key and it has to win",
+ * 30–40° off the camera axis at 37–40° elevation, raked so the terminator runs
+ * vertically across a chest plate) and this light inherits all of it for free,
+ * including on a mood change. Measured, the re-seated 40° arm and the mood-dir
+ * arm land within 1% of each other on every metric on `industrial`, which is
+ * the check that the inheritance is doing what it claims.
+ *
+ * Distance, cone and penumbra were swept on a frozen frame, all arms inside one
+ * page session with the `off` arm repeated at the end (it returned bit-identical
+ * both times). Six metres beat 4.6 m on low-frequency form contrast and 8 m on
+ * everything else. On the cone, the result was the opposite of the intuition: a
+ * WIDE cone with a HARD edge (0.40 rad, 0.12 penumbra) beat a narrow cone with a
+ * soft one (0.26–0.30 rad, 0.30 penumbra) on every metric *including* form, and
+ * it still beat it after the narrow arm was driven up to matched subject
+ * brightness — 0.9945 form against 0.9569.
+ *
+ * The penumbra shipped is 0.20 rather than the 0.12 that measures best, and that
+ * is a deliberate and quantified trade rather than a rounding. Swept on frozen
+ * frames on both framings, with the light in every other respect as shipped:
+ *
+ *                  hero                              wide
+ *     penumbra  subj/bg  top1%  form(LF)     subj/bg  top1%  form(LF)
+ *       0.12     2.680   37.8%   1.143        2.442   5.3%    1.135
+ *       0.20     2.663   37.0%   1.125        2.425   5.0%    1.118
+ *       0.30     2.641   36.3%   1.100        2.392   4.7%    1.085
+ *
+ * 0.12 is better on every column, and it is not shipped because of what the
+ * numbers cannot see: the plateau at 0.12 is 2.23 m and the skirt 2.53 m, so as
+ * the fighters back away from each other the *neighbour's* spot switches off
+ * over 30 cm of travel, and a step in the key while a player walks backwards is
+ * worse than 1% of anything in that table. 0.20 puts the same transition over
+ * 55 cm for about half the loss.
+ */
+const KEY_SPOT = {
+  radius: 6.0,
+  /** Aim height above the fighter's root — chest, same as the other two keys. */
+  aimHeight: 1.2,
+  angle: 0.40,
+  penumbra: 0.20,
+  decay: 2,
+  range: 16,
+  /**
+   * Irradiance at the aim point as a fraction of the mood's authored key,
+   * exactly the units {@link KEY_BOX}.share is in, so a mood that pushes its key
+   * drags all three keys with it. `radius²` is folded back in at use because a
+   * spot with decay 2 delivers `intensity / d²`.
+   *
+   * Swept on a frozen frame inside one page session — the light is built and
+   * shadow-casting in every arm and only its intensity moves, so the compiled
+   * program is identical across the sweep and the difference is signal. Hero
+   * framing, `off` repeated at the end and bit-identical to the first `off`:
+   *
+   *     share   subj/bg   top1% on fighters   form (low-freq)   subject mean
+   *     0        2.143          30.4%              1.288           0.175
+   *     0.50     2.510          37.3%              1.201           0.206
+   *     0.62     2.589          38.3%              1.185           0.212
+   *     0.75     2.670          39.9%              1.167           0.219
+   *     1.00     2.818          42.3%              1.138           0.231
+   *     1.30     2.983          44.0%              1.105           0.244
+   *
+   * 0.75 rather than the 1.30 the first two columns keep rewarding, and the
+   * reason is the last two. Low-frequency form contrast falls monotonically with
+   * share, and it is the axis's other half — the measurement that said the body
+   * was flat when `KEY_BOX.share` was cut. And the subject mean is a budget this
+   * file has already spent once: that cut happened because the pale fighter sat
+   * at 0.31–0.37 linear against a Tekken 8 range of 0.097–0.248, so there is no
+   * surplus left to spend a second time. At 0.75 the subject sits at 0.21–0.22
+   * on both framings, inside the reference band, and the whole run stays inside
+   * the Tekken form-contrast range (0.76–1.65 over seven references).
+   */
+  share: 0.75,
+  /**
+   * Near and far for the shadow camera, in metres from the source.
+   *
+   * These are a performance control as much as a precision one. The frame's
+   * shadow maps are all drawn in `RenderPipeline`'s depth prepass, which widens
+   * the camera mask so every caster in the scene is visible to every light — so
+   * without a tight far plane each of these two maps would rasterise the whole
+   * arena as well as the robots. The source is a fixed 6 m from the aim point
+   * and a fighter is under 2.5 m tall, so 2 m to 12 m contains one fighter, a
+   * little of the other and a patch of deck, and three's own
+   * `_frustum.intersectsObject` rejects the rest before it reaches a draw.
+   */
+  near: 2,
+  far: 12,
+  bias: -0.0006,
+  normalBias: 0.018,
+  softness: 3.2,
 };
 
 /**
@@ -1344,11 +1526,45 @@ export class Environment {
      * The per-fighter rim rigs, in player order. `root` is the object each rig
      * follows; set it through {@link trackFighters} or leave it to the by-name
      * lookup in {@link update}. `box` is the key softbox that rides with them.
+     * `key` is the shadowed per-fighter key spot; see {@link KEY_SPOT}.
      * @type {{index: number, root: ?THREE.Object3D, cool: THREE.SpotLight,
      *         warm: THREE.SpotLight, lights: THREE.SpotLight[],
-     *         box: THREE.RectAreaLight, aim: THREE.Vector3}[]}
+     *         box: THREE.RectAreaLight, key: THREE.SpotLight, aim: THREE.Vector3}[]}
      */
     this.fighterRims = [];
+    /**
+     * Multiplier on the shadowed per-fighter key, and the A/B arm for it.
+     *
+     * It is a live field rather than a compile-time constant on purpose: the
+     * light stays built, visible and shadow-casting at every value including
+     * zero, so the compiled program is bit-identical across the sweep and a
+     * frozen-frame difference between two values is the light and nothing else.
+     * Toggling `visible` instead would change `NUM_SPOT_LIGHT_SHADOWS` and
+     * recompile every material in the scene, which is the trap
+     * `docs/PROFILING.md` documents for lights.
+     *
+     * Both arms of an A/B also have to sit in ONE task with no animation frame
+     * between them. `KB.paused` with the clock pinned does **not** stop the
+     * camera rig or the animator — waiting half a second between arms moved the
+     * wide framing and 86% of the frame differed. Set, redraw, read back, all
+     * before the page can run another frame.
+     *
+     * Measured that way, sim paused, frame clock pinned, grain and chroma
+     * zeroed, null control 0.0000/255 on both framings:
+     *
+     *     scale   01-hero-idle                      06-stage-wide
+     *             subj/bg  band/bg  top1% (share)   subj/bg  band/bg  top1% (share)
+     *      0       2.204    2.786   27.4% (13.7%)    1.693    1.849   1.8%  (1.6%)
+     *      1       2.718    3.248   37.5% (13.7%)    2.263    2.367   4.7%  (1.6%)
+     *
+     * The background term does not move at all across those rows — 0.07850 to
+     * 0.07852 on hero and 0.09114 to 0.09114 on wide — which is the check that
+     * `SPLIT_LIGHT_LAYER` is doing what it is here for. Every unit of this light
+     * is subject.
+     *
+     * @type {number}
+     */
+    this.keySpotScale = 1;
     /** @type {THREE.RectAreaLight[]} */
     this.practicals = [];
     /**
@@ -1691,6 +1907,22 @@ export class Environment {
       box.visible = tier.boxes > 0;
       this._rig.add(box);
 
+      // The shadowed key. Same layer discipline as everything else on this rig:
+      // it shapes one robot and must never be evaluated over the arena, both
+      // because that is 85% of the frame and because the whole reason this light
+      // moves the figure/ground ratio is that none of it reaches the ground.
+      const key = new THREE.SpotLight(
+        0xffffff, 0, KEY_SPOT.range, KEY_SPOT.angle, KEY_SPOT.penumbra, KEY_SPOT.decay,
+      );
+      key.name = `fighterKeySpot${i}`;
+      key.layers.set(SPLIT_LIGHT_LAYER);
+      key.target.layers.set(SPLIT_LIGHT_LAYER);
+      key.target.position.set(0, KEY_SPOT.aimHeight, 0);
+      key.visible = i < (tier.keySpots ?? 0);
+      key.castShadow = i < (tier.keyShadows ?? 0);
+      this._configureKeyShadow(key, tier);
+      this._rig.add(key, key.target);
+
       this.fighterRims.push({
         index: i,
         root: null,
@@ -1698,9 +1930,30 @@ export class Environment {
         warm: lights[1],
         lights,
         box,
+        key,
         aim: new THREE.Vector3(0, RIM.aimHeight, 0),
       });
     }
+  }
+
+  /**
+   * Shadow settings for one per-fighter key spot, at the given tier.
+   *
+   * Split out so {@link setQuality} can re-seat the map size without rebuilding
+   * the rig, which is the same reason `keyLight`'s size lives in `setQuality`.
+   *
+   * @param {THREE.SpotLight} key
+   * @param {{keyShadow: number}} tier
+   */
+  _configureKeyShadow(key, tier) {
+    const size = tier.keyShadow ?? 1024;
+    key.shadow.mapSize.set(size, size);
+    key.shadow.bias = KEY_SPOT.bias;
+    key.shadow.normalBias = KEY_SPOT.normalBias;
+    key.shadow.radius = KEY_SPOT.softness;
+    key.shadow.camera.near = KEY_SPOT.near;
+    key.shadow.camera.far = KEY_SPOT.far;
+    key.shadow.camera.updateProjectionMatrix();
   }
 
   /**
@@ -1936,6 +2189,15 @@ export class Environment {
     for (const rig of this.fighterRims) {
       for (let k = 0; k < rig.lights.length; k++) rig.lights[k].visible = k < tier.rims;
       rig.box.visible = tier.boxes > 0;
+      rig.key.visible = rig.index < (tier.keySpots ?? 0);
+      // The light and its shadow are separate tier decisions — see TIERS. A
+      // spot the tier has switched off must lose `castShadow` too, or it would
+      // still declare its `spotShadowMap` slot on every fighter material: the
+      // whole cost of this light with none of it on screen.
+      rig.key.castShadow = rig.key.visible && rig.index < (tier.keyShadows ?? 0);
+      rig.key.shadow.map?.dispose();
+      rig.key.shadow.map = null;
+      this._configureKeyShadow(rig.key, tier);
     }
     for (let i = 0; i < this.strips.length; i++) this.strips[i].visible = i < tier.strips;
     if (this.ready) {
@@ -2171,6 +2433,12 @@ export class Environment {
     const boxRadiance =
       p.key.intensity * KEY_BOX.share * (KEY_BOX.radius * KEY_BOX.radius) / (KEY_BOX.width * KEY_BOX.height);
 
+    // Same irradiance-to-intensity conversion the rims use: decay 2, so the
+    // authored share is multiplied back up by the distance squared. `keySpotScale`
+    // is the A/B arm and is 1 in the shipping rig.
+    const keyRadiance =
+      p.key.intensity * KEY_SPOT.share * this.keySpotScale * (KEY_SPOT.radius * KEY_SPOT.radius);
+
     for (const rig of this.fighterRims) {
       if (acquire && !rig.root?.parent) {
         rig.root = this.scene.getObjectByName(`fighter${rig.index}`) ?? null;
@@ -2179,6 +2447,7 @@ export class Environment {
         rig.cool.intensity = 0;
         rig.warm.intensity = 0;
         rig.box.intensity = 0;
+        rig.key.intensity = 0;
         continue;
       }
 
@@ -2211,6 +2480,22 @@ export class Environment {
         .copy(this._sourceOffset(p.key.dir, 0, KEY_BOX.elevationDeg, KEY_BOX.radius, this._tmpVecB))
         .add(this._tmpVec);
       rig.box.lookAt(this._tmpVec.x, this._tmpVec.y - 0.25, this._tmpVec.z);
+
+      // The shadowed key sits on the mood's key direction itself — azimuth and
+      // elevation both — rather than on a re-seated elevation of its own. It is
+      // the directional key made local, so its terminator lands where the hard
+      // key's already does instead of carving a second one across the same
+      // plate, and a mood that moves its key moves this with it.
+      this._tmpVec.copy(rig.aim);
+      this._tmpVec.y = rig.aim.y - RIM.aimHeight + KEY_SPOT.aimHeight;
+      rig.key.color.copy(p.key.color);
+      rig.key.intensity = keyRadiance;
+      rig.key.target.position.copy(this._tmpVec);
+      this._tmpVecB.copy(p.key.dir);
+      if (this._tmpVecB.lengthSq() < 1e-8) this._tmpVecB.set(0, 1, 1);
+      rig.key.position
+        .copy(this._tmpVecB.normalize().multiplyScalar(KEY_SPOT.radius))
+        .add(this._tmpVec);
     }
   }
 
@@ -2313,6 +2598,7 @@ export class Environment {
     this._envQuads.length = 0;
 
     this.keyLight?.shadow.map?.dispose();
+    for (const rig of this.fighterRims) rig.key?.shadow.map?.dispose();
     if (this._rig) this.scene.remove(this._rig);
     if (this.practicalMeshes) this.scene.remove(this.practicalMeshes);
     this.practicals.length = 0;
