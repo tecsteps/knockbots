@@ -798,3 +798,34 @@ of round 17 cannot enter, and the noise floor is zero rather than 0.235.
    (Several agents were driving browsers on this machine, so read these as an upper bound on cost.)
    A third shadowed light is reachable in samplers and should be assumed unaffordable in milliseconds
    until someone measures it.
+
+---
+
+# The occluder sweep: the tool that would have found the pole 23 rounds earlier
+
+Built by the vault workstream while siting its own set. It rasterises every stage mesh against the
+fighters' **real projected footprints** across a sweep of **legal fight-camera poses**, and reports
+the fraction of the subject each mesh covers.
+
+It found four occluders in a brand-new arena, **three of which were invisible in every capture that
+had been taken of it** — they only appear in legal-but-unphotographed poses. That is precisely the
+class of defect the pit arena carried for twenty-three rounds: a black rigging leg through a
+fighter's torso, present in `06-stage-wide` and absent from `01-hero-idle`, found eventually by a
+critic who happened to be looking at the right frame.
+
+**Two corrections it needed before it generalised, both worth inheriting.** Triangles straddling the
+lens smear across the frame, so rejection has to happen in view space. And the subject must be the
+fighters' actual projected footprints, not a fixed screen box — otherwise a wall *beside* a cornered
+fighter is scored as an occluder.
+
+**Three findings that are really one rule.** A curve is not sited by its endpoints, it is sited by
+its extent: a cable authored as two clear anchors plus a 0.35 sag fraction dipped to y 0.55, nearly
+two metres below its lower anchor, putting 45.2% of its vertices inside the play volume. Two more
+pieces of set sat *inside* the ±9 play bound where a fighter could walk through them. And a tank
+wall grazed the lens at 0.2 m because `TANK_FRONT` was 9.4 while the fight camera reaches z 13 —
+**the room stopped before the camera did**, which is the same repair `StageStructure#outerShell`
+already documents.
+
+**Run this against the pit.** It is the highest-value unclaimed job on the stage axis: the pole is
+known, but nothing has ever swept that arena for the other three-quarters of the class, and by
+construction those defects are the ones no existing shot can see.
