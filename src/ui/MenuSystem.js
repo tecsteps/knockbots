@@ -179,6 +179,7 @@ const KEYBINDS = {
     ['Left Kick', 'N'],
     ['Right Kick', 'M'],
     ['Overdrive', 'U'],
+    ['Block', 'Q'],
   ],
   P2: [
     ['Move', 'Arrow Keys'],
@@ -187,6 +188,7 @@ const KEYBINDS = {
     ['Left Kick', 'V / Num 1'],
     ['Right Kick', 'B / Num 2'],
     ['Overdrive', 'T / Num 7'],
+    ['Block', 'R / Num 0'],
   ],
 };
 
@@ -358,6 +360,7 @@ export class MenuSystem {
     this.screens = {};
 
     this.#buildTitle();
+    this.#buildImprint();
     this.#buildSelect();
     this.#buildOptions();
     this.#buildPause();
@@ -439,6 +442,7 @@ export class MenuSystem {
 
   #handleEscape() {
     if (this.current === 'options') { this.show(this.pendingReturn); return; }
+    if (this.current === 'imprint') { this.show('title'); return; }
     if (this.current === 'pause') { this.#resume(); return; }
     if (this.current === 'select') { this.game.setPhase('menu'); return; }
     if (!this.current && PAUSABLE_PHASES.has(this.game.phase)) { this.#pause(); return; }
@@ -604,6 +608,7 @@ export class MenuSystem {
     trainBtn.appendChild(el('span', 'title-nav-note', 'STANDING DUMMY · NO CLOCK'));
     nav.appendChild(trainBtn);
     nav.appendChild(this.#addNavButton(items, 'OPTIONS', () => this.#openOptions('title')));
+    nav.appendChild(this.#addNavButton(items, 'IMPRINT', () => this.show('imprint')));
 
     const hint = el('div', 'title-hint', 'ENTER TO SELECT · ARROW KEYS TO NAVIGATE');
     const tag = el('div', 'build-tag', 'KNOCKBOTS');
@@ -615,6 +620,58 @@ export class MenuSystem {
       el: screen, nav: items, cols: 1,
       onShow: () => this.#warmRoster(),
     };
+  }
+
+  /** Legal notice kept as a first-class screen so it works in the game shell
+   * on desktop, touch devices, and the keyboard-only menu flow. */
+  #buildImprint() {
+    const screen = el('div', 'menu-screen');
+    const bg = el('div', 'menu-bg menu-bg--dim');
+    const wrap = el('div', 'imprint-wrap');
+    const panel = el('main', 'imprint-panel');
+    panel.setAttribute('aria-labelledby', 'imprint-title');
+
+    const title = el('h1', 'imprint-title', 'IMPRINT');
+    title.id = 'imprint-title';
+    const updated = el('p', 'imprint-updated', 'Company information · June 2026');
+
+    const company = el('section', 'imprint-section');
+    company.append(
+      el('h2', null, 'Company information (§ 5 DDG)'),
+      el('p', null, 'Information pursuant to § 5 DDG (Digitale-Dienste-Gesetz). Knockbots is a service of:'),
+      el('p', 'imprint-address', 'Tecsteps GmbH\nBreitscheidstr. 42\n16321 Bernau bei Berlin\nGermany'),
+      el('p', null, 'Represented by the Managing Director: Fabian Wesner.'),
+    );
+
+    const contact = el('section', 'imprint-section');
+    const contactLine = el('p');
+    contactLine.append('Email: ');
+    const email = document.createElement('a');
+    email.href = 'mailto:fabian.wesner@tecsteps.com';
+    email.textContent = 'fabian.wesner@tecsteps.com';
+    contactLine.appendChild(email);
+    contact.append(el('h2', null, 'Contact'), contactLine);
+
+    const register = el('section', 'imprint-section');
+    register.append(el('h2', null, 'Commercial register'), el('p', null, 'Amtsgericht Frankfurt (Oder), HRB 18540.'));
+
+    const vat = el('section', 'imprint-section');
+    vat.append(el('h2', null, 'VAT identification number'), el('p', null, 'DE341723281'));
+
+    const dispute = el('section', 'imprint-section');
+    dispute.append(
+      el('h2', null, 'Consumer dispute resolution'),
+      el('p', null, 'Pursuant to § 36 VSBG (Verbraucherstreitbeilegungsgesetz): we are neither willing nor obliged to participate in dispute resolution proceedings before a consumer arbitration board.'),
+    );
+
+    const items = [];
+    const actions = el('div', 'imprint-actions');
+    actions.appendChild(this.#addNavButton(items, 'BACK TO TITLE', () => this.show('title')));
+    panel.append(title, updated, company, contact, register, vat, dispute, actions);
+    wrap.appendChild(panel);
+    screen.append(bg, wrap);
+    this.root.appendChild(screen);
+    this.screens.imprint = { el: screen, nav: items, cols: 1 };
   }
 
   /**

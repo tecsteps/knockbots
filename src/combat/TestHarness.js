@@ -143,6 +143,65 @@ export function makeTestHarness(game) {
     fighter.fastForward(Math.max(0, move.startup - lead));
   }
 
+  /**
+   * A `Command` with exactly the fields `Input#commandsFor` publishes, for the
+   * probes that DRIVE the fighter rather than force its state. Shared, so the
+   * three of them cannot drift apart on what a keypress looks like.
+   *
+   * `dir` is a notation direction token ('', 'f', 'b', 'u', 'df', 'ub', ...)
+   * and is already facing-relative, the way `Input` hands it over.
+   *
+   * @param {string} dir
+   * @param {number[]} [buttons]
+   * @param {boolean} [guard]
+   * @param {?string} [motion]
+   * @returns {Object}
+   */
+  function mkCmd(dir = '', buttons = [], guard = false, motion = null) {
+    const x = dir === 'f' || dir === 'df' || dir === 'uf' ? 1
+      : dir === 'b' || dir === 'db' || dir === 'ub' ? -1 : 0;
+    const y = dir === 'u' || dir === 'uf' || dir === 'ub' ? 1
+      : dir === 'd' || dir === 'df' || dir === 'db' ? -1 : 0;
+    return {
+      x, y, fwd: x > 0, back: x < 0, up: y > 0, down: y < 0,
+      guard, touchGuard: false,
+      held: new Set(buttons), pressed: new Set(buttons),
+      notation: '', buffer: [], motion,
+    };
+  }
+
+  /**
+   * Put `a` into a NEUTRAL JUMP and hold it near the top of the arc, with the
+   * pair still `dist` apart horizontally.
+   *
+   * An air-only move cannot be probed from the ground. `probeMoves` forces the
+   * move with `startMove`, which does not consult `canUse` — so a `requireAir`
+   * move starts happily while the fighter is standing, and everything about the
+   * measurement is then wrong: the striking foot is a metre and a half below
+   * where it will ever be in play, and the answer the probe returns is about a
+   * pose no player can produce. `airKick` was being scored that way.
+   *
+   * @returns {boolean} whether the fighter actually left the ground
+   */
+  function stageAir(a, d, dist, hold = 10) {
+    for (let t = 0; t < 30 && !a.airborne; t++) { a.simulate(mkCmd('u')); d.simulate(null); }
+    if (!a.airborne) return false;
+    for (let t = 0; t < hold; t++) { a.simulate(mkCmd()); d.simulate(null); }
+    if (!a.airborne) return false;
+    // Re-pin the horizontal spacing without touching Y — `stage` would drop the
+    // fighter back to the floor and undo the jump.
+    const sign = a.index === 0 ? -1 : 1;
+    a.position.x = sign * dist * 0.5;
+    a.position.z = 0;
+    d.position.x = -sign * dist * 0.5;
+    d.position.z = 0;
+    a.prevPosition.x = a.position.x;
+    a.prevPosition.z = a.position.z;
+    a.velocity.x = 0;
+    a.velocity.z = 0;
+    return true;
+  }
+
   function hideLineup() {
     if (!lineup) return;
     for (const e of lineup) {
@@ -488,6 +547,8 @@ export function makeTestHarness(game) {
       const set = MOVES[o.moveSet || a.moveSetKey] || MOVES.standard;
       const dists = o.dists || [0.9, 1.02, 1.2, 1.5];
       const rows = [];
+      const notStarted = new Set();
+      const noAir = new Set();
       let landed = 0;
       let attempts = 0;
 
@@ -511,10 +572,24 @@ export function makeTestHarness(game) {
           if (!move.active?.length || move.props?.throw) continue;
           let hits = 0;
           let aim = 0;
+          // Which distances connected, in the order given. A total is not enough
+          // to separate a defect from correct short reach: a jab that misses at
+          // 1.5 m is right, and a kick that misses at 0.9 m is the bug the
+          // player reported. Only the leading distances are diagnostic.
+          const at = [];
           for (const dist of dists) {
             stage(a, d, dist);
             d.health = MAX_HEALTH * 100;
             a.health = MAX_HEALTH * 100;
+            // Meter, every attempt. `Fighter#startMove` RETURNS EARLY when the
+            // move costs more meter than the fighter holds, so without this the
+            // probe scores a move that never ran as a whiff — silently, because
+            // a move that does not start emits no event at all. `overdrive`
+            // costs METER_MAX, and this probe read it as 1/4 for exactly that
+            // reason: meter accumulated from the moves probed before it, the
+            // super fired once at the first distance, spent all of it, and
+            // whiffed the other three by never existing.
+            a.meter = METER_MAX;
             a.animYaw = 0;
             a.aimYaw = 0;
             // Settle both bodies on the idle clip first, so the probe measures
@@ -525,9 +600,15 @@ export function makeTestHarness(game) {
             stage(a, d, dist);
             a.animYaw = 0;
             a.aimYaw = 0;
+            // An air-only move is probed from the air, because that is the only
+            // place a player can ever press it.
+            if (move.props?.requireAir && !stageAir(a, d, dist)) noAir.add(id);
 
             struck = false;
             a.startMove(move);
+            // A move that refused to start is not a whiff, and reporting it as
+            // one is how `overdrive` hid for three rounds. Say so out loud.
+            if (a.currentMove !== move) notStarted.add(id);
             a.animator?.play(move.clip, { blend: 0, loop: false, retime: retimeFor(move) });
             for (let t = 0; t < move.total + 4 && !struck; t++) {
               a.simulate(null);
@@ -536,9 +617,10 @@ export function makeTestHarness(game) {
               game.combat.simulate(game.tick + t);
             }
             attempts++;
+            at.push(struck ? 1 : 0);
             if (struck) { hits++; landed++; }
           }
-          rows.push({ id, clip: move.clip, hits, aim: Math.round(aim) });
+          rows.push({ id, clip: move.clip, hits, at, aim: Math.round(aim) });
         }
       } finally {
         for (const [move, bias] of saved) move.aimBias = bias;
@@ -547,9 +629,13 @@ export function makeTestHarness(game) {
       }
 
       const dead = rows.filter((r) => r.hits === 0).map((r) => `${r.id} (${r.clip})`);
+      // A miss at the CLOSEST staged distance is the player-visible defect;
+      // anything that only drops off at range is reach, which is a balance
+      // question and not a bug. Reported separately so the two never get mixed.
+      const nearMiss = rows.filter((r) => r.at[0] === 0).map((r) => `${r.id} (${r.clip}) ${r.at.join('')}`);
       return {
         total: attempts, connected: landed, rate: landed / Math.max(1, attempts),
-        dead, rows,
+        dead, nearMiss, notStarted: [...notStarted], noAir: [...noAir], dists, rows,
       };
     },
 
@@ -598,14 +684,19 @@ export function makeTestHarness(game) {
       stage(a, d, dist);
       d.health = MAX_HEALTH * 100;
       a.health = MAX_HEALTH * 100;
+      // See `probeMoves`: without meter, a meter-gated move never starts and
+      // the trace records a hundred ticks of a fighter standing still.
+      a.meter = METER_MAX;
       a.animYaw = 0; a.aimYaw = 0;
       a.animator?.play('idle.fight', { blend: 0, loop: true });
       d.animator?.play('idle.fight', { blend: 0, loop: true });
       for (let i = 0; i < 8; i++) { a.simulate(null); d.simulate(null); }
       stage(a, d, dist);
       a.animYaw = 0; a.aimYaw = 0;
+      const air = !!move.props?.requireAir && stageAir(a, d, dist);
 
       let struck = null;
+      let started = false;
       // Where every bone this move strikes with actually IS, on every tick of
       // the move, whether or not a hitbox exists that tick. Without this a trace
       // can only say the active window missed; with it you can see whether the
@@ -618,6 +709,7 @@ export function makeTestHarness(game) {
       ];
       try {
         a.startMove(move);
+        started = a.currentMove === move;
         a.animator?.play(move.clip, { blend: 0, loop: false, retime: retimeFor(move) });
         const sweptBones = [...new Set(move.active.flatMap((w) => w.boxes.map((b) => b.bone)))];
         for (let t = 0; t < move.total + 4; t++) {
@@ -689,7 +781,7 @@ export function makeTestHarness(game) {
         this.resetFight();
       }
       const result = {
-        move: `${move.id} (${move.clip})`, dist, struck, contact: o.contact,
+        move: `${move.id} (${move.clip})`, dist, struck, started, air, contact: o.contact,
         startup: move.startup, active: move.active.map((w) => [w.from, w.to]),
         retime: retimeFor(move),
         aimDeg: Math.round(strikeAim(move) * 180 / Math.PI), ticks, swept,
@@ -727,21 +819,6 @@ export function makeTestHarness(game) {
       const set = MOVES[setKey] || MOVES.standard;
       const hold = o.ticks ?? 60;
 
-      /** A Command with exactly the fields `Input#commandsFor` publishes. */
-      const command = (dir, buttons = [], guard = false, motion = null) => {
-        const x = dir === 'f' || dir === 'df' || dir === 'uf' ? 1
-          : dir === 'b' || dir === 'db' || dir === 'ub' ? -1 : 0;
-        const y = dir === 'u' || dir === 'uf' || dir === 'ub' ? 1
-          : dir === 'd' || dir === 'df' || dir === 'db' ? -1 : 0;
-        const pressed = new Set(buttons);
-        return {
-          x, y, fwd: x > 0, back: x < 0, up: y > 0, down: y < 0,
-          guard, touchGuard: false,
-          held: new Set(buttons), pressed,
-          notation: '', buffer: [], motion,
-        };
-      };
-
       const neutral = () => {
         stage(a, d, 2.4);
         a.animator?.play('idle.fight', { blend: 0, loop: true });
@@ -751,12 +828,12 @@ export function makeTestHarness(game) {
       // --- held directions ---------------------------------------------------
       const walks = [];
       for (const [label, cmd] of [
-        ['neutral', () => command('')],
-        ['fwd', () => command('f')],
-        ['back', () => command('b')],
-        ['guard', () => command('', [], true)],
-        ['back+guard', () => command('b', [], true)],
-        ['down+guard', () => command('d', [], true)],
+        ['neutral', () => mkCmd('')],
+        ['fwd', () => mkCmd('f')],
+        ['back', () => mkCmd('b')],
+        ['guard', () => mkCmd('', [], true)],
+        ['back+guard', () => mkCmd('b', [], true)],
+        ['down+guard', () => mkCmd('d', [], true)],
       ]) {
         neutral();
         const x0 = a.position.x;
@@ -769,6 +846,34 @@ export function makeTestHarness(game) {
           state: a.state,
         });
       }
+
+      // --- opposed spacing ---------------------------------------------------
+      // The number that decides whether a neutral game exists: one fighter holds
+      // forward, the other holds back, from the round-start gap. A displacement
+      // per fighter says only that the clip is wired up; the CLOSING RATE says
+      // whether retreating is a decision or a formality.
+      const spacing = (() => {
+        stage(a, d, 3.8);
+        a.animator?.play('idle.fight', { blend: 0, loop: true });
+        d.animator?.play('idle.fight', { blend: 0, loop: true });
+        for (let i = 0; i < 6; i++) { a.simulate(null); d.simulate(null); }
+        const gap0 = Math.abs(d.position.x - a.position.x);
+        const touch = a.radius + d.radius;
+        let ticks = -1;
+        for (let t = 0; t < 240; t++) {
+          a.simulate(mkCmd('f'));
+          d.simulate(mkCmd('b'));
+          game.combat.simulate(game.tick + t);
+          if (ticks < 0 && Math.abs(d.position.x - a.position.x) <= touch + 0.01) ticks = t + 1;
+        }
+        const gap1 = Math.abs(d.position.x - a.position.x);
+        return {
+          gap0: +gap0.toFixed(2), gap1: +gap1.toFixed(2), touch: +touch.toFixed(2),
+          ticksToContact: ticks, secondsToContact: ticks < 0 ? null : +(ticks / 60).toFixed(2),
+          closeRate: +(((gap0 - gap1) / (240 / 60))).toFixed(2),
+          defenderPinned: Math.abs(d.position.x) >= d.bounds.halfWidth - d.radius - 0.02,
+        };
+      })();
 
       // --- the command columns ----------------------------------------------
       // A press is one tick of the button with the direction already held, which
@@ -794,16 +899,16 @@ export function makeTestHarness(game) {
           // Airborne moves are entered from a jump, which is what they are for.
           const air = !!mv.props.requireAir;
           if (air) {
-            for (let t = 0; t < 24 && !a.airborne; t++) { a.simulate(command('u')); d.simulate(null); }
-            for (let t = 0; t < 6; t++) { a.simulate(command('')); d.simulate(null); }
+            for (let t = 0; t < 24 && !a.airborne; t++) { a.simulate(mkCmd('u')); d.simulate(null); }
+            for (let t = 0; t < 6; t++) { a.simulate(mkCmd('')); d.simulate(null); }
           }
           // Hold the direction for a few ticks first so a held-direction move is
           // entered the way a player enters it rather than as a same-frame stab.
-          for (let t = 0; t < 4; t++) { a.simulate(command(p.dir, [], false, p.motion)); d.simulate(null); }
-          a.simulate(command(p.dir, p.buttons, false, p.motion));
+          for (let t = 0; t < 4; t++) { a.simulate(mkCmd(p.dir, [], false, p.motion)); d.simulate(null); }
+          a.simulate(mkCmd(p.dir, p.buttons, false, p.motion));
           d.simulate(null);
           for (let t = 0; t < 3 && !a.currentMove; t++) {
-            a.simulate(command(p.dir, [], false, p.motion));
+            a.simulate(mkCmd(p.dir, [], false, p.motion));
             d.simulate(null);
           }
           column.push({ input: mv.input, want: mv.id, got: a.currentMove?.id ?? null, air, airborne: !!a.airborne });
@@ -816,9 +921,111 @@ export function makeTestHarness(game) {
       const missed = column.filter((c) => c.got !== c.want);
       const backCol = column.filter((c) => c.input.startsWith('b+'));
       return {
-        moveSet: setKey, walks,
+        moveSet: setKey, walks, spacing,
         column: { total: column.length, matched: column.length - missed.length, missed },
         backColumn: backCol,
+      };
+    },
+
+    /**
+     * Press-to-hit, end to end: type a move's own notation on a Command and
+     * report whether a `hit` came out the other side.
+     *
+     * `probeInputs` proves a keypress starts the right move. `probeMoves` proves
+     * a move connects once `startMove` has been called on it. Neither proves the
+     * thing the player actually reported — "n and m make him kick but I never
+     * hit the opponent" — because the two halves are measured on different
+     * fighters in different states, and `startMove` bypasses `canUse` entirely.
+     * This runs the whole path once: neutral, hold the direction, press the
+     * button, and let the move play out against a live defender.
+     *
+     * The distance is recorded AT THE PRESS, not as staged, because holding a
+     * direction for the entry walks the fighter — a `b+` move is entered while
+     * retreating and genuinely starts further out than it was staged. That is
+     * real play, and a reach number taken from the staged value would be a lie.
+     *
+     * @param {{moveSet?:string, dists?:number[], attacker?:number}} o
+     */
+    probePlay(o = {}) {
+      const a = fighters()[o.attacker ?? 0];
+      const d = fighters()[1 - (o.attacker ?? 0)];
+      const setKey = o.moveSet || a.moveSetKey;
+      const set = MOVES[setKey] || MOVES.standard;
+      const dists = o.dists || [0.9, 1.02, 1.2, 1.5];
+
+      let struck = false;
+      const off = [bus.on('hit', () => { struck = true; }), bus.on('block', () => { struck = true; })];
+      const wasSetKey = a.moveSetKey;
+      const rows = [];
+
+      try {
+        a.moveSetKey = setKey;
+        for (const mv of set.__ordered) {
+          if (mv.followUp || !mv.active?.length || mv.props?.throw) continue;
+          const p = mv.parsed;
+          if (!p.buttons.length) continue;
+          const at = [];
+          const gotIds = new Set();
+          const pressDist = [];
+          for (const dist of dists) {
+            stage(a, d, dist);
+            d.health = MAX_HEALTH * 100;
+            a.health = MAX_HEALTH * 100;
+            a.meter = METER_MAX;
+            a.animator?.play('idle.fight', { blend: 0, loop: true });
+            d.animator?.play('idle.fight', { blend: 0, loop: true });
+            for (let i = 0; i < 8; i++) { a.simulate(null); d.simulate(null); }
+            stage(a, d, dist);
+            if (mv.props.requireAir) stageAir(a, d, dist);
+
+            // Hold the direction the way a human does, then one tick of button.
+            //
+            // A MOTION IS NOT A HELD DIRECTION and must not be pre-held. `bb+1`
+            // is a double tap with the button on the second one; presenting
+            // `motion:'bb'` for four ticks before the press fires a full
+            // backdash first and the move then starts from wherever that dash
+            // ended. Measured: it put `phaseStep` at 1.53 m when it was staged
+            // at 0.90, and the probe called a move dead that a player can land.
+            // The direction is still held for a plain `b+`/`f+` move, which is
+            // exactly how those are entered.
+            if (!p.motion) {
+              for (let t = 0; t < 4; t++) { a.simulate(mkCmd(p.dir, [], false, null)); d.simulate(null); }
+            }
+            pressDist.push(+Math.abs(d.position.x - a.position.x).toFixed(2));
+            struck = false;
+            a.simulate(mkCmd(p.dir, p.buttons, false, p.motion));
+            d.simulate(null);
+            game.combat.simulate(game.tick);
+            // Let it play out. The move may not have started on the press tick,
+            // so the budget is the move plus the buffer window that feeds it.
+            for (let t = 1; t < mv.total + 12 && !struck; t++) {
+              // Motion dropped after the press: a live `bb` through the whole
+              // move would keep re-offering a dash to every cancel window.
+              a.simulate(mkCmd(p.dir, [], false, null));
+              d.simulate(null);
+              if (a.currentMove) gotIds.add(a.currentMove.id);
+              game.combat.simulate(game.tick + t);
+            }
+            at.push(struck ? 1 : 0);
+          }
+          rows.push({
+            id: mv.id, input: mv.input, at, hits: at.reduce((n, v) => n + v, 0),
+            got: [...gotIds], pressDist,
+          });
+        }
+      } finally {
+        a.moveSetKey = wasSetKey;
+        for (const fn of off) fn?.();
+        this.resetFight();
+      }
+
+      const total = rows.length * dists.length;
+      const connected = rows.reduce((n, r) => n + r.hits, 0);
+      return {
+        moveSet: setKey, dists, total, connected,
+        dead: rows.filter((r) => r.hits === 0).map((r) => `${r.id} [${r.input}] got=${r.got.join(',') || 'nothing'}`),
+        nearMiss: rows.filter((r) => r.at[0] === 0 && r.hits > 0).map((r) => `${r.id} [${r.input}] ${r.at.join('')}`),
+        rows,
       };
     },
 

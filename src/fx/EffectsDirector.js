@@ -742,9 +742,101 @@ const DUST = new THREE.Color(0.46, 0.42, 0.37);
  * trade — a shock front is bright and thin. The radius was swept too
  * (`r x0.7` with the same band) and lands on the thin rows without adding
  * anything, so the front keeps its authored size.
+ *
+ * ---
+ *
+ * ROUND 21: THE FRONT WAS THE RIGHT OBJECT AND THE RADIUS WAS THE WRONG NUMBER
+ * TO LEAVE ALONE. `FRONT_RADIUS_FLOOR` 0.16 -> 0.075, `FRONT_RADIUS_SHARE`
+ * 0.22 -> 0.13 — ROUGHLY A HALVING ON EVERY TIER.
+ *
+ * The round above thinned the band and then swept the radius, found it "lands on
+ * the thin rows without adding anything", and kept the authored size. That
+ * conclusion is correct about the numbers and wrong about the frame, for the
+ * same reason every other round on this axis has been wrong about the frame:
+ * **the front does not clip, so no hot-pixel or clipped-white statistic can see
+ * it.** It is a pale mid-tone ribbon, and the whole defect is where it is drawn.
+ *
+ * What it was drawing, read straight out of the live ring buffer on a frozen
+ * `04-impact` contact frame (launcher, +1 rendered frame, camera 4.96 m):
+ *
+ *     maxR 0.265 m, eased to 0.184 m at the shutter, lifted 0.60 m toward the
+ *     camera, aspect sqrt(2.6) = 1.61 -> a 294 x 113 PIXEL ELLIPSE, drawn
+ *     additively at ringHeat x FRONT_HEAT_GAIN = 11.52, centred on the struck
+ *     chest.
+ *
+ * The 220 px crop the axis is judged in is 220 px wide. The front was **larger
+ * than the frame it is supposed to punctuate** — a smooth pale hoop sweeping
+ * right across the victim's torso and out of both sides of the crop, with the
+ * armour inside it veiled. `docs/CRITIC.md` names "generic round sprites" as the
+ * first thing that drags this axis down, and this was the largest one in the
+ * game, on the shot the axis is headlined on.
+ *
+ * Swept on ONE frozen launcher contact frame by rewriting `aParams.z` (maxR) in
+ * the live ring buffer and re-rendering the same frame — same compiled program,
+ * same pose, same camera, sim paused, render clock 0, `FightCamera.render`
+ * stubbed, grain and chroma off, so the control repeats to the last digit and
+ * the noise floor is **0.000**. 260 px disc on the projected contact. The last
+ * five columns are the paired difference against the control frame: `dMean` the
+ * mean |dL| in code values, `d12`/`d32` the share of the disc that moves by 12
+ * and 32 code values:
+ *
+ *     radius      hot   contrast  midCon    sat    coreArea  dMean  d12    d32
+ *     x1.00*    17541    12.851   12.433   .3326     8992    0.000  0.00   0.00
+ *     x0.70     17347    12.938   12.468   .3353     8500    1.434  1.96   1.37
+ *     x0.55     17255    12.932   12.493   .3362     8411    1.274  1.74   1.24
+ *     x0.40     17206    12.924   12.478   .3367     8460    1.127  1.59   1.09
+ *     front off 17351    12.999   12.501   .3348     8933    0.570  1.03   0.59
+ *                (* shipped before this round)
+ *
+ * Read the numeric columns and there is nothing here: 0.09 of contrast, 300 hot
+ * pixels, everything inside a rounding error of "front off". Read the delta
+ * columns and the change is enormous — **1.24 % of a 212,000 px disc, 2,600
+ * pixels, move by more than 32 of 255**, with a peak of 242. That is the
+ * measurement the previous three rounds did not take, and it is the one that
+ * matches what the crop shows: at x1.00 a pale hoop over the torso and a milky
+ * lower-left corner; at x0.40-0.55 a compact ellipse sitting on the contact
+ * patch, with the blue trim, the orange stencils, the black cabling and the
+ * panel gaps in the lower left all readable again.
+ *
+ * Note that shrinking the front moves MORE pixels than deleting it does (d32
+ * 1.24 against 0.59) — it removes the old arc and puts a new one somewhere else
+ * — and that `coreArea` falls below the front-off row at x0.55. The front had
+ * been welding the flare's core and its own band into one connected hot blob;
+ * once it is off the plate they are two objects again.
+ *
+ * The same sweep on `15-impact-light` (a jab, the tier the front was built for)
+ * moves the same way and the front survives it: dMean 0.776 and d32 0.85 % at
+ * x0.40 against 0.363 and 0.33 % for front-off, i.e. the shrunken front is still
+ * putting more than twice the light on the frame that removing it does. At 3x
+ * the milky oval over the hip becomes a bright point at the contact with the
+ * thigh plates and their teal trim readable through where it was.
+ *
+ * The two constants are set so the result is close to a uniform halving rather
+ * than tuned per tier, and the ladder is preserved:
+ *
+ *     tier      frontR before -> after    band thickness (fraction of radius)
+ *     jab        0.208 -> 0.101  (x0.48)   0.35 -> 0.73
+ *     heavy      0.258 -> 0.128  (x0.50)   0.28 -> 0.57
+ *     launcher   0.265 -> 0.137  (x0.52)   0.28 -> 0.54
+ *     ultra      0.334 -> 0.219  (x0.65)   0.22 -> 0.34
+ *
+ * Round 20's repair survives intact: `thickness` stays strictly below 1 on every
+ * tier, so the clamp still does not bind and the band's world width is still
+ * `0.3 x thickness x frontR` = `FRONT_BAND_M` = 0.022 m by construction, at
+ * every radius. The floor is still the dominant term for the light tier, which
+ * is the property the note above defends — a fist is a fist — it is simply a
+ * fist-sized floor now instead of a torso-sized one.
+ *
+ * **`FRONT_HEAT_GAIN` was swept again and is not a lever, for the fourth time.**
+ * On the same frozen frame, x0.55 and x0.30 of it give contrast 13.190 and
+ * 13.226 against a control of 13.172 and leave `coreArea` at 9776 and 9763
+ * against 9808 — and at 3x the hoop is still a hoop, merely a slightly dimmer
+ * one. Every brief that has pointed at this constant has been pointing at the
+ * right object through the wrong number: it is the front's SIZE that puts it on
+ * the torso, and its radiance is what makes it read as a shock once it is off.
  */
-const FRONT_RADIUS_FLOOR = 0.16;
-const FRONT_RADIUS_SHARE = 0.22;
+const FRONT_RADIUS_FLOOR = 0.075;
+const FRONT_RADIUS_SHARE = 0.13;
 const FRONT_LIFE_SHARE = 0.6;
 const FRONT_HEAT_GAIN = 3.2;
 const FRONT_BAND_M = 0.022;

@@ -45,6 +45,14 @@ const MOVE_KEYS = [
   { code: 'KeyD', us: 'D', row: 1, col: 2 },
 ];
 
+// Guard sits beside the movement cluster rather than with the limb buttons:
+// it is held like a direction, and its physical Q position makes that clear at
+// a glance. `tag` annotates the cap while `listTag` keeps the compact key list
+// below it in the same "Q  BLOCK" form as the attack legend.
+const GUARD_KEYS = [
+  { code: 'KeyQ', us: 'Q', row: 0, col: 0, tag: 'BLOCK', listTag: 'Q', label: 'Block' },
+];
+
 const ATTACK_KEYS = [
   { code: 'KeyU', us: 'U', row: 0, col: 1, tag: 'OD', label: 'Overdrive' },
   { code: 'KeyJ', us: 'J', row: 1, col: 0, tag: '1', label: 'Left punch' },
@@ -139,7 +147,7 @@ export function renderControlLegend(doc, scheme = detectScheme()) {
   // keyboard still needs it, and it is the only scheme that currently works.
   grid.className = 'keymap';
   grid.replaceChildren(
-    cluster(doc, 'Move', MOVE_KEYS, null),
+    cluster(doc, 'Move', [...GUARD_KEYS, ...MOVE_KEYS], GUARD_KEYS),
     cluster(doc, 'Attack', ATTACK_KEYS, ATTACK_KEYS),
   );
 
@@ -152,7 +160,7 @@ export function renderControlLegend(doc, scheme = detectScheme()) {
   root.hidden = false;
 
   // Upgrade the caps to the user's real layout once the API answers.
-  resolveKeyLabels([...MOVE_KEYS, ...ATTACK_KEYS].map((k) => k.code)).then((labels) => {
+  resolveKeyLabels([...GUARD_KEYS, ...MOVE_KEYS, ...ATTACK_KEYS].map((k) => k.code)).then((labels) => {
     if (!labels.size) return;
     for (const el of grid.querySelectorAll('kbd[data-code]')) {
       const l = labels.get(el.dataset.code);
@@ -220,7 +228,7 @@ function cluster(doc, heading, keys, withLabels) {
     for (const k of withLabels) {
       const li = doc.createElement('span');
       li.className = 'kc-li';
-      li.innerHTML = `<b>${k.tag}</b>${k.label}`;
+      li.innerHTML = `<b>${k.listTag || k.tag}</b>${k.label}`;
       list.appendChild(li);
     }
     wrap.appendChild(list);

@@ -162,6 +162,33 @@ const FIGHTER_RIG_COUNT = 2;
  * skirt around it, so an outstretched arm is still inside the light while the
  * ramp does the work of keeping the far half of the body out of it.
  */
+/**
+ * **Do not try to make these graze. It was tried and it is worse.**
+ *
+ * Zeroing both spots on a frozen frame and differencing shows where the pass
+ * actually lands, and it is not an edge: it is a cyan-and-magenta wash across
+ * the front-facing shield disc, the plastron and the thighs, brightest on the
+ * broadest plates. The obvious reading is that ±34° off directly-behind is too
+ * far round to graze, so the fix is to push the sources behind the fighter and
+ * drop them toward the horizon. Measured, in one session, sources re-placed
+ * relative to the *camera*'s view axis at a fixed irradiance (radius² folded in
+ * so each arm delivers the same power at the subject):
+ *
+ *     placement                          sil/halo   sil/body   top1% on fighters
+ *     shipped (±34°, 20°, 3.2 m)           1.07       1.50          13.7%
+ *     ±25° off back, 10°, 4.6 m            1.01       1.35          12.5%
+ *     ±15° off back,  6°, 4.6 m            1.00       1.36          13.7%
+ *      ±8° off back,  4°, 5.2 m            1.02       1.31          12.0%
+ *
+ * Every grazing arm is worse on every metric. The intuition is borrowed from
+ * organic subjects and does not transfer: a body with a smooth silhouette has
+ * near-tangent surface at its outline, and a rim source behind it catches that
+ * tangent. A robot's outline is made of flat plate *edges* facing arbitrary
+ * directions, so moving the source behind the fighter turns it away from the
+ * outline at the same rate it turns it away from everything else — and it loses
+ * the three-quarter plates that were at least carrying hue. The ±34° placement
+ * below is a local optimum and this brief should stop paying for attempts on it.
+ */
 const RIM = {
   radius: 3.2,
   elevationDeg: 20,
@@ -546,8 +573,45 @@ const STRIP = {
  * hidden, because `light.visible` changes `NUM_DIR_LIGHTS` and recompiles every
  * material in the scene — see docs/PROFILING.md — so it has to happen once at
  * construction, and that is a separate change with its own measurement.
+ *
+ * **That reclaim is taken now, and it turns the objection above into the fix.**
+ * The pair is built onto `SPLIT_LIGHT_LAYER` — the same fighter-only layer the
+ * per-fighter spots already use — so it is no longer scene-wide. The sentence
+ * this constant opens with ("it edges the fighter and the wall behind the
+ * fighter by exactly the same amount") was the whole case for zero, and a light
+ * that cannot reach the wall does not have that property. What is left is the
+ * one thing a directional rim is better at than a spot: it is parallel, so it
+ * does not fall off across the body and it does not wrap the way a source 3.2 m
+ * from a 1 m-wide robot does. It also comes off the arena half of the beauty
+ * pass, which is what the paragraph above was asking for.
+ *
+ * Swept on the built page, one frozen hero frame, one session, mask by frame
+ * difference (hide the two fighter groups and nothing else, so the pair is
+ * exact). `RIM` is the 90th percentile of the 6 px silhouette band over the
+ * mean of the 6 px of background immediately outside it — the file's own
+ * "top quartile of the edge band is the rim itself rather than the plate behind
+ * it", which is the only one of these that isolates the edge:
+ *
+ *     share   subj/bg   sil/halo   RIM    top1% on fighters   sil/body
+ *      0.00    1.14       1.05     2.16        15.9%            1.17
+ *      0.55    1.17       1.08     2.22        17.7%            1.16
+ *      0.88    1.18       1.09     2.25        18.5%            1.16
+ *      1.43    1.21       1.11     2.30        19.7%            1.15
+ *
+ * Monotone, and the flattening the old zero was defending against costs 0.02 of
+ * sil/body across the whole range — because the light can no longer reach the
+ * background, the fill it deposits on the body is bought back several times
+ * over by the background it no longer lifts. 0.85 ships — the top of the swept
+ * range, not past it, because `sil/body` carries real session-to-session
+ * variance (the same build measured 1.39 and 1.61 on two boots) and is not a
+ * number to extrapolate on.
+ *
+ * It is a small effect and it is reported as one: 0 -> 1.43 is worth 0.14 on
+ * RIM, against the 0.15 that darkening the mid-ground bought on subj/bg by
+ * itself. **On a faceted hard-surface robot no analytic light draws an outline**
+ * — see the failed grazing sweep recorded on `RIM`.
  */
-const DIRECTIONAL_RIM_SHARE = 0.0;
+const DIRECTIONAL_RIM_SHARE = 0.85;
 
 /**
  * Radiance of an env-scene practical quad per unit of RectAreaLight power.
@@ -646,6 +710,39 @@ function practical(pos, target, w, h, color, power, flickerAmp, flickerHz, seed)
 // it veils; `StageStructure` reads it too and drives the parallaxed skyline off
 // it at 2.4×, so a fog colour raised until it looks right on its own arrives on
 // the far city at more than twice that and takes the whole backdrop with it.
+//
+// **It was not below the mid-ground it veils, and that is why the frame had no
+// depth ramp.** Measured on one frozen hero frame with the arena and the
+// fighters separated by a frame-difference mask (hide the two fighter groups,
+// nothing else changes, so the pair is exact): the mid-ground band read a mean
+// luminance of 60/255 and the fog colour it was being blended toward read 55.
+// Fog can only build depth if its colour differs in *value* from the surfaces it
+// veils; blending 60 toward 55 does nothing at any density, and disabling the
+// fog outright moved the frame by 2.39/255 against an in-session noise floor of
+// 0.80. Aerial perspective was, in effect, switched off.
+//
+// The colours below are now roughly a third of the value they were, on the same
+// hue, with density up by half. The point is the *ramp*, and it is asymmetric on
+// purpose — at the fight framing the fighters are 6.4 m out and the crowd tier
+// 15 m, so the same curve costs the subject 7% and the mid-ground 35%:
+//
+//     industrial, density 0.034, colour 0x0b1018
+//     6.4 m (fighters)      5% fog    mid-ground band  60.0 -> 48
+//     15 m  (crowd tier)   22% fog    subject band     78.9 -> 76
+//     26 m  (far wall)     55% fog
+//
+// A darker colour at a lower density beats a lighter one at a higher density,
+// because the two knobs are not symmetric: density is what the *near* field
+// pays and colour is what the *far* field converges to. The first pass shipped
+// 0.042/0x101722 and it cost the wide framing 11.4% of its pixels to the bottom
+// of the range; 0.034/0x0b1018 holds the same mid-ground drop, takes that back
+// to 10.2%, and lifts the wide framing's mean 66.6 -> 70.0 with the top 1% on
+// the fighters going 4.0% -> 4.7%. Prefer moving the colour before the density.
+//
+// Measured through the built page, subject-over-background mean goes 1.03 ->
+// 1.11 on this change alone. See the round note on `DIRECTIONAL_RIM_SHARE` for
+// why that ratio, rather than saturation or mid-ground contrast, is the number
+// this axis was actually failing.
 // ---------------------------------------------------------------------------
 
 /** @type {Record<string, object>} */
@@ -695,7 +792,7 @@ const MOODS = {
     rimB: { color: C(0xff5a6a), intensity: 3.6, dir: dir(326, 13) },
     bounce: { color: C(0x6b7c94), intensity: 0.2, dir: dir(280, -22) },
     fill: { sky: C(0x36506b), ground: C(0x181310), intensity: 0.15 },
-    fog: { color: C(0x2c3a4c), density: 0.028 },
+    fog: { color: C(0x0b1018), density: 0.034 },
     shaft: { color: C(0xbfd8ff), intensity: 0.85 },
     envIntensity: 0.52,
     bgSky: 0.26,
@@ -754,7 +851,7 @@ const MOODS = {
     rimB: { color: C(0xff2fb0), intensity: 4.0, dir: dir(328, 12) },
     bounce: { color: C(0x8a4fd0), intensity: 0.26, dir: dir(290, -20) },
     fill: { sky: C(0x3d1a60), ground: C(0x0a0810), intensity: 0.13 },
-    fog: { color: C(0x2e1a42), density: 0.032 },
+    fog: { color: C(0x0c0713), density: 0.037 },
     shaft: { color: C(0xff6fd0), intensity: 0.85 },
     envIntensity: 0.56,
     bgSky: 0.28,
@@ -809,7 +906,7 @@ const MOODS = {
     rimB: { color: C(0xffd08a), intensity: 3.4, dir: dir(324, 11) },
     bounce: { color: C(0xff5a20), intensity: 0.5, dir: dir(275, -30) },
     fill: { sky: C(0x4d1408), ground: C(0x2a0a03), intensity: 0.2 },
-    fog: { color: C(0x431c0e), density: 0.036 },
+    fog: { color: C(0x120703), density: 0.040 },
     shaft: { color: C(0xff8a3a), intensity: 1.0 },
     envIntensity: 0.54,
     bgSky: 0.26,
@@ -866,7 +963,7 @@ const MOODS = {
     rimB: { color: C(0xff4a5e), intensity: 3.8, dir: dir(325, 14) },
     bounce: { color: C(0x8fa3ba), intensity: 0.22, dir: dir(284, -24) },
     fill: { sky: C(0x2d3b4d), ground: C(0x121417), intensity: 0.16 },
-    fog: { color: C(0x243040), density: 0.024 },
+    fog: { color: C(0x090c11), density: 0.031 },
     shaft: { color: C(0xdce9ff), intensity: 0.95 },
     envIntensity: 0.52,
     bgSky: 0.24,
@@ -921,7 +1018,7 @@ const MOODS = {
     rimB: { color: C(0xffd8a0), intensity: 3.2, dir: dir(258, 9) },
     bounce: { color: C(0xc89060), intensity: 0.3, dir: dir(80, -26) },
     fill: { sky: C(0x6a90d0), ground: C(0x3a2620), intensity: 0.22 },
-    fog: { color: C(0x5c4a3e), density: 0.028 },
+    fog: { color: C(0x1a1511), density: 0.032 },
     shaft: { color: C(0xffc890), intensity: 1.0 },
     envIntensity: 0.6,
     bgSky: 0.13,
@@ -1491,8 +1588,20 @@ export class Environment {
 
     // The money light. Behind and above, saturated, deliberately opposite the
     // key in temperature so the silhouette separates from the backdrop.
+    //
+    // Both rims live on `SPLIT_LIGHT_LAYER`, so they reach the fighters and
+    // nothing else — see `DIRECTIONAL_RIM_SHARE`. A rim that also lands on the
+    // wall behind the fighter raises the background by the same amount it
+    // raises the edge and buys no separation at all; restricting the layer is
+    // what makes the share worth carrying, and it takes two directional lights
+    // off the 85% of the frame that is arena at the same time. The target has
+    // to move with it: three culls a light by testing `light.layers` against
+    // the camera, and a target left on layer 0 would be evaluated in a pass
+    // that cannot see its light.
     this.rimLight = new THREE.DirectionalLight(0xffffff, 1);
     this.rimLight.castShadow = false;
+    this.rimLight.layers.set(SPLIT_LIGHT_LAYER);
+    this.rimLight.target.layers.set(SPLIT_LIGHT_LAYER);
     this.rimLight.target.position.set(0, 1.05, 0);
     this._rig.add(this.rimLight, this.rimLight.target);
 
@@ -1500,6 +1609,8 @@ export class Environment {
     // edge regardless of which way the camera has swung.
     this.rimLightB = new THREE.DirectionalLight(0xffffff, 1);
     this.rimLightB.castShadow = false;
+    this.rimLightB.layers.set(SPLIT_LIGHT_LAYER);
+    this.rimLightB.target.layers.set(SPLIT_LIGHT_LAYER);
     this.rimLightB.target.position.set(0, 1.05, 0);
     this._rig.add(this.rimLightB, this.rimLightB.target);
 

@@ -138,7 +138,30 @@
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
-#ui button {
+/* `:where()` so the whole selector weighs (0,0,0).
+ *
+ * This was `#ui button`, which weighs (1,0,1) — an id plus a type — and that
+ * beats every single-class rule in the project. So `background: none` here was
+ * silently winning against `.mbtn`, `.seg-btn`, `.kbg-step-btn` and `.kbs-tile`,
+ * and EVERY button in the game was rendering with no fill: measured on the
+ * built page, all 10 roster tiles, all 3 title buttons, the 4 quality
+ * segments, both stepper arrows and the 3 results actions computed
+ * `background-image: none; background-color: rgba(0,0,0,0)`, each of them with
+ * an authored gradient or tint that never reached a pixel. The hover and focus
+ * fills were dead for the same reason, which is why the focus state on those
+ * controls had to be carried entirely by rules and shadows.
+ *
+ * On 12-select-screen it was visible without a loupe: the roster rack's second
+ * column sits over the part of the scrim that is deliberately clear, so with no
+ * card behind them the arena's hazard chevrons and wet floor ran straight under
+ * the names and stat bars of Kestrel, Seraph, Mantis, Bastion and Volta — five
+ * of the ten machines were being read off the stage. The tile's own `background`
+ * declaration, and the comment above it explaining that 0.98 alpha is required
+ * and why, had been correct and inert.
+ *
+ * A reset must never outweigh the rules it is resetting for. Zero specificity
+ * is the fix; the reset still applies to any button nobody styled. */
+:where(#ui button) {
   font: inherit;
   color: inherit;
   background: none;
@@ -2265,6 +2288,63 @@
 .build-tag {
   position: absolute; top: 1.2em; right: 1.4em;
   font-size: 0.5em; letter-spacing: 0.2em; color: var(--kb-text-faint);
+}
+
+/* -- imprint ------------------------------------------------------------- */
+
+.imprint-wrap {
+  position: relative;
+  height: 100%;
+  overflow: auto;
+  padding: clamp(2em, 7vh, 5em) 1.5em;
+  display: grid;
+  place-items: start center;
+}
+.imprint-panel {
+  width: min(42em, 100%);
+  padding: clamp(1.7em, 4vw, 3.2em);
+  background: linear-gradient(135deg, rgba(14, 20, 31, 0.96), rgba(6, 9, 15, 0.92));
+  border: 1px solid var(--kb-line);
+  box-shadow: var(--kb-shadow-panel);
+}
+.imprint-title {
+  margin: 0;
+  font-size: 1.55em;
+  letter-spacing: 0.22em;
+  line-height: 1;
+}
+.imprint-updated {
+  margin: 0.85em 0 2.4em;
+  color: var(--kb-accent-soft);
+  font-size: 0.58em;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.imprint-section { margin-top: 1.65em; }
+.imprint-section h2 {
+  margin: 0 0 0.65em;
+  color: var(--kb-accent);
+  font-size: 0.68em;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.imprint-section p {
+  margin: 0.55em 0 0;
+  color: var(--kb-text-dim);
+  font-size: 0.72em;
+  line-height: 1.65;
+}
+.imprint-section .imprint-address { white-space: pre-line; color: var(--kb-text); }
+.imprint-section a { color: var(--kb-cyan); }
+.imprint-section a:hover, .imprint-section a:focus-visible { color: var(--kb-text); }
+.imprint-actions { margin-top: 2.4em; display: flex; justify-content: flex-end; }
+.imprint-actions .mbtn { width: min(18em, 100%); }
+
+@media (max-width: 520px) {
+  .imprint-wrap { padding: 1em; }
+  .imprint-panel { padding: 1.5em; }
+  .imprint-actions .mbtn { width: 100%; }
 }
 
 /* -- character select ---------------------------------------------------- */

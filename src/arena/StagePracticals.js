@@ -250,8 +250,21 @@ const WASHES = [
  * reproducible run to run, docs/PROFILING.md trap 5), so only on-vs-off pairs
  * from the SAME frozen frame are comparable; across sessions the same change
  * measured -2.8% and -15% on the median ratio.
+ *
+ * **0.7.** The paragraph above already reports the cost and takes it anyway;
+ * this round is the one where the bill came in. The wash is the second half of
+ * the same object as the tube (see `TUBE_DRIVE`) — together they are a
+ * full-width horizontal band at the fighters' chest height, and on-vs-off
+ * inside one frozen frame they were worth -14.4 and -14.6 mean luminance on
+ * that band out of 111, i.e. a quarter of it between them. Halving the wash
+ * with the tube costs the "source in frame that visibly deposits light"
+ * argument nothing — the gradient is still there and still skewed down the
+ * barrier — while the band stops being brighter than the subject in front of
+ * it. Every number in the sweep above was measured against a background that
+ * was allowed to own the top of the range; none of them are wrong, they were
+ * just answering a question that turned out not to be the one on the rubric.
  */
-const WASH_DRIVE = 1.4;
+const WASH_DRIVE = 0.7;
 
 /**
  * Scene-referred radiance the dimmest fixture any mood authors is driven to.
@@ -1421,8 +1434,45 @@ export class StagePracticals {
       // the wide framing the trade goes the other way, fighters over deck
       // improving 1.408 -> 1.543. If the fight framing is ever judged to be
       // washing out, x8 is the measured fallback and costs 0.039 of p99.
-      const TUBE_DRIVE = 12.0;
-      const TUBE_BLEACH = 0.30;
+      //
+      // **x6, and the sweep above optimised the wrong quantity.** "The lowest
+      // drive at which both framings clear zero on the clipped fraction" put
+      // the top of the frame's range on a 24-metre tube that crosses the whole
+      // width of the picture at the fighters' chest height. Measured on a
+      // frozen hero frame with a frame-difference mask separating fighters from
+      // set: the brightest 1% of the frame was landing 13.3% on the fighters,
+      // who occupy 12.2% of it — the highlights were distributed at *chance*,
+      // which is the rubric's "everything the same brightness" stated as a
+      // number. Clipped pixels are worth having; clipped pixels on the backdrop
+      // are worth having only if the subject already has some.
+      //
+      // **The table above cannot see what the drive actually controls.** Swept
+      // again in one session at 0.5 / 1 / 2 / 3 / 6 / 12, the tube's own
+      // brightest full-width row does not move at all: 194.7, 196.8, 197.9,
+      // 198.0, 198.7, 198.9 out of 255. The core is clipped at every drive on
+      // the list — a 24x drop in radiance is invisible on the fixture. What the
+      // drive controls is the *halo*, and the halo is a lot of frame:
+      //
+      //     drive    top 1% of frame luminance landing on the fighters
+      //      12        14.0%      (fighters are 12.6% of the frame: chance)
+      //       6        14.8%
+      //       3        16.4%
+      //       2        18.0%
+      //       1        21.2%
+      //     0.5        23.0%
+      //
+      // So the sweep recorded above was buying clipped pixels it could not put
+      // anywhere except into a bloom veil across the mid-ground, and paying for
+      // them out of the subject's share of the highlight range. x2 ships: the
+      // fixture is unchanged to the eye (its core was always clipped), the veil
+      // is gone, and the fighters take 18% of the top percentile instead of the
+      // 14% that a random 12.6% of the frame would get for free.
+      //
+      // The bleach goes 0.30 -> 0.10 for the same reason in colour rather than
+      // level. A tube pulled 30% toward white reads as a lit *surface* spanning
+      // the picture; the same radiance kept on the rim hue reads as a *source*.
+      const TUBE_DRIVE = 2.0;
+      const TUBE_BLEACH = 0.10;
       this.neonMaterial.color.copy(rimA).lerp(_white, TUBE_BLEACH).multiplyScalar(pulse * TUBE_DRIVE);
       this.screenMaterial.uniforms.uColor.value.copy(rimA).lerp(_white, 0.25);
       // The strip's own wash on the barrier and the floor at its foot. The

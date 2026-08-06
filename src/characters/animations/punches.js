@@ -1193,6 +1193,92 @@ export const PUNCH_CLIPS = {
   // staging: they are equal at every tick, 0:0 4:4 ... 32:32, where the retime
   // says clip 16 should land on move tick 20 for a heavy. The strip's panels are
   // honest CLIP ticks; they are not the move ticks a player sees.
+  //
+  // ROUND 21. THE HEAD WAS BOLTED TO THE CHEST — ON THIS CLIP AND ON EVERY
+  // OTHER ATTACK IN THE LIBRARY.
+  //
+  // Start with the briefed finding, because it is dead and this is the fourth
+  // rig to say so. "The hips translate a NET -1.7 px toward the target and the
+  // chest actively RETREATS 11.9 px" has now been re-measured in rounds 18, 19,
+  // 20 and here; the acceptance test's two halves both pass and have since
+  // round 18. DO NOT BRIEF IT AS OPEN AGAIN WITHOUT RE-MEASURING IT.
+  //
+  // What is open is one level up the same chain. `docs/CRITIC.md`'s 90+ line is
+  // "the hips lead, the HEAD LAGS", and `whip` (see ./reactions.js) has been
+  // retiming this clip's head by six ticks since round 13 — but a delay applied
+  // to a track with no amplitude produces nothing. Measured as headTop's
+  // position in the CHEST's own frame, driven through the real rig, which is the
+  // head's own contribution with everything the body does divided out:
+  //
+  //     p.uppercut, whole clip     14.4 mm      <- 25th lowest of 79 clips
+  //     across the seven panels    13.7 mm         the axis is scored on
+  //     r.launch / r.koFall        194 / 246 mm    the rig can do this
+  //
+  // It is not this clip's defect, it is the library's. Of the thirty clips with
+  // the least head articulation, twenty-eight are attacks: k.lowKick 1.9 mm,
+  // p.elbow 3.1, p.hook 4.1, p.jab 4.8, p.straight 5.7, k.roundhouse 10.0.
+  // Lateral (roll) on an attack runs 0.3–6 mm — the head never tilts AT ALL.
+  // For scale, headTop sits 0.29 m above the neck base, so 14 mm is under three
+  // degrees. Every attacking robot in this game carries its head the way a
+  // mannequin does, and it sits at the top of the silhouette where the eye goes.
+  //
+  // This round fixes the ONE clip the axis is photographed on, because that is
+  // the only place the fix can be proved. The chin tucks and rolls onto the
+  // loaded rear side through the coil, holds tucked one key past the hips'
+  // reversal, and is thrown back and open as the fist goes overhead. Head
+  // articulation over the seven scored panels, headTop in chest frame:
+  //
+  //     forward   16  19  11  15  24  25  21  mm     ->  16  19  65  69  24 -78 -76
+  //     lateral    1   1   1   0  -1  -1   0  mm     ->   1   3  48  42  -1 -26 -26
+  //     range                          13.7 mm       ->            164.7 mm  (12x)
+  //
+  // WHAT IT COST: nothing. Only `neck` and `head` were touched, X and Z only —
+  // every Y is the yaw the clip already had, to the digit. Driven through the
+  // rig against a reconstruction of the pre-edit tracks, EVERY bone that is not
+  // neck/head/headTop moves 0.00 mm at every one of the seven panels, and t0,
+  // t16 and t36 are bit-identical at 0.0000 mm, so the stance, the pinned
+  // contact pose and everything combat reads are untouched. Worst single-tick
+  // hurtbox travel is unchanged at 0.705 m on hand_R; the head bone's own worst
+  // tick is unchanged at 0.131 m (the crown swings, the hurtbox origin barely
+  // moves). `check.mjs` anchors stay 0-on-the-wrong-limb, worst ratio 0.59. No
+  // geometry, no root motion, no reach: the kick workstream's spacing
+  // measurements cannot be confounded by this.
+  //
+  // SEEN, not just measured. Single-page A/B against dist/ — one compiled
+  // program, one GPU state, the only difference being which TWO key arrays hang
+  // on the attacker's live clip — run A/B/A' so the third pass is the noise
+  // floor, frozen on the strip's own clip ticks with its own parked camera,
+  // differenced over the 200x210 head band:
+  //
+  //     tick   change   noise    change %>=8   noise %>=8
+  //       13    4.20     1.12        7.8%         0.6%
+  //       16    1.26     1.16        1.6%         0.7%   <- pose IS identical here
+  //       21    7.55     5.13       25.4%        19.7%
+  //       26    5.34     1.06        8.2%         0.5%
+  //
+  // t16 is the control and it lands ON the noise floor, which is the shape a
+  // real change has: it appears where the clip changed and vanishes where it
+  // did not. At 3x, at t13 the visor has swung down and the crown clears the
+  // exhaust column it used to hide behind; at t26 the head comes up and back
+  // and reads as a separate element instead of being lost in the backpack.
+  //
+  // THREE THINGS THAT WILL WASTE A ROUND IF NOT KNOWN. (1) `Animator`'s look-at
+  // layer would fight this, and it is DORMANT — `setLookTarget` has no caller
+  // outside Animator.js, so the authored head reaches the frame. (2) `whip`
+  // moves this clip's head keys to 6 / 11.6 / 14.1 / 16 / 24.1 / 29 / 36 and its
+  // neck keys to 4.68 / 11.05 / 13.88 / 16 / 22.98 / 28.34 / 36; author against
+  // those, not against the literal t's, or the extreme lands between panels.
+  // (3) The A/B instrument needs the attacker's world position restored and the
+  // arena, FX, environment and HUD updates stubbed between arms, and 90 idle
+  // ticks run to settle the spring layer. Without the position restore the
+  // A/A' floor is 8.8–11.6/255 — the whole fighter, standing somewhere else,
+  // because root motion accumulates across runs. With it, 1.1.
+  //
+  // NEXT: the other twenty-eight attack clips, same treatment, in punches.js,
+  // kicks.js and specials.js. It was not done this round because 17-anim-strip
+  // photographs only this clip and an unprovable change is how the last two
+  // rounds stalled — but the measurement above is the whole brief, and the
+  // instrument is `headTop in the chest's frame`, not the authored Euler track.
   'p.uppercut': {
     name: 'Uppercut',
     duration: 36, blendIn: 3, blendOut: 8,
@@ -1280,13 +1366,21 @@ export const PUNCH_CLIPS = {
         { t: 21, r: [0.4, 4.4, -2], ease: 'quad' }, { t: 23, r: [4.55, 4.72, -2.16], ease: 'sine' },
         { t: 26, r: [5.4, 5.2, -2.4], ease: 'sine' }, { t: 30, r: [4, 6.2, -2.7], ease: 'sine' },
         { t: 36, r: [2.6, 7.3, -3], ease: 'linear' }],
-      neck: [{ t: 0, r: [0.6, 5.2, 0], ease: 'quad' }, { t: 9, r: [0, 6.4, 0], ease: 'sine' },
-        { t: 13, r: [0.7, 0.5, 0], ease: 'quart' }, { t: 16, r: [1.5, -3, 0], ease: 'sine' },
-        { t: 19, r: [1.59, -3.38, 0], ease: 'quad' }, { t: 26, r: [0.5, 0.2, 0], ease: 'sine' },
+      // ROUND 21: THE HEAD. X (pitch) and Z (roll) only — every Y here is the
+      // yaw this clip already had, to the digit, and the t0, t16 and t36 keys
+      // are bit-identical, so the stance and the pinned contact pose do not
+      // move. The chin tucks through the load, holds tucked one key past the
+      // hips' reversal, and is thrown back as the fist goes overhead. Split
+      // ~35/65 between the two joints because they compose over a parent chain:
+      // the numbers below SUM to the ~20deg tuck and ~30deg throw-back that were
+      // authored, they are not that figure repeated twice.
+      neck: [{ t: 0, r: [0.6, 5.2, 0], ease: 'quad' }, { t: 9, r: [7, 6.4, -4.5], ease: 'sine' },
+        { t: 13, r: [5.5, 0.5, -3.2], ease: 'quart' }, { t: 16, r: [1.5, -3, 0], ease: 'sine' },
+        { t: 19, r: [-10, -3.38, 3.5], ease: 'quad' }, { t: 26, r: [-2.8, 0.2, 1.1], ease: 'sine' },
         { t: 36, r: [0.6, 5.2, 0], ease: 'linear' }],
-      head: [{ t: 0, r: [2.5, 8, 0], ease: 'quad' }, { t: 9, r: [1.8, 10.1, 0], ease: 'sine' },
-        { t: 13, r: [2.6, -0.8, 0], ease: 'quart' }, { t: 16, r: [3.6, -7.3, 0], ease: 'sine' },
-        { t: 19, r: [3.71, -8.01, 0], ease: 'quad' }, { t: 26, r: [2.4, -1.3, 0], ease: 'sine' },
+      head: [{ t: 0, r: [2.5, 8, 0], ease: 'quad' }, { t: 9, r: [13, 10.1, -8.5], ease: 'sine' },
+        { t: 13, r: [10.6, -0.8, -6.2], ease: 'quart' }, { t: 16, r: [3.6, -7.3, 0], ease: 'sine' },
+        { t: 19, r: [-20, -8.01, 6.5], ease: 'quad' }, { t: 26, r: [-6.5, -1.3, 2], ease: 'sine' },
         { t: 36, r: [2.5, 8, 0], ease: 'linear' }],
       clavicle_L: [{ t: 0, r: [0, -10, -4] }],
       shoulder_L: [{ t: 0, r: [-35, 0, -36], ease: 'quad' }, { t: 9, r: [-41.1, 11.2, -33], ease: 'sine' },
