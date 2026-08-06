@@ -41,6 +41,38 @@
  * are the same helmet described twice, once for a 100-pixel SVG and once for
  * geometry.
  *
+ * `moveSet` / `moveBase` / `signatureMoves`
+ * ----------------------------------------
+ * Ten fighters used to share four move tables, which meant VULKAN and BASTION —
+ * a furnace and a security door — had the same fifty-two moves with the same
+ * numbers. Every character now points `moveSet` at a table of its OWN, built in
+ * `Moves.js` by merging that machine's signature moves over the archetype named
+ * by `moveBase`.
+ *
+ *  - `moveBase` is the archetype family. It still decides the shared skeleton of
+ *    the list, the startup shift, the damage and reach scaling, and the display
+ *    label ("Bulwark", "Wraith", "Arbiter", "Vanguard") — which is what a select
+ *    screen should print, via `MOVE_SET_LABELS[def.moveSet]`, rather than the raw
+ *    key.
+ *  - `signatureMoves` NAMES what is unique to the machine, in authored order,
+ *    finisher last, so the select screen and the command list can show "these are
+ *    yours" without importing the move table. `Moves.js` DEFINES them, and it
+ *    compares the two lists at load: if they ever disagree, the module throws and
+ *    `tools/check.mjs` fails the build. The duplication cannot rot silently.
+ *
+ * `movesFor(def)` in `Moves.js` is the supported accessor and is what `Fighter`
+ * calls (docs/CONTRACT-character-moves.md). `moveSet` being the character's own
+ * key is belt and braces: it means the older `MOVES[def.moveSet]` lookups in
+ * `CPU.js` and `TestHarness.js` land on the character table too, instead of
+ * silently fighting with the archetype list.
+ *
+ * A character that lists no `signatureMoves` gets its archetype table verbatim,
+ * so adding an eleventh fighter costs nothing until it earns a signature.
+ *
+ * NOTE: `signature` (below) is a different field and always has been — the four
+ * intro/victory/taunt/idle CLIP ids. `signatureMoves` is the move list. Both are
+ * read by the select screen and they are not interchangeable.
+ *
  * @typedef {Object} CharacterDef
  * @property {string} id                 stable key, lowercase, no spaces
  * @property {string} name               display name
@@ -51,7 +83,9 @@
  * @property {{height:number,torso:number,arms:number,legs:number,head:number}} proportions
  * @property {{primary:string,secondary:string,accent:string,emissive:string,trim:string}} palette
  * @property {{power:number,speed:number,reach:number,weight:number,defense:number}} stats  1..10
- * @property {string} moveSet            key into MOVES: standard|heavy|agile|technical
+ * @property {string} moveSet            key into MOVES — the character's OWN table
+ * @property {string} moveBase           archetype the signature layer merges over
+ * @property {string[]} signatureMoves   move ids unique to this machine
  * @property {VoiceDef} voice
  * @property {SilhouetteDef} silhouette
  * @property {BuildDef} build
@@ -186,7 +220,9 @@ export const ROSTER = [
       trim: '#C7752E',      // hot brass
     },
     stats: { power: 10, speed: 3, reach: 7, weight: 9, defense: 5 },
-    moveSet: 'heavy',
+    moveSet: 'vulkan',
+    moveBase: 'heavy',
+    signatureMoves: ['slagVent', 'pourOff', 'tapOut', 'bessemerPour'],
     voice: { pitch: 0.58, timbre: 0.16, resonance: 0.72, grit: 0.85, servo: 58, impact: 96, tone: 'furnace' },
     // Mass low and central rather than up on the shoulders: the barrel belly is
     // the read, which is what keeps this apart from BASTION's square wall.
@@ -216,7 +252,9 @@ export const ROSTER = [
       trim: '#9FB4C7',      // brushed aluminium
     },
     stats: { power: 4, speed: 10, reach: 6, weight: 3, defense: 5 },
-    moveSet: 'agile',
+    moveSet: 'kestrel',
+    moveBase: 'agile',
+    signatureMoves: ['slipstream', 'slipstream2', 'coolantLance', 'terminalVelocity'],
     voice: { pitch: 1.42, timbre: 0.86, resonance: 0.44, grit: 0.12, servo: 420, impact: 640, tone: 'chime' },
     silhouette: {
       shoulders: 0.80, chestDepth: 0.88, waist: 0.66, limbTaper: 0.46,
@@ -244,7 +282,9 @@ export const ROSTER = [
       trim: '#6E6252',      // greasy oxide steel
     },
     stats: { power: 9, speed: 4, reach: 5, weight: 10, defense: 7 },
-    moveSet: 'heavy',
+    moveSet: 'anvil',
+    moveBase: 'heavy',
+    signatureMoves: ['throwFwd', 'dockClamp', 'counterweight', 'loadTest'],
     voice: { pitch: 0.64, timbre: 0.24, resonance: 0.86, grit: 0.6, servo: 74, impact: 130, tone: 'drum' },
     silhouette: {
       shoulders: 1.58, chestDepth: 1.26, waist: 0.98, limbTaper: 0.88,
@@ -272,7 +312,9 @@ export const ROSTER = [
       trim: '#D8C48A',      // aged temple gold
     },
     stats: { power: 6, speed: 6, reach: 9, weight: 4, defense: 4 },
-    moveSet: 'technical',
+    moveSet: 'seraph',
+    moveBase: 'technical',
+    signatureMoves: ['chorale', 'chorale2', 'descant', 'finalCadence'],
     voice: { pitch: 1.18, timbre: 0.92, resonance: 0.95, grit: 0.05, servo: 300, impact: 520, tone: 'choir' },
     silhouette: {
       shoulders: 0.96, chestDepth: 0.78, waist: 0.62, limbTaper: 0.42,
@@ -300,7 +342,9 @@ export const ROSTER = [
       trim: '#8C8F97',      // polished nickel
     },
     stats: { power: 7, speed: 7, reach: 6, weight: 5, defense: 6 },
-    moveSet: 'technical',
+    moveSet: 'ronin',
+    moveBase: 'technical',
+    signatureMoves: ['iaiDraw', 'iaiNoto', 'kesaLine', 'seventhSerial'],
     voice: { pitch: 0.96, timbre: 0.58, resonance: 0.62, grit: 0.28, servo: 190, impact: 320, tone: 'blade' },
     silhouette: {
       shoulders: 1.26, chestDepth: 0.92, waist: 0.74, limbTaper: 0.58,
@@ -328,7 +372,9 @@ export const ROSTER = [
       trim: '#C9D2C0',      // chrome mandible edge
     },
     stats: { power: 5, speed: 9, reach: 8, weight: 4, defense: 3 },
-    moveSet: 'agile',
+    moveSet: 'mantis',
+    moveBase: 'agile',
+    signatureMoves: ['raptorRake', 'raptorRake2', 'raptorRake3', 'raptorRakeUp', 'harvest'],
     voice: { pitch: 1.3, timbre: 0.74, resonance: 0.38, grit: 0.44, servo: 510, impact: 470, tone: 'chitter' },
     silhouette: {
       shoulders: 0.88, chestDepth: 1.06, waist: 0.58, limbTaper: 0.40,
@@ -356,7 +402,9 @@ export const ROSTER = [
       trim: '#7BE6FF',      // iridescent cyan edge break
     },
     stats: { power: 6, speed: 8, reach: 5, weight: 4, defense: 6 },
-    moveSet: 'technical',
+    moveSet: 'nyx',
+    moveBase: 'technical',
+    signatureMoves: ['houseEdge', 'doubleOrNothing', 'snakeEyes', 'lastHand'],
     voice: { pitch: 1.06, timbre: 0.68, resonance: 0.55, grit: 0.5, servo: 260, impact: 380, tone: 'glitch' },
     silhouette: {
       shoulders: 0.92, chestDepth: 0.86, waist: 0.68, limbTaper: 0.52,
@@ -384,7 +432,9 @@ export const ROSTER = [
       trim: '#A8B6C6',      // scuffed chrome
     },
     stats: { power: 7, speed: 4, reach: 5, weight: 9, defense: 10 },
-    moveSet: 'heavy',
+    moveSet: 'bastion',
+    moveBase: 'heavy',
+    signatureMoves: ['counterStance', 'blastDoor', 'holdTheLine', 'lockdown'],
     voice: { pitch: 0.72, timbre: 0.34, resonance: 0.7, grit: 0.4, servo: 96, impact: 175, tone: 'bulwark' },
     // Square: the shoulders are the widest point and the waist barely narrows,
     // so the whole fighter reads as a door rather than as a body.
@@ -414,7 +464,9 @@ export const ROSTER = [
       trim: '#8FA5A2',      // anodised grey-green
     },
     stats: { power: 6, speed: 7, reach: 6, weight: 6, defense: 7 },
-    moveSet: 'standard',
+    moveSet: 'axiom',
+    moveBase: 'standard',
+    signatureMoves: ['errata', 'errata2', 'footnote', 'qed'],
     voice: { pitch: 1.0, timbre: 0.62, resonance: 0.5, grit: 0.1, servo: 220, impact: 300, tone: 'clean' },
     // The only fighter with nothing bolted to it. Its identity is that it is the
     // one smooth, symmetrical, uninterrupted shape in the cast, so the numbers
@@ -445,7 +497,9 @@ export const ROSTER = [
       trim: '#5E4630',      // patinated bronze
     },
     stats: { power: 8, speed: 6, reach: 5, weight: 7, defense: 6 },
-    moveSet: 'standard',
+    moveSet: 'volta',
+    moveBase: 'standard',
+    signatureMoves: ['arcTap', 'arcSplit', 'arcOverload', 'deadShort'],
     voice: { pitch: 0.86, timbre: 0.48, resonance: 0.78, grit: 0.66, servo: 140, impact: 245, tone: 'arc' },
     silhouette: {
       shoulders: 1.14, chestDepth: 1.18, waist: 1.06, limbTaper: 0.72,

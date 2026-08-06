@@ -1,97 +1,139 @@
 {
- "head": "038ac200f5b5936152919b56c91968f114ad96d5",
+ "head": "a6b8a587eb561632ed2f90de2ed391ce0bde98a8",
  "dirty": true,
  "writtenBy": "tools/capture.mjs",
  "shots": {
   "01-hero-idle": {
-   "bytes": 615395,
+   "bytes": 634958,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "02-closeup-face": {
-   "bytes": 609978,
+   "bytes": 635552,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "03-full-body": {
-   "bytes": 669701,
+   "bytes": 677444,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "04-impact": {
-   "bytes": 552447,
+   "bytes": 564543,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "04b-impact-decay": {
-   "bytes": 648071,
+   "bytes": 640227,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "05-juggle": {
-   "bytes": 620130,
+   "bytes": 624399,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "06-stage-wide": {
-   "bytes": 596885,
+   "bytes": 595535,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "07-super": {
-   "bytes": 492541,
+   "bytes": 514362,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "08-hud": {
-   "bytes": 494805,
+   "bytes": 618286,
    "rendered": "1920x1080",
    "renderScale": 1
   },
+  "08b-hud-motion": {
+   "bytes": 800407,
+   "rendered": null,
+   "renderScale": null,
+   "strip": true
+  },
   "09-roster": {
-   "bytes": 699718,
+   "bytes": 696898,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "10-ko": {
-   "bytes": 607888,
+   "bytes": 519667,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "12-select-screen": {
-   "bytes": 441110,
+   "bytes": 441946,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "18-skydeck-wide": {
-   "bytes": 534793,
+   "bytes": 533527,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "19-cistern-wide": {
-   "bytes": 552696,
+   "bytes": 553706,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "13-announce-fight": {
-   "bytes": 592375,
+   "bytes": 592456,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "14-victory": {
-   "bytes": 390952,
+   "bytes": 389432,
    "rendered": "1920x1080",
    "renderScale": 1
   },
+  "17-anim-strip": {
+   "bytes": 3080982,
+   "rendered": null,
+   "renderScale": null,
+   "strip": true
+  },
   "15-impact-light": {
-   "bytes": 599613,
+   "bytes": 599542,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "16-impact-heavy": {
-   "bytes": 604230,
+   "bytes": 603555,
    "rendered": "1920x1080",
    "renderScale": 1
+  },
+  "20-anim-roundhouse": {
+   "bytes": 665939,
+   "rendered": null,
+   "renderScale": null,
+   "strip": true
+  },
+  "21-anim-straight": {
+   "bytes": 630575,
+   "rendered": null,
+   "renderScale": null,
+   "strip": true
+  },
+  "22-anim-reaction-launch": {
+   "bytes": 402756,
+   "rendered": null,
+   "renderScale": null,
+   "strip": true
+  },
+  "23-anim-run": {
+   "bytes": 558742,
+   "rendered": null,
+   "renderScale": null,
+   "strip": true
+  },
+  "24-anim-uppercut": {
+   "bytes": 741656,
+   "rendered": null,
+   "renderScale": null,
+   "strip": true
   }
  },
  "note": "Written by the capture run that produced these frames. `head` is read from git, not declared. If `dirty` is true the working tree had uncommitted changes and `head` does NOT fully describe the code that rendered them."

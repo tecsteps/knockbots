@@ -96,6 +96,7 @@ import { createSkeleton } from '../characters/Skeleton.js';
 import { buildRobot } from '../characters/RobotBuilder.js';
 import { RosterPortraits } from './RosterPortraits.js';
 import { applyKbText } from './Typeface.js';
+import { MoveListPanel, moveModelFor } from './MoveList.js';
 
 /** Game#phase -> the screen that phase implies. `null` means "hide the menu". */
 const SCREEN_FOR_PHASE = {
@@ -359,6 +360,15 @@ export class MenuSystem {
     this.nav = { items: [], index: 0, cols: 1, gridCount: 0 };
     this.screens = {};
 
+    /**
+     * The move list, mounted on the menu root so it inherits `kbs-layer`'s
+     * z-order and therefore sits above the in-fight touch pad. Built lazily on
+     * its first open — a panel of ~400 elements is not worth constructing for
+     * a player who never presses the button, and it must cost nothing per
+     * frame during a fight.
+     */
+    this.moveList = new MoveListPanel(this.root);
+
     this.#buildTitle();
     this.#buildImprint();
     this.#buildSelect();
@@ -370,6 +380,10 @@ export class MenuSystem {
     this._onKeyDown = (e) => this.#onKeyDown(e);
     window.addEventListener('keydown', this._onKeyDown);
 
+    // The HUD's touch-only MENU button, which is the Escape key for a device
+    // that has none. Routed through the same handler so the two can never mean
+    // different things.
+    bus.on('requestPause', () => this.#handleEscape());
     bus.on('phase', (e) => this.#onPhase(e));
     bus.on('matchEnd', (e) => { this._lastWinner = e.winner; });
     bus.on('difficulty', () => this.#syncDifficulty());
@@ -392,6 +406,10 @@ export class MenuSystem {
 
   /** @param {?string} screen one of 'title'|'select'|'options'|'pause'|'results', or null to hide everything */
   show(screen) {
+    // The move list is modal over a screen, never a screen of its own, so any
+    // navigation dismisses it — including the phase change that starts a match
+    // out from under a player who left it open.
+    this.moveList?.close();
     if (this.current === screen) return;
     const prev = this.current && this.screens[this.current];
     if (prev) {
@@ -423,7 +441,17 @@ export class MenuSystem {
   // -------------------------------------------------------------------------
 
   #onKeyDown(e) {
+    // The move list captures its own keys and stops them, so this is belt and
+    // braces — but a stray Escape reaching both handlers would close the panel
+    // and unpause the game in the same keystroke, which is the one interaction
+    // bug worth being paranoid about.
+    if (this.moveList?.isOpen) return;
     if (e.code === 'Escape') { e.preventDefault(); this.#handleEscape(); return; }
+    // The move list is worth a key of its own. `L` is free on every screen and
+    // is not bound by Input.js on either player, so it cannot fire a move.
+    if (e.code === 'KeyL' && (this.current === 'select' || this.current === 'pause')) {
+      e.preventDefault(); this.#openMoveList(); return;
+    }
     if (!this.current) return;
     switch (e.code) {
       case 'Enter': case 'Space': case 'NumpadEnter':
@@ -441,6 +469,11 @@ export class MenuSystem {
   }
 
   #handleEscape() {
+    // The move list is the topmost layer, so it is the first thing "back"
+    // closes. Its own key handler already does this for a real Escape; this
+    // branch is for the HUD's MENU button, which arrives on the bus and never
+    // passes that handler.
+    if (this.moveList?.isOpen) { this.moveList.close(); return; }
     if (this.current === 'options') { this.show(this.pendingReturn); return; }
     if (this.current === 'imprint') { this.show('title'); return; }
     if (this.current === 'pause') { this.#resume(); return; }
@@ -450,6 +483,33 @@ export class MenuSystem {
 
   #pause() { this.game.paused = true; this.show('pause'); bus.emit('uiBack', {}); }
   #resume() { this.game.paused = false; this.show(null); bus.emit('uiConfirm', {}); }
+
+  // -- move list ---------------------------------------------------------------
+
+  /**
+   * Which machine's moves to show.
+   *
+   * On character select it is whatever the carriage is sitting on, so a player
+   * can read a machine's specials *before* committing to it — which is the only
+   * point in the game where that information changes a decision. Everywhere
+   * else it is the machine player one is actually holding: the live fighter's
+   * own `def` first, because a character can be swapped without the menu's
+   * index following it, and the roster entry as the fallback.
+   *
+   * @returns {?Object} roster entry
+   */
+  #moveListDef() {
+    if (this.current === 'select') return ROSTER[this._select?.focus] || ROSTER[this.p1Index];
+    return this.game.fighters?.[0]?.def || ROSTER[this.p1Index] || ROSTER[0];
+  }
+
+  /** Open (or close) the move list for the machine in context. */
+  #openMoveList(returnFocus) {
+    const def = this.#moveListDef();
+    if (!def) return;
+    bus.emit('uiConfirm', {});
+    this.moveList.toggle(def, { returnFocus });
+  }
 
   // -- focus/nav --------------------------------------------------------------
 
@@ -1047,7 +1107,7 @@ export class MenuSystem {
     // -- footer -------------------------------------------------------------
     const foot = el('div', 'kbs-foot');
     const hints = el('div', 'kbs-hints');
-    for (const [k, v] of [['↑ ↓ ← →', 'BROWSE'], ['ENTER', 'LOCK IN'], ['ESC', 'BACK']]) {
+    for (const [k, v] of [['↑ ↓ ← →', 'BROWSE'], ['ENTER', 'LOCK IN'], ['L', 'MOVES'], ['ESC', 'BACK']]) {
       const h = el('span', 'kbs-hint');
       h.append(el('kbd', null, k), document.createTextNode(v));
       hints.appendChild(h);
@@ -1063,11 +1123,23 @@ export class MenuSystem {
     // before the two buttons so the footer's left-to-right order and the tail's
     // walk order are the same thing.
     const opponent = this.#buildOpponentControl(items);
+    // Character select is the one screen where knowing a machine's specials
+    // changes a decision the player is about to make, so the move list is
+    // reachable *before* the commit and not only after it. It sits left of LOCK
+    // IN deliberately: read, then commit, in the order the footer is read.
+    //
+    // Labelled "MOVES" rather than "MOVE LIST" for width. Three buttons plus the
+    // opponent control overflow one footer row on a 667px-wide handset by six
+    // pixels, and the wrap cost the roster rack a whole rank — measured, two
+    // machines fell off the bottom of the screen. It also matches the keyboard
+    // hint sitting at the other end of the same row.
+    const movesBtn = this.#addNavButton(items, 'MOVES', () => this.#openMoveList(movesBtn), 'kbs-moves');
+    movesBtn.setAttribute('aria-label', 'Move list for the selected machine');
     // A visible commit control. The two-tap rule works without it, but a
     // touch player has no ENTER key and nothing on screen said so.
     const lockBtn = this.#addNavButton(items, 'LOCK IN', () => this.#confirmSelect(this._select.focus), 'kbs-lock');
     const backBtn = this.#addNavButton(items, 'BACK', () => this.game.setPhase('menu'), 'kbs-back');
-    foot.append(hints, touchHint, opponent, lockBtn, backBtn);
+    foot.append(hints, touchHint, opponent, movesBtn, lockBtn, backBtn);
 
     grid.append(head, rack, stage, doss, foot);
     screen.append(scrim, grid, el('div', 'kbs-flash'));
@@ -1264,7 +1336,9 @@ export class MenuSystem {
     r.dNote.textContent = chassis.description;
     r.specVals.chassis.textContent = chassis.label;
     r.specVals.mass.textContent = `${massOf(def)} kg`;
-    r.specVals.moveset.textContent = def.moveSet;
+    const ms = this.#movesetSummary(def);
+    r.specVals.moveset.textContent = ms.text;
+    r.specVals.moveset.parentElement.title = ms.title;
     r.specVals.frame.textContent = def.silhouette?.plating || '—';
 
     for (const key of STAT_KEYS) {
@@ -1282,6 +1356,42 @@ export class MenuSystem {
       replayAnim(r.sweep, 'kbs-sweep--go');
     }
     this.#previewSet(i, first);
+  }
+
+  /**
+   * The dossier's Move Set line.
+   *
+   * It used to print the raw `moveSet` key — "heavy" — which is the name of an
+   * internal table and told a browsing player nothing. It now prints the class
+   * label and, when the machine has moves no other machine has, how many. That
+   * count is the advert for the move list button three inches below it: a
+   * player who can see that VULKAN has five moves of its own has a reason to
+   * open the list, and a player who cannot see it has no reason to look.
+   *
+   * Memoised per character. Building a model is cheap but focus changes on
+   * every arrow key and this is a browse screen, not a fight.
+   */
+  #movesetSummary(def) {
+    const cache = (this._moveSummary ||= new Map());
+    let s = cache.get(def.id);
+    if (s === undefined) {
+      try {
+        const m = moveModelFor(def);
+        // "+4", not "· 4 own". The cell is ~7em wide and shares a two-column
+        // grid with "HEAVY FRAME"; the longer phrasing orphaned its last word
+        // onto a second line, which pushed the whole spec block down over the
+        // machine's knees on the compact layouts. The tooltip carries the
+        // sentence, and the move list's own header says it in full.
+        s = {
+          text: m.signatureCount ? `${m.label} +${m.signatureCount}` : m.label,
+          title: `${m.label} class · ${m.total} moves, ${m.signatureCount} of them unique to ${def.name}`,
+        };
+      } catch {
+        s = { text: def.moveSet, title: '' };
+      }
+      cache.set(def.id, s);
+    }
+    return s;
   }
 
   /** Slides the rack carriage onto the focused tile. One layout read per move. */
@@ -1789,7 +1899,7 @@ export class MenuSystem {
   // -------------------------------------------------------------------------
 
   /**
-   * Pause carries one contextual block between RESUME and OPTIONS: the CPU
+   * Pause carries one contextual block between MOVE LIST and OPTIONS: the CPU
    * difficulty stepper in an arcade match, the practice display toggles in a
    * training session. They are mutually exclusive by construction — training
    * has no CPU to tune and a match has nothing to draw boxes for — so the
@@ -1810,6 +1920,11 @@ export class MenuSystem {
     const build = (mode) => {
       const items = [];
       shared.resume = this.#addNavButton(items, 'RESUME', () => this.#resume());
+      // Second in the walk, directly under RESUME. A player who paused because
+      // they do not know what their machine can do should not have to read past
+      // a difficulty stepper to find out — and pause is the only moment during
+      // a match when they can look at all.
+      const moves = this.#addNavButton(items, 'MOVE LIST', () => this.#openMoveList(moves));
       const block = mode === 'training'
         ? this.#buildTrainingToggles(items)
         : this.#buildDifficultyStepper(items, 'kbg-step--panel').root;
@@ -1820,7 +1935,7 @@ export class MenuSystem {
         this.game.setPhase('menu');
       });
       const body = el('div', 'pause-body');
-      body.append(shared.resume, block, shared.options, shared.quit);
+      body.append(shared.resume, moves, block, shared.options, shared.quit);
       return { items, body };
     };
 
@@ -2957,12 +3072,17 @@ const KBS_CSS = `
   padding: 0.2em 0.45em;
   box-shadow: inset 0 0 0 1px var(--kb-line-strong);
 }
-.kbs-back.mbtn, .kbs-lock.mbtn { width: auto; padding: 0 1.8em; }
+.kbs-back.mbtn, .kbs-lock.mbtn, .kbs-moves.mbtn { width: auto; padding: 0 1.8em; }
 /* Both only exist for a hover-less device; the pointer legend above is the
    desktop equivalent and they would only compete with it. */
 .kbs-touch-hint, .kbs-lock.mbtn { display: none; }
 .kbs-touch-hint { margin-right: auto; }
 .kbs-lock.mbtn { color: var(--kb-text); box-shadow: inset 0 0 0 1px rgba(255,138,42,0.55); }
+/* MOVE LIST opens a reference; its two neighbours change what happens next.
+   The cyan keyline is the whole of that distinction — it is not a commit
+   control and should not read as one. */
+.kbs-moves.mbtn { color: var(--kb-text-dim); box-shadow: inset 0 0 0 1px rgba(63,224,255,0.34); }
+.kbs-moves.mbtn:hover, .kbs-moves.mbtn.mbtn--focus { color: var(--kb-text); box-shadow: inset 0 0 0 1px rgba(63,224,255,0.7); }
 
 /* Training reuses this whole screen, so the one thing that has to change is the
    badge that says which commit the LOCK IN button is about to make. */
@@ -3211,7 +3331,23 @@ const KBS_CSS = `
   /* 44px is the floor for anything a finger has to land on. The em scale can
      fall below it on a small phone, so these are pinned in px. */
   .kbs-tile { min-height: 44px; }
-  .kbs-back.mbtn, .kbs-lock.mbtn { min-height: 44px; padding: 0 1.3em; }
+  /* Three of them share the row with the opponent control now, so the padding
+     comes off before the row is allowed to wrap. 44px of height is the part
+     that is not negotiable; the width is. */
+  .kbs-back.mbtn, .kbs-lock.mbtn, .kbs-moves.mbtn { min-height: 44px; padding: 0 1em; }
+}
+
+/* -- the footer's width budget, once MOVES joined it --------------------------- */
+/* Measured at 667x375 with the pad active: hint 151 + opponent control 286 +
+   three buttons 209 + four gaps 36 = 682px into a 640px row. Six pixels over on
+   the buttons alone, so it wrapped — and a wrapped footer is 141px instead of
+   86px, which came straight out of the roster rack: NYX and BASTION fell off
+   the bottom of the screen.
+   The hint is what goes. "TAP TO INSPECT · TAP AGAIN TO LOCK IN" is teaching a
+   commit gesture that now has a labelled 44px button sitting two inches to its
+   right, and above this width both still fit. */
+@media (hover: none) and (max-width: 720px) {
+  .kbs-touch-hint { display: none; }
   /* Nothing here has a hover state worth keeping — on touch it latches on the
      last tile tapped and reads as a second, wrong highlight next to the
      carriage. */

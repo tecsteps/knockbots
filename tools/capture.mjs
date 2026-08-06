@@ -1054,13 +1054,57 @@ const SHOTS = [
     // `announce--run` and `data-kind` are set by HUD#advanceAnnounceQueue when
     // the banner actually starts, so they are honest.
     preRoll: true,
-    setup: `window.KB.startMatch(0, 1); window.KB.setPhase('fight');`,
+    /*
+     * FORCE A GENUINELY FRESH BANNER, because this shot cannot catch a stale one.
+     *
+     * In isolation the setup below produced opacity 1.00. In the FULL run it
+     * failed twice, at opacity 0.49 and then 0.00, and the reason is
+     * `#queueAnnounce`'s repeat-collapse guard: if the same kind and text are
+     * already queued or already on screen, the call returns and nothing new
+     * fires. By this point in a 25-shot run a FIGHT banner has already played,
+     * so re-entering the phase re-announced nothing and the wait was left
+     * looking at the corpse of an earlier banner as it faded.
+     *
+     * Clearing the queue and the busy flag first makes the announcement this
+     * shot is named for actually happen, rather than hoping the run has left
+     * one in flight. Worth stating because it is the third defect in this shot
+     * of the same family: gating on state that was supposed to imply the
+     * pixels, instead of on the pixels.
+     */
+    setup: `(() => {
+      const h = window.KB.hud;
+      if (h) {
+        h.announceQueue = [];
+        h.announceBusy = false;
+        const b = h.announceBanner;
+        if (b) { b.classList.remove('announce--run'); b.dataset.kind = ''; }
+      }
+      window.KB.startMatch(0, 1);
+      window.KB.setPhase('ready');
+      window.KB.setPhase('fight');
+    })()`,
+    /*
+     * GATE ON THE OPACITY ITSELF, NOT ON A DELAY MEASURED FROM THE START.
+     *
+     * This waited for `announce--run` and then shuttered a fixed 600ms later,
+     * on the reasoning that the banner holds legibly from ~26% to ~78% of its
+     * 1.5s run. But `waitFor` POLLS, so the moment it returns is already an
+     * unknown distance into the animation, and 600ms after that lands wherever
+     * it lands. It failed twice in a row with different values -- opacity 0.49,
+     * then 0.00, the banner fully faded -- which is a race, not a flake.
+     *
+     * The fix is the same lesson this harness keeps relearning: wait for the
+     * QUANTITY YOU CARE ABOUT to be true, rather than for a clock that is
+     * supposed to imply it. The frame check already measures opacity at the
+     * shutter; now the wait measures it too, so the two cannot disagree.
+     */
     waitFor: `(() => {
       const b = document.querySelector('.announce-banner');
-      return !!b && b.classList.contains('announce--run') && b.dataset.kind === 'fight';
+      if (!b || !b.classList.contains('announce--run') || b.dataset.kind !== 'fight') return false;
+      return parseFloat(getComputedStyle(b).opacity) >= 0.85;
     })()`,
-    // announceCycle holds legibly from roughly 26% to 78% of its 1.5s run.
-    settle: 600,
+    // Small, and only to let the frame after the opacity check actually paint.
+    settle: 90,
     // Measure the pixels, not the state that was supposed to produce them.
     verify: `(() => {
       const b = document.querySelector('.announce-banner');
@@ -2671,7 +2715,18 @@ async function main() {
         // than re-encoding. Skipping them archived 18 of 25 on the first run --
         // and the seven it dropped were the per-clip animation strips, i.e.
         // precisely the new evidence the animation axis is now scored on.
-        if (!png.endsWith('.png')) { writeFileSync(jpg, readFileSync(png)); continue; }
+        // ...and it must still be RECORDED. The first version copied the strip
+        // and `continue`d before writing its entry, so seven files sat in the
+        // archive directory that ARCHIVE.json did not list. An archive whose
+        // index disagrees with its own contents is the exact failure this file
+        // was written to end.
+        if (!png.endsWith('.png')) {
+          writeFileSync(jpg, readFileSync(png));
+          const rs = (verified[m.name] || {}).res || {};
+          entry[m.name] = { bytes: statSync(jpg).size, rendered: rs.buffer ?? null,
+                            renderScale: rs.renderScale ?? null, strip: true };
+          continue;
+        }
         // Re-encoded in the page, because there is no image library in this
         // tool's dependencies and adding one for an archive step is not worth a
         // package. q92 4:4:4-ish via canvas rather than the previous q72 4:2:0:

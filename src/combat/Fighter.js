@@ -41,14 +41,14 @@ import {
   GRAVITY, GROUND_Y, TICK_DT, FIGHTER_RADIUS, ARENA_HALF_WIDTH, ARENA_HALF_DEPTH,
   MAX_HEALTH, CHIP_DAMAGE_RATIO, RECOVERABLE_RATIO, RECOVERY_PER_TICK,
   METER_MAX, METER_ON_DEAL, METER_ON_TAKE, METER_ON_BLOCK,
-  INPUT_BUFFER_TICKS, HEIGHT, REACTION,
+  INPUT_BUFFER_TICKS, MOTION_WINDOW_TICKS, HEIGHT, REACTION,
 } from '../core/Constants.js';
 import { bus } from '../core/Bus.js';
 import { Rng } from '../core/Rng.js';
 import { BONES, BONE_NAMES, HURTBOX_BONES, IK_CHAINS, SPRING_BONES, SPRING_DEFS, createSkeleton } from '../characters/Skeleton.js';
 import { sampleClip, Pose } from '../characters/AnimationFormat.js';
 import { activeBoxes, isActive, isInvulnerable } from './MoveSchema.js';
-import { MOVES, findMove } from './Moves.js';
+import { MOVES, findMove, movesFor, parseToken, dirMatches } from './Moves.js';
 import { Animator } from '../characters/Animator.js';
 import { CLIPS } from '../characters/animations/index.js';
 import { buildRobot } from '../characters/RobotBuilder.js';
@@ -499,6 +499,71 @@ export function strikeAim(move) {
   return move.aimBias;
 }
 
+// ---------------------------------------------------------------------------
+// Finishers
+//
+// A finisher is not a bigger super. A super is a resource you spend; a finisher
+// is a *window you can miss*, and everything below exists to make that true and
+// to make it learnable. The data contract is pinned in
+// `docs/CONTRACT-character-moves.md` and this file implements exactly it:
+//
+//     tag: 'finisher',
+//     input: 'b,b,d+4',                 // the SEQUENCE, comma-separated
+//     props: { finisher: {
+//       condition: 'Opponent below 20% health on the final round',  // verbatim UI
+//       healthPct: 0.20, finalRoundOnly: true, window: 90,          // the engine
+//       sequenceText: 'Back, Back, Down, RK',                       // verbatim UI
+//     } }
+//
+// Four things separate it from `overdrive`:
+//
+//   CONDITION — `CombatSystem` opens the window, once per round per fighter,
+//     the tick the opponent drops under `healthPct` (and, if `finalRoundOnly`,
+//     on a round that can decide the match). Deterministic: it is a comparison
+//     on two integers the sim already owns.
+//   WINDOW — `window` ticks, counted on the sim clock, and it does NOT re-open.
+//     Miss it and the round is won the ordinary way. That is the whole point:
+//     a finisher you cannot fail is a cutscene.
+//   SEQUENCE — the move's own `input`, split on commas, each token parsed by the
+//     same `parseToken` the move list uses. Direction-only tokens match on a
+//     direction EDGE (a tap), button tokens on a press. A button press that does
+//     not advance the sequence resets it, so mashing cannot find it.
+//   PRESENTATION — the move's `cinematic`, plus the two clips the overdrive has
+//     always declared and nothing has ever played: `hitClip` on the connect and
+//     `finishClip` on the follow-through. `specials.js` authored the overdrive as
+//     three clips precisely "so the combat system can hold the cinematic between
+//     them", and until now it held nothing.
+//
+// The end state is deliberately the ordinary one. A landed finisher zeroes the
+// victim's health and goes through `#toKO`, so `CombatSystem.#checkKO`, the KO
+// banner, round scoring, the victory screen and the rematch path all run exactly
+// as they do for any other knockout. A finisher that needed its own match flow
+// would be a second, weaker copy of the one that already works.
+// ---------------------------------------------------------------------------
+
+/**
+ * Stance value stamped onto a finisher so the ordinary matcher can never start
+ * one. `canUse` already gates on `props.requireStance` and nothing ever sets
+ * this stance, so this is the existing mechanism rather than a new one — and it
+ * matters, because a sequence like `b,b,d+4` parses its first token as a bare
+ * `b`, which would otherwise out-rank every plain button and fire the finisher
+ * on any press made while holding back.
+ */
+const FINISHER_STANCE = '__finisher';
+/** Window length when the data does not name one, in ticks. 1.5 seconds. */
+const FINISHER_WINDOW_DEFAULT = 90;
+/**
+ * Fraction of MAX_HEALTH the opponent must be under, when the data omits it.
+ * Exported so `CombatSystem` — which evaluates the condition — and this file,
+ * which describes it, cannot disagree about the number.
+ */
+export const FINISHER_HEALTH_DEFAULT = 0.2;
+
+/** States a finisher may be launched from. It is a neutral-game input. */
+const FINISHER_START_STATES = new Set([
+  STATE.IDLE, STATE.WALK, STATE.CROUCH, STATE.BLOCK_HIGH, STATE.BLOCK_LOW,
+]);
+
 /** Mirror of Skeleton.scaleFor — hurtbox radii must scale with the proportions. */
 function proportionScale(name, p) {
   if (!p) return 1;
@@ -569,6 +634,26 @@ export class Fighter {
     this.cmd = null;
     this.upHeldTicks = 0;
     this.pendingSidestep = 0;
+    /**
+     * Direction-edge bookkeeping, used to tell a real double-tap from a dash
+     * motion the input layer manufactured. See `#trackDirection`.
+     */
+    this.dirSign = 0;
+    this.dirReleaseTick = -999;
+    this.prevDir = { fwd: false, back: false, up: false, down: false };
+    /**
+     * A copy of this tick's command with the dash motion validated, handed to
+     * `findMove` in place of the raw one. It carries exactly the fields
+     * `matchesEntry` reads; see `#liveCommand`.
+     */
+    this._live = { fwd: false, back: false, up: false, down: false, motion: null, pressed: null, held: null };
+
+    /** Finisher state. `move` is resolved from the character's move table. */
+    this.finisher = {
+      move: null, steps: [], spec: null,
+      open: false, openedThisRound: false, fired: false, ready: false,
+      ticksLeft: 0, window: FINISHER_WINDOW_DEFAULT, index: 0,
+    };
 
     this.radius = FIGHTER_RADIUS;
     this.floorY = GROUND_Y;
@@ -592,6 +677,8 @@ export class Fighter {
 
     this.opponent = null;
     this.moveSetKey = def?.moveSet && MOVES[def.moveSet] ? def.moveSet : 'standard';
+    /** The table this fighter actually fights with. See `#bindMoveSet`. */
+    this.moveTable = null;
     this.stats = def?.stats || { power: 5, speed: 5, reach: 5, weight: 5, defense: 5 };
 
     this.rng = new Rng(0x51ed2701 + index * 0x9e37);
@@ -623,6 +710,39 @@ export class Fighter {
     this._offHit = null;
     this._offBlock = null;
     this.ready = false;
+    this.#bindMoveSet();
+  }
+
+  /**
+   * Resolve the move table this fighter fights with, and the finisher inside it.
+   *
+   * `movesFor` is the supported accessor (docs/CONTRACT-character-moves.md):
+   * reading `MOVES[archetype]` directly silently misses every character-specific
+   * move, which is most of what makes two robots of the same archetype
+   * different. `moveSetKey` is kept because the CPU and the QA harness pass it
+   * around by name.
+   */
+  #bindMoveSet() {
+    this.moveSetKey = this.def?.moveSet && MOVES[this.def.moveSet] ? this.def.moveSet : 'standard';
+    this.moveTable = movesFor(this.def) || MOVES[this.moveSetKey] || MOVES.standard;
+
+    const fs = this.finisher;
+    fs.move = null; fs.steps = []; fs.spec = null;
+    fs.open = false; fs.openedThisRound = false; fs.fired = false; fs.ready = false;
+    fs.index = 0; fs.ticksLeft = 0; fs.window = FINISHER_WINDOW_DEFAULT;
+
+    let found = null;
+    for (const m of Object.values(this.moveTable)) {
+      if (m && (m.tag === 'finisher' || m.props?.finisher)) { found = m; break; }
+    }
+    if (!found) return;
+
+    fs.move = found;
+    fs.spec = found.props.finisher || {};
+    fs.window = Math.max(12, Math.round(fs.spec.window ?? FINISHER_WINDOW_DEFAULT));
+    fs.steps = String(found.input || '').split(',').map((t) => parseToken(t.trim())).filter((t) => t);
+    // The ordinary matcher must never be able to start it. See FINISHER_STANCE.
+    if (found.props.requireStance == null) found.props.requireStance = FINISHER_STANCE;
   }
 
   // -------------------------------------------------------------------------
@@ -857,7 +977,7 @@ export class Fighter {
     if (this.ready && this.def === def && this.robot) return;
     this.def = def;
     this.stats = def.stats || this.stats;
-    this.moveSetKey = def.moveSet && MOVES[def.moveSet] ? def.moveSet : 'standard';
+    this.#bindMoveSet();
     if (!this.ready) return;
     if (this.robot?.dispose) this.robot.dispose();
     if (this.robot?.group) this.group.remove(this.robot.group);
@@ -934,6 +1054,17 @@ export class Fighter {
     this.wallImpact = null;
     this.upHeldTicks = 0;
     this.pendingSidestep = 0;
+    this.dirSign = 0;
+    this.dirReleaseTick = -999;
+    this.prevDir.fwd = false; this.prevDir.back = false;
+    this.prevDir.up = false; this.prevDir.down = false;
+    // One finisher window per fighter per round, and a fresh one every round.
+    this.finisher.open = false;
+    this.finisher.openedThisRound = false;
+    this.finisher.fired = false;
+    this.finisher.ready = false;
+    this.finisher.index = 0;
+    this.finisher.ticksLeft = 0;
     this.lastDamageTick = -999;
     this.impactTick = -999;
     this.pelvisLift = 0;
@@ -970,7 +1101,9 @@ export class Fighter {
     this.cmd = cmd;
     this.wallImpact = null;
 
+    this.#trackDirection(cmd);
     this.#pushInput(cmd);
+    this.#tickFinisher(cmd);
     this.#updateFacing();
     this.#updateGuard(cmd);
     this.#updateState(cmd);
@@ -1029,11 +1162,85 @@ export class Fighter {
         tick: this.simTick,
         btns: new Set(cmd.pressed),
         fwd: !!cmd.fwd, back: !!cmd.back, up: !!cmd.up, down: !!cmd.down,
-        motion: cmd.motion || null,
+        motion: this.#dashMotion(cmd),
         used: false,
       });
       if (buf.length > 24) buf.shift();
     }
+  }
+
+  /**
+   * Track when a horizontal direction was last let go.
+   *
+   * This is one number and it exists to answer one question: was a `ff`/`bb`
+   * dash motion TAPPED, or did the input layer manufacture it?
+   */
+  #trackDirection(cmd) {
+    const sign = cmd ? (cmd.fwd ? 1 : cmd.back ? -1 : 0) : 0;
+    if (sign !== this.dirSign) {
+      if (this.dirSign !== 0) this.dirReleaseTick = this.simTick;
+      this.dirSign = sign;
+    }
+  }
+
+  /**
+   * The command's motion, with a manufactured dash rejected.
+   *
+   * THE BUG THIS FIXES, and it is a live playability defect: holding a direction
+   * and pressing a button reported a DASH. `Input.#motion` reads the direction
+   * history, and `Input.commandsFor` pushes a fresh history entry on any tick a
+   * button is pressed — so holding back for ten ticks and then pressing a button
+   * produced two consecutive `4` samples with nothing between them, which the
+   * matcher reads as back-back. Reproduced in a browser with real key events,
+   * 16 attempts out of 16: `b+3` (Gyro Sweepline) never came out, `bb+3` (Phase
+   * Spiral) came out every time, because a motion prefix scores 100 against a
+   * single direction's 25 and `findMove` walks the table most-specific-first.
+   * Any `bb+`/`ff+` move the move table gains silently eats the plain `b+`/`f+`
+   * move on the same button, which is exactly the shape of "back + RP does
+   * nothing" — the button is not dead, it is bound to something else.
+   *
+   * A real dash has the direction RELEASED between the two taps. A held one
+   * never does, and that is the whole test. The window matches the one the
+   * motion recogniser itself uses, so this is never stricter than the source.
+   *
+   * It is applied to the BUFFER ENTRY and to the live command handed to
+   * `findMove` — the two things that pick a move — and deliberately not to the
+   * raw `cmd.motion` that `#tickNeutral` reads for the neutral-game dash. A
+   * synthetic CPU command sets `motion` with no direction at all on the press
+   * tick (`CPU.#applyParsed` calls `#setDir('')`), which registers as a release
+   * on that very tick, so the CPU's `ff+2` and `ff+3` still come out; its
+   * `motion: 'ff'` dash-in, which holds forward and presses nothing, is not
+   * routed through here at all.
+   *
+   * The root cause is one line in `src/core/Input.js` and the patch is in this
+   * round's report; this gate stays either way, because a fighter should not be
+   * able to be told it dashed by anything but a dash.
+   *
+   * @param {Object} cmd
+   * @returns {?string}
+   */
+  #dashMotion(cmd) {
+    const m = cmd?.motion || null;
+    if (m !== 'ff' && m !== 'bb') return m;
+    // Only a HELD direction can manufacture one. A dash reported with the stick
+    // already back at neutral cannot be this defect, and the CPU's synthetic
+    // commands arrive that way, so they are never touched.
+    if (this.dirSign !== (m === 'ff' ? 1 : -1)) return m;
+    return (this.simTick - this.dirReleaseTick) <= MOTION_WINDOW_TICKS ? m : null;
+  }
+
+  /**
+   * This tick's command as `findMove` should see it: the same directions and
+   * buttons, with a manufactured dash motion removed. `matchesEntry` reads
+   * `motion` and the four direction flags off this object and nothing else.
+   */
+  #liveCommand(cmd) {
+    if (!cmd) return null;
+    const l = this._live;
+    l.fwd = !!cmd.fwd; l.back = !!cmd.back; l.up = !!cmd.up; l.down = !!cmd.down;
+    l.pressed = cmd.pressed; l.held = cmd.held;
+    l.motion = this.#dashMotion(cmd);
+    return l;
   }
 
   #updateFacing() {
@@ -1124,6 +1331,13 @@ export class Fighter {
   }
 
   #tickNeutral(cmd) {
+    // A completed finisher sequence outranks everything, including a buffered
+    // move. It is armed by `#tickFinisher` and launched here, so it enters the
+    // move state machine on the same tick boundary as any other move — and if
+    // the fighter is not actionable yet, the arm survives and is retried every
+    // tick until the window closes.
+    if (this.finisher.ready && this.#fireFinisher()) return;
+
     // A move always wins over movement.
     const mv = this.#tryMove(false);
     if (mv) { this.#startMove(mv); return; }
@@ -1269,7 +1483,15 @@ export class Fighter {
       canCancel: allowCancel,
       allowRoot: !allowCancel,
     };
-    return findMove(this.moveSetKey, this.cmd, st);
+    const mv = findMove(this.moveTable || this.moveSetKey, this.#liveCommand(this.cmd), st);
+    // Belt and braces on FINISHER_STANCE: a finisher is started by the finisher
+    // system and by nothing else. If one somehow matched, hand the press back so
+    // the next tick can spend it on a real move rather than swallowing it.
+    if (mv && (mv.tag === 'finisher' || mv.props?.finisher)) {
+      if (st.matchedInput) st.matchedInput.used = false;
+      return null;
+    }
+    return mv;
   }
 
   /** Begin a move. Public so the CPU and the QA harness can drive fighters. */
@@ -1329,12 +1551,20 @@ export class Fighter {
     this.velocity.z *= 0.3;
     this.#play(move.clip, move.startup > 16 ? 4 : 2, false, 1, retimeFor(move));
 
-    if (move.props.super) {
+    const fin = !!move.props.finisher;
+    if (move.props.super || fin) {
+      // `superStart` is the event `FightCamera`, `EffectsDirector` and
+      // `AudioDirector` already listen on for a cinematic. A finisher raises the
+      // same one rather than asking three other workstreams for a second path,
+      // and layers its own longer, deeper slow-motion on top.
       bus.emit('superStart', { fighter: this, move });
       const cin = move.props.cinematic;
-      if (cin) {
-        bus.emit('timeScale', { scale: cin.slow ?? 0.4, ticks: cin.slowTicks ?? 24 });
-        bus.emit('shake', { amount: 0.35, ticks: 18 });
+      if (cin || fin) {
+        bus.emit('timeScale', {
+          scale: fin ? Math.min(cin?.slow ?? 0.3, 0.3) : (cin?.slow ?? 0.4),
+          ticks: fin ? Math.max(cin?.slowTicks ?? 26, 40) : (cin?.slowTicks ?? 24),
+        });
+        bus.emit('shake', { amount: fin ? 0.5 : 0.35, ticks: fin ? 26 : 18 });
       }
     }
   }
@@ -1358,9 +1588,17 @@ export class Fighter {
 
     // The move whiffed: every active window has passed with nothing connected.
     const last = mv.active[mv.active.length - 1].to;
-    if (this.moveTick === last + 1 && !this.hitConnectedThisMove) {
-      if (mv.props.throw) this.#play('t.grabWhiff', 2, false);
-      bus.emit('whiff', { fighter: this, move: mv });
+    if (this.moveTick === last + 1) {
+      if (!this.hitConnectedThisMove) {
+        if (mv.props.throw) this.#play('t.grabWhiff', 2, false);
+        bus.emit('whiff', { fighter: this, move: mv });
+      } else if (mv.props.finishClip) {
+        // The follow-through. `specials.js` authored the overdrive as three
+        // clips "so the combat system can hold the cinematic between them" and
+        // nothing has ever played the other two; a staged strike is most of what
+        // makes a finisher read as bigger than a normal.
+        this.#play(mv.props.finishClip, 4, false);
+      }
     }
 
     if (this.moveTick >= mv.total) {
@@ -1368,6 +1606,182 @@ export class Fighter {
       this.hitboxes.length = 0;
       this.#toNeutral();
     }
+  }
+
+  // --- finishers -----------------------------------------------------------
+
+  /** The finisher's authored rule, or null if this machine has no finisher. */
+  get finisherSpec() { return this.finisher.move ? this.finisher.spec : null; }
+
+  /**
+   * Everything a prompt needs, polled per frame by the HUD.
+   * @returns {?{name:string, sequenceText:string, condition:string,
+   *             index:number, total:number, ticksLeft:number, window:number}}
+   */
+  get finisherPrompt() {
+    const fs = this.finisher;
+    if (!fs.open || !fs.move) return null;
+    return {
+      name: fs.move.name,
+      sequenceText: fs.spec?.sequenceText || fs.move.input,
+      condition: fs.spec?.condition || '',
+      index: fs.index,
+      total: fs.steps.length,
+      ticksLeft: fs.ticksLeft,
+      window: fs.window,
+    };
+  }
+
+  /** Has this fighter's one window for this round already been spent? */
+  canOpenFinisher() {
+    const fs = this.finisher;
+    return !!fs.move && !fs.openedThisRound && !fs.fired;
+  }
+
+  /**
+   * Open the window. Called by `CombatSystem`, which owns the condition — it is
+   * the only object that can see both fighters and the round score.
+   *
+   * Once per round, deliberately. A window that re-opens every tick the health
+   * condition holds is not a window, and the player could not miss it.
+   * @returns {boolean} true if it opened
+   */
+  openFinisherWindow() {
+    const fs = this.finisher;
+    if (!this.canOpenFinisher()) return false;
+    fs.open = true;
+    fs.openedThisRound = true;
+    fs.ticksLeft = fs.window;
+    fs.index = 0;
+    bus.emit('finisherWindow', {
+      fighter: this, opponent: this.opponent, move: fs.move,
+      ticks: fs.window, input: fs.move.input,
+      sequenceText: fs.spec?.sequenceText || fs.move.input,
+      condition: fs.spec?.condition || '',
+    });
+    return true;
+  }
+
+  /** Shut the window without firing. */
+  #closeFinisher(reason) {
+    const fs = this.finisher;
+    if (!fs.open) return;
+    fs.open = false;
+    fs.ready = false;
+    fs.index = 0;
+    fs.ticksLeft = 0;
+    bus.emit('finisherExpired', { fighter: this, move: fs.move, reason });
+  }
+
+  /**
+   * Advance the sequence recogniser by one tick.
+   *
+   * Steps are the move's own `input`, comma-split — the same string the move
+   * list prints — so the thing the player is taught and the thing the engine
+   * accepts cannot drift apart. A direction-only token wants an EDGE, so
+   * `b,b` really is two taps and not one hold; a token with buttons wants a
+   * press. A press that advances nothing resets the sequence, which is what
+   * stops mashing from finding it by accident.
+   */
+  #tickFinisher(cmd) {
+    const fs = this.finisher;
+    if (!fs.open) {
+      this.#rememberDir(cmd);
+      return;
+    }
+
+    if (--fs.ticksLeft <= 0) { this.#closeFinisher('expired'); this.#rememberDir(cmd); return; }
+    const opp = this.opponent;
+    if (!opp || opp.state === STATE.KO || this.state === STATE.KO) {
+      this.#closeFinisher('moot');
+      this.#rememberDir(cmd);
+      return;
+    }
+
+    const step = fs.steps[fs.index];
+    if (!step) { fs.ready = true; this.#rememberDir(cmd); return; }
+
+    if (cmd) {
+      const pressed = cmd.pressed && cmd.pressed.size ? cmd.pressed : null;
+      let advanced = false;
+      if (step.buttons.length || step.motion) {
+        // A press step: every button of the token down this tick, with the
+        // token's direction (and motion) satisfied.
+        //
+        // A BARE button token — `2`, the last step of every authored finisher —
+        // does not care which way the stick is pointing. `dirMatches('')` means
+        // "no direction held", which is the right reading for a move list entry
+        // and the wrong one for the trigger at the end of a direction sequence:
+        // `d,b,d,2` would have demanded the player let go of down between the
+        // third tap and the button, which is not what "Down, Back, Down, RP"
+        // says on the card. A token that names a direction still gets it.
+        const dirOk = step.motion ? this.#dashMotion(cmd) === step.motion
+          : (step.dir ? dirMatches(step.dir, cmd) : true);
+        if (pressed && step.buttons.every((b) => pressed.has(b)) && dirOk) {
+          advanced = true;
+          // The press is spent on the finisher. Without this the last button of
+          // the sequence ALSO starts whatever ordinary move it is bound to —
+          // measured, `d+4` fired the low sweep and the finisher had to wait for
+          // its recovery — and the sequence would read as two moves.
+          this.#consumePress();
+        }
+      } else if (step.dir) {
+        // A direction step: the tap edge, not the hold.
+        if (dirMatches(step.dir, cmd) && !dirMatches(step.dir, this.prevDir)) advanced = true;
+      }
+      if (advanced) {
+        fs.index++;
+        bus.emit('finisherProgress', { fighter: this, move: fs.move, index: fs.index, total: fs.steps.length });
+        // Armed, not launched: the actual start belongs to `#tickNeutral`, so a
+        // finisher enters the move state machine on exactly the same tick
+        // boundary every other move does and its frame data is not shifted.
+        if (fs.index >= fs.steps.length) fs.ready = true;
+      } else if (pressed) {
+        // Committed to the wrong thing. Start over — the window keeps running.
+        fs.index = 0;
+      }
+    }
+    this.#rememberDir(cmd);
+  }
+
+  /** Mark this tick's buffered press as spent, so no ordinary move claims it. */
+  #consumePress() {
+    const buf = this.inputBuffer;
+    for (let i = buf.length - 1; i >= 0; i--) {
+      if (buf[i].tick !== this.simTick) break;
+      buf[i].used = true;
+    }
+  }
+
+  #rememberDir(cmd) {
+    const p = this.prevDir;
+    p.fwd = !!(cmd && cmd.fwd); p.back = !!(cmd && cmd.back);
+    p.up = !!(cmd && cmd.up); p.down = !!(cmd && cmd.down);
+  }
+
+  /**
+   * The sequence completed. Launch it if the fighter is actually able to act;
+   * if it is not, the sequence stays complete and this is retried every tick
+   * until the window runs out — a finisher entered a frame before recovery
+   * should not be thrown away, and a finisher entered from inside a combo
+   * should not teleport out of it.
+   */
+  #fireFinisher() {
+    const fs = this.finisher;
+    const move = fs.move;
+    if (!move) { this.#closeFinisher('nomove'); return false; }
+    if (this.airborne || !FINISHER_START_STATES.has(this.state)) return false;
+    if (move.meterCost > 0 && this.meter < move.meterCost) return false;
+
+    fs.open = false;
+    fs.ready = false;
+    fs.fired = true;
+    fs.ticksLeft = 0;
+    // `#startMove` raises the cinematic; this is the event the UI, camera and
+    // audio can key off to say FINISHER rather than SUPER.
+    bus.emit('finisherStart', { fighter: this, defender: this.opponent, move });
+    this.#startMove(move);
+    return true;
   }
 
   #applyMoveMotion() {
@@ -1546,6 +1960,12 @@ export class Fighter {
     const raw = info.damage ?? move.damage;
     const dmg = Math.max(1, raw * this.#defenseScale());
     this.health = Math.max(0, this.health - dmg);
+    // A finisher finishes. Its window only opens on an opponent already under
+    // the authored health threshold, so this is not a damage number the balance
+    // pass has to carry — it is the definition of the move. Going through the
+    // ordinary `#toKO` below is what keeps rounds, scoring, the KO banner, the
+    // victory screen and the rematch path working unchanged.
+    if (move.props?.finisher) this.health = 0;
     this.recoverable = Math.min(this.recoverable + dmg * RECOVERABLE_RATIO, MAX_HEALTH - this.health);
     this.lastDamageTick = this.simTick;
     this.impactTick = this.simTick;
@@ -1721,15 +2141,24 @@ export class Fighter {
   }
 
   #toKO(move, attacker) {
+    const fin = !!move?.props?.finisher;
     this.#enter(STATE.KO);
     this.currentMove = null;
     this.hitboxes.length = 0;
     this.airborne = true;
     this.grounded = false;
-    this.velocity.set(attacker.facing * 4.6, 5.2, 0);
+    // A finisher does not send the body across the arena; it puts it down. The
+    // slump reads at the framing the KO camera holds, and `r.koSlump` was
+    // authored and never played.
+    this.velocity.set(attacker.facing * (fin ? 2.2 : 4.6), fin ? 3.2 : 5.2, 0);
     this.stunTicks = 0;
-    this.#play('r.koFall', 2, false);
+    this.#play(fin ? 'r.koSlump' : 'r.koFall', 2, false);
     this.koTick = this.simTick;
+    if (fin) {
+      bus.emit('finisherKO', { fighter: this, attacker, move });
+      bus.emit('timeScale', { scale: 0.18, ticks: 110 });
+      bus.emit('shake', { amount: 0.9, ticks: 30 });
+    }
   }
 
   #toNeutral() {
@@ -2136,8 +2565,12 @@ export class Fighter {
   registerConnect(windowIndex) {
     const key = `${this.moveInstance}:${windowIndex}`;
     if (this.connected.has(key)) return false;
+    const first = !this.hitConnectedThisMove;
     this.connected.add(key);
     this.hitConnectedThisMove = true;
+    // Stage two of a declared multi-clip strike. See `props.finishClip` above.
+    const hitClip = first ? this.currentMove?.props?.hitClip : null;
+    if (hitClip) this.#play(hitClip, 2, false);
     return true;
   }
 

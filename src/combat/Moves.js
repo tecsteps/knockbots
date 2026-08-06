@@ -30,6 +30,10 @@
 
 import { HEIGHT, WEIGHT, REACTION, METER_MAX, INPUT_BUFFER_TICKS } from '../core/Constants.js';
 import { defineMove } from './MoveSchema.js';
+// roster.js is pure data and imports nothing, so this cannot cycle. It is the
+// source of truth for which machine exists and which archetype its signature
+// layer is merged over; see CHARACTER_EXTRAS below.
+import { ROSTER } from '../characters/roster.js';
 
 // ---------------------------------------------------------------------------
 // Authoring helpers
@@ -89,6 +93,51 @@ const KNEE_R = (r = 0.25) => [B('knee_R', r, [0, -0.08, 0.05]), B('ankle_R', r *
 // leg hurtboxes and connects with nothing.
 const SHIN_L = (r = 0.23) => [B('knee_L', r, [0, -0.04, 0.04], 0.42), B('foot_L', r, [0, -0.02, 0.05])];
 const SHIN_R = (r = 0.23) => [B('knee_R', r, [0, -0.04, 0.04], 0.42), B('foot_R', r, [0, -0.02, 0.05])];
+
+/**
+ * The vestigial hitbox on a throw, tucked inside the thrower's own chest.
+ *
+ * A throw is resolved by RANGE, in `CombatSystem#resolveThrow`, which never
+ * looks at these boxes — it compares |dx| against `props.throw.range` and calls
+ * `beginThrow`. The boxes exist only because `defineMove` requires at least one
+ * active window and `#resolveThrow` uses `isActive()` to find the grab frames.
+ *
+ * They were authored as real 0.30 m capsules on both hands leading 0.25 m
+ * forward, and that was a live bug rather than dead weight. `#resolveThrow`
+ * refuses a long list of defender states — airborne, juggled, launched,
+ * backdashing (`throwInvuln`), invulnerable — and returns *without* consuming
+ * the window. `#findConnection` then runs on the very same tick, and
+ * `#guardResult` answers `'hit'` for anything carrying `props.throw` before it
+ * tests guard or height. So a rejected grab could pay out instead as an
+ * unblockable 34-62 damage knockdown that could not be blocked, ducked, or
+ * armoured through.
+ *
+ * How close it actually came, measured offline against the real rig at the grab
+ * frame — clearance in metres between the grab capsule and the nearest defender
+ * hurtbox, negative meaning it connects, at the 0.84 m minimum separation the
+ * push-out enforces:
+ *
+ *     defender pose      standing  launched  crouching  mid-whiff
+ *     0.30 m boxes, +0.25   +0.17     -0.05      -0.05      -0.13
+ *     as authored now       +1.17     +1.18      +1.03      +0.97
+ *
+ * Standing, it missed — which is why this never showed up as an obvious "throws
+ * do damage from nowhere" report. Against a launched opponent, which is the one
+ * state `#resolveThrow` explicitly refuses, it connected: 1+2 during a juggle
+ * was free unblockable damage.
+ *
+ * `fwd: -0.7` pulls the anchor back through the fighter's own spine, so the box
+ * is behind its own hurtboxes and cannot reach anything the push-out has
+ * separated — a metre of clearance in every pose above. The grab frames still
+ * exist, `isActive` still finds them, and the throw path is untouched.
+ *
+ * The clean fix belongs one line up the stack in CombatSystem — see the note on
+ * `throwFwd` — but this file can make the boxes harmless on its own, and does.
+ */
+const GRAB = () => [
+  B('hand_R', 0.04, [0, -0.05, 0], 0, -0.7),
+  B('hand_L', 0.04, [0, -0.05, 0], 0, -0.7),
+];
 
 const MOTIONS = new Set(['qcf', 'qcb', 'dp', 'hcf', 'dd', 'ff', 'bb']);
 const DIRS = new Set(['f', 'b', 'u', 'd', 'df', 'db', 'uf', 'ub']);
@@ -159,9 +208,17 @@ function noteFor(m) {
   if (p.homing) n.push('Homing');
   if (p.wallBounce) n.push('Wall bounce');
   if (p.groundBounce) n.push('Floor bounce');
-  if (p.throw) n.push(p.throw.type === 'back' ? 'Back throw' : 'Throw');
+  // A throw the player cannot see the break for is a coin flip, not a mix-up.
+  // The break button and the size of the window are the whole defensive read,
+  // so they go in the command list next to the frame data rather than in a wiki.
+  if (p.throw) {
+    const t = p.throw;
+    const kind = t.type === 'back' ? 'Back throw' : t.type === 'command' ? 'Command throw' : 'Throw';
+    n.push(`${kind} · reach ${t.range.toFixed(2)}m · break ${t.breakButtons.join(' or ')} within ${t.breakWindow[1]}f`);
+  }
   if (p.counterLaunch) n.push('Launches on counter');
   if (p.hitsGrounded) n.push('Hits grounded');
+  if (p.finisher) n.push(`Finisher · ${p.finisher.condition} · ${p.finisher.sequenceText} within ${(p.finisher.window / 60).toFixed(1)}s`);
   if (m.meterCost > 0) n.push(`${m.meterCost} meter`);
   if (m.height === HEIGHT.UNBLOCKABLE) n.push('Unblockable');
   return n.join(' · ');
@@ -227,9 +284,16 @@ function make(s, cfg) {
   s.hitStun = Math.max(1, recovery + (adv.hit ?? 4));
   delete s.adv;
 
-  if (cfg.names && cfg.names[s.id]) s.name = cfg.names[s.id];
-  if (cfg.clips && cfg.clips[s.id]) s.clip = cfg.clips[s.id];
-  if (cfg.mirrorBoxes && cfg.mirrorBoxes.includes(s.id)) mirrorAnchors(s);
+  // The archetype's rename/reclip tables exist to give the SHARED core list a
+  // local accent, and a character's own move must not be caught by them. Without
+  // this gate BASTION's `counterStance` override came out named "Ablative
+  // Guard" — the heavy archetype's name for the move it had just replaced.
+  if (!s.character) {
+    if (cfg.names && cfg.names[s.id]) s.name = cfg.names[s.id];
+    if (cfg.clips && cfg.clips[s.id]) s.clip = cfg.clips[s.id];
+    if (cfg.mirrorBoxes && cfg.mirrorBoxes.includes(s.id)) mirrorAnchors(s);
+  }
+  delete s.character;
 
   const m = defineMove(s);
   m.followUp = m.input.includes(',');
@@ -640,24 +704,54 @@ function coreMoves(mv, cfg) {
   });
 
   // --- throws --------------------------------------------------------------
+  //
+  // THROWS DID EXIST AND THEY DID NOT COME OUT, and the reason was one line in
+  // the matcher rather than anything in this block. `Fighter#pushInput` writes
+  // one buffer entry per tick from `cmd.pressed`, which is edge-triggered, and
+  // `matchesEntry` required every button of a notation token to live in that ONE
+  // entry. So `1+2` demanded that both keys go down inside the same 16.7 ms
+  // tick. Driven through `findMove` with a hand-built buffer:
+  //
+  //     1+2 on the same tick        -> throwFwd
+  //     1 then 2, one tick apart    -> jab
+  //     1 then 2, two ticks apart   -> jab
+  //     b+1+2 split by two ticks    -> backfist
+  //     f+1+3 split by two ticks    -> sideKick
+  //
+  // A player who is a single frame off gets a jab, which is exactly what "the
+  // throws don't work" looks like from the seat. The fix is `CHORD_TICKS` down
+  // in the matcher; the throws themselves were fine.
+  //
+  // The second defect was that a rejected grab still paid out as an unblockable
+  // strike — see the `GRAB` note above.
+  //
+  // Still owed, and NOT expressible from this file (CombatSystem.js is another
+  // agent's this round; the patch is in the handover):
+  //   - `#findConnection` should return null outright for `props.throw`, so a
+  //     grab can never resolve down the strike path.
+  //   - `#resolveThrow` should refuse a crouching defender for a standing throw,
+  //     which is what makes ducking a real answer to a throw loop.
   mv({
     id: 'throwFwd', name: 'Chassis Toss', input: '1+2', clip: 't.grabAttempt', tag: 'throw',
-    active: [W(12, 14, [B('hand_R', 0.3, [0, -0.06, 0]), B('hand_L', 0.3, [0, -0.06, 0])])], total: 46,
+    active: [W(12, 14, GRAB())], total: 46,
     height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 34,
     adv: { block: 0, hit: 0 }, reaction: REACTION.KNOCKDOWN,
     knockback: [4.0, 2.0, 0], meterGain: 12,
     props: {
-      throw: { type: 'forward', range: 1.35, breakWindow: [0, 19], breakButtons: [1, 2], clip: 't.throwForward', victimClip: 't.beingThrown', duration: 74 },
+      // 1.45 m against a 0.84 m minimum separation: the grab reaches about two
+      // thirds of a body past the push-out, which is jab range. At the authored
+      // 1.35 it only worked from a stance the push-out rarely leaves you in.
+      throw: { type: 'forward', range: 1.45, breakWindow: [0, 19], breakButtons: [1, 2], clip: 't.throwForward', victimClip: 't.beingThrown', duration: 74 },
     },
   });
   mv({
     id: 'throwBack', name: 'Reactor Suplex', input: 'b+1+2', clip: 't.grabAttempt', tag: 'throw',
-    active: [W(12, 14, [B('hand_L', 0.3, [0, -0.06, 0]), B('hand_R', 0.3, [0, -0.06, 0])])], total: 50,
+    active: [W(12, 14, GRAB())], total: 50,
     height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 42,
     adv: { block: 0, hit: 0 }, reaction: REACTION.KNOCKDOWN,
     knockback: [-3.0, 2.4, 0], meterGain: 14,
     props: {
-      throw: { type: 'back', range: 1.3, breakWindow: [0, 14], breakButtons: [1], clip: 't.throwBack', victimClip: 't.beingThrown', duration: 86 },
+      throw: { type: 'back', range: 1.4, breakWindow: [0, 14], breakButtons: [1], clip: 't.throwBack', victimClip: 't.beingThrown', duration: 86 },
     },
   });
 
@@ -858,11 +952,14 @@ function heavyExtras(mv, cfg, set) {
   });
   mv({
     id: 'titanGrab', name: 'Titan Clamp', input: 'f+1+3', clip: 't.grabAttempt', tag: 'throw',
-    active: [W(16, 19, [B('hand_R', 0.32, [0, -0.06, 0]), B('hand_L', 0.32, [0, -0.06, 0])])], total: 56,
+    active: [W(16, 19, GRAB())], total: 56,
     height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 48,
     adv: { block: 0, hit: 0 }, reaction: REACTION.KNOCKDOWN,
     knockback: [3.0, 3.0, 0], meterGain: 16,
-    props: { throw: { type: 'command', range: 1.55, breakWindow: [0, 12], breakButtons: [1, 2], clip: 't.throwForward', victimClip: 't.beingThrown', duration: 96 } },
+    // A command throw pays for its damage with a one-button escape: `1` only,
+    // where the two generic throws take either punch. Reach 1.8 m — a siege
+    // frame's arms are the reason to respect its walk-forward.
+    props: { throw: { type: 'command', range: 1.8, breakWindow: [0, 12], breakButtons: [1], clip: 't.throwForward', victimClip: 't.beingThrown', duration: 96 } },
   });
   mv({
     id: 'meteorDrop', name: 'Meteor Drop', input: 'uf+1+2', clip: 'p.overhand', tag: 'heavy',
@@ -1079,6 +1176,691 @@ function buildMoveSet(cfg) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Per-character signature layers
+// ---------------------------------------------------------------------------
+
+/**
+ * Ten fighters shared four move tables, so any two machines on the same
+ * archetype played *identically* — VULKAN and BASTION are a furnace and a door
+ * and they had the same 52 moves with the same numbers. This layer closes that.
+ *
+ * Each function below is merged over its character's archetype table at load.
+ * `mv()` adds a move, and adds it under an id that already exists to OVERRIDE
+ * that move — ANVIL replaces the generic `throwFwd`, BASTION replaces the
+ * generic `counterStance`, and the archetype tables are untouched because the
+ * character table copies the references before it writes. `chain()` clones a
+ * base move before hanging a cancel off it, for the same reason: mutating
+ * `set.elbow` in place would give every heavy character VULKAN's string.
+ *
+ * A character that declares nothing gets its archetype table verbatim.
+ *
+ * Design rules these obey, because a signature that is just another button is
+ * not a signature:
+ *
+ *  - Every one is a motion input or a multi-step string. Motions are `qcf`,
+ *    `qcb`, `dp` — the four the touch pad can draw as swipes — so a signature is
+ *    reachable on glass as well as on a keyboard. `hcf`, `ff` and `bb` are
+ *    deliberately unused here: TouchControls only recognises the first four.
+ *  - Every one comes out of the machine. The stats and the bio pick the move:
+ *    a courier frame gets the plus-on-block advancing knee, a substation rig
+ *    gets the 50/50 off an arc, a door gets the only armoured plus-frame check
+ *    in the cast, and the dockyard lifting rig gets the second command throw.
+ *  - The balance invariants at the top of this file still hold. Every launcher
+ *    here is -13 or worse, every low is minus, and the two moves that are plus
+ *    on block (KESTREL's Slipstream, BASTION's Blast Door) pay for it in damage
+ *    and push-out exactly as the invariant requires.
+ *
+ * Frame data is authored PRE-SHIFT, like everything else: `make()` applies the
+ * archetype's startup shift, power, reach and launch scaling on the way in, so
+ * VULKAN's signature is a heavy move and KESTREL's is an agile one without
+ * either being written twice.
+ */
+/**
+ * The rule every finisher in the game shares, so it is one thing to learn.
+ *
+ * A finisher is a window you can MISS — that is the whole difference between it
+ * and the overdrive, which is a resource you spend. `CombatSystem` opens the
+ * window once per fighter per round the tick the opponent drops under 20% on a
+ * round that can decide the match, `Fighter` recognises the sequence, and both
+ * halves of the rule live here: `condition` and `sequenceText` are rendered on
+ * screen verbatim, `healthPct` / `finalRoundOnly` / `window` drive the engine.
+ * See docs/CONTRACT-character-moves.md.
+ *
+ * Uniform on purpose. Ten different opening conditions would be ten things to
+ * memorise before anyone saw a single finisher; the identity is in the sequence,
+ * the machine and what it does, not in the paperwork.
+ *
+ * 130 ticks is 2.2 seconds for a four-step sequence — long enough to think, far
+ * too short to stumble into. `window` being finite is the point.
+ */
+const FINISH_RULE = {
+  condition: 'Opponent below 20% health, on a round that can win the match',
+  healthPct: 0.2,
+  finalRoundOnly: true,
+  window: 130,
+};
+
+/**
+ * A finisher's shared frame shape. Ten of these differ in clip, hitbox, damage,
+ * sequence and follow-through — not in how long they take, because a finisher
+ * that is faster than another finisher is a balance decision nobody asked for.
+ *
+ * `travel` is deliberate and is not a gimmick: the sequence is entered from
+ * neutral at whatever range the round happened to end at, so a finisher that
+ * could whiff would be a two-second animation of missing. It closes the gap.
+ */
+const FIN_TRAVEL = [{ from: 4, to: 34, x: 5.0, z: 0 }];
+
+const CHARACTER_EXTRAS = {
+  // --- VULKAN — forge-born, power 10, speed 3 -------------------------------
+  // The furnace never backs up. Both signatures commit forward through armour
+  // and both are punishable if they are wrong; nothing here retreats.
+  vulkan(mv, cfg, set, chain) {
+    mv({
+      id: 'slagVent', name: 'Slag Vent', input: 'qcb+2', clip: 'sp.plasmaBurst', tag: 'special',
+      desc: 'Dumps the chest furnace forward through armour: walks into a jab, staggers on hit, and shoves a blocker most of a body away.',
+      active: [W(24, 29, [B('hand_L', 0.34, [0, -0.16, 0]), B('chest', 0.3, [0, 0, -0.3])])], total: 62,
+      height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 30,
+      adv: { block: -9, hit: 6 }, reaction: REACTION.STAGGER,
+      knockback: [4.2, 0.6, 0], blockPush: [5.6, 0, 0], meterGain: 13,
+      // Twenty frames of armour on a 32-frame recovery: it walks through a jab
+      // to open the chest, and loses the round to anything that waits for it.
+      props: { armorFrom: 6, armorTo: 26, armorScale: 0.5, wallCarry: 2.0 },
+    });
+    mv({
+      id: 'pourOff', name: 'Pour-Off', input: 'f+2,1', clip: 'p.overhand', tag: 'string',
+      desc: 'Follow the drive elbow with an overhand that staggers rather than knocks down, so the string can keep going.',
+      active: [W(18, 20, [B('hand_R', 0.27, [0, -0.05, 0], 0, 0.36), B('wrist_R', 0.22, [0, -0.04, 0], 0, 0.34)])], total: 46,
+      height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 24,
+      adv: { block: -10, hit: 4 }, reaction: REACTION.STAGGER,
+      knockback: [3.2, 0, 0], blockPush: [2.6, 0, 0], meterGain: 9, trail: 'hand_R',
+      props: { wallCarry: 1.6 },
+      cancels: ['tapOut'], cancelWindow: [18, 44],
+    });
+    mv({
+      id: 'tapOut', name: 'Tap Out', input: 'f+2,1,2', clip: 'p.siegeSlam', tag: 'string',
+      desc: 'The string ender. Armoured, crumples on hit, floor-bounces for a pickup, and -16 if they block it.',
+      active: [W(24, 27, [B('hand_R', 0.34, [0, -0.08, 0]), B('hand_L', 0.34, [0, -0.08, 0])])], total: 62,
+      height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 32,
+      adv: { block: -16, hit: 2 }, reaction: REACTION.CRUMPLE,
+      knockback: [4.0, 1.0, 0], blockPush: [3.4, 0, 0], meterGain: 14,
+      props: { armorFrom: 10, armorTo: 27, armorScale: 0.6, groundBounce: 0.7 },
+    });
+    chain('elbow', ['pourOff']);
+    // The furnace is the character, so the finisher is the furnace opened all the way. Longest active window of the ten — it is a pour, not a blow.
+    mv({
+      id: 'bessemerPour', name: 'Bessemer Pour', input: 'd,b,d,2', clip: 'sp.plasmaBurst', tag: 'finisher',
+      desc: 'Tips the chest furnace over them and holds it there. Twelve active frames of molten pour; the follow-through is VULKAN charging its own reactor back up.',
+      active: [W(28, 40, [B('hand_L', 0.4, [0, -0.16, 0]), B('chest', 0.36, [0, 0, -0.32])])], total: 112,
+      height: HEIGHT.MID, weight: WEIGHT.ULTRA, damage: 96,
+      adv: { block: -30, hit: 10 }, reaction: REACTION.CRUMPLE,
+      knockback: [7.0, 2.2, 0], blockPush: [5.0, 0, 0], meterGain: 0,
+      props: {
+        finisher: { ...FINISH_RULE, sequenceText: 'Down, Back, Down, RP' },
+        invulnFrom: 1, invulnTo: 8, wallBounce: true, wallCarry: 3.2,
+        travel: FIN_TRAVEL, hitsGrounded: true,
+        cinematic: { zoom: 1.45, slow: 0.26, slowTicks: 52 },
+        hitClip: 'sp.overdriveHit', finishClip: 'v.saluteCharge',
+      },
+    });
+  },
+
+  // --- KESTREL — courier, speed 10, weight 3 --------------------------------
+  // Arrives first. The identity is frame advantage from movement rather than
+  // damage: the only plus-on-block advancing mid in the cast, paid for with 11
+  // damage and a block push that ends the pressure it just earned.
+  kestrel(mv, cfg, set, chain) {
+    mv({
+      id: 'slipstream', name: 'Slipstream', input: 'qcf+3', clip: 'k.kneeStrike', tag: 'rush',
+      desc: 'Closes half the screen and is PLUS on block — the only advancing mid in the cast that is. It does almost no damage and shoves them out again.',
+      active: [W(17, 18, KNEE_R(0.24))], total: 34,
+      height: HEIGHT.MID, weight: WEIGHT.LIGHT, damage: 13,
+      adv: { block: 2, hit: 8 }, reaction: REACTION.FLINCH_MID,
+      knockback: [1.0, 0, 0], blockPush: [3.8, 0, 0], meterGain: 6,
+      props: { crushLow: true, travel: [{ from: 4, to: 16, x: 5.2, z: 0 }] },
+      cancels: ['slipstream2'], cancelWindow: [17, 32],
+    });
+    mv({
+      id: 'slipstream2', name: 'Overtake', input: 'qcf+3,4', clip: 'k.spinKick', tag: 'string',
+      desc: 'Spinning high off the slipstream. Carries to the wall; duckable, and -12 if it is.',
+      active: [W(20, 22, [...FOOT_R(0.27), B('hand_R', 0.24, [0, -0.05, 0])])], total: 50,
+      height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 22,
+      adv: { block: -12, hit: 4 }, reaction: REACTION.SPIN,
+      knockback: [6.0, 1.2, 0], blockPush: [3.0, 0, 0], meterGain: 10, trail: 'foot_R',
+      props: { wallCarry: 2.2 },
+    });
+    mv({
+      id: 'coolantLance', name: 'Coolant Lance', input: 'qcb+2', clip: 'p.duckingStraight', tag: 'evade',
+      desc: 'Ducks under a high with ten frames of real invulnerability and answers it. Launches on counter-hit. Loses clean to a low.',
+      active: [W(15, 16, FIST_R(0.24))], total: 42,
+      height: HEIGHT.MID, weight: WEIGHT.LIGHT, damage: 15,
+      adv: { block: -11, hit: 5 }, reaction: REACTION.FLINCH_MID,
+      knockback: [2.4, 0, 0], blockPush: [1.8, 0, 0], meterGain: 7, trail: 'hand_R',
+      // Ten frames of outright invulnerability on an i14 move, bought with 25
+      // frames of recovery and -11: it beats a high, and it loses to a low.
+      props: { crushHigh: true, invulnFrom: 3, invulnTo: 12, counterLaunch: { reaction: REACTION.LAUNCH, juggleHeight: 5.6, hitStun: 30 } },
+    });
+    // Three windows on the three-hit rush clip, anchored L,R,R exactly as `pistonRush` is, because that is the order p.pistonRush actually throws them.
+    mv({
+      id: 'terminalVelocity', name: 'Terminal Velocity', input: 'f,b,f,3', clip: 'p.pistonRush', tag: 'finisher',
+      desc: 'Arrives from three places at once. Three separate impacts down the same line, each one faster than the last, and KESTREL is already posing before the last one lands.',
+      active: [
+        W(26, 27, FIST_L(0.3), 30),
+        W(32, 33, FIST_R(0.3), 34),
+        W(40, 45, FIST_R(0.38), 58),
+      ], total: 108,
+      height: HEIGHT.MID, weight: WEIGHT.ULTRA, damage: 122,
+      adv: { block: -30, hit: 10 }, reaction: REACTION.CRUMPLE,
+      knockback: [7.0, 2.2, 0], blockPush: [5.0, 0, 0], meterGain: 0,
+      props: {
+        finisher: { ...FINISH_RULE, sequenceText: 'Forward, Back, Forward, LK' },
+        invulnFrom: 1, invulnTo: 8, wallBounce: true, wallCarry: 3.2,
+        travel: FIN_TRAVEL, hitsGrounded: true,
+        cinematic: { zoom: 1.5, slow: 0.24, slowTicks: 48 },
+        hitClip: 'sp.overdriveHit', finishClip: 'v.pose',
+      },
+    });
+  },
+
+  // --- ANVIL — dockyard lifting rig, weight 10, the grappler ----------------
+  // "Never learned a strike it liked more than a hug." It is the only machine in
+  // the cast with two command grabs, and its generic forward throw is REPLACED
+  // rather than added to — the override path, demonstrated on the character the
+  // feature exists for.
+  anvil(mv, cfg, set, chain) {
+    mv({
+      id: 'throwFwd', name: 'Industrial Embrace', input: '1+2', clip: 't.grabAttempt', tag: 'throw',
+      desc: 'ANVIL\'s grab, not the standard one: longer reach, more damage, and five fewer frames to break it.',
+      active: [W(12, 14, GRAB())], total: 48,
+      height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 40,
+      adv: { block: 0, hit: 0 }, reaction: REACTION.KNOCKDOWN,
+      knockback: [4.4, 2.2, 0], meterGain: 14,
+      props: { throw: { type: 'forward', range: 1.7, breakWindow: [0, 14], breakButtons: [1, 2], clip: 't.throwForward', victimClip: 't.beingThrown', duration: 82 } },
+    });
+    mv({
+      id: 'dockClamp', name: 'Dock Clamp', input: 'qcf+1', clip: 't.grabAttempt', tag: 'throw',
+      desc: 'A command throw with the longest reach in the game and a ten-frame break window. This is why you do not stand in front of ANVIL.',
+      active: [W(18, 21, GRAB())], total: 60,
+      height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 46,
+      adv: { block: 0, hit: 0 }, reaction: REACTION.KNOCKDOWN,
+      knockback: [4.0, 2.6, 0], meterGain: 18,
+      props: { throw: { type: 'command', range: 1.95, breakWindow: [0, 10], breakButtons: [1], clip: 't.throwForward', victimClip: 't.beingThrown', duration: 102 } },
+    });
+    mv({
+      id: 'counterweight', name: 'Counterweight', input: 'qcb+2', clip: 'sp.chargeShoulder', tag: 'armor',
+      desc: 'Armoured, homing body check that wall-bounces. Built to close the gap the grabs need closed.',
+      active: [W(22, 26, [B('shoulder_R', 0.34, [0, -0.1, 0]), B('chest', 0.32, [0, 0, -0.18])])], total: 58,
+      height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 28,
+      adv: { block: -10, hit: 4 }, reaction: REACTION.KNOCKDOWN,
+      knockback: [8.0, 1.0, 0], blockPush: [5.0, 0, 0], meterGain: 14,
+      // The answer to a machine that has to close the gap: armoured, homing, and
+      // it carries the opponent to the wall the grabs want them against.
+      props: { armorFrom: 6, armorTo: 26, armorScale: 0.5, homing: true, wallCarry: 3.0, wallBounce: true, travel: [{ from: 6, to: 26, x: 3.6, z: 0 }] },
+    });
+    // The dockyard rig's finisher is a lift and a drop, which is the one thing it was actually built to do.
+    mv({
+      id: 'loadTest', name: 'Load Test', input: 'b,d,f,1', clip: 'p.siegeSlam', tag: 'finisher',
+      desc: 'Picks the opponent up, reads the number off the load cell, and puts them through the floor. ANVIL files the result.',
+      active: [W(34, 40, [B('hand_R', 0.42, [0, -0.08, 0]), B('hand_L', 0.42, [0, -0.08, 0])])], total: 116,
+      height: HEIGHT.MID, weight: WEIGHT.ULTRA, damage: 104,
+      adv: { block: -30, hit: 10 }, reaction: REACTION.CRUMPLE,
+      knockback: [7.0, 2.2, 0], blockPush: [5.0, 0, 0], meterGain: 0,
+      props: {
+        finisher: { ...FINISH_RULE, sequenceText: 'Back, Down, Forward, LP' },
+        invulnFrom: 1, invulnTo: 8, wallBounce: true, wallCarry: 3.2,
+        travel: FIN_TRAVEL, hitsGrounded: true,
+        cinematic: { zoom: 1.35, slow: 0.22, slowTicks: 54 },
+        hitClip: 'sp.overdriveHit', finishClip: 'v.systemsNominal',
+      },
+    });
+  },
+
+  // --- SERAPH — choir-drone, reach 9, defense 4 -----------------------------
+  // "Considers the ring an acoustically interesting room." Holds the room at
+  // arm's length and punishes anyone who tries to come over the top of it.
+  seraph(mv, cfg, set, chain) {
+    mv({
+      id: 'chorale', name: 'Chorale Line', input: 'qcb+3', clip: 'k.sideKick', tag: 'poke',
+      desc: 'The longest poke in the game that does not travel. -4 on block and it pushes them back out to where SERAPH wants them.',
+      // Authored fwd 0.46 against the 0.31 default for a foot: this is the
+      // longest non-travelling poke in the game, which is what reach 9 means.
+      active: [W(20, 22, [B('foot_L', 0.3, [0, -0.02, 0.04], 0, 0.46), B('ankle_L', 0.25, [0, 0, 0], 0, 0.44)])], total: 44,
+      height: HEIGHT.MID, weight: WEIGHT.MEDIUM, damage: 22,
+      adv: { block: -4, hit: 5 }, reaction: REACTION.FLINCH_MID,
+      knockback: [7.0, 0, 0], blockPush: [5.2, 0, 0], meterGain: 8, trail: 'foot_L',
+      props: { wallCarry: 2.4 },
+      cancels: ['chorale2'], cancelWindow: [20, 42],
+    });
+    mv({
+      id: 'chorale2', name: 'Antiphon', input: 'qcb+3,4', clip: 'k.axeKick', tag: 'string',
+      desc: 'Axe-kick ender off the chorale. Hops over lows, floor-bounces, and is -14 for the privilege.',
+      active: [W(20, 22, FOOT_L(0.29))], total: 52,
+      height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 26,
+      adv: { block: -14, hit: 2 }, reaction: REACTION.KNOCKDOWN,
+      knockback: [2.4, -2.0, 0], blockPush: [2.4, 0, 0], meterGain: 10, trail: 'foot_L',
+      props: { crushLow: true, groundBounce: 0.6, airborne: [8, 24] },
+    });
+    mv({
+      id: 'descant', name: 'Descant', input: 'dp+3', clip: 'k.launcherKick', tag: 'reversalLauncher',
+      desc: 'Anti-air reversal: invulnerable for its first thirteen frames, full launch on hit, -19 if it does not.',
+      active: [W(14, 17, FOOT_R(0.28))], total: 54,
+      height: HEIGHT.MID, weight: WEIGHT.LAUNCHER, damage: 21,
+      adv: { block: -19, hit: 22 }, reaction: REACTION.LAUNCH, juggleHeight: 7.4,
+      knockback: [2.2, 0, 0], blockPush: [2.0, 0, 0], meterGain: 12, trail: 'foot_R',
+      props: { invulnFrom: 1, invulnTo: 13, airborne: [6, 30] },
+    });
+    // Reach 9 gets the longest capsule in the game: a 1.1 m lance down the arm rather than a fist.
+    mv({
+      id: 'finalCadence', name: 'Final Cadence', input: 'd,f,b,1', clip: 'sp.rocketPunch', tag: 'finisher',
+      desc: 'Resolves the chord. A single lance of cold light the length of the room, held long enough for the interval to close.',
+      active: [W(30, 38, [B('hand_R', 0.32, [0, -0.1, 0], 1.1), B('elbow_R', 0.26, [0, 0, 0], 0.34)])], total: 110,
+      height: HEIGHT.MID, weight: WEIGHT.ULTRA, damage: 88,
+      adv: { block: -30, hit: 10 }, reaction: REACTION.CRUMPLE,
+      knockback: [7.0, 2.2, 0], blockPush: [5.0, 0, 0], meterGain: 0,
+      props: {
+        finisher: { ...FINISH_RULE, sequenceText: 'Down, Forward, Back, LP' },
+        invulnFrom: 1, invulnTo: 8, wallBounce: true, wallCarry: 3.2,
+        travel: FIN_TRAVEL, hitsGrounded: true,
+        cinematic: { zoom: 1.55, slow: 0.28, slowTicks: 50 },
+        hitClip: 'sp.overdriveHit', finishClip: 'v.pose',
+      },
+    });
+  },
+
+  // --- RONIN-07 — bodyguard line, precision frame ---------------------------
+  // One draw, one return cut, one diagonal. The whole kit is built around the
+  // counter-hit: the draw crumples anything that presses a button into it, and
+  // the return cut is the only wall-bouncing string ender a technical frame has.
+  ronin(mv, cfg, set, chain) {
+    mv({
+      id: 'iaiDraw', name: 'Iai Draw', input: 'qcf+1', clip: 'p.backfist', tag: 'special',
+      desc: 'The draw cut. Crumples anything that pressed a button into it; a plain high otherwise, and duckable.',
+      active: [W(20, 22, [B('hand_L', 0.28, [0, -0.05, 0], 0, 0.36), B('wrist_L', 0.22, [0, -0.04, 0], 0, 0.34)])], total: 50,
+      height: HEIGHT.HIGH, weight: WEIGHT.HEAVY, damage: 24,
+      adv: { block: -9, hit: 5 }, reaction: REACTION.FLINCH_HIGH,
+      knockback: [4.0, 0, 0], blockPush: [2.4, 0, 0], meterGain: 10, trail: 'hand_L',
+      props: { counterLaunch: { reaction: REACTION.CRUMPLE, hitStun: 52 } },
+      cancels: ['iaiNoto'], cancelWindow: [20, 48],
+    });
+    mv({
+      id: 'iaiNoto', name: 'Noto', input: 'qcf+1,2', clip: 'p.straight', tag: 'string',
+      desc: 'The return cut off the draw. Wall-bounces for the follow-up, -13 on block.',
+      active: [W(14, 16, FIST_R(0.26))], total: 46,
+      height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 26,
+      adv: { block: -13, hit: 6 }, reaction: REACTION.KNOCKDOWN,
+      knockback: [5.6, 1.0, 0], blockPush: [2.8, 0, 0], meterGain: 11, trail: 'hand_R',
+      props: { wallBounce: true, wallCarry: 2.6 },
+    });
+    mv({
+      id: 'kesaLine', name: 'Kesa Line', input: 'qcb+2', clip: 'p.overhand', tag: 'mid',
+      desc: 'The diagonal. Floor-bounces on hit, crumples on counter-hit, and stays -11 either way.',
+      active: [W(22, 24, [B('hand_R', 0.28, [0, -0.05, 0], 0, 0.36), B('wrist_R', 0.23, [0, -0.04, 0], 0, 0.34)])], total: 50,
+      height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 27,
+      adv: { block: -11, hit: 3 }, reaction: REACTION.KNOCKDOWN,
+      knockback: [3.0, 1.2, 0], blockPush: [2.6, 0, 0], meterGain: 10, trail: 'hand_R',
+      props: { groundBounce: 0.5, counterLaunch: { reaction: REACTION.CRUMPLE, hitStun: 48 } },
+    });
+    // Six frames active and nothing else. The shortest finisher window of the ten, on the machine whose entire kit is one decision made correctly.
+    mv({
+      id: 'seventhSerial', name: 'Seventh Serial', input: 'b,f,d,2', clip: 'p.overhand', tag: 'finisher',
+      desc: 'One cut, straight down, and then RONIN-07 etches an eighth number inside its forearm.',
+      active: [W(30, 35, [B('hand_R', 0.34, [0, -0.05, 0], 0, 0.42), B('wrist_R', 0.28, [0, -0.04, 0], 0, 0.4)])], total: 106,
+      height: HEIGHT.MID, weight: WEIGHT.ULTRA, damage: 92,
+      adv: { block: -30, hit: 10 }, reaction: REACTION.CRUMPLE,
+      knockback: [7.0, 2.2, 0], blockPush: [5.0, 0, 0], meterGain: 0,
+      props: {
+        finisher: { ...FINISH_RULE, sequenceText: 'Back, Forward, Down, RP' },
+        invulnFrom: 1, invulnTo: 8, wallBounce: true, wallCarry: 3.2,
+        travel: FIN_TRAVEL, hitsGrounded: true,
+        cinematic: { zoom: 1.6, slow: 0.25, slowTicks: 46 },
+        hitClip: 'sp.overdriveHit', finishClip: 'v.pose',
+      },
+    });
+  },
+
+  // --- MANTIS — pest control, reach 8, defense 3 ----------------------------
+  // "Holds still for exactly as long as it takes you to relax." The signature is
+  // one string that forks at the end into a low and a launcher off the same two
+  // frames, which is the entire reason a rushdown frame is frightening. It has
+  // the worst defence in the cast and no evasive option: it wins by guessing
+  // right on the third hit.
+  mantis(mv, cfg, set, chain) {
+    mv({
+      id: 'raptorRake', name: 'Raptor Rake', input: 'qcf+1', clip: 'p.jabAlt', tag: 'poke',
+      desc: 'i11 high that is 0 on block. The opener; on its own it is worth nothing.',
+      active: [W(12, 13, FIST_L(0.22))], total: 28,
+      height: HEIGHT.HIGH, weight: WEIGHT.LIGHT, damage: 10,
+      adv: { block: 0, hit: 8 }, reaction: REACTION.FLINCH_HIGH,
+      knockback: [1.2, 0, 0], blockPush: [0.9, 0, 0], meterGain: 4,
+      cancels: ['raptorRake2'], cancelWindow: [12, 27],
+    });
+    mv({
+      id: 'raptorRake2', name: 'Second Angle', input: 'qcf+1,1', clip: 'p.backfist', tag: 'string',
+      desc: 'Second rake. Sets up the fork — from here MANTIS is either sweeping your legs or launching you.',
+      active: [W(12, 13, FIST_L(0.24))], total: 32,
+      height: HEIGHT.HIGH, weight: WEIGHT.MEDIUM, damage: 13,
+      adv: { block: -4, hit: 6 }, reaction: REACTION.FLINCH_HIGH,
+      knockback: [2.4, 0, 0], blockPush: [1.6, 0, 0], meterGain: 5, trail: 'hand_L',
+      cancels: ['raptorRake3', 'raptorRakeUp'], cancelWindow: [12, 31],
+    });
+    mv({
+      id: 'raptorRake3', name: 'Sixth Angle', input: 'qcf+1,1,3', clip: 'k.sweep', tag: 'low',
+      desc: 'The low half of the fork. Sweeps on hit, -15 if they were crouching.',
+      active: [W(18, 20, [B('knee_L', 0.25, [0, -0.04, 0.04], 0.44), B('foot_L', 0.26, [0, -0.02, 0.06]), B('hand_L', 0.23, [0, -0.05, 0])])], total: 48,
+      height: HEIGHT.LOW, weight: WEIGHT.MEDIUM, damage: 18,
+      adv: { block: -15, hit: 4 }, reaction: REACTION.SWEEP,
+      knockback: [2.8, 0.4, 0], blockPush: [2.0, 0, 0], meterGain: 7, trail: 'foot_L',
+      props: { crushHigh: true },
+    });
+    mv({
+      id: 'raptorRakeUp', name: 'Fourth Angle', input: 'qcf+1,1,2', clip: 'p.launcherPunch', tag: 'string',
+      desc: 'The mid half of the fork. Full launch on hit, -18 if they blocked. Same two frames as the sweep — that is the guess.',
+      active: [W(17, 19, FIST_R(0.26))], total: 50,
+      height: HEIGHT.MID, weight: WEIGHT.LAUNCHER, damage: 18,
+      adv: { block: -18, hit: 20 }, reaction: REACTION.LAUNCH, juggleHeight: 6.0,
+      knockback: [1.8, 0, 0], blockPush: [1.8, 0, 0], meterGain: 10, trail: 'hand_R',
+    });
+    // Anchored on the hand and the driving leg the way the base `groundSpike` is; the spike clip drives both.
+    mv({
+      id: 'harvest', name: 'Harvest', input: 'd,f,d,4', clip: 'sp.groundSpike', tag: 'finisher',
+      desc: 'Pins them to the floor with the raptor arms and does not stop. Pest control, as originally specified.',
+      active: [W(30, 39, [B('hand_L', 0.36, [0, -0.06, 0], 0, 0.44), B('foot_R', 0.34, [0, -0.02, 0.3], 0, 0.5), B('knee_R', 0.3, [0, -0.04, 0.05], 0.44, 0.42)])], total: 112,
+      height: HEIGHT.MID, weight: WEIGHT.ULTRA, damage: 86,
+      adv: { block: -30, hit: 10 }, reaction: REACTION.CRUMPLE,
+      knockback: [7.0, 2.2, 0], blockPush: [5.0, 0, 0], meterGain: 0,
+      props: {
+        finisher: { ...FINISH_RULE, sequenceText: 'Down, Forward, Down, RK' },
+        invulnFrom: 1, invulnTo: 8, wallBounce: true, wallCarry: 3.2,
+        travel: FIN_TRAVEL, hitsGrounded: true,
+        cinematic: { zoom: 1.4, slow: 0.26, slowTicks: 50 },
+        hitClip: 'sp.overdriveHit', finishClip: 'v.pose',
+      },
+    });
+  },
+
+  // --- NYX — casino security, wildcard --------------------------------------
+  // "Its outcomes are fair; its inputs are not." Everything is a gamble with a
+  // stated price: the teleport is invulnerable for eighteen frames and its
+  // follow-up is -21, and the low does nothing at all unless it counter-hits.
+  nyx(mv, cfg, set, chain) {
+    mv({
+      id: 'houseEdge', name: 'House Edge', input: 'qcb+3', clip: 'k.spinKick', tag: 'evade',
+      desc: 'Vanishes backwards through the attack and reappears through them. Eighteen frames of invulnerability.',
+      active: [W(22, 24, [...FOOT_R(0.27), B('hand_R', 0.24, [0, -0.05, 0])])], total: 52,
+      height: HEIGHT.MID, weight: WEIGHT.MEDIUM, damage: 19,
+      adv: { block: -9, hit: 5 }, reaction: REACTION.SPIN,
+      knockback: [4.0, 0.8, 0], blockPush: [2.6, 0, 0], meterGain: 9, trail: 'foot_R',
+      props: { invulnFrom: 1, invulnTo: 18, travel: [{ from: 0, to: 9, x: -6.0, z: 0 }, { from: 10, to: 22, x: 5.2, z: 0 }] },
+      cancels: ['doubleOrNothing'], cancelWindow: [22, 50],
+    });
+    mv({
+      id: 'doubleOrNothing', name: 'Double or Nothing', input: 'qcb+3,1', clip: 'p.launcherPunch', tag: 'string',
+      desc: 'The gamble off House Edge: full launcher on hit, -21 on block. Nothing in the game punishes harder.',
+      active: [W(16, 18, FIST_R(0.26))], total: 52,
+      height: HEIGHT.MID, weight: WEIGHT.LAUNCHER, damage: 20,
+      adv: { block: -21, hit: 20 }, reaction: REACTION.LAUNCH, juggleHeight: 6.4,
+      knockback: [1.8, 0, 0], blockPush: [1.8, 0, 0], meterGain: 11, trail: 'hand_R',
+    });
+    mv({
+      id: 'snakeEyes', name: 'Snake Eyes', input: 'db+1', clip: 'k.lowKick', tag: 'low',
+      desc: 'A low that does nothing much — unless it counter-hits, and then it launches.',
+      active: [W(16, 17, SHIN_L(0.25))], total: 40,
+      height: HEIGHT.LOW, weight: WEIGHT.LIGHT, damage: 12,
+      adv: { block: -11, hit: 5 }, reaction: REACTION.FLINCH_LOW,
+      knockback: [1.6, 0, 0], blockPush: [1.4, 0, 0], meterGain: 5,
+      props: { crushHigh: true, counterLaunch: { reaction: REACTION.LAUNCH, juggleHeight: 5.4, hitStun: 30 } },
+    });
+    // The one finisher built on the full three-clip overdrive staging, because the wildcard is the character a staged reveal belongs to.
+    mv({
+      id: 'lastHand', name: 'Last Hand', input: 'f,b,d,4', clip: 'sp.overdriveStart', tag: 'finisher',
+      desc: 'Deals three cards face down and turns all three over. The only finisher that pays out in stages, on the only machine that would.',
+      active: [
+        W(24, 28, [B('hand_R', 0.36, [0, -0.1, 0])], 30),
+        W(38, 43, [B('hand_L', 0.38, [0, -0.1, 0])], 34),
+        W(56, 64, [B('chest', 0.46, [0, 0, -0.34]), B('hand_R', 0.4, [0, -0.12, 0])], 56),
+      ], total: 120,
+      height: HEIGHT.MID, weight: WEIGHT.ULTRA, damage: 120,
+      adv: { block: -30, hit: 10 }, reaction: REACTION.CRUMPLE,
+      knockback: [7.0, 2.2, 0], blockPush: [5.0, 0, 0], meterGain: 0,
+      props: {
+        finisher: { ...FINISH_RULE, sequenceText: 'Forward, Back, Down, RK' },
+        invulnFrom: 1, invulnTo: 8, wallBounce: true, wallCarry: 3.2,
+        travel: FIN_TRAVEL, hitsGrounded: true,
+        cinematic: { zoom: 1.5, slow: 0.2, slowTicks: 58 },
+        hitClip: 'sp.overdriveHit', finishClip: 'sp.overdriveFinish',
+      },
+    });
+  },
+
+  // --- BASTION — twenty years in one corridor, defense 10 -------------------
+  // "Patience is a weapon and everyone eventually swings first." Its generic
+  // counter stance is REPLACED by one that reads lows as well as highs and mids,
+  // and holds the read for 27 frames instead of 18 — the best parry in the game,
+  // on the character whose whole biography is waiting.
+  bastion(mv, cfg, set, chain) {
+    mv({
+      id: 'counterStance', name: 'Bulkhead Protocol', input: 'b+3+4', clip: 'sp.counterStance', tag: 'parry',
+      desc: 'BASTION\'s parry, not the generic one: it reads lows as well as highs and mids, and it holds the read for twenty-seven frames.',
+      active: [W(26, 28, FIST_R(0.28))], total: 66,
+      height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 24,
+      adv: { block: -8, hit: 8 }, reaction: REACTION.CRUMPLE,
+      knockback: [2.0, 0, 0], blockPush: [2.0, 0, 0], meterGain: 16,
+      props: { parryFrom: 2, parryTo: 28, parryHeights: ['high', 'mid', 'low'], parryClip: 'sp.parrySuccess', parryRiposte: 20 },
+    });
+    mv({
+      id: 'blastDoor', name: 'Blast Door', input: 'qcb+4', clip: 'sp.chargeShoulder', tag: 'armor',
+      desc: 'Armoured for its whole startup and PLUS on block, which nothing else in the game manages. The +1 buys nothing but the right to walk forward again.',
+      active: [W(24, 28, [B('shoulder_R', 0.34, [0, -0.1, 0]), B('chest', 0.32, [0, 0, -0.18])])], total: 58,
+      height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 22,
+      // The one move in the game that is plus on block WITH armour, and it is
+      // legal by the invariant at the top of the file for both reasons the
+      // invariant allows: it is i26, and 7.0 of block push means the +1 buys
+      // nothing but the right to walk forward again.
+      adv: { block: 1, hit: 3 }, reaction: REACTION.STAGGER,
+      knockback: [5.0, 0, 0], blockPush: [7.0, 0, 0], meterGain: 12,
+      props: { armorFrom: 4, armorTo: 28, armorScale: 0.45, wallCarry: 3.0, travel: [{ from: 6, to: 26, x: 3.0, z: 0 }] },
+    });
+    mv({
+      id: 'holdTheLine', name: 'Hold the Line', input: 'dp+2', clip: 'p.hammerFist', tag: 'mid',
+      desc: 'Armoured mid that hops lows and crumples on counter-hit. The answer to someone finally swinging first.',
+      active: [W(18, 20, [B('hand_R', 0.27, [0, -0.06, 0]), B('hand_L', 0.27, [0, -0.06, 0])])], total: 48,
+      height: HEIGHT.MID, weight: WEIGHT.HEAVY, damage: 24,
+      adv: { block: -11, hit: 2 }, reaction: REACTION.KNOCKDOWN,
+      knockback: [3.0, 1.0, 0], blockPush: [2.6, 0, 0], meterGain: 11,
+      props: { crushLow: true, armorFrom: 8, armorTo: 20, armorScale: 0.6, counterLaunch: { reaction: REACTION.CRUMPLE, hitStun: 50 } },
+    });
+    // The heaviest travel of the ten and the lowest zoom: the camera stays wide because the read is the distance covered, not the blow.
+    mv({
+      id: 'lockdown', name: 'Lockdown', input: 'b,d,b,3', clip: 'sp.chargeShoulder', tag: 'finisher',
+      desc: 'Walks them backwards into the wall and stands there. Twenty years of standing in one corridor, delivered all at once.',
+      active: [W(32, 40, [B('shoulder_R', 0.42, [0, -0.1, 0]), B('chest', 0.4, [0, 0, -0.2])])], total: 114,
+      height: HEIGHT.MID, weight: WEIGHT.ULTRA, damage: 98,
+      adv: { block: -30, hit: 10 }, reaction: REACTION.CRUMPLE,
+      knockback: [7.0, 2.2, 0], blockPush: [5.0, 0, 0], meterGain: 0,
+      props: {
+        finisher: { ...FINISH_RULE, sequenceText: 'Back, Down, Back, LK' },
+        invulnFrom: 1, invulnTo: 8, wallBounce: true, wallCarry: 3.2,
+        travel: FIN_TRAVEL, hitsGrounded: true,
+        cinematic: { zoom: 1.3, slow: 0.24, slowTicks: 52 },
+        hitClip: 'sp.overdriveHit', finishClip: 'v.systemsNominal',
+      },
+    });
+  },
+
+  // --- AXIOM — the reference chassis, "quietly furious about being boring" ---
+  // The only character whose signature IS the frame data. No armour, no
+  // invulnerability, no travel, nothing bolted on: the cleanest poke in the game
+  // (i13 mid, 0 on block, +9 on hit), the safest low in the game (-9, where
+  // every other low in the cast is -10 to -18), and one launcher off the poke.
+  axiom(mv, cfg, set, chain) {
+    mv({
+      id: 'errata', name: 'Errata', input: 'qcf+3', clip: 'k.kneeStrike', tag: 'poke',
+      desc: 'i13 mid, 0 on block, +9 on hit. The cleanest poke in the game and the whole of AXIOM\'s argument.',
+      active: [W(13, 14, KNEE_R(0.25))], total: 30,
+      height: HEIGHT.MID, weight: WEIGHT.LIGHT, damage: 13,
+      adv: { block: 0, hit: 9 }, reaction: REACTION.FLINCH_MID,
+      knockback: [1.4, 0, 0], blockPush: [2.6, 0, 0], meterGain: 5,
+      props: { crushLow: true },
+      cancels: ['errata2'], cancelWindow: [13, 29],
+    });
+    mv({
+      id: 'errata2', name: 'Errata, Revised', input: 'qcf+3,2', clip: 'p.launcherPunch', tag: 'string',
+      desc: 'Launcher off Errata. -15 on block, which is the price of the check being free.',
+      active: [W(16, 18, FIST_R(0.26))], total: 48,
+      height: HEIGHT.MID, weight: WEIGHT.LAUNCHER, damage: 20,
+      adv: { block: -15, hit: 20 }, reaction: REACTION.LAUNCH, juggleHeight: 6.0,
+      knockback: [1.6, 0, 0], blockPush: [1.8, 0, 0], meterGain: 10, trail: 'hand_R',
+    });
+    mv({
+      id: 'footnote', name: 'Footnote', input: 'db+1', clip: 'k.lowKick', tag: 'low',
+      desc: '-9. Every other low in the cast is -10 to -18. It does ten damage and nothing else, and it is always your turn afterwards.',
+      active: [W(17, 18, SHIN_L(0.24))], total: 34,
+      height: HEIGHT.LOW, weight: WEIGHT.LIGHT, damage: 10,
+      adv: { block: -9, hit: 0 }, reaction: REACTION.FLINCH_LOW,
+      knockback: [1.2, 0, 0], blockPush: [1.2, 0, 0], meterGain: 4,
+      props: { crushHigh: true },
+    });
+    // The fastest finisher and the tightest camera. Nothing bolted on, which is the character.
+    mv({
+      id: 'qed', name: 'Q.E.D.', input: 'd,b,f,3', clip: 'p.launcherPunch', tag: 'finisher',
+      desc: 'One uppercut, thrown exactly correctly. AXIOM would like it noted that this is not boring.',
+      active: [W(26, 31, [B('hand_R', 0.34, [0, -0.05, 0]), B('wrist_R', 0.28, [0, -0.04, 0])])], total: 104,
+      height: HEIGHT.MID, weight: WEIGHT.ULTRA, damage: 90,
+      adv: { block: -30, hit: 10 }, reaction: REACTION.CRUMPLE,
+      knockback: [7.0, 2.2, 0], blockPush: [5.0, 0, 0], meterGain: 0,
+      props: {
+        finisher: { ...FINISH_RULE, sequenceText: 'Down, Back, Forward, LK' },
+        invulnFrom: 1, invulnTo: 8, wallBounce: true, wallCarry: 3.2,
+        travel: FIN_TRAVEL, hitsGrounded: true,
+        cinematic: { zoom: 1.65, slow: 0.3, slowTicks: 44 },
+        hitClip: 'sp.overdriveHit', finishClip: 'v.systemsNominal',
+      },
+    });
+  },
+
+  // --- VOLTA — substation rig, mixup ----------------------------------------
+  // "Every move it knows ends with something arcing." One staggering opener that
+  // forks into a low and a mid launcher off the SAME cancel window — a genuine
+  // 50/50 rather than a string with a decorative branch. The opener is only -3,
+  // so blocking it does not end the guess.
+  volta(mv, cfg, set, chain) {
+    mv({
+      id: 'arcTap', name: 'Arc Tap', input: 'qcb+2', clip: 'sp.plasmaBurst', tag: 'special',
+      desc: 'Staggers on hit and is only -3 on block, so blocking it does not end the guess. Cancels into a low OR a launcher.',
+      active: [W(20, 23, [B('hand_L', 0.32, [0, -0.16, 0]), B('chest', 0.28, [0, 0, -0.3])])], total: 46,
+      height: HEIGHT.MID, weight: WEIGHT.MEDIUM, damage: 18,
+      adv: { block: -3, hit: 7 }, reaction: REACTION.STAGGER,
+      knockback: [2.2, 0, 0], blockPush: [3.0, 0, 0], meterGain: 9,
+      cancels: ['arcSplit', 'arcOverload'], cancelWindow: [20, 45],
+    });
+    mv({
+      id: 'arcSplit', name: 'Earth Return', input: 'qcb+2,4', clip: 'k.sweep', tag: 'low',
+      desc: 'The low half of the arc. Sweeps on hit, -14 on block.',
+      active: [W(19, 21, [B('knee_L', 0.25, [0, -0.04, 0.04], 0.44), B('foot_L', 0.27, [0, -0.02, 0.06]), B('hand_L', 0.24, [0, -0.05, 0])])], total: 46,
+      height: HEIGHT.LOW, weight: WEIGHT.MEDIUM, damage: 19,
+      adv: { block: -14, hit: 5 }, reaction: REACTION.SWEEP,
+      knockback: [3.0, 0.6, 0], blockPush: [2.0, 0, 0], meterGain: 8, trail: 'foot_L',
+      props: { crushHigh: true },
+    });
+    mv({
+      id: 'arcOverload', name: 'Overload', input: 'qcb+2,2', clip: 'p.uppercut', tag: 'string',
+      desc: 'The mid half of the arc. Full launch on hit, -14 on block. Identical window to the low — that is the 50/50.',
+      active: [W(17, 19, FIST_R(0.26))], total: 48,
+      height: HEIGHT.MID, weight: WEIGHT.LAUNCHER, damage: 21,
+      adv: { block: -14, hit: 20 }, reaction: REACTION.LAUNCH, juggleHeight: 5.8,
+      knockback: [1.8, 0, 0], blockPush: [1.8, 0, 0], meterGain: 10, trail: 'hand_R',
+    });
+    // Two hundred amps needs a path to earth, so the finisher is the one that puts them on the floor and keeps them there.
+    mv({
+      id: 'deadShort', name: 'Dead Short', input: 'f,d,f,2', clip: 'k.stomp', tag: 'finisher',
+      desc: 'Drives the grounding spike through them and closes the circuit. Everything VOLTA knows ends with something arcing; this ends with everything arcing.',
+      active: [W(30, 38, [B('foot_R', 0.4, [0, -0.04, 0.02]), B('knee_R', 0.34, [0, -0.04, 0.04], 0.4), B('hand_L', 0.34, [0, -0.05, 0])])], total: 110,
+      height: HEIGHT.MID, weight: WEIGHT.ULTRA, damage: 94,
+      adv: { block: -30, hit: 10 }, reaction: REACTION.CRUMPLE,
+      knockback: [7.0, 2.2, 0], blockPush: [5.0, 0, 0], meterGain: 0,
+      props: {
+        finisher: { ...FINISH_RULE, sequenceText: 'Forward, Down, Forward, RP' },
+        invulnFrom: 1, invulnTo: 8, wallBounce: true, wallCarry: 3.2,
+        travel: FIN_TRAVEL, hitsGrounded: true,
+        cinematic: { zoom: 1.45, slow: 0.25, slowTicks: 50 },
+        hitClip: 'sp.overdriveHit', finishClip: 'v.saluteCharge',
+      },
+    });
+  },
+};
+
+/**
+ * Merge a character's signature layer over its archetype table.
+ *
+ * The base moves are copied BY REFERENCE — a hundred-odd Move objects shared by
+ * ten characters, not cloned ten times — so the whole per-character layer costs
+ * one small object per fighter plus the two or three moves it actually defines.
+ * `chain()` is the one thing that would break that sharing, so it clones.
+ *
+ * @param {Object} def          roster entry
+ * @param {Object} base         the archetype table
+ * @param {Object} archCfg      the archetype tuning
+ */
+function buildCharacterSet(def, base, archCfg) {
+  const cfg = { ...archCfg, key: def.moveSet };
+  const out = Object.create(null);
+  for (const id of Object.keys(base)) out[id] = base[id];
+
+  const owned = [];
+  const overlay = Object.create(null);
+  const mv = (spec) => {
+    spec.character = true;
+    const m = make(spec, cfg);
+    // `owner`, not `signature`: the roster already uses `signature` for the
+    // intro/victory/taunt/idle clip ids, and the UI has to read both.
+    // docs/CONTRACT-character-moves.md pins this.
+    m.owner = def.id;
+    if (!m.desc) throw new Error(`character move ${def.id}/${m.id}: needs a one-line desc`);
+    out[m.id] = m;
+    overlay[m.id] = m;
+    owned.push(m.id);
+    return m;
+  };
+  /**
+   * Hang a cancel off a base move without touching the archetype's copy of it.
+   * VULKAN's `f+2,1` has to be reachable from the shared `elbow`, and mutating
+   * that in place is how every heavy character would end up with it.
+   */
+  const chain = (id, cancels, window) => {
+    const b = out[id];
+    if (!b) throw new Error(`character ${def.id}: chain target ${id} not in ${def.moveBase}`);
+    const c = { ...b };
+    c.cancels = [...(b.cancels || []), ...cancels];
+    c.cancelWindow = window || b.cancelWindow || [b.startup, b.total - 2];
+    out[id] = c;
+    return c;
+  };
+
+  const extras = CHARACTER_EXTRAS[def.id];
+  if (extras) extras(mv, cfg, out, chain);
+
+  // The roster NAMES each machine's signature moves and this file DEFINES them.
+  // Two places, so the select screen can list them without importing the move
+  // table — which means they can rot apart, so they are checked at load and
+  // `tools/check.mjs` fails the build on a disagreement.
+  const declared = (def.signatureMoves || []).slice().sort();
+  const built = owned.slice().sort();
+  if (declared.join(',') !== built.join(',')) {
+    throw new Error(`roster ${def.id}: signatureMoves [${declared}] does not match the moves `
+      + `Moves.js defines for it [${built}]`);
+  }
+
+  const ordered = Object.values(out)
+    .filter((m) => !m.followUp)
+    .sort((a, b) => (b.parsed.score - a.parsed.score) || (a.startup - b.startup));
+  Object.defineProperty(out, '__ordered', { value: ordered, enumerable: false });
+  Object.defineProperty(out, '__label', { value: archCfg.label, enumerable: false });
+  Object.defineProperty(out, '__base', { value: def.moveBase, enumerable: false });
+  Object.defineProperty(out, '__overlay', { value: overlay, enumerable: false });
+  return out;
+}
+
 /** @type {Record<string, Record<string, import('./MoveSchema.js').Move>>} */
 export const MOVES = {
   standard: buildMoveSet(ARCHETYPES.standard),
@@ -1087,9 +1869,42 @@ export const MOVES = {
   technical: buildMoveSet(ARCHETYPES.technical),
 };
 
+/**
+ * The ten per-character tables, registered into `MOVES` under the character id.
+ *
+ * Doing it here rather than in a parallel export is deliberate: `Fighter` already
+ * resolves `MOVES[def.moveSet]`, `CPU` and `TestHarness` already fall back to
+ * `MOVES.standard`, and `tools/check.mjs` already walks every entry of `MOVES`
+ * through the hitbox-anchor guard. Registering here means a signature move gets
+ * the same validation as everything else and no consumer changes at all — the
+ * roster simply points `moveSet` at the character's own table.
+ */
+export const CHARACTER_MOVE_KEYS = [];
+
+/**
+ * The per-character OVERLAYS, keyed by roster id — only what each machine adds
+ * or replaces, not the merged table. `movesFor()` returns the merged one.
+ * Pinned by docs/CONTRACT-character-moves.md.
+ * @type {Record<string, Record<string, import('./MoveSchema.js').Move>>}
+ */
+export const CHARACTER_MOVES = Object.create(null);
+
+for (const def of ROSTER) {
+  const archCfg = ARCHETYPES[def.moveBase] || ARCHETYPES.standard;
+  const base = MOVES[def.moveBase] || MOVES.standard;
+  const set = buildCharacterSet(def, base, archCfg);
+  MOVES[def.moveSet] = set;
+  CHARACTER_MOVES[def.id] = set.__overlay;
+  CHARACTER_MOVE_KEYS.push(def.moveSet);
+}
+
 export const MOVE_SET_KEYS = Object.keys(MOVES);
 
-/** Display label for a move set, for the character-select and command list. */
+/**
+ * Display label for a move set. A character table reports its archetype family
+ * ("Bulwark", "Wraith"), which is what the select screen wants to say about a
+ * machine — the character's own name is right next to it already.
+ */
 export const MOVE_SET_LABELS = Object.fromEntries(
   MOVE_SET_KEYS.map((k) => [k, MOVES[k].__label]),
 );
@@ -1117,12 +1932,75 @@ export const COMMAND_LIST = Object.fromEntries(
       weight: m.weight,
       tag: m.tag,
       note: m.note,
+      // Which rows are this machine's own. A signature move nobody can find is
+      // not a move, so the projection the UI renders has to be able to say
+      // "these four are yours" without knowing anything about archetypes.
+      // `owner` is the pinned flag; its presence IS the signature marker.
+      owner: m.owner || null,
+      desc: m.desc || '',
+      finisher: m.props.finisher || null,
     }));
     rows.sort((a, b) => (a.input.split(',')[0].localeCompare(b.input.split(',')[0])) ||
       (a.input.length - b.input.length) || (a.startup - b.startup));
     return [key, rows];
   }),
 );
+
+/**
+ * Just the character's own rows, per character, in the order the roster names
+ * them —
+ * which is authored order, not alphabetical, so a string reads opener-first.
+ *
+ * This is the block a command list or a character-select dossier should show
+ * under a heading like "VULKAN ONLY". Everything else in `COMMAND_LIST[id]` is
+ * shared with the rest of the archetype.
+ * @type {Record<string, Array<Object>>}
+ */
+export const SIGNATURE_MOVES = Object.fromEntries(
+  ROSTER.map((def) => {
+    const rows = COMMAND_LIST[def.moveSet] || [];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return [def.id, (def.signatureMoves || []).map((id) => byId.get(id)).filter(Boolean)];
+  }),
+);
+
+/**
+ * The move table a machine actually fights with.
+ *
+ * This is the accessor `src/ui/MoveList.js` asks for by name, and the one thing
+ * outside this file that should ever have to know how a character's table is
+ * assembled. It takes a roster entry, a character id, or an archetype key, and
+ * it always returns a renderable table.
+ *
+ * @param {Object|string} defOrId
+ * @returns {Record<string, import('./MoveSchema.js').Move>}
+ */
+export function movesFor(defOrId) {
+  const k = typeof defOrId === 'string' ? defOrId : (defOrId?.moveSet || defOrId?.id);
+  return MOVES[k] || MOVES[ROSTER_SET_BY_ID[k]] || MOVES.standard;
+}
+
+/** Character id -> its move-set key, so `movesFor('vulkan')` works either way. */
+const ROSTER_SET_BY_ID = Object.fromEntries(ROSTER.map((d) => [d.id, d.moveSet]));
+
+/**
+ * The command list for a roster entry, tolerating a def, an id, or a set key.
+ * @param {Object|string} defOrKey
+ */
+export function commandListFor(defOrKey) {
+  const k = typeof defOrKey === 'string' ? defOrKey : (defOrKey?.moveSet || defOrKey?.id);
+  return COMMAND_LIST[k] || COMMAND_LIST[ROSTER_SET_BY_ID[k]] || COMMAND_LIST.standard;
+}
+
+/**
+ * The archetype table a character's set was built over — named, not guessed.
+ * @param {Object|string} defOrId
+ */
+export function baseMovesFor(defOrId) {
+  const id = typeof defOrId === 'string' ? defOrId : defOrId?.id;
+  const def = ROSTER.find((d) => d.id === id || d.moveSet === id);
+  return MOVES[def?.moveBase] || MOVES.standard;
+}
 
 // ---------------------------------------------------------------------------
 // Input matching
@@ -1155,9 +2033,72 @@ function canUse(m, st) {
  * `live` supplies the *current* direction so that a press followed within a few
  * ticks by the direction still comes out — the leniency real fighting games have.
  */
-function matchesEntry(p, e, live, tick) {
-  for (const b of p.buttons) if (!e.btns.has(b)) return false;
+/**
+ * How far apart two presses may land and still count as one simultaneous press.
+ *
+ * Everything with a `+` between buttons — all three throws, the power crush, the
+ * counter stance, the two-handed slams — used to require both keys inside the
+ * SAME 16.7 ms tick, because `Fighter#pushInput` writes one buffer entry per
+ * tick from the edge-triggered `cmd.pressed` and this function demanded that a
+ * single entry hold every button. Human hands do not do that: two fingers on a
+ * keyboard land 10-40 ms apart, two thumbs on glass rather more. The result is
+ * that pressing 1+2 gave you a jab, which is indistinguishable from the throw
+ * not existing.
+ *
+ * Four ticks is 66 ms — wide enough that a deliberate chord always registers,
+ * narrow enough that a jab-then-cross string does not turn into a throw. The
+ * bound is also self-limiting: a fighter who is *actionable* starts the jab on
+ * the tick the first button lands and marks that entry `used`, so the chord path
+ * can only fire when both presses were buffered while the fighter could not act
+ * — which is precisely when the player meant them as one input.
+ */
+const CHORD_TICKS = 4;
+
+/** Shared "nothing extra to consume" result, so the common path allocates nothing. */
+const EMPTY = [];
+
+/**
+ * Collect the extra buffer entries needed to satisfy a multi-button token.
+ * @returns {?Array} entries to consume alongside `buffer[i]`, or null if the
+ *          chord cannot be completed.
+ */
+function gatherChord(p, buffer, i, live, tick, reuse) {
+  const e = buffer[i];
+  let extra = null;
+  for (const b of p.buttons) {
+    if (e.btns.has(b)) continue;
+    // A single-button token has to be in the entry it matched; borrowing across
+    // entries there would let any two taps satisfy any one-button move.
+    if (p.buttons.length < 2) return null;
+    let found = null;
+    for (let j = buffer.length - 1; j >= 0; j--) {
+      if (j === i) continue;
+      const o = buffer[j];
+      if ((o.used && !reuse) || (extra && extra.includes(o))) continue;
+      if (Math.abs(o.tick - e.tick) > CHORD_TICKS) continue;
+      if (o.btns.has(b)) { found = o; break; }
+    }
+    if (found) { (extra || (extra = [])).push(found); continue; }
+    // Still holding it. Real pads are held-state machines, and holding 1 while
+    // tapping 2 is how most people actually press 1+2.
+    if (live && live.held && live.held.has(b) && tick - e.tick <= CHORD_TICKS) continue;
+    return null;
+  }
+  return extra || EMPTY;
+}
+
+/**
+ * @param {boolean} asStep true when matching a string continuation rather than
+ *   a root move. A continuation written without a direction prefix — the `1` of
+ *   `b+2,1`, the `3` of `db+4,3` — means "the next button", not "the next button
+ *   with the stick centred". Requiring a centred stick meant every string with a
+ *   directional opener silently died unless the player let go of the direction
+ *   mid-string, which nobody does. Root moves keep the strict test, because
+ *   there `''` really does have to mean neutral or `2` would eat `f+2`.
+ */
+function matchesEntry(p, e, live, tick, asStep) {
   if (p.motion) return e.motion === p.motion || (live && live.motion === p.motion && tick - e.tick <= 4);
+  if (asStep && !p.dir) return true;
   if (dirMatches(p.dir, e)) return true;
   if (live && tick - e.tick <= 4 && dirMatches(p.dir, live)) return true;
   return false;
@@ -1167,9 +2108,10 @@ function matchesEntry(p, e, live, tick) {
  * Resolve the move a fighter should start this tick.
  *
  * Handles, in priority order: string continuations inside the current move's
- * cancel window, then root moves ordered by input specificity. Every candidate
- * is tested against the fighter's input buffer newest-first, so a press made a
- * few ticks before the fighter became actionable still comes out.
+ * cancel window, then a chord upgrade of a single-button move that has only just
+ * started, then root moves ordered by input specificity. Every candidate is
+ * tested against the fighter's input buffer newest-first, so a press made a few
+ * ticks before the fighter became actionable still comes out.
  *
  * On a match the consumed buffer entry is flagged `used` and exposed as
  * `fighterState.matchedInput`, so the caller can see what produced the move.
@@ -1192,17 +2134,19 @@ export function findMove(moveSet, cmd, fighterState = {}) {
   const tick = fighterState.tick ?? (buffer.length ? buffer[buffer.length - 1].tick : 0);
   const window = fighterState.bufferWindow ?? INPUT_BUFFER_TICKS;
 
-  const tryMatch = (mv, parsed) => {
+  const tryMatch = (mv, parsed, asStep, reuse) => {
     if (!canUse(mv, fighterState)) return false;
     for (let i = buffer.length - 1; i >= 0; i--) {
       const e = buffer[i];
       if (e.used) continue;
       if (tick - e.tick > window) break;
-      if (matchesEntry(parsed, e, cmd, tick)) {
-        e.used = true;
-        fighterState.matchedInput = e;
-        return true;
-      }
+      const chord = gatherChord(parsed, buffer, i, cmd, tick, reuse);
+      if (!chord) continue;
+      if (!matchesEntry(parsed, e, cmd, tick, asStep)) continue;
+      e.used = true;
+      for (const o of chord) o.used = true;
+      fighterState.matchedInput = e;
+      return true;
     }
     return false;
   };
@@ -1216,15 +2160,55 @@ export function findMove(moveSet, cmd, fighterState = {}) {
       for (const id of cur.cancels) {
         const nxt = set[id];
         if (!nxt) continue;
-        if (tryMatch(nxt, nxt.parsedStep)) return nxt;
+        if (tryMatch(nxt, nxt.parsedStep, true)) return nxt;
       }
     }
   }
 
-  // 2. Root moves, most specific input first.
+  // 2. Chord upgrade.
+  //
+  // THIS IS THE HALF OF THE THROW FIX THE BUFFER ALONE CANNOT DO, and it took a
+  // run through the real sim to see it. `CHORD_TICKS` makes `1+2` match when
+  // both presses are already sitting in the buffer, which is the case while the
+  // fighter is in stun or recovery — but from NEUTRAL the fighter is actionable
+  // on the tick the first button lands, so `1` resolves to a jab and marks its
+  // entry used before `2` has been pressed at all. Driven end-to-end with real
+  // Fighters and a real CombatSystem, one tick of spread still produced:
+  //
+  //     1+2 on the same tick    -> throwFwd, 42.3 damage, victim in 'thrown'
+  //     1 then 2, two ticks     -> jab, 10.5 damage
+  //
+  // A single-button move inside its own first few frames has not started up
+  // (the fastest startup in the game is i9, this window is 4) and cannot have
+  // hit anything, so replacing it costs nothing. When the completing button
+  // arrives, the fighter switches to the chord it was obviously trying to press.
+  // `#tickAttack` already restarts on a different move returned mid-attack, so
+  // this needs no engine change.
+  //
+  // It is checked AFTER string continuations on purpose, and that ordering is
+  // the whole high/low distinction the player feels: `1` then `2` two frames
+  // apart is a throw, `1` then `2` ten frames apart is inside the jab's cancel
+  // window and is the jab string. Tekken behaves the same way for the same
+  // reason.
+  const src = fighterState.currentMove;
+  if (src && fighterState.canCancel !== false &&
+      (fighterState.moveTick ?? 0) <= CHORD_TICKS &&
+      (fighterState.moveTick ?? 0) < src.startup &&
+      src.parsed.buttons.length === 1) {
+    for (const mv of set.__ordered) {
+      const p = mv.parsed;
+      if (p.buttons.length <= src.parsed.buttons.length) continue;
+      if (!src.parsed.buttons.every((b) => p.buttons.includes(b))) continue;
+      // `reuse` lets the chord borrow the very entry that started `src`: it is
+      // marked used, and the move it produced is the one being replaced.
+      if (tryMatch(mv, p, false, true)) return mv;
+    }
+  }
+
+  // 3. Root moves, most specific input first.
   if (fighterState.allowRoot === false) return null;
   for (const mv of set.__ordered) {
-    if (tryMatch(mv, mv.parsed)) return mv;
+    if (tryMatch(mv, mv.parsed, false)) return mv;
   }
   return null;
 }

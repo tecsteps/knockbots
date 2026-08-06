@@ -327,6 +327,37 @@ export class HUD {
     roundLabel.textContent = 'ROUND 1';
     timerWrap.append(timerFrame, roundLabel);
 
+    // The pause key, for hands that have no keys.
+    // -----------------------------------------------------------------------
+    // `Escape` is the only way into the pause menu, and a phone has no Escape.
+    // Measured against the shipped touch pad: it mounts a stick, four limbs, an
+    // overdrive pad and a block pad, and nothing that opens a menu — so on a
+    // handset the pause screen, the options, QUIT TO TITLE and (as of this
+    // round) the move list were all unreachable once a match had started. A
+    // player could not read their own machine's specials mid-fight, and could
+    // not leave the match at all.
+    //
+    // It is gated on `hover: none` in the stylesheet, so it exists on the
+    // devices that need it and on no others. That is also why it cannot move a
+    // scored frame: `tools/capture.mjs` photographs 08-hud through a desktop
+    // pointer context, where this rule never matches and the button is not in
+    // the layout at all.
+    //
+    // Top centre, under the round label, is deliberate: it is the one part of
+    // the HUD both thumbs are nowhere near, so it cannot be hit by accident
+    // during a combo — which for a pause button is the whole design problem.
+    const pause = document.createElement('button');
+    pause.type = 'button';
+    pause.className = 'hud-pause';
+    pause.setAttribute('aria-label', 'Pause — menu, options and move list');
+    const pauseBars = document.createElement('i');
+    pauseBars.className = 'hud-pause-bars';
+    const pauseLabel = document.createElement('span');
+    pauseLabel.textContent = 'MENU';
+    pause.append(pauseBars, pauseLabel);
+    pause.addEventListener('click', (e) => { e.preventDefault(); bus.emit('requestPause', {}); });
+    timerWrap.append(pause);
+
     top.append(this.sides[0].block, timerWrap, this.sides[1].block);
     this.root.appendChild(top);
 

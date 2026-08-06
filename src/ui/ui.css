@@ -1198,6 +1198,58 @@
   50% { opacity: 1; }
 }
 /*
+ * The pause key, for hands that have no keys.
+ *
+ * `display: none` by default and shown only where there is no hover, which is
+ * the same test `detectScheme()` uses for "this is a touch device". Two
+ * consequences, both deliberate:
+ *
+ *  - A desktop HUD is byte-identical to what it was. `tools/capture.mjs`
+ *    photographs 08-hud through a normal pointer context, so this rule never
+ *    matches there and the button contributes no pixels to a scored frame.
+ *  - On a phone it is the only route into the pause menu, and therefore the
+ *    only route into options, QUIT TO TITLE and the move list, none of which
+ *    a handset could reach at all before it existed.
+ *
+ * Sized at the 44px floor and parked under the round label — the one strip of
+ * HUD neither thumb passes over, so a pause cannot be thrown mid-combo.
+ */
+.hud-pause {
+  display: none;
+  margin-top: 0.45em;
+  /* Both axes pinned in px, not em: the HUD's type scale can put this under a
+     fingertip on a small handset, and 44 is the floor on the axis the thumb is
+     least accurate on as well as the one it is most. */
+  min-height: 44px;
+  min-width: 44px;
+  justify-content: center;
+  padding: 0 0.9em;
+  align-items: center;
+  gap: 0.5em;
+  background: rgba(9, 12, 18, 0.62);
+  border: 0;
+  cursor: pointer;
+  pointer-events: auto;
+  color: var(--kb-text-dim);
+  font-family: var(--kb-font-label);
+  font-size: 0.62em;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  box-shadow: inset 0 0 0 1px var(--kb-line-strong);
+  clip-path: polygon(0.5em 0, 100% 0, calc(100% - 0.5em) 100%, 0 100%);
+}
+.hud-pause-bars {
+  width: 0.5em;
+  height: 0.85em;
+  border-left: 0.16em solid currentColor;
+  border-right: 0.16em solid currentColor;
+}
+.hud-pause:active { color: var(--kb-text); box-shadow: inset 0 0 0 1px var(--kb-accent); }
+@media (hover: none) {
+  .hud-pause { display: inline-flex; }
+}
+
+/*
  * Sized to actually read at 1080p, not just sit there as a caption: at the
  * previous 0.62em it rendered under 13px tall and disappeared against the
  * dim colour it also needs for hierarchy under the timer. Pushing size and
