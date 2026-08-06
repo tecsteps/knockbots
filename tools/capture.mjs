@@ -1237,13 +1237,36 @@ async function main() {
              geometries: r.info.memory.geometries };
   })()`);
 
+  /*
+   * `complete` means the FULL shot list was written and verified -- nothing
+   * weaker.
+   *
+   * It used to be the literal `true`, and the short-run warning below was
+   * suppressed whenever --shots was passed. The effect was that a one-shot
+   * `--shots 01-hero-idle` run overwrote the manifest with `complete: true`,
+   * `defects: []` and a single entry, while 19 stale PNGs sat next to it in the
+   * same directory. Two critics scoring the stage axis were handed frames that
+   * the manifest vouched for and had never looked at.
+   *
+   * That is the THIRD defect of this exact class: c562242 hardened against two
+   * runs sharing an output directory, 965f3c7 against a crashed run leaving a
+   * manifest that looked successful, and this one against a deliberate partial
+   * run certifying itself. The common root is that `complete` was an assertion
+   * the writer made about itself rather than a fact derived from the run, so it
+   * is now derived and cannot be asserted.
+   */
+  const missing = SHOTS.map((s) => s.name).filter((n) => !manifest.some((m) => m.name === n));
+  const complete = missing.length === 0 && !ONLY.length;
+
   writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({
-    complete: true, shots: manifest, fps, perf, info, verified, defects,
+    complete, only: ONLY.length ? ONLY : undefined, missing: missing.length ? missing : undefined,
+    shots: manifest, fps, perf, info, verified, defects,
     errors: errors.slice(0, 40),
   }, null, 2));
-  if (manifest.length < SHOTS.length && !ONLY.length) {
-    console.warn(`[capture] SHORT RUN: ${manifest.length} of ${SHOTS.length} shots written. `
-      + 'The set is incomplete and must not be scored as a full pass.');
+  if (!complete) {
+    console.warn(`[capture] PARTIAL RUN: ${manifest.length} of ${SHOTS.length} shots written`
+      + `${ONLY.length ? ` (--shots ${ONLY.join(',')})` : ''}. manifest.complete is false; `
+      + 'this set must not be scored as a full pass.');
   }
 
   if (errors.length) {

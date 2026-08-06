@@ -75,6 +75,102 @@ function streakField(size, seed, stretch = 7, cells = 26) {
   return f;
 }
 
+/**
+ * Integer hash to [0,1). Two rounds, the same mix `StageFloor` uses for its
+ * tie-down lattice, kept identical so a per-unit draw looks the same wherever
+ * one is taken in the arena.
+ */
+function hash2(i, j, salt = 0) {
+  let h = (i * 374761393 + j * 668265263 + salt * 2246822519) | 0;
+  h = (h ^ (h >>> 13)) * 1274126177;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+}
+
+/**
+ * A grid of individually-varied units, and the missing octave of every set in
+ * this file.
+ *
+ * Measured against the frame the stage axis is scored on: with the five big
+ * arena materials' normal maps switched off entirely the wide shot's background
+ * band moves from 0.0280 to 0.0267 mean gradient, and tripling their strength
+ * only reaches 0.0300. **The maps carry almost no legible energy at all**, and
+ * amplitude is not why. Each set had its grain (1–3 cm, at or under a screen
+ * pixel twelve metres out) and its macro blobs (1–3 m, a smooth ramp that a
+ * derivative barely sees) and *nothing in between* — no energy anywhere in the
+ * 8–50 cm band, which is the only band that lands at a legible 8–50 screen
+ * pixels at this camera distance. A wall built out of a smooth ramp plus
+ * sub-pixel speckle is a flat wall.
+ *
+ * What fills that hole in real construction is that surfaces are assembled from
+ * *units* — shutter boards, precast bays, bolted plates — and no two units are
+ * the same value. So this returns three fields over a grid of them:
+ *
+ *   - `tone`, one hash per unit, constant across it, giving a hard value step
+ *     at every joint rather than a ramp;
+ *   - `rough`, a second independent hash, because a unit that is darker is not
+ *     therefore duller — correlating them is what made the floor lattice read
+ *     as one stamp at different exposures;
+ *   - `seam`, the joint itself, for the height field.
+ *
+ * Cell indices are taken modulo the grid so the field tiles at any `size`, and
+ * `bond` offsets alternate rows so a run of units is not a chequerboard.
+ *
+ * @param {number} size texture edge
+ * @param {number} cellsX units across the tile
+ * @param {number} cellsY units up the tile
+ * @param {number} seed
+ * @param {{bond?: number, joint?: number}} [opts] `joint` is in texels.
+ */
+function cellField(size, cellsX, cellsY, seed, opts = {}) {
+  const bond = opts.bond ?? 0;
+  const joint = opts.joint ?? 2;
+  const tone = new Float32Array(size * size);
+  const rough = new Float32Array(size * size);
+  const seam = new Float32Array(size * size);
+  const sx = size / cellsX;
+  const sy = size / cellsY;
+  for (let j = 0; j < size; j++) {
+    const v = (j / size) * cellsY;
+    const gj = Math.floor(v);
+    const fy = v - gj;
+    const dy = Math.min(fy, 1 - fy) * sy;
+    const off = bond * (gj & 1);
+    for (let i = 0; i < size; i++) {
+      const u = (i / size) * cellsX + off;
+      const gi = Math.floor(u);
+      const fx = u - gi;
+      const k = j * size + i;
+      const ii = ((gi % cellsX) + cellsX) % cellsX;
+      tone[k] = hash2(ii, gj, seed);
+      rough[k] = hash2(ii, gj, seed + 977);
+      const dx = Math.min(fx, 1 - fx) * sx;
+      seam[k] = 1 - smoothstep(joint * 0.45, joint, Math.min(dx, dy));
+    }
+  }
+  return { tone, rough, seam };
+}
+
+/**
+ * Pushes a 0..1 field out from its midpoint.
+ *
+ * The reason this is needed everywhere in this file: an fbm field is roughly
+ * Gaussian about 0.5 with a standard deviation around 0.12, so a value written
+ * as `lerp(dark, pale, fines * 0.7)` does not swing between dark and pale — it
+ * swings across the middle eighth of that interval and comes out one colour.
+ * Measured on the baked concrete albedo before this was applied: 5th to 95th
+ * percentile 0.153 to 0.192 in sRGB, standard deviation 0.0134 — a wall living
+ * inside four per cent of the available range. The endpoints were never the
+ * problem; the driver was. After, at the same median: 0.125 to 0.235, sd 0.0329.
+ *
+ * Bake the library in node and write the maps out rather than capturing the
+ * frame to judge one of these fields: it is half a minute against four, and a
+ * field that is too loud or too rare is obvious in the map long before it is
+ * obvious through a light rig. The first cut of the concrete's spalling was
+ * forty per cent coverage of round worley discs — polka dots — and the map
+ * showed it immediately.
+ */
+const punch = (x, k, mid = 0.5) => clamp01((x - mid) * k + mid);
+
 /** Straight grooves on a grid, written into a height field. */
 function scribeGrid(height, size, cellsX, cellsY, depth, width) {
   const w = width * size;
@@ -127,9 +223,15 @@ function paintedSteelSet(size, seed) {
   const streaks = streakField(size, seed + 5, 6, 18);
   const { f1: cellF1 } = worley(size, 9, seed + 9, 0.9);
   const scratch = fbm(size, 240, { octaves: 2, seed: seed + 13, ridged: true });
+  // Bolted panels at 47 x 63cm. A gantry housing is sheet on a frame and every
+  // sheet was sprayed on a different day; the smooth `patch` field below is a
+  // metre-scale ramp and cannot produce the edge a panel joint has.
+  const panels = cellField(size, 4, 3, seed + 59, { joint: Math.max(2, size / 320) });
 
   const height = new Float32Array(size * size);
-  for (let k = 0; k < size * size; k++) height[k] = grain[k] * 0.16 + macro[k] * 0.1;
+  for (let k = 0; k < size * size; k++) {
+    height[k] = grain[k] * 0.16 + macro[k] * 0.1 - panels.seam[k] * 0.6;
+  }
   scribeGrid(height, size, 2, 2, 0.55, 0.006);
   studGrid(height, size, 8, 8, 0.006, 0.3, 0.5);
 
@@ -157,8 +259,9 @@ function paintedSteelSet(size, seed) {
     const c = chip[k];
     const dirt = clamp01(streaks[k] * 0.85 + macro[k] * 0.3 - 0.15);
     // The metre-scale field rides the paint value as well as the chipping, so a
-    // run of gantry does not come out one flat colour between its chips.
-    const bay = 0.84 + patch[k] * 0.32;
+    // run of gantry does not come out one flat colour between its chips, and
+    // the panel hash steps it again at the joints.
+    const bay = (0.84 + patch[k] * 0.32) * (0.86 + panels.tone[k] * 0.28);
     for (let ch = 0; ch < 3; ch++) {
       let v = lerp(paint[ch], paintDark[ch], macro[k] * 0.7 + grain[k] * 0.3);
       v = lerp(v, steel[ch] * (0.65 + grain[k] * 0.5), c);
@@ -171,8 +274,9 @@ function paintedSteelSet(size, seed) {
   const metal = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) {
     const dirt = clamp01(streaks[k] * 0.8 - 0.1);
-    rough[k] = clamp01(lerp(0.52, 0.31, chip[k]) + dirt * 0.22 + grain[k] * 0.06);
-    metal[k] = clamp01(lerp(0.35, 0.95, chip[k]) * (1 - dirt * 0.4));
+    rough[k] = clamp01(lerp(0.52, 0.31, chip[k]) + dirt * 0.22 + grain[k] * 0.06
+      + (panels.rough[k] - 0.5) * 0.26);
+    metal[k] = clamp01(lerp(0.35, 0.95, chip[k]) * (1 - dirt * 0.4) - panels.seam[k] * 0.3);
   }
   return { albedo, normal: makeTexture(normal, size), orm: packOrm(ao, rough, metal, size) };
 }
@@ -183,10 +287,22 @@ function paintedSteelSet(size, seed) {
 
 /** Machined steel tiles at 1.4m: 11mm pits, 3mm brush grain, 70cm blotching. */
 function darkMetalSet(size, seed) {
+  // Plate lattice at 47cm — the unit this stock is actually delivered and
+  // welded in, and the octave the set was missing between its 11mm pits and its
+  // 70cm blotches. Nothing else here lands in the 8-50cm band.
+  const plates = cellField(size, 3, 3, seed + 43, { bond: 0.5, joint: Math.max(2, size / 300) });
   const brush = new Float32Array(size * size);
   const src = fbm(size, 260, { octaves: 3, seed });
   for (let j = 0; j < size; j++) {
-    for (let i = 0; i < size; i++) brush[j * size + i] = sampleWrap(src, size, i / 12, j);
+    for (let i = 0; i < size; i++) {
+      const k = j * size + i;
+      // Each plate takes its grain from a different part of the field. Rolled
+      // stock is cut from different coils and hung whichever way up it came off
+      // the truck, so a continuous brush across a welded run is the giveaway;
+      // offsetting the sample per plate costs nothing and breaks it completely.
+      const o = plates.tone[k] * 640;
+      brush[k] = sampleWrap(src, size, i / 12 + o, j + o * 0.7);
+    }
   }
   // Pitting on machined stock is an order finer than aggregate in concrete. At
   // 46 cells over the old tile it was 4cm across, which is the same size as the
@@ -198,7 +314,10 @@ function darkMetalSet(size, seed) {
 
   const height = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) {
-    height[k] = brush[k] * 0.09 + macro[k] * 0.08 - smoothstep(0.34, 0, pit[k]) * 0.5;
+    // Plates sit proud of one another by a millimetre or two — nobody shims a
+    // machinery guard flush — so the seam is a step as well as a groove.
+    height[k] = brush[k] * 0.09 + macro[k] * 0.08 - smoothstep(0.34, 0, pit[k]) * 0.5
+      + (plates.tone[k] - 0.5) * 0.16 - plates.seam[k] * 0.8;
   }
   scribeGrid(height, size, 1, 1, 0.65, 0.008);
   studGrid(height, size, 4, 4, 0.009, 0.36, 0.5);
@@ -213,10 +332,12 @@ function darkMetalSet(size, seed) {
   const albedo = bakeAlbedo(size, (i, j, k, out) => {
     const b = brush[k];
     const dirt = clamp01(streaks[k] * 0.9 - 0.1);
-    const bay = 0.86 + patch[k] * 0.3;
+    const bay = (0.86 + patch[k] * 0.3) * (0.82 + plates.tone[k] * 0.36);
     for (let ch = 0; ch < 3; ch++) {
-      let v = lerp(dark[ch], steel[ch], b * 0.75 + macro[k] * 0.35);
-      v = lerp(v, oil[ch], dirt * 0.5);
+      // `punch` for the reason given at its definition: the baked map read a
+      // 0.013 sRGB standard deviation before it, which is one grey.
+      let v = lerp(dark[ch], steel[ch], punch(b, 2.2) * 0.85 + punch(macro[k], 1.6) * 0.4);
+      v = lerp(v, oil[ch], dirt * 0.5 + plates.seam[k] * 0.55);
       out[ch] = v * bay * (0.82 + ao[k] * 0.18);
     }
   });
@@ -226,9 +347,12 @@ function darkMetalSet(size, seed) {
   for (let k = 0; k < size * size; k++) {
     const dirt = clamp01(streaks[k] * 0.9 - 0.1);
     // Brushed steel: roughness varies along the grain, which is what produces
-    // the stretched highlight the eye reads as machined metal.
-    rough[k] = clamp01(0.29 + brush[k] * 0.2 + dirt * 0.3 + smoothstep(0.3, 0, pit[k]) * 0.25);
-    metal[k] = clamp01(0.96 - dirt * 0.45 - smoothstep(0.28, 0, pit[k]) * 0.3);
+    // the stretched highlight the eye reads as machined metal. Plus a per-plate
+    // offset, dealt from a hash independent of the plate's value — a run where
+    // the dark plates are also the dull ones reads as one plate lit unevenly.
+    rough[k] = clamp01(0.29 + brush[k] * 0.2 + dirt * 0.3 + smoothstep(0.3, 0, pit[k]) * 0.25
+      + (plates.rough[k] - 0.5) * 0.32);
+    metal[k] = clamp01(0.96 - dirt * 0.45 - smoothstep(0.28, 0, pit[k]) * 0.3 - plates.seam[k] * 0.4);
   }
   return { albedo, normal: makeTexture(normal, size), orm: packOrm(ao, rough, metal, size) };
 }
@@ -281,9 +405,10 @@ function containerSet(size, seed) {
 
   const albedo = bakeAlbedo(size, (i, j, k, out) => {
     const r = rustMask[k];
+    const g = punch(grain[k], 2.0);
     for (let ch = 0; ch < 3; ch++) {
-      let v = lerp(paint[ch], paintPale[ch], grain[k] * 0.6 + rustBlob[k] * 0.3);
-      v = lerp(v, lerp(rustDark[ch], rust[ch], grain[k] * 0.8 + 0.2), r);
+      let v = lerp(paint[ch], paintPale[ch], g * 0.7 + punch(rustBlob[k], 1.5) * 0.35);
+      v = lerp(v, lerp(rustDark[ch], rust[ch], g * 0.9 + 0.15), r);
       out[ch] = v * (0.8 + ao[k] * 0.2);
     }
   });
@@ -317,11 +442,37 @@ function concreteSet(size, seed) {
   const pour = fbm(size, 2, { octaves: 3, seed: seed + 33 });
   const streaks = streakField(size, seed + 7, 8, 14);
   const crackField = fbm(size, 22, { octaves: 4, seed: seed + 21, ridged: true });
+  // The 8-50cm band this set did not have. Three fields, all of them hard-edged
+  // where the old ones ramped:
+  //   - shutter boards at 31cm, which is what a board-marked wall IS: twenty
+  //     planks up a six-metre tile, each one a different age of timber and so a
+  //     different value, with a raised lip of grout where the boards met;
+  //   - precast bays at 1.24 x 2.06m, one value and one finish apiece;
+  //   - spalling at 18cm, thresholded rather than faded, so a patch of exposed
+  //     aggregate has an EDGE — but gated onto the arrises, because that is
+  //     where concrete actually breaks away and because an all-over field of it
+  //     is leopard print. The first cut of this was ungated and covered roughly
+  //     forty per cent of the face; it moved the band number and made the wall
+  //     look like cave popcorn, which is the exact trade this round exists to
+  //     refuse.
+  const boards = cellField(size, 1, 20, seed + 51, { joint: Math.max(2, size / 340) });
+  const bays = cellField(size, 5, 3, seed + 67, { bond: 0.37, joint: Math.max(2, size / 260) });
+  // Thresholded fbm, not thresholded worley. A worley cell is a disc, so a
+  // cut-off on `f1` produces round patches at an even pitch and the wall comes
+  // back covered in polka dots — visible in the baked map long before it is
+  // visible in the frame, which is what `scratchpad/dumptex.mjs` is for. An fbm
+  // cut high enough gives the same coverage in irregular shapes.
+  const spallCell = fbm(size, 26, { octaves: 4, seed: seed + 71 });
 
   const height = new Float32Array(size * size);
+  const spall = new Float32Array(size * size);
   for (let k = 0; k < size * size; k++) {
     const pop = smoothstep(0.16, 0, aggregate[k]) * 0.35;
-    height[k] = fines[k] * 0.18 + macro[k] * 0.12 + pop;
+    const arris = clamp01(boards.seam[k] * 0.7 + bays.seam[k]);
+    spall[k] = smoothstep(0.70, 0.84, spallCell[k]) *
+      smoothstep(0.34, 0.72, arris * 0.42 + macro[k] * 0.55 + streaks[k] * 0.42);
+    height[k] = fines[k] * 0.18 + macro[k] * 0.12 + pop
+      - boards.seam[k] * 0.3 - bays.seam[k] * 0.55 - spall[k] * 0.3;
   }
   // Form-board seams: horizontal lines every 1/3 tile plus tie-rod holes.
   scribeGrid(height, size, 1, 3, 0.5, 0.005);
@@ -334,18 +485,31 @@ function concreteSet(size, seed) {
   const ao = heightToAo(height, size, 6, 1.15);
   const normal = heightToNormal(height, size, 2.4, { wrap: true });
 
-  const pale = hexToLinear(0x42444a);
-  const mid = hexToLinear(0x2c2e33);
-  const dark = hexToLinear(0x191a1e);
+  // Widened, and then the midpoint pulled back down to hold the median where it
+  // was. The set's first rule is that value range is reserved for the fighters,
+  // and a wall that gains contrast by getting brighter has broken it — the
+  // whole point is more variance at the same mean.
+  const pale = hexToLinear(0x4e5158);
+  const mid = hexToLinear(0x262830);
+  const dark = hexToLinear(0x16171b);
   const stain = hexToLinear(0x111214);
+  // Exposed aggregate under the skim is warmer and lighter than the face.
+  const core = hexToLinear(0x585047);
 
   const albedo = bakeAlbedo(size, (i, j, k, out) => {
     const dirt = clamp01(streaks[k] * 0.95 - 0.08);
-    const bay = 0.8 + pour[k] * 0.42;
+    // Two independent unit fields riding the value, not one smooth pour field.
+    // Neither is large — a bay is +-13% and a board +-9% — but they are steps,
+    // and a step at 25 and at 120 screen pixels is exactly the scale the eye
+    // reads a wall's construction at.
+    const bay = (0.8 + pour[k] * 0.42) * (0.87 + bays.tone[k] * 0.26) * (0.91 + boards.tone[k] * 0.18);
+    const fine = punch(fines[k], 2.4);
+    const blot = punch(macro[k], 1.7);
     for (let ch = 0; ch < 3; ch++) {
-      let v = lerp(mid[ch], pale[ch], fines[k] * 0.7 + smoothstep(0.2, 0, aggregate[k]) * 0.5);
-      v = lerp(v, dark[ch], macro[k] * 0.5);
+      let v = lerp(mid[ch], pale[ch], fine * 0.8 + smoothstep(0.24, 0, aggregate[k]) * 0.5);
+      v = lerp(v, dark[ch], blot * 0.55);
       v = lerp(v, stain[ch], dirt * 0.55 + cracks[k] * 0.6);
+      v = lerp(v, core[ch] * (0.5 + aggregate[k] * 0.9), spall[k] * 0.55);
       out[ch] = v * bay * (0.78 + ao[k] * 0.22);
     }
   });
@@ -354,8 +518,28 @@ function concreteSet(size, seed) {
   for (let k = 0; k < size * size; k++) {
     // A float-finished bay and a tamped one sit next to each other on a real
     // pour, and the difference shows up in the highlight long before it shows
-    // up in the albedo.
-    rough[k] = clamp01(0.88 + fines[k] * 0.1 - streaks[k] * 0.1 - (pour[k] - 0.5) * 0.16);
+    // up in the albedo. Dealt per bay and per board from their OWN hashes: the
+    // set previously ran 0.83-0.98, which is dead matte everywhere, so a
+    // forty-five per cent surface of the frame took no specular structure from
+    // fifteen analytic lights and a dozen practicals. Damp cuts it to 0.42 in
+    // the low spots, which is where water actually sits.
+    //
+    // The damp is driven at 24cm as well as at the metre scale, and it is
+    // allowed to go properly wet. A sublevel pit with standing water on the
+    // deck does not have bone-dry walls, and a wet patch is the only thing on a
+    // concrete surface that can carry a *reflection* — which is worth more per
+    // pixel than any amount of albedo noise, because the thing it reflects is
+    // the practicals, and they are the brightest objects in the room.
+    const damp = smoothstep(0.60, 0.92,
+      streaks[k] * 0.6 + (1 - macro[k]) * 0.35 + punch(spallCell[k], 1.6) * 0.45 + (pour[k] - 0.5) * 0.4);
+    rough[k] = clamp01(
+      0.9 + fines[k] * 0.1 - streaks[k] * 0.08
+      - (pour[k] - 0.5) * 0.16
+      - (bays.rough[k] - 0.5) * 0.3
+      - (boards.rough[k] - 0.5) * 0.16
+      - damp * 0.58
+      + spall[k] * 0.1,
+    );
   }
   return { albedo, normal: makeTexture(normal, size), orm: packOrm(ao, rough, null, size) };
 }
@@ -784,7 +968,12 @@ export function makeArenaMaterials(opts = {}) {
     steel: std(steelSet, { name: 'arena.steel', normalScale: new THREE.Vector2(1, 1), envMapIntensity: 0.7 }),
     darkMetal: std(darkSet, { name: 'arena.darkMetal', normalScale: new THREE.Vector2(0.9, 0.9), envMapIntensity: 0.85 }),
     container: std(boxSet, { name: 'arena.container', normalScale: new THREE.Vector2(1.1, 1.1), envMapIntensity: 0.55 }),
-    concrete: std(concSet, { name: 'arena.concrete', metalness: 0, normalScale: new THREE.Vector2(1.15, 1.15), envMapIntensity: 0.3 }),
+    // envMapIntensity was 0.3 and the map is now damp in its low spots. A
+    // dielectric at roughness 0.42 with almost no environment to reflect is a
+    // grey card with a slightly different grey card painted on it; the whole
+    // point of cutting the roughness is that the practicals then appear in the
+    // wall, and that only happens if the surface is allowed to see them.
+    concrete: std(concSet, { name: 'arena.concrete', metalness: 0, normalScale: new THREE.Vector2(1.35, 1.35), envMapIntensity: 0.55 }),
     hazard: std(hazSet, { name: 'arena.hazard', metalness: 0, normalScale: new THREE.Vector2(0.85, 0.85), envMapIntensity: 0.32 }),
 
     grating: new THREE.MeshStandardMaterial({

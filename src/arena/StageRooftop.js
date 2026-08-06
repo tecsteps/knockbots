@@ -372,9 +372,11 @@ export function bakeRoofMaps(size) {
   const chipCell = worley(FIELD, 9, 643, 0.95);
   const chipF = fbm(FIELD, 17, { octaves: 4, seed: 647 });
   const stainF = fbm(FIELD, 8, { octaves: 4, seed: 653 });
-  // Which parts of the roof hold water at all. A cell field rather than a noise
-  // field, because ponding is regional: a bay either falls correctly or it does
-  // not, and the ones that do not are bounded by the falls around them.
+  // Bay structure behind the ponding. Only its F1 distance is used, as a gentle
+  // bowl that deepens the middle of a bay; its cell IDs are not, because a
+  // threshold on a per-cell constant is a straight Voronoi chord and that chord
+  // is what laid a hard-edged mirror quad across the fighting plane. See the
+  // wetness block in the texel loop.
   const pondCell = worley(FIELD, 7, 659, 0.95);
 
   const px = size / FLOOR.w;
@@ -474,8 +476,10 @@ export function bakeRoofMaps(size) {
       const chI = sampleWrap(chipCell.id, FIELD, fx, fy);
       const chN = sampleWrap(chipF, FIELD, fx, fy);
       const stn = sampleWrap(stainF, FIELD, fx, fy);
+      // F1 only. `pondCell.id` is deliberately NOT read — see the wetness
+      // block below for what thresholding a piecewise-constant field did to
+      // the middle of the fighting plane.
       const pdF = sampleWrap(pondCell.f1, FIELD, fx, fy);
-      const pdI = sampleWrap(pondCell.id, FIELD, fx, fy);
 
       // --- which section, and which sheet inside it -----------------------
       // The re-laid bay is a rotated rectangle; its boundary is a butt joint
@@ -635,12 +639,74 @@ export function bakeRoofMaps(size) {
       // sky over every square metre of it. Distance from an outlet is a slope,
       // not a hollow; only the ponding field and the sumps are hollows.
       const relief = (pond - 0.5) * 0.95 + sump * 0.7 - bestD * 0.012;
-      const low = 1 - smoothstep(-0.30, 0.02, relief);
-      // And the hollows are regional. A bay either falls correctly or it does
-      // not, so ponds are bounded by cell edges rather than fading out into a
-      // general dampness.
-      const cellGate = smoothstep(0.40, 0.60, pdI) * (1 - smoothstep(0.42, 0.86, pdF));
-      const pool = clamp01(low * cellGate * (0.75 + holdU * 0.6) * 1.6);
+      // ***********************************************************************
+      // NEVER THRESHOLD `pdI`. THIS IS THE HARD-EDGED QUAD DEFECT.
+      // ***********************************************************************
+      // This used to be
+      //
+      //   cellGate = smoothstep(0.40, 0.60, pdI) * (1 - smoothstep(0.42, 0.86, pdF));
+      //   pool     = clamp01(low * cellGate * (0.75 + holdU * 0.6) * 1.6);
+      //
+      // and `pdI` is `worley(...).id` — a field that is piecewise CONSTANT over
+      // each cell. A smoothstep on a piecewise-constant field is not a soft
+      // gate, it is a binary one, and its boundary is the Voronoi chord between
+      // two cells: a dead-straight line at an arbitrary angle. The F1 term that
+      // was supposed to feather it never fired — with only 7 cells across the
+      // field, F1 reaches ~0.5-0.7 at a cell edge and the fade does not start
+      // until 0.42, so it took a few percent off a corner and left the chord
+      // intact. `* 1.6` then clamped, so each polygon was filled to a flat 1.0.
+      //
+      // What that put on screen, measured on 18-skydeck-wide: a hard-edged
+      // quad lying across the centre of the fighting plane, luminance 0.14-0.16
+      // outside and a flat 0.30-0.31 plateau inside. On the y=950 scanline the
+      // sharpest rising edge in x900-1000 was +0.067 at x=922, and the band
+      // ratio x960-1030 over x860-930 was 1.95x; after this change the same
+      // measurement on the same shot reads +0.023 and 1.39x, and what is left
+      // is a gradient rather than a step. Three separate terms switch on that one
+      // chord and all three are visible: `wet` multiplies the ALBEDO by 0.30
+      // (which is why the painted ring visibly dims where the chord crosses it),
+      // it pins ROUGHNESS to 0.05 so the deck becomes a mirror, and through
+      // `uReflStrength` it turns the planar reflection on — depositing an
+      // unblurred, untextured slab of reflected sky inside the polygon and none
+      // outside it. The pit's floor has the same `pid` threshold and does NOT
+      // show this, because its 11-cell field and tighter F1 fade close the pond
+      // before the chord is reached.
+      //
+      // The replacement is the physical statement instead of the cellular one:
+      // **water stands to a LEVEL, and a shoreline is the contour where the
+      // roof rises through it.** Ponding is still regional — the level is
+      // driven by the broad region and stain fields, so one end of the roof
+      // holds water and the other does not — but the SHAPE of a pond now comes
+      // from comparing two independent low-frequency fields, and the zero set
+      // of a difference of fbms is a curve. `pdF` is Worley F1, which is
+      // continuous (only its gradient breaks at a cell edge), so it can deepen
+      // the middle of a bay without ever putting a step anywhere.
+      //
+      // A first attempt drove the level off `pdF` alone and stamped the roof
+      // with perfect circles — the disk varies far faster than the relief does,
+      // so the disk edge became the shoreline. Keep the level's own variation
+      // SLOWER than the relief it is compared against or the shoreline is the
+      // level's shape rather than the roof's.
+      //
+      // Standing water is kept — a wet deck mirroring a dusk sky is the reason
+      // this arena exists and the fix must not throw it away — but it now
+      // arrives on a ramp. The shallow term wets the whole bay; the deep term
+      // only fires in the cores, over a 0.28-wide band of depth, so the deck
+      // walks dry -> damp -> mirror across metres instead of switching in one
+      // texel. Measured on the 512px bake, wetness by decile:
+      //
+      //   before  71449 78888 22301 14880 11493 11762 9941 8145 7130 6943 19212
+      //   after   64414 67527 29447 20639 16524 13903 12572 12251 11173 10492  3202
+      //
+      // The before histogram is bimodal — a dry mode and a 7.3% spike pinned at
+      // the top bin, which is the polygon interiors all sitting at exactly 1.0.
+      // 5.65% of the slab was saturated at 255; it is now 0.28%, and the middle
+      // bins that were empty are populated. That monotone tail is the gradient.
+      const level = -0.08 + (reg - 0.5) * 0.38 + (stn - 0.5) * 0.18 + pdF * 0.12;
+      // Depth of standing water: how far the local roof sits below that level.
+      const depth = level - relief;
+      const pool = smoothstep(0.0, 0.26, depth) * (0.46 + holdU * 0.24)
+        + smoothstep(0.06, 0.34, depth) * 0.34;
       // The crown of a lap sheds. Water cannot sit on it, so the mask is cut
       // there whatever the pond field says.
       const shed = clamp01(ridge * 0.9 + chip * 0.85 + collar * 0.6 + smoothstep(0.55, 0.85, wea) * 0.45);
