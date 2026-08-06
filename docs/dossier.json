@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.22.0",
-    "commits": "121",
-    "modules": 65,
-    "lines": "60k",
+    "rev": "0.23.0",
+    "commits": "126",
+    "modules": 69,
+    "lines": "63k",
     "clips": 91,
     "moves": 195,
     "characters": 10
@@ -11,27 +11,27 @@
   "verdicts": [
     {
       "axis": "Stage detail",
-      "score": 78
-    },
-    {
-      "axis": "Lighting & atmosphere",
-      "score": 75
+      "score": 76
     },
     {
       "axis": "Interface craft",
-      "score": 75
+      "score": 74
+    },
+    {
+      "axis": "Lighting & atmosphere",
+      "score": 73
     },
     {
       "axis": "Character rendering",
-      "score": 72
+      "score": 70
     },
     {
       "axis": "Impact & effects",
-      "score": 65
+      "score": 68
     },
     {
       "axis": "Animation quality",
-      "score": 64
+      "score": 63
     }
   ],
   "log": [
@@ -777,11 +777,27 @@
         "And the harness can no longer disguise a truncated run as a successful one. The manifest was written last, so a run that died left a directory of valid-looking frames and no certification at all — indistinguishable from success, which is precisely how six critics came to score a partial set. An incomplete manifest is now written before the first shot and rewritten at the end.",
         "One open defect is recorded rather than fixed: a dead-black vertical member runs from the top of frame through a fighter’s torso in the wide stage shot, receiving no rim while standing directly in front of the brightest object in the scene. It was found at 1x, by a critic stripped of magnification, after twenty-three rounds of magnified review had missed it. The likely cause is a cropped rigging mast rather than a misplaced one, which would make moving it the better fix than lighting it — and that is why it was left open, since a rim change made blind would be exactly the unmeasured fix this project does not ship."
       ]
+    },
+    {
+      "phase": "PHASE 28",
+      "when": "Round 24",
+      "rev": "rev 0.23.0",
+      "title": "The best-measured change in the project, and five axes fell",
+      "paras": [
+        "Impact 68, stage 76, interface 74, lighting 73, character 70, animation 63. Average 71.5 to 70.7. Five axes down, one up.",
+        "The lighting work is the most rigorous thing this project has produced and its own axis lost two points. Both are true, and the second does not diminish the first.",
+        "The blocker that had stood since round eighteen is gone. Sharing a texture does not share the sampler — three maps pointing at one texture were three separate declarations costing three units, which is the opposite of what had been recorded. Folding two of them into the third freed the budget, and the fold was proved rather than asserted: control arm rebuilt as the genuine pre-fold program, null control zero, and the fold moved 370 pixels out of 1,359,070 with a fold-unfold-fold round trip returning exactly zero.",
+        "The key light itself, one shadow-casting spot per fighter on the split lighting layer: subject over background 2.15 to 2.70 on the hero framing and 2.02 to 2.80 on the wide, silhouette separation up eighteen and thirty per cent, and the share of the frame’s brightest one per cent landing on the fighters going from exactly their frame share — chance — to between one and four times chance. The background does not move at all, because the split layer means every unit of that light is subject.",
+        "It disproved three things it had been briefed with, including two of mine. The wet floor was never a second blocker, because the split beauty pass masks that layer out, which is why two spots fit where one had been budgeted. My sampler counts were wrong in both directions, and the armour was already at the cap. And the axis’s own headline number does not reproduce under a proper coverage mask — the real baseline is 1.6 to 2.3, not 1.03. What does reproduce is the figure the rubric is actually about: highlights landing at chance.",
+        "The cost was 2.4 milliseconds, and it found the reason — the depth prepass widens the camera mask so both shadow maps redraw the arena even though that light cannot shade it. So the quality ladder drops the shadows rather than the light, returning the whole cost while keeping the entire figure-ground result, and drops them in pairs, because one shadowed key across two fighters lights the second player differently from the first and that is not a quality setting.",
+        "Five axes falling on a round of that quality is the saturation signal, not a failure of the work. The findings keep sharpening; the numbers stopped responding several rounds ago. Two new arenas are now being built instead — a rooftop at dusk and an underground vault — on the reasoning that eight rounds of tuning one closed box lit from above may be losing to venues the box structurally cannot imitate.",
+        "One finding from that work already reaches back into the old arena: the fight camera roams between four and thirteen metres of depth, so there is no near-field position reliably in front of it. The pit has the same exposure and has only escaped it because its scored shot happens to pose the fighters near the origin."
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.22.0",
+    "rev": "0.23.0",
     "note": "Deployed with telemetry. Source on github.com/tecsteps/knockbots."
   }
 }
