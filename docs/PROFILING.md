@@ -1038,3 +1038,98 @@ the texture-unit ceiling documented earlier in this file rather than at the memo
 walks the same path the capture harness does. The perf number the dossier has been quoting all
 along is the end-of-run number, so every fps figure in the project history is a twenty-match figure,
 not a fresh-load one.
+
+---
+
+# Round 26: I was wrong about the frame time, and about what was eating the shadows
+
+Two claims in the section above are retracted, both mine.
+
+**"Textures 125 -> 137 ... points at the leak pushing a shader past the texture-unit ceiling."**
+Wrong, and disproved four independent ways. 300 deliberately orphaned bone-shaped textures — 25x
+the observed leak — measured 18.00ms against 17.60ms for the disposed arm, with `programs` at 163 in
+*both*, so there is no recompile and no driver fallback. Closing the leak left the full run at
+20.7ms, unchanged. `renderScale = 1` alone reproduces 21.8ms in a page that has run no shots at all.
+And mechanically it never could have been true: an orphaned bone texture belongs to a `Skeleton`
+that is in no render list, so it is never bound to a sampler unit, and sampler counts are fixed when
+the program links. One state-walk reached **155 textures at 14.4ms** — eighteen more textures than
+the "failing" run and six milliseconds faster.
+
+**"Every fps figure in this project's history is a twenty-match figure, not a fresh-load one."**
+Also wrong, and wrong in a more interesting way. It is not cumulative at all. `tools/capture.mjs`'s
+`pinTicks` block set `renderScale = 1`, `adaptiveResolution = false` and zeroed the grade's grain,
+and **restored none of it**. `02-closeup-face` is the only shot with `pinTicks` and it is shot
+number *two*, so from that point the whole run — and the end-of-run perf probe — rendered at native
+1920x1080 instead of the high tier's 1632x918. Per-shot trace: `fresh 0.81 -> 01-hero-idle 0.81 ->
+02-closeup-face 1 -> 1 for all seventeen remaining shots`. A step change at shot 2, which is exactly
+why no subset I tried reproduced it: none of them included `02`.
+
+```
+renderScale 1.00 (what the harness left behind)   21.80ms   45.9 fps
+renderScale 0.85 (tier max, what ships)           16.80ms   59.5 fps
+renderScale 0.81 (fresh equilibrium)              16.00ms   62.5 fps
+renderScale 0.72 (tier floor)                     13.80ms   72.5 fps
+```
+
+The pipeline's own published curve says 1.00 -> 20.4ms and 0.80 -> 15.4ms. The manifest's 20.8 and
+the fresh 15.2 land on those two rows. **The whole 5.8ms gap was resolution.** I also reported that
+gap as "17ms" in the section above; it was never more than 5.8. The full pass now reports 60.2 fps,
+and the manifest records `renderScale` and `pixels` beside the number, because an fps figure without
+the resolution it was taken at is not a measurement.
+
+The leak is real, and it is innocent. `THREE.Skeleton` lazily allocates a 16x16 RGBA float bone
+texture the first frame a rig is drawn, freed by `Skeleton.dispose()` and by nothing else — not by
+`robot.dispose()`, not by removal from the scene, and nothing in the repo had ever called it. Ten
+from the roster lineup, two per character change, nine once per page load from the menu warm-up.
+Fixed as a correctness matter with the measured frame-time benefit — zero — written into each
+comment so nobody re-derives it as a performance win. A real twenty-match player session, driven by
+synthetic keyboard events rather than by the harness, held textures flat at 127 throughout and never
+reproduced the collapse.
+
+## What was actually eating the shadows
+
+8.30% of the wide frame at or below linear 3e-4, against a reference range of 0.000–1.633% across
+all ten images. Every candidate in the brief was eliminated by measurement, one knob per arm on a
+frozen frame:
+
+```
+SPLIT/ARENA layer masking   not it   fillLight is on GLOBAL_LIGHT_LAYER; both halves see it
+GTAO zeroing ambient        not it   blendIntensity 0.92 -> 0 moved the metric the WRONG way
+scene.environmentIntensity  not it   zeroing it: 3.9% -> 4.1%
+hemisphere fill strength    not it   fill x10: 3.89% -> 3.74%. No leverage at any strength.
+grade LUT toe               THIS     LUT bypassed: 3.2% -> 0.002%, darkMed 0.0057 -> 0.0180
+```
+
+The grade LUT's shadow segment is a straight line `pivot + (v - pivot) * contrast` clamped at zero.
+With `pivot 0.42, contrast 1.45` it reaches zero at display **0.1303** — thirteen percent of the
+range, where the file's own comment claimed the bottom two percent. Modelled through the whole pass,
+**every scene-linear radiance below 1.94e-2 left as exactly (0,0,0)**: 127,051 pure-black pixels in
+06-stage-wide against 645 in the blackest reference. The hemisphere fill delivers about 1e-3 — a
+factor of twenty *below* the clip — which is the complete explanation for why adding light did
+nothing, and why five rounds of lighting work never moved this number.
+
+**The lesson generalises past this bug.** Four rounds treated a black frame as a lighting problem
+because black looks like missing light. It was an output-transform problem, and no amount of work
+upstream of a clamp can be seen through it. Before attributing a tonal complaint to the lighting
+model, check what the transform does to the range in question — the check is cheap and it would have
+saved four rounds.
+
+`environmentIntensity x2` does reach the reference median darkMed of 0.01407, and was **rejected on
+measurement**: it drops figure/ground 3.4 -> 2.343, a 31% loss, and lifts the frame median 61%. That
+is the recorded answer to "why not just add ambient".
+
+## Gate 4 was a badly-posed gate, and the disproof is worth more than the fix
+
+The brief demanded the wall band 14–42px below the strip light show 2.5x top-to-bottom falloff, up
+from 1.16x, as proof an emissive quad had become a light. It was not met, and should not have been
+asked for. Raycasting the band shows **every pixel in it hits `arena.motes`, a volumetric sheet
+~2m in front of the wall**, or an emissive wash card at z -8.28. Two `RectAreaLight`s hugging the
+back wall moved the ratio 2.151 -> 2.118, and at thirty times strength -> 2.044: they raise top and
+bottom together, because the motes sit between the wall and the lens. Adding light cannot move this
+ratio.
+
+Worse, the metric is framing-fragile: the identical scene reads **1.04** on `06-stage-wide` (strip at
+row 402) and **2.15** on the frozen probe (strip at row 416). A fourteen-pixel shift doubles it,
+because the band contains structural panels rather than a falloff. Under this round's own rule, the
+1.16 baseline was a single-frame reading of a quantity with 2x spread from framing alone. **A gate
+has to be robust to the framing before it can be a gate.**
