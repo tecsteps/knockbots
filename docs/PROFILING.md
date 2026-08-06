@@ -717,3 +717,25 @@ each gives **0 failing programs across all 69 in the scene**. Next in line: `kb.
 **And one shadowed spot needs no ablation at all.** With a single shared key rather than one per
 fighter, `kb.armor` and `arena.floorWet` both land exactly on 16 and nothing fails. If the lighting
 axis can accept one key for the pair, the light it has wanted since round 18 is reachable today.
+
+### Do not spend the clearcoat normal — measured
+
+Ablated through a pure uniform (`clearcoatNormalScale` -> 0 on kb.armor and kb.trim, 8 instances) so
+the compiled program is literally identical between grabs. Noise floor **0.0000/255, max 0**, and
+restoring the uniform reproduced the first grab at 0.0000 — the toggle is clean and reversible.
+
+| | whole frame | head crop |
+|---|---|---|
+| clearcoatNormalMap off | **1.117 / 255**, max 138 | 1.796 / 255 |
+| story/grunge layer off (reference scale) | 27.804 / 255 | — |
+
+It is 25x smaller than the story layer, and it is still the wrong unit to spend. **The pixels it
+moves are concentrated exactly where a broad key specular lands on a large flat plate** — with the
+map on, the highlight breaks into a fine orange-peel; with it off, the same plate reads as an
+unbroken sheet of glass. That is the shot the lighting axis is trying to improve, so dropping it to
+buy a shadowed key would take back part of what the key is being added for.
+
+**Spend the ORM redundancy instead** — `aoMap` and `metalnessMap` are separate sampler uniforms
+pointing at the texture `roughnessMap` already binds, and the fragment patch already rewrites all
+three from that texel. Two free units, one more than the light needs, and bit-identical output by
+construction.
