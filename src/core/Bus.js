@@ -40,6 +40,24 @@
  *   'hitstop'    { ticks:number }
  *   'shake'      { amount:number, ticks:number }
  *   'timeScale'  { scale:number, ticks:number }
+ *
+ *   'requestPause' {}
+ *                The HUD's touch MENU button asking for the pause screen;
+ *                MenuSystem routes it into the same handler as Escape.
+ *
+ *                It exists because the touch pad mounts a stick, four limbs,
+ *                overdrive and block -- and nothing that opens a menu. So once
+ *                a match started on a handset, the pause screen, the options,
+ *                the move list and QUIT TO TITLE were all unreachable: a phone
+ *                player could not leave a match. The button is gated on
+ *                `@media (hover: none)`, so the desktop capture context is
+ *                byte-identical and 08-hud is unaffected.
+ *
+ *                It is a REQUEST rather than a command deliberately. The pad
+ *                cannot know whether pausing is legal in the current phase --
+ *                it is not during the intro, the KO or the match-end screens --
+ *                so the input asks and MenuSystem decides, which is the same
+ *                split every other event here follows.
  */
 
 export class Bus {
