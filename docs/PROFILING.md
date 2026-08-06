@@ -1133,3 +1133,85 @@ row 402) and **2.15** on the frozen probe (strip at row 416). A fourteen-pixel s
 because the band contains structural panels rather than a falloff. Under this round's own rule, the
 1.16 baseline was a single-frame reading of a quantity with 2x spread from framing alone. **A gate
 has to be robust to the framing before it can be a gate.**
+
+## The gate I quoted was measuring the HUD
+
+Both critics found this independently, and I confirmed it. The round-26 commit reports
+`% <= linear 3e-4: 8.300 -> 0.072`. That 0.072% is 1,494 pixels, it is **identical to four decimals
+across every shipped fight shot**, and all of them lie on a single scanline: `y = 72, x 83..1820`, a
+1px black rule inside the HUD nameplate bar.
+
+```
+06-stage-wide    full 0.0720%   rows containing black: [72]   scene rows 175-960: 0.0000%
+01-hero-idle     full 0.0720%   rows containing black: [72]   scene rows 175-960: 0.0000%
+18-skydeck-wide  full 0.0720%   rows containing black: [72]   scene rows 175-960: 0.0000%
+19-cistern-wide  full 0.0720%   rows containing black: [72]   scene rows 175-960: 0.0000%
+03-full-body     full 0.0720%   rows containing black: [72]   scene rows 175-960: 0.0000%
+```
+
+Two consequences, in opposite directions. The fix is **better** than it was reported: the scene's
+own figure is 0.000%, not 0.072%. And the gate is **dead as an instrument** — it has a hard floor
+set by a UI element the renderer cannot influence, so any future round that "improves" it below
+0.072 will have changed the HUD, and comparing 0.072 against the reference median of 0.121 compares
+a HUD rule against reference scene content. Crop to rows 175-960 before computing anything in this
+class, or retire the gate.
+
+This is the same failure as the fps figure earlier in the round: **a number that nobody had checked
+was measuring what it claimed.** Twice in one round, in two different subsystems.
+
+## What the toe cost, which the lighting axis did not see and the stage axis did
+
+The toe fix moved lighting 74 -> 77 and stage 74 -> 74, and the stage critic found why: it traded a
+clipped shadow for a **plateaued** one. On frozen-frame pairs with a bit-identical null arm,
+HUD-cropped:
+
+```
+dark-quartile local contrast, wide   3.168 -> 2.274   -28%
+dark-quartile local contrast, hero   3.442 -> 2.414   -30%
+whole-frame local contrast, wide     4.117 -> 3.754    -9%
+the 8-48 code band the toe rewrote   3.443 -> 2.495   -28%
+share of that band locally flat      2.61% -> 11.36%
+```
+
+Independently reproduced here at coarser precision (unmatched poses, JPEG before): `lc_dark` 18.571
+-> 12.102 on the wide and 15.331 -> 13.093 on the hero. Same direction, same order.
+
+Both wide-frame figures crossed a boundary: before the change `lc_dark` 3.168 and `lc_all` 4.117 sat
+just **inside** the matched-framing reference floor (3.133 and 4.037); after, both are outside it.
+The 81,119 recovered pixels now sit at display luma mean 13.88 with sd 1.85 and local contrast 1.264
+codes against 3.338 for the whole frame. **The black was not hiding stage geometry. It was hiding an
+unlit flat.** An area that read as "the renderer gave up" now reads as "unlit floor" — worth
+something, and correctly not worth a point on stage detail.
+
+## The reference set is wrong for the stage axis, which is round 25 wearing different clothes
+
+Of the ten references, only **three** (02, 06, 07) are wide or full-body in-match framings. Six are
+character closeups where the stage is a deliberately defocused backdrop, and one (10) is the Fight
+Lounge hub, not a fight stage at all. Every "we sit inside the reference range" claim on a detail or
+dark-quartile metric has been carried by those defocused members:
+
+```
+lc_dark floor, full ten references        2.500   (tekken8_09 -- a bokeh ruin behind a fur collar)
+lc_dark floor, matched framings only      3.133
+our five shots                            2.104 - 3.074
+```
+
+We pass against the first floor and fail against the second. Round 25's lesson was "report the
+distribution, not one member". The sharper form: **the distribution has to be over a comparable
+subset.** Averaging a defocused closeup backdrop into a stage-detail reference is the same error as
+quoting one outlier, and it flatters us by about a point of floor.
+
+## Both critics now name the same mechanism, from different axes
+
+Lighting: only **12.79%** of the arena floor's illumination comes from a source that can cast a
+shadow. Environment/PMREM, the hemisphere fill, the emissive washes and the mirror are all
+shadowless by construction, so a cast shadow is bounded at ~13% contrast before anyone authors one,
+and lands at 8.68% over 1.48% of the floor. The fighters are not standing in the arena's light, they
+are composited onto it.
+
+Stage: the shadow band has level but no **modulation** — a uniform fill adds level, not local
+variation, which is exactly why multiplying the hemisphere by ten moved nothing.
+
+These are one finding seen twice: the arena's light is overwhelmingly shadowless, so neither contact
+darkening nor grazing modulation can exist at any tuning. That is the first time two axes have
+converged on a single mechanism, and it is a stronger signal than either score.

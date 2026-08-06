@@ -1169,6 +1169,27 @@ async function main() {
       }
     }
 
+    /*
+     * Record the resolution the SHOT was rendered at, not the one the perf
+     * probe pins later.
+     *
+     * Round 26 gave the fps figure a render scale and stopped one step short:
+     * the manifest said 1632x918 (the probe's pinned 0.85) while the frames
+     * themselves were taken with the adaptive controller live, measured at
+     * 1555x874 -- renderScale 0.81. Every shot a critic scores against a native
+     * 1080p reference is a sub-native render blown up by the viewport
+     * screenshot, and the amount of upscaling was nowhere on the record.
+     */
+    const res = await page.evaluate(`(() => {
+      const r = window.KB && window.KB.renderer;
+      const gl = r && r.renderer && r.renderer.getContext ? r.renderer.getContext() : null;
+      return {
+        renderScale: r && r.renderScale != null ? +r.renderScale.toFixed(3) : null,
+        adaptive: r && r.effects ? !!r.effects.adaptiveResolution : null,
+        buffer: gl ? gl.drawingBufferWidth + 'x' + gl.drawingBufferHeight : null,
+      };
+    })()`).catch(() => null);
+
     const png = await page.screenshot({ path: file });
 
     // UNIVERSAL FRAME CHECK — every shot, whether or not it declares a `verify`.
@@ -1196,7 +1217,7 @@ async function main() {
       if (frame.bannerOverFrame) why.push('an announcement banner is drawn over a shot that is not about one');
       flaw(shot.name, `FRAME NOT SCOREABLE: ${why.join('; ')}`);
     }
-    verified[shot.name] = { ...(verified[shot.name] || {}), frame };
+    verified[shot.name] = { ...(verified[shot.name] || {}), frame, res };
     if (shot.freezeOnHit) {
       await page.evaluate(`(() => { window.KB.paused = false; ${RESTORE_CLOCK} })()`);
     }
