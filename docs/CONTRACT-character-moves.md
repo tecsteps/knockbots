@@ -106,3 +106,39 @@ For a selected roster character:
   enforces this and it caught a real bug this session: a right-button sweep whose
   capsule sat on the planted leg, because `k.sweep` swings the left leg. The
   button a move is bound to says nothing about which limb its clip moves.
+
+---
+
+## Ownership resolution (round 30)
+
+Two agents ended up building the move list in `src/ui/**` at the same time. That
+was my error as coordinator: I launched a workflow whose UI agent owns `src/ui/**`,
+then separately resumed that same agent by message to hand it this contract, which
+put two workers on one file set. Neither was mis-briefed; I created the second.
+
+**Resolution: the workflow's UI agent owns `src/ui/**`.** The second agent stays on
+`src/core/ControlLegend.js` and on verification, which is what it had already
+chosen to do the moment it detected the conflict — it stopped writing rather than
+racing, having caught `check.mjs` failing mid-write with `Private name
+"#openMoveList" must be declared in an enclosing class` and passing again seconds
+later. That transient failure is what two writers look like.
+
+**Load-bearing and not to be reverted**, contributed by the second agent and now
+imported by the first: the shared button/direction vocabulary in
+`src/core/ControlLegend.js` — `BUTTONS`, `buttonDef`,
+`buttonLabel(n, scheme, keyLabels)`, `MOVE_AXES`, `GUARD_KEY`, and
+`ATTACK_KEYS`/`GAMEPAD` rederived from `BUTTONS`, plus `MOTION_SWIPE_DIR` with
+`MOTION_SWIPE` rederived from it.
+
+Deriving the boot legend and the move list from ONE vocabulary is the right call
+and worth stating as a rule: it makes it impossible for the two screens to
+disagree about what button 2 is called. Two instruments describing the same thing
+differently is the single most expensive recurring defect in this project — see
+the fps figure that was an unlabelled resolution, the wall gate that measured a
+sign plate, and the baseline archive at the wrong resolution.
+
+**Known gap, deliberately unassigned to avoid a third writer:** the character-select
+screen has no MOVE LIST button. `#openMoveList` and `#moveListDef()` already handle
+the select case, so it is one `#addNavButton(items, 'MOVE LIST', ...)` in the select
+footer beside LOCK IN and BACK — but that button lands in the scored
+`12-select-screen` frame, so it has to look designed rather than appended.
