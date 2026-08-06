@@ -659,7 +659,22 @@ function takeLock(dir) {
 }
 
 async function main() {
-  if (!KEEP && existsSync(OUT)) rmSync(OUT, { recursive: true, force: true });
+  /*
+   * A SUBSET RUN MUST NEVER WIPE THE SET.
+   *
+   * This used to be `if (!KEEP)`, so `--shots 07-super` deleted all twenty
+   * captures and wrote one back. `shots/` is gitignored, so there is no undo,
+   * and several agents share this tree -- one agent taking a quick single-shot
+   * measurement silently destroyed another's certified set, which is how this
+   * was found. A run that is only going to write one shot has no business
+   * deleting the nineteen it will not rewrite.
+   *
+   * The complementary defect is already closed: a subset run can no longer
+   * certify itself, because `complete` is derived from the shot list rather
+   * than asserted. Together they mean a subset run leaves the other frames
+   * intact AND cannot claim to have verified them.
+   */
+  if (!KEEP && !ONLY.length && existsSync(OUT)) rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
 
   const server = await createServer({
