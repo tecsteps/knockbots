@@ -76,6 +76,34 @@ const _c3 = new THREE.Color();
 const _size = new THREE.Vector2();
 const _eye = new THREE.Vector3();
 const _lightDir = new THREE.Vector3(0.4, -0.8, 0.35);
+const _hsl = { h: 0, s: 0, l: 0 };
+
+/**
+ * HSL to sRGB, scaled so the result has unit display luminance.
+ *
+ * Written out rather than routed through `THREE.Color` because the whole point
+ * of these values is that they are sRGB-ENCODED display multipliers, and
+ * `Color` lives in the linear working space: any round trip through it would
+ * silently apply a transfer function to a number that is not a colour.
+ *
+ * @param {number} h 0..1
+ * @param {number} s 0..1
+ * @param {number} l 0..1
+ * @param {THREE.Vector3} out
+ * @returns {THREE.Vector3} out
+ */
+function hslToNormalisedRgb(h, s, l, out) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = ((h % 1) + 1) % 1 * 6;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (hp < 1) { r = c; g = x; } else if (hp < 2) { r = x; g = c; } else if (hp < 3) { g = c; b = x; } else if (hp < 4) { g = x; b = c; } else if (hp < 5) { r = x; b = c; } else { r = c; b = x; }
+  r += m; g += m; b += m;
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const k = y > 1e-5 ? 1 / y : 1;
+  return out.set(r * k, g * k, b * k);
+}
 
 /**
  * Per-weight impact recipe. Every number here is a readability decision.
@@ -930,6 +958,25 @@ export class EffectsDirector {
     this.overdrive = {
       on: false, t: 0, hold: 0, level: 0, desat: 0, flash: 0, bar: 0,
       fighter: null, color: new THREE.Color(0.4, 0.75, 1),
+      // Ends of the duotone the overlay re-lights the world into, derived from
+      // `color` by `#superTints` and held luma-normalised.
+      shade: new THREE.Vector3(1, 1, 1), tint: new THREE.Vector3(1, 1, 1),
+      // How far the world is carried into that duotone at full takeover. The
+      // literal this replaces was 0.94 on a mix toward *grey*, and at that
+      // weight the frame's own colour was gone: mean saturation 0.484 -> 0.090.
+      // Against a coloured ramp the same weight is not a problem but an
+      // instrument, so it is a named field: it is the single number that
+      // decides how much of the arena's own colour survives the beat.
+      gel: 0.92,
+      // Saturation and lightness of the two ends of the ramp, swept on the live
+      // shot rather than picked. Overshooting is a real failure mode here and
+      // has its own measurement: at shadeSat 0.92 with an additive far field
+      // the frame read 0.96, above every one of the ten references, which is
+      // the same error as the 0.090 it replaced with the sign flipped. These
+      // land at 0.74 over the full frame -- between the ten-reference median
+      // (0.641) and the two frames in the set that are themselves supers,
+      // tekken8_04 (0.796) and tekken8_06 (0.806).
+      shadeSat: 0.84, shadeLight: 0.30, tintSat: 0.60, tintLight: 0.62,
     };
     this.overlayCenter = new THREE.Vector2();
     this._speedSeed = 0;
@@ -1102,7 +1149,35 @@ export class EffectsDirector {
     on('superHit', (e) => this.#onSuperHit(e));
     on('roundStart', () => this.reset());
     on('roundEnd', (e) => this.#onRoundEnd(e));
-    on('phase', (e) => { if (e?.phase === 'menu' || e?.phase === 'select') this.reset(); });
+    on('phase', (e) => {
+      if (e?.phase === 'menu' || e?.phase === 'select') { this.reset(); return; }
+      // THE 08-hud LETTERBOX LEAK.
+      //
+      // 08-hud shipped with 18 rows of pure black top and bottom, carrying the
+      // scope crop's own 1.7px smoothstep edge at y=1062 — an overdrive
+      // letterbox at uSuperBar ~0.13, bleeding out of 07-super two shots
+      // earlier. It survives because the takeover's only clocks are wall time:
+      // `hold` is 3.5s and `bar` releases at 2.4/s, which is 3.9s from
+      // superStart, and the harness re-stages faster than that. Nothing in
+      // between resets anything: `roundStart` does, but the harness re-enters
+      // with a bare `setPhase('fight')`, and ENTER_MATCH skips `startMatch`
+      // when the phase is already 'fight'.
+      //
+      // A phase transition is exactly the signal that was missing. No legal
+      // super spans one — the game sits in FIGHT for the whole cinematic, and
+      // `roundEnd` already tears the takeover down for the KO case — so
+      // clearing it on any phase change is a no-op in play and closes the leak
+      // in the harness. The rest of the FX state is left alone; a full reset
+      // here would also wipe decals and particles at every READY -> FIGHT.
+      const od = this.overdrive;
+      if (!od.on && od.level <= 0 && od.bar <= 0 && od.flash <= 0) return;
+      od.on = false; od.level = 0; od.desat = 0; od.flash = 0; od.bar = 0; od.hold = 0;
+      if (this._pass) {
+        const u = this._pass.uniforms;
+        u.uSuper.value = 0; u.uDesat.value = 0; u.uSuperFlash.value = 0; u.uSuperBar.value = 0;
+        this._pass.refreshActive();
+      }
+    });
   }
 
   #learn(f) {
@@ -1766,6 +1841,36 @@ export class EffectsDirector {
     });
   }
 
+  /**
+   * Derives the two ends of the duotone the overdrive re-lights the world into,
+   * from the attacker's emissive colour.
+   *
+   * These are DISPLAY-SPACE multipliers — `OverlayPass` runs after the output
+   * pass, so the pixels it sees are sRGB-encoded — and they are normalised so
+   * that `dot(tint, (0.2126, 0.7152, 0.0722)) == 1`. That normalisation is the
+   * whole safety property of the re-light: `luma * tint` carries exactly the
+   * luminance the pixel arrived with, so substituting the attacker's hue for
+   * the world's own cannot move the frame's exposure. The transform this
+   * replaced, `mix(col, vec3(luma), 0.94)`, had the same property and still
+   * took the frame's mean saturation from 0.484 to 0.090 — preserving luma is
+   * necessary and not sufficient, which is why the chroma is authored here
+   * rather than merely not destroyed.
+   *
+   * Hue is read in sRGB rather than in the linear working space so that a
+   * character's colour lands where a person would say it does.
+   *
+   * @param {THREE.Color} base attacker emissive
+   */
+  #superTints(base) {
+    base.getHSL(_hsl, THREE.SRGBColorSpace);
+    const od = this.overdrive;
+    // Deep end: near-full chroma, low lightness — this is what the corners and
+    // the shadows become. Hot end: lighter and a little less saturated, so the
+    // mid-tones near the fighter read as lit rather than as painted.
+    hslToNormalisedRgb(_hsl.h, od.shadeSat, od.shadeLight, od.shade);
+    hslToNormalisedRgb(_hsl.h, od.tintSat, od.tintLight, od.tint);
+  }
+
   #onSuperStart(e) {
     if (!this.enabled || !e?.fighter) return;
     const f = e.fighter;
@@ -1783,6 +1888,7 @@ export class EffectsDirector {
     this.overdrive.hold = 3.5;
     this.overdrive.fighter = f;
     this.overdrive.color.copy(_c);
+    this.#superTints(_c);
 
     _v.copy(f.position);
     _v.y = this.floorY;
@@ -2183,7 +2289,7 @@ export class EffectsDirector {
       od.level = Math.max(0, od.level - dt * 1.8);
     }
     od.flash = Math.max(0, od.flash - dt * 5.5);
-    od.desat = od.level * 0.94;
+    od.desat = od.level * od.gel;
     // The bars lead the drain in and lag it out, so the crop arrives before the
     // world drains and is the last thing to leave.
     od.bar = od.on
@@ -2195,6 +2301,8 @@ export class EffectsDirector {
     u.uSuperFlash.value = od.flash;
     u.uSuperBar.value = od.bar;
     if (od.color) u.uSuperColor.value.copy(od.color);
+    u.uSuperShade.value.copy(od.shade);
+    u.uSuperTint.value.copy(od.tint);
     if (od.fighter && this.camera && (od.level > 0 || od.bar > 0)) {
       _v.copy(od.fighter.position);
       _v.y += 1.0;

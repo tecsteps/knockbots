@@ -1215,3 +1215,104 @@ variation, which is exactly why multiplying the hemisphere by ten moved nothing.
 These are one finding seen twice: the arena's light is overwhelmingly shadowless, so neither contact
 darkening nor grazing modulation can exist at any tuning. That is the first time two axes have
 converged on a single mechanism, and it is a stronger signal than either score.
+
+# Round 27: a wall-falloff gate the framing cannot move
+
+Round 26 retired gate 4 with the right verdict — *"a gate has to be robust to the framing before it
+can be a gate"* — and left the replacement unbuilt. This is the replacement, and the measurement
+that it is one.
+
+## Definition
+
+1. **The samples are fixed world points on the barrier face**, not a pixel rectangle: a
+   0.10 m x 0.012 m grid over `x` +/-8.4, `y` 0.32-1.24 at `z` -8.60, 13,013 points, projected
+   through whatever camera the shot happens to have. The old gate averaged rows 14-42 px below the
+   brightest row, which is why fourteen pixels of camera move doubled it.
+2. **Linear Rec.709 luminance, median per world-height bin** — 18 bins across the 0.9 m below the
+   tube. The barrier is not one material (a full-width hoarding runs from `y` 0.42 to 0.90), so the
+   median makes each bin one material instead of averaging concrete with vinyl.
+3. **Least-squares fit of `ln(median)` against world height**, reported as `exp(slope * 0.9)` — the
+   fitted top-to-bottom ratio over that 0.9 m — together with the fit's `r2`. A falloff is a *trend*;
+   `r2` is what tells you whether the band you are quoting a ratio for has one.
+4. **The gate is that reading divided by the same reading with the wash switched off**, on/off inside
+   one frozen frame. That is the discipline the rest of this round already uses, and here it also
+   divides out the wall's own albedo steps and its view-dependent shading.
+
+## Framing robustness, measured
+
+One frozen session, fighters hidden, the camera moved around the point it is looking at, null control
+between two untouched grabs **0.0/255**. The strip light's own row moves from 279 to 544 — a 265-pixel
+range, nineteen times the fourteen-pixel shift that broke the old gate:
+
+```
+framing     strip row   OLD gate   world-anchored  r2      pass-off   GATE (on/off)
+ref             416       2.713        2.307      0.445     0.980        2.353
+near            411       2.467        2.441      0.443     1.059        2.304
+far             420       2.862        2.320      0.439     1.010        2.297
+low             544       2.685        2.733      0.452     1.147        2.383
+high            279       2.848        2.045      0.337     0.870        2.352
+near-low        523       1.820        2.285      0.337     0.918        2.488
+far-high        281       2.642        2.005      0.350     0.891        2.250
+
+OLD screen-space gate        1.820 .. 2.862    spread x1.57
+world-anchored, raw          2.005 .. 2.733    spread x1.36
+world-anchored, on/off       2.250 .. 2.488    spread x1.11
+```
+
+**World-anchoring alone is not enough, and the pass-off column says why.** The unlit wall's own
+vertical trend runs 0.870 at the high camera to 1.147 at the low one: a third of the raw metric's
+spread is real view-dependent shading of the concrete, not instrument noise. Dividing by it takes the
+spread from x1.36 to x1.11 — and the residual x1.11 is over camera moves far larger than any shot
+list would contain. Across the three arms that only change distance, the gate reads 2.297-2.353,
+x1.02.
+
+## It also has to discriminate, or it is just a stable number
+
+Same rig, one framing, sweeping the wash card's near-field parameter live on its uniform (null control
+0.0/255 again):
+
+```
+  k       falloff   r2      gate (on/off)
+  1.00    1.503    0.118       1.316      <- the plateau this round replaced
+  0.60    1.682    0.178       1.473
+  0.45    1.800    0.220       1.577
+  0.35    1.876    0.243       1.642      <- shipped
+  0.28    1.905    0.245       1.668
+  0.20    1.893    0.226       1.658
+  0.12    1.743    0.164       1.527
+```
+
+The gate separates the shipped profile from the one it replaced by 25%, and it turns back down at both
+ends — the flat lift above `k` 0.6 and the collapse-into-the-first-ten-centimetres below `k` 0.2. Its
+optimum is a broad plateau from 0.20 to 0.35; the shipped 0.35 is within 1.6% of the peak, and a third
+instrument (evaluating the profile analytically, no renderer involved) puts the same optimum at 0.28-0.35.
+Three routes, one answer, is the reason to believe it.
+
+## What this gate still cannot do
+
+- `r2` on the **pass-off** arm is 0.000-0.013. The gate is a ratio of two mean trends, and only the
+  numerator's trend is well explained; the denominator is a mean slope through a band whose variance
+  is dominated by material steps. It is a sound correction, not a fitted model.
+- It is one arena, one mood, one wall. Nothing here says the same construction transfers to the
+  cistern or the skydeck without re-picking the world band.
+- `r2` should be quoted with every reading and treated as the validity flag. Below about 0.15 the band
+  has no trend to have a ratio of, which is the state the old gate was in when it was being quoted.
+
+## Three ways this rig lied before it told the truth
+
+Worth recording, because each failure produced a *plausible* number.
+
+1. **Seven framings, seven bit-identical rows.** `cinematic()` sets targets that the camera's own
+   `simulate`/`render` integrate — and the freeze stubs both, so every reframe was a no-op and the
+   rig reported the old gate as perfectly framing-stable. **A robustness test that returns identical
+   numbers is far more likely broken than perfect.** The fix is to move `camera.position` directly.
+2. **54,281 of 54,281 raycast hits landed on `arena.practicals.wash`** — the multiply card hanging
+   34 cm in front of the barrier. The first sampling pass measured the uniform it was trying to
+   evaluate. Excluding transparent, non-depth-writing surfaces fixes it.
+3. **Then every hit landed on `arena.structure.backdrop`, 100 m behind the wall.** The set is merged
+   one mesh per material, so the barrier's concrete belongs to an object whose bounding box spans the
+   whole arena; a bounding-box filter cannot find it and silently selects the scenery behind it.
+
+Raycasting is also not free here: against the merged set meshes it costs roughly **24 ms per ray**, so
+a 25,000-ray sampling pass is a ten-minute stall. The shipped rig raycasts nothing — a world grid on a
+known plane is what "attached to the wall" means, and it costs milliseconds.

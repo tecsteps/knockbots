@@ -868,6 +868,12 @@ async function main() {
       const lum = [];
       let black = 0, topBlack = 0, topN = 0;
       const topRows = Math.round(H * 0.2);
+      // Modal-colour share over the SCENE rows only, which is the dead-canvas
+      // test. Deliberately a variance measure rather than a level measure --
+      // see the note on `deadFrac` below.
+      const sceneTop = Math.round(H * 0.162), sceneBot = Math.round(H * 0.889);
+      const tally = new Map();
+      let sceneN = 0;
       for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
           const i = (y * W + x) * 4;
@@ -875,23 +881,68 @@ async function main() {
           lum.push(L);
           if (L < 0.012) black++;
           if (y < topRows) { topN++; if (L < 0.012) topBlack++; }
+          if (y >= sceneTop && y < sceneBot) {
+            sceneN++;
+            const key = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
+            tally.set(key, (tally.get(key) || 0) + 1);
+          }
         }
       }
+      let modal = 0;
+      for (const c of tally.values()) if (c > modal) modal = c;
       lum.sort((a, b2) => a - b2);
       const q = (f) => +lum[Math.min(lum.length - 1, Math.floor(lum.length * f))].toFixed(4);
       const banner = document.querySelector('.announce-banner');
       const bannerUp = !!banner && parseFloat(getComputedStyle(banner).opacity) > 0.05;
+
       const out = {
         p50: q(0.5), p95: q(0.95), p999: q(0.999),
         blackFrac: +(black / lum.length).toFixed(3),
         topBlackFrac: +(topBlack / Math.max(1, topN)).toFixed(3),
         bannerOverFrame: bannerUp && !wantsBanner,
+        deadFrac: +(modal / Math.max(1, sceneN)).toFixed(4),
       };
-      // Thresholds are deliberately loose -- this catches unscoreable frames,
-      // not dark art direction. 07-super sat at p50 0.0044; a normal fight
-      // frame is an order of magnitude above that.
+      /**
+       * Thresholds are deliberately loose -- this catches unscoreable frames,
+       * not dark art direction. 07-super sat at p50 0.0044; a normal fight
+       * frame is an order of magnitude above that.
+       *
+       * `deadFrac` IS THE DEAD-CANVAS TEST, AND IT IS NOT REDUNDANT.
+       *
+       * Under load a capture can come back with the WebGL canvas never drawn and
+       * the DOM HUD composited over it perfectly -- health bars, timer, combo
+       * counter, damage number, all correct. Two of twenty shipped frames were
+       * this, and every gate above passed them, and the manifest certified the
+       * run `complete: true, defects: []`. Three critics found it independently;
+       * one lost its flagship shot and could not score its axis.
+       *
+       * A previous version of this comment asserted the case was already covered
+       * and told the next reader NOT to add this check. That was wrong on one
+       * specific point, and the whole failure follows from it: **a dead canvas is
+       * not black.** What shows through is the page background, --kb-void
+       * #05070c (src/ui/ui.css), whose Rec.709 luma is 0.0272. That is 2.3x the
+       * p50 floor of 0.012, and -- the part that really bites -- it is ABOVE the
+       * L < 0.012 black threshold, so `blackFrac` reports 0.000 on a frame that
+       * is 99% one colour. `topBlackFrac` is inverted here too, because the top
+       * of a dead frame is exactly where the surviving HUD lives. The reasoning
+       * was validated by blanking a frame to BLACK, which is the one shade the
+       * real failure never produces.
+       *
+       * So the gate has to be a VARIANCE test, not a level test. Modal quantised
+       * colour share over the scene rows, measured across all 18 shipped frames:
+       *
+       *     two dead frames        99.17%, 99.96%
+       *     worst healthy frame     2.29%  (07-super, whose modal colour is the
+       *                                     cinematic letterbox, not the void)
+       *     typical healthy frame   0.05% - 1.95%
+       *
+       * Forty-fold separation, so 0.5 is not a delicate threshold. It is also
+       * orthogonal to brightness and to the HUD, which is why it survives both
+       * the dark-art-direction case and the bright-chrome case that defeated the
+       * level tests.
+       */
       out.ok = out.p50 >= 0.012 && out.p95 >= 0.06 && out.blackFrac < 0.55
-        && out.topBlackFrac < 0.9 && !out.bannerOverFrame;
+        && out.topBlackFrac < 0.9 && !out.bannerOverFrame && out.deadFrac < 0.5;
       return out;
   }, { b64, wantsBanner });
 
@@ -1230,7 +1281,12 @@ async function main() {
       if (frame.blackFrac >= 0.55) why.push(`${Math.round(frame.blackFrac * 100)}% of pixels crushed to black`);
       if (frame.topBlackFrac >= 0.9) why.push(`top fifth is ${Math.round(frame.topBlackFrac * 100)}% black — framed against a void`);
       if (frame.bannerOverFrame) why.push('an announcement banner is drawn over a shot that is not about one');
-      flaw(shot.name, `FRAME NOT SCOREABLE: ${why.join('; ')}`);
+      if (frame.deadFrac >= 0.5) {
+        why.push(`DEAD CANVAS — ${Math.round(frame.deadFrac * 100)}% of the scene is a single colour; `
+          + 'the WebGL canvas never drew and this is the DOM HUD over the page background');
+      }
+      flaw(shot.name, `FRAME NOT SCOREABLE: ${why.join('; ')} — if this shot is being tuned,`
+        + ' treat the frame as DEAD and re-run it; do not read its numbers as a tuning result');
     }
     verified[shot.name] = { ...(verified[shot.name] || {}), frame, res };
     if (shot.freezeOnHit) {
@@ -1358,6 +1414,19 @@ async function main() {
   if (info) console.log(`[capture] draw calls ${info.calls}, tris ${info.triangles}`);
   if (perf) console.log(`[capture] frame time ${perf.medianMs}ms median, ${perf.p95Ms}ms p95 over ${perf.frames} frames`
     + ` -> ${fps} fps${fps < 60 ? '  *** BELOW THE 60FPS CONSTRAINT ***' : ''}`);
+
+  /**
+   * Defects are warned WHEN THEY HAPPEN, which puts them above every later
+   * shot's line and the whole perf block. Anyone reading the tail of a run --
+   * which is what you read, because the fps verdict prints last -- sees none of
+   * them. A dead 07-super capture was flagged correctly by the frame check and
+   * still got measured and compared against two other candidates, because the
+   * warning was forty lines up. Repeat the list last, where the verdict is.
+   */
+  if (defects.length) {
+    console.warn(`\n[capture] *** ${defects.length} DEFECT(S) — THESE FRAMES ARE NOT SCOREABLE ***`);
+    for (const d of defects) console.warn(`  ${d.shot}: ${d.problem}`);
+  }
 
   await browser.close();
   await server.close();

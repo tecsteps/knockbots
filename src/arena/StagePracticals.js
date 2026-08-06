@@ -156,6 +156,49 @@ const POOL_GAIN = 0.096;
  * deliberately NOT washed: the fight plane is the band the fighters are read
  * against, `POOLS` already lands the tube's scatter there, and it lands twice
  * because the barrier tube is the one emitter left inside the floor's mirror.
+ *
+ * ---------------------------------------------------------------------------
+ * HOW THE FALLOFF ON THIS BAND IS MEASURED, AND WHY THE OLD WAY WAS WRONG
+ *
+ * The standing gate was "the band 14-42 px below the strip should show several
+ * times top-to-bottom falloff; it shows 1.07x". Three things are wrong with it,
+ * all reproduced here on a frozen frame with a bit-identical null arm:
+ *
+ *   1. **It is inverted.** Reimplemented and run at the wide framing it reads
+ *      0.51-0.70 — under one, i.e. the wall getting BRIGHTER further from the
+ *      lamp — in every framing tried, because 42 px below the tube lands on the
+ *      "KEEP BEHIND THE LINE" sign plate. The number never described a falloff.
+ *   2. **It is framing-fragile**, as already suspected: over six small camera
+ *      perturbations (+/-17 and +/-33 px of tube row) it swings 0.506-0.646.
+ *   3. **It cannot tell a trend from structure**, which is why nobody noticed 1.
+ *
+ * The replacement is world-anchored. The barrier kerb is a 24 x 1.15 x 0.6 m
+ * box whose camera-side face is the plane z = -8.60 and the tube hangs at
+ * y = 1.28, so the sample set is every point on that face at a world height
+ * that is PLAIN CONCRETE — excluding y < 0.17 (base angle and bolt row),
+ * 0.42-0.90 (banner panels), 0.96-1.06 (conduit and saddle clamps) and y > 1.15
+ * (steel cap), and excluding in x the two bays that carry hardware instead of
+ * banner, the joint cover strips at x = 4k, and the two junction boxes. Linear
+ * luminance is read at each, the median taken across x at each height, and a
+ * least-squares log slope fitted against world height, reported over 0.9 m
+ * together with its r2.
+ *
+ * It is robust because the samples are fixed in the WORLD: a camera shift moves
+ * them with the wall and they land on the same physical concrete. Both ends of
+ * the fit are the same material on the same plane with the same normal, so the
+ * ratio is a light ratio and not an albedo ratio; every plain-concrete height
+ * votes, so no cover strip or specular chip can carry it; and the structure is
+ * excluded by NAME from the set's own coordinates rather than by hoping a
+ * screen-space row misses it. Measured over the same six perturbations the old
+ * gate swings 0.506-0.646 across, this reads 1.62-1.80 — and, the part that
+ * matters, the near-field profile beats the plateau in EVERY one of them.
+ *
+ * Its own limitation, stated so the next round does not over-trust it: r2 at
+ * the shipped drive is 0.39, so 61% of the wall's vertical variation is still
+ * the set's own structure and albedo. That is honest — the wall really is
+ * mostly structure — but it means the falloff figure should always be quoted
+ * with its r2, and a change that moves falloff while r2 falls has moved an
+ * artefact.
  */
 const WASHES = [
   // The barrier tube: `#neon` hangs it at [0, 1.28, -8.62], 24 m long. The card
@@ -263,8 +306,128 @@ const WASHES = [
  * it. Every number in the sweep above was measured against a background that
  * was allowed to own the top of the range; none of them are wrong, they were
  * just answering a question that turned out not to be the one on the rubric.
+ *
+ * **1.14, and it is not a brightening.** The drive is only meaningful together
+ * with {@link WASH_NEAR}, which this round changed from a plateau to a line
+ * source's near field, and 1.14 is the drive at which the new profile deposits
+ * the SAME TOTAL LIGHT the old one did: whole-frame mean 63.784 against 63.806
+ * for the shipped plateau, on one frozen wide frame with a bit-identical null
+ * arm, against 63.199 with the pass switched off. So this pair is a pure
+ * redistribution of the light the wash was already spending, and the direction
+ * it redistributes in is the one the paragraph above was worried about. Deposit
+ * multiplier on the barrier face, by distance below the tube, measured on the
+ * concrete itself:
+ *
+ *     below tube   0.15   0.20   0.35   0.88   1.00   1.09  m
+ *     plateau      1.633  1.497  1.608  1.237  1.220  1.120
+ *     near field   2.008  1.774  1.769  1.130  1.103  1.048
+ *
+ * The gain concentrates into the first 0.4 m under the fitting, where a real
+ * strip puts it, and the metre below — the band a standing fighter's chest and
+ * head are actually read against — comes DOWN 6-10%. The figure/ground cost
+ * this note was written to record is smaller after the change, not larger.
  */
-const WASH_DRIVE = 0.7;
+const WASH_DRIVE = 1.14;
+
+/**
+ * NEAR-FIELD SHARPNESS of a wash, as a fraction of the card's half-height.
+ *
+ * This is the standoff between the tube and the surface it throws down,
+ * expressed in the card's own units, and it is the parameter that decides
+ * whether the band under a strip light reads as a *gradient* or as a *lifted
+ * rectangle*. The profile it drives is
+ *
+ *     g(q) = k^2 / ( k^2 + q^2 )        q = 0 at the tube, 1 at the card edge
+ *
+ * shifted and renormalised so it is exactly 1 at the tube and exactly 0 at the
+ * edge, which keeps the pass an identity outside its own reach.
+ *
+ * That form is not a curve picked for looking right. A line source of length
+ * much greater than its distance deposits `s / ( s^2 + d^2 )` on a parallel
+ * surface at perpendicular distance d with standoff s — the 1/r line-source
+ * law times the cosine — and `k` is `s` in card units. So the card's gradient
+ * is now driven by where the fitting actually is instead of by an arbitrary
+ * polynomial.
+ *
+ * **What it replaces, and why that was a real defect.** The profile was
+ * `( 1 - q^2 )^2`. That function has ZERO DERIVATIVE AT q = 0 — it is a plateau
+ * exactly where a real lamp's near field is steepest — and the band the eye
+ * reads is the first half-metre under the fitting, which is precisely where the
+ * old profile was flattest. Measured on the shipped drive, the deposit's own
+ * multiplier across the band 0.22 m to 0.66 m below the tube ran 1.58 -> 1.34,
+ * a ratio of 1.18: a full-width horizontal bar of near-constant gain, which is
+ * the additive failure mode this file's own docs warn about arriving through
+ * the multiply operator.
+ *
+ * `k = 1.0` is very nearly the old plateau: `g` becomes `(1-q^2)/(1+q^2)`, and
+ * the difference from `(1-q^2)^2` is `q^2(1-q^2)/(1+q^2)`, which peaks at 0.090
+ * of full scale around q = 0.79 and is under 0.010 anywhere in the first third
+ * of the card. On the wall, at the drive this shipped with, that is at most 5%
+ * on the deposited multiplier. So the change is a one-parameter family with the
+ * previous behaviour effectively at one end of it, and the sweep below is a
+ * sweep inside one frozen frame rather than across sessions.
+ *
+ * **Swept in-page on one frozen 1920x1080 wide frame**, simulation and frame
+ * clock stopped, grain, chroma AND motion blur zeroed, adaptive resolution
+ * pinned off at renderScale 1.0, the rAF loop stopped so the only draws are the
+ * rig's — null arm bit-identical, 0.000/255.
+ *
+ * `falloff` is the world-anchored wall metric: the least-squares log slope of
+ * linear luminance against WORLD height over every plain-concrete height on the
+ * barrier face, expressed over 0.9 m. `r2` is how much of the wall's vertical
+ * variation that trend explains — a falloff is a trend, and if r2 is low the
+ * band is structure and the ratio means nothing, which is the failure the old
+ * screen-space gate could not see. `deposit` is the whole-frame mean minus the
+ * pass-off mean, i.e. what the wash actually spends.
+ *
+ *     k        falloff    r2     deposit   lc_dark   lc_p90
+ *     off       1.119    0.020    0.000     5.876    23.86
+ *     1.00      1.504    0.167    0.601     5.945    24.28    <- the old plateau
+ *     0.60      1.599    0.217    0.505     5.946    24.19
+ *     0.45      1.633    0.237    0.434     5.933    24.09
+ *     0.35      1.634    0.244    0.369     5.922    24.09
+ *     0.28      1.619    0.241    0.314     5.913    24.08
+ *     0.20      1.556    0.215    0.239     5.902    24.00
+ *     0.12      1.416    0.147    0.149     5.882    23.91
+ *
+ * Two failure modes, and the metric sees both. Above k ~ 0.6 the profile is
+ * the old lifted rectangle. Below k ~ 0.2 the falloff turns back DOWN, because
+ * the whole gradient has collapsed into the first ten centimetres, under the
+ * tube's own bloom halo where nothing can see it — which is the failure this
+ * file's shader comment already warned about, now with a number on it.
+ *
+ * The profile predicts that shape before the renderer is involved, which is the
+ * reason to believe the sweep rather than the sweep's noise. Evaluating `g`
+ * alone at 0.22 m and 0.66 m below the tube — no renderer, no tone curve, no
+ * wall — the deposited multiplier's own ratio runs 1.24 (k=1), 1.36, 1.44, 1.49
+ * (k=0.35), 1.51, 1.48, 1.31 (k=0.12): a maximum between k 0.28 and 0.35 and a
+ * fall-off on both sides, which is the measured column's shape. Two independent
+ * routes to the same optimum, one of them arithmetic.
+ *
+ * k = 0.35 is the peak of both columns and deposits 39% less light than the
+ * plateau it replaces. The drive is then raised to put that light back (see
+ * {@link WASH_DRIVE}), and at MATCHED deposit the comparison is not close:
+ *
+ *     arm                        deposit   falloff    r2
+ *     plateau, drive 0.70         0.607     1.557    0.189
+ *     near field 0.35, drive 1.14 0.585     2.058    0.390
+ *     plateau, drive 1.14         0.960     1.803    0.268
+ *
+ * The plateau driven 64% harder still shows less gradient than the near field
+ * driven to the same deposit. It is the SHAPE that puts a gradient on a wall,
+ * not the level — which is the same lesson the stage axis learned about the
+ * shadow band, in the one place in this file where the fix was available.
+ *
+ * **Re-measured with the framing-robust gate** that replaced round 26's retired
+ * screen-space one (docs/PROFILING.md, round 27): pass-on log slope over the
+ * barrier's world band divided by the same slope with the pass off, which is
+ * stable to x1.11 over camera moves that slide the strip 265 px up and down the
+ * frame. It reads 1.316 for the plateau and 1.642 here, and puts the optimum on
+ * a broad plateau from k 0.20 to 0.35 with a shallow peak at 0.28 — 1.6% above
+ * the shipped value, which is inside anybody's noise. The value is not critical;
+ * the SHAPE is, and every instrument that has looked at it agrees about that.
+ */
+const WASH_NEAR = 0.35;
 
 /**
  * Scene-referred radiance the dimmest fixture any mood authors is driven to.
@@ -956,7 +1119,10 @@ export class StagePracticals {
 
     this.washMaterial = new THREE.ShaderMaterial({
       name: 'arena.practicals.wash',
-      uniforms: { uWash: { value: new THREE.Color(0, 0, 0) } },
+      uniforms: {
+        uWash: { value: new THREE.Color(0, 0, 0) },
+        uNear: { value: WASH_NEAR },
+      },
       vertexShader: /* glsl */ `
         attribute vec2 aEdge;
         attribute vec2 aGain;
@@ -975,28 +1141,34 @@ export class StagePracticals {
       `,
       fragmentShader: /* glsl */ `
         uniform vec3 uWash;
+        uniform float uNear;
         varying vec2 vUv;
         varying vec2 vEdge;
         varying vec2 vGain;
         varying vec3 vWorld;
         void main() {
-          // Separable plateau-plus-skirt, as the pools use, with the ACROSS axis
-          // squared a second time and the ALONG axis left linear. The two axes
-          // of a strip's near field are not the same shape: along the run the
-          // source is effectively infinite and the falloff is only the run
-          // ending, while across it the wall goes dark within about a metre.
-          // Squaring both (the pools' profile) put the whole cross-gradient
-          // inside the first twenty centimetres, under the bloom halo, where
-          // nothing can see it; squaring neither made the pass a flat lift on
-          // everything within a metre and a half, which is the additive failure
-          // mode arriving by another route.
+          // The two axes of a strip's near field are not the same shape: ALONG
+          // the run the source is effectively infinite and the only falloff is
+          // the run ending, so that axis stays a soft plateau-plus-skirt.
+          // ACROSS it, the surface sees a line source at a fixed standoff and
+          // the deposit is s / ( s^2 + d^2 ) — steepest right at the fitting.
           vec2 s = ( vUv - 0.5 ) * 2.0;
           // Reach upward is vGain.y times the reach downward, so the same card
           // throws a long gradient down the barrier and a short one up the fence.
           vec2 q = vec2( abs( s.x ), abs( s.y ) / ( s.y > 0.0 ? vGain.y : 1.0 ) );
           vec2 e = clamp( ( q - vEdge ) / max( vec2( 1.0 ) - vEdge, vec2( 1e-3 ) ), 0.0, 1.0 );
-          float across = 1.0 - e.y * e.y;
-          float f = ( 1.0 - e.x * e.x ) * across * across;
+          // Line-source near field, shifted and renormalised to 1 at the tube
+          // and exactly 0 at the card edge — so the pass stays an exact
+          // identity outside its own reach and cannot draw a seam. uNear is the
+          // standoff in card units; see WASH_NEAR for the sweep it was picked
+          // from and for what the old ( 1 - q^2 )^2 plateau cost.
+          float k2 = uNear * uNear;
+          float gEdge = k2 / ( k2 + 1.0 );
+          // The guard matters only for standoffs far larger than the card, where
+          // the profile degenerates to a flat lift and the renormaliser goes to
+          // zero; it is the same 1e-3 floor the edge remap above uses.
+          float across = ( k2 / ( k2 + e.y * e.y ) - gEdge ) / max( 1.0 - gEdge, 1e-3 );
+          float f = ( 1.0 - e.x * e.x ) * across;
 
           // The same large-scale unevenness the pools carry, so the gradient
           // reads as light on a dirty wall rather than as an airbrushed decal.
