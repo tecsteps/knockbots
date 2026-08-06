@@ -1,7 +1,7 @@
 {
  "status": {
-  "rev": "0.26.0",
-  "commits": "146",
+  "rev": "0.27.0",
+  "commits": "148",
   "modules": 69,
   "lines": "63k",
   "clips": 92,
@@ -11,7 +11,7 @@
  "verdicts": [
   {
    "axis": "Stage detail",
-   "score": 72
+   "score": 73
   },
   {
    "axis": "Interface craft",
@@ -23,15 +23,15 @@
   },
   {
    "axis": "Character rendering",
-   "score": 70
-  },
-  {
-   "axis": "Impact & effects",
    "score": 69
   },
   {
+   "axis": "Impact & effects",
+   "score": 66
+  },
+  {
    "axis": "Animation quality",
-   "score": 63
+   "score": 67
   }
  ],
  "log": [
@@ -920,11 +920,54 @@
      "state": "next"
     }
    ]
+  },
+  {
+   "phase": "PHASE 32",
+   "when": "Round 28",
+   "rev": "rev 0.27.0",
+   "title": "The body was rigid, and the frame archive never existed",
+   "paras": [
+    "Animation 67, lighting 78, interface 74, stage 73, character 69, impact 66. The first dedicated animation round since round twenty, and the largest move that axis has ever made — which is an indictment, because four consecutive rounds went to lighting while the worst axis in the project sat untouched and drifted down two points.",
+    "The finding is that the body had no kinetic chain. The rubric's own text for a ninety-plus score is that the hips lead and the head lags — a strike drives from the floor up. That is a claim about ordering, and ordering is measurable. Driven through the offline rig sampler across all thirty-four clips that declare an impact: median hips-to-tip lag, zero ticks. Median chain concordance, 0.50 — pure chance. Median hip speed on the contact frame, as a fraction of the hips' own peak, 1.00. Nine clips peaked every link — hips, both spine joints, chest, shoulder, elbow, wrist — on a single tick. The pelvis was at its own top speed on the exact frame the fist landed, which is the opposite of how a strike transfers momentum.",
+    "The cause was localised in the data rather than guessed at. Round eleven re-keyed the drive one key per tick on a ramp whose exponent is solved per span so that a fixed fraction of the travel always lands on the contact tick — solved per span and applied to every driving bone, so they all arrive together. It bought the contact-frame speed it was written for and flattened the chain doing it. And the operator already in the file structurally could not repair it: its taper is zero at the pivot, so it can separate two bones during the startup and never at contact, for any strength.",
+    "The new operator advances the proximal chain and holds the authored contact value, so the contact pose is unchanged by construction — verified at zero bones drifted, to six decimal places, across all ninety-two clips, with no move's startup, active or recovery frames touched. Concordance went to 0.74, lag to four ticks, hip speed at contact to zero, and the number of clips whose chain ran backwards from seventeen to two.",
+    "Then the critics found something that invalidates a great deal of this project's own history. The ignore rule was the single word shots, which matches the dossier's screenshot directory as well as the working one. Not one capture from any round survives in git. The question every axis keeps raising — did this fall because the work got worse, or because the frame it is scored on changed — has been unanswerable by construction for twenty-eight rounds, and would have stayed that way. It is fixed, the archive is tracked, and it now records its own revision, commit and resolution.",
+    "The archive was also the wrong resolution, and that faked a catastrophe. It held 1280 by 720 frames while captures deliver 1920 by 1080. Compared naively on identical crop coordinates, the stage critic's nine floor crops read between fifty-six and eighty-five per cent down — the floor detail apparently destroyed. Scale-matched, the same crops read plus five point seven, plus one point three, and zero. A critic quoting the first table would have led with a disaster that does not exist, and the impact critic hit the same trap from the other side, with a pixel region landing on background and reporting that the effect had vanished entirely.",
+    "Two things were reverted under the charter rule that a change measuring worse ships the measurement instead of the feature. The fine particle population regressed the very metric it was built to raise — discrete component count down on all three impact frames, the fine end worst at minus forty-seven per cent on the flagship — and the critic controlled for the resolution trap by round-tripping through 720p, finding the resampler's bias runs the same direction, so the true drop is larger than quoted. And one clip's chain budget was disabled: its acceleration reversed twelve times along the approach where it had reversed twice, because the gate set governing the new operator never included approach smoothness. It bought chain ordering by spending precisely what the rubric penalises as linear interpolation.",
+    "Two admissions. The particle gate I forwarded into the briefing — count eleven-to-twenty-nine rising to thirty-five-to-one-hundred-fifty-two — had no measurement script, no defined region, and its before-figure does not reproduce under any mask anyone could construct; the same baseline measures one hundred and six to two hundred and six. Re-deriving numbers before passing them on is rule four of my own preamble, written three rounds ago. And I cited an evidence shot that has never existed in the capture list at all, which the manifest cannot catch, because completeness is validated against the list itself rather than against a declared roster.",
+    "The animation axis is scored on one clip out of ninety-two. Every evidence frame in the project photographs the same uppercut, and that clip received the smallest fix in the file — a reduced two-bone chain on a half-tick budget. Ninety-two clips diagnosed, twenty-eight improved, and the round's median gain is invisible in all four scored frames. That is a harness limit, not an art limit, and it is the first thing the next round has to fix."
+   ],
+   "tags": [
+    {
+     "label": "kinetic chain",
+     "state": "done"
+    },
+    {
+     "label": "frame archive",
+     "state": "done"
+    },
+    {
+     "label": "floor variation",
+     "state": "pit only"
+    },
+    {
+     "label": "fine particles",
+     "state": "reverted"
+    },
+    {
+     "label": "siegeSlam budget",
+     "state": "reverted"
+    },
+    {
+     "label": "anim capture coverage",
+     "state": "next"
+    }
+   ]
   }
  ],
  "deploy": {
   "url": "https://knockbots.vercel.app",
-  "rev": "0.26.0",
-  "note": "Deployed after round 27. Source on github.com/tecsteps/knockbots."
+  "rev": "0.27.0",
+  "note": "Deployed after round 28. Source on github.com/tecsteps/knockbots."
  }
 }
