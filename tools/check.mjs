@@ -83,6 +83,42 @@ function walk(dir, out = []) {
 
 console.log('— Knockbots integrity check —\n');
 
+/*
+ * PRE-FLIGHT: bundle-parse the whole tree before anything else.
+ *
+ * One bug class has broken this tree FIVE times -- a backtick inside a JS
+ * comment that sits inside a /* glsl *""" + '"' + """/ template literal, which terminates the
+ * literal and spills shader source into JS. The per-module import test below
+ * catches it, but two things make it a poor first responder: it only reports
+ * the first failure it reaches, and V8's message can point a thousand lines
+ * away from the real edit when the spill lands inside an existing doc comment.
+ *
+ * esbuild parses the entire graph in about ten milliseconds and reports EVERY
+ * syntax error with an accurate file, line and column. It is strictly a
+ * parser here -- nothing is written -- so it costs nothing and fails fast.
+ */
+{
+  const r = spawnSync(resolve(ROOT, 'node_modules/.bin/esbuild'),
+    ['src/main.js', '--bundle', '--outfile=/dev/null', '--log-level=warning', '--loader:.css=empty'],
+    { cwd: ROOT, encoding: 'utf8' });
+  if (r.status !== 0 && r.stderr) {
+    // esbuild puts the message and the location on SEPARATE lines:
+    //   ✘ [ERROR] Expected ")" but found "uFoo"
+    //       src/arena/StageVault.js:1451:20:
+    // My first pass matched them on one line, reported "whole graph parses"
+    // over a genuinely broken file, and I only caught it because I tested the
+    // detector against a real break instead of trusting it.
+    const hits = [...r.stderr.matchAll(/\[ERROR\]\s*([^\n]+)[\s\S]{0,200}?(src\/[^\s:]+):(\d+):(\d+)/g)];
+    if (hits.length) {
+      for (const [, msg, file, line, col] of hits) fail.push(`SYNTAX — ${file}:${line}:${col}  ${msg}`);
+      console.log(`syntax: ${hits.length} error(s) — see below`);
+    }
+  } else {
+    console.log('syntax: whole graph parses');
+  }
+}
+
+
 // 1. Every module must import cleanly.
 const files = walk(resolve(ROOT, 'src'));
 const importErrors = [];
