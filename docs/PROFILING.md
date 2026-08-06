@@ -958,3 +958,83 @@ produce at any tuning — and does not use it to reflect the fighters.
 centre of the skydeck fighting plane, x777–1208, a 2.2x luminance step with flat plateaus either
 side whose edges cut across plate seams at angles no floor geometry follows. At 1x it reads as a
 vague smear. No score above 80 is available while it renders.
+
+---
+
+# Round 25: I sent a round after a number that came from one image
+
+The block above states the gap as "the reference's LEAST detailed ninth (0.0836) is more detailed
+than Knockbots' MOST detailed ninth (0.0764)" and calls it *the* finding, with every other symptom
+downstream of it. Two agents then spent a round attacking it.
+
+**It reproduces against one reference out of ten.** Recomputed independently, mean |grad| on luma,
+all images resampled to 1920x1080, thirds-of-frame:
+
+```
+                    least ninth   median ninth   most ninth
+tekken8_07             0.0834        0.1376        0.1596     <- the source of 0.0836
+tekken8_01             0.0457        0.0630        0.1092
+tekken8_10             0.0373        0.0812        0.1157
+tekken8_08             0.0316        0.0605        0.0968
+tekken8_02             0.0289        0.0554        0.0757
+tekken8_04             0.0151        0.0620        0.1177
+tekken8_03             0.0133        0.0305        0.0663
+tekken8_05             0.0128        0.0239        0.0778
+tekken8_06             0.0104        0.0298        0.0665
+tekken8_09             0.0015        0.0160        0.0626
+reference median       0.0220
+Knockbots 06-wide      0.0296        0.0425        0.0796
+```
+
+Our floor is **above** the reference median floor. One of ten references beats our ceiling with its
+floor, and that one is a 2.1x outlier over the whole set — a midday outdoor farm shot, the densest
+image in the folder by a wide margin. "The reference" was one frame.
+
+This is the round-4 impact-timing failure repeating in a different subsystem, and it is the third
+time on this project that a confident number has sent work in a direction the evidence did not
+support. The lesson is not "measure" — the round did measure. It is **that a statistic over a
+reference SET must be reported as a distribution, and a claim that names "the reference" singular
+is a claim that has not looked at the spread.**
+
+The density work still shipped and still helped, because the weaker true version of the finding is
+real: our *ceiling* is short. At 32px block granularity — which resolves hot spots that a 640x360
+ninth averages flat — our p90 block gradient is 12.70 against 21.81 and 24.12 for two references.
+We are now evenly mediocre rather than patchily mediocre. A uniform procedural octave raises the
+whole histogram and by construction cannot produce a hot spot.
+
+## The manifest could certify a run it never looked at
+
+`--shots 01-hero-idle` overwrote `shots/manifest.json` with `complete: true`, `defects: []` and one
+entry, next to 19 stale PNGs from an earlier run. Both stage critics scored 06-stage-wide,
+18-skydeck-wide and 19-cistern-wide against a manifest that vouched for them and had never opened
+them. `complete` was written as the literal `true` and the short-run warning was explicitly
+suppressed whenever `--shots` was passed.
+
+Third defect of this class (c562242: two runs sharing a directory; 965f3c7: a crashed run leaving a
+successful-looking manifest). The common root, now fixed: **`complete` was an assertion the writer
+made about itself rather than a fact derived from the run.** It is now derived from the shot list,
+records `only` and `missing`, and cannot be asserted.
+
+## 48.1 fps in the manifest, 65.8 fps in the game
+
+The full 20-shot pass reported 20.8ms median / 48.1 fps — below the charter's 60fps floor. It is
+not a rendering regression:
+
+```
+single shot, current build        15.2ms  65.8 fps
+single shot, repeat               15.3ms  65.4 fps
+three wides, two arena switches    14.7ms  68.0 fps    (rules out arena accumulation)
+single shot immediately after      15.4ms  64.9 fps    (rules out thermal throttling)
+07-super + impacts + hud           14.9ms  67.1 fps    (rules out the heavy-effect shots)
+full 20-shot pass                  20.8ms  48.1 fps
+```
+
+No individual shot or pair reproduces it; it is cumulative. Renderer resources across the same
+comparison: geometries flat at 168, programs 163 -> 164, **textures 125 -> 137**. Twelve leaked
+textures should not cost 17ms a frame on their own, which points at the leak pushing a shader past
+the texture-unit ceiling documented earlier in this file rather than at the memory itself.
+
+**This is player-facing, not just harness-facing.** A player who runs twenty matches in a session
+walks the same path the capture harness does. The perf number the dossier has been quoting all
+along is the end-of-run number, so every fps figure in the project history is a twenty-match figure,
+not a fresh-load one.
