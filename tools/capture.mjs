@@ -650,6 +650,24 @@ async function main() {
   const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1 });
 
   takeLock(OUT);
+  /*
+   * Write an INCOMPLETE manifest before taking a single shot.
+   *
+   * The real manifest is written last, after every shot. That meant a run which
+   * died partway -- the disk filling is the case that actually happened -- left
+   * a directory full of valid-looking PNGs and NO manifest at all, which is
+   * indistinguishable from success to every downstream critic. Six agents then
+   * scored a partial, uncertified shot set, three of them on frames that did
+   * not exist, and the round's numbers had to be thrown away.
+   *
+   * A stub makes the failure loud instead of silent: if `complete` is false,
+   * the run did not finish and nothing in the directory should be scored.
+   */
+  writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({
+    complete: false,
+    startedAt: new Date().toISOString(),
+    note: 'INCOMPLETE — this capture run did not finish. Do not score these frames.',
+  }, null, 2));
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -1185,7 +1203,14 @@ async function main() {
              geometries: r.info.memory.geometries };
   })()`);
 
-  writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({ shots: manifest, fps, perf, info, verified, defects, errors: errors.slice(0, 40) }, null, 2));
+  writeFileSync(resolve(OUT, 'manifest.json'), JSON.stringify({
+    complete: true, shots: manifest, fps, perf, info, verified, defects,
+    errors: errors.slice(0, 40),
+  }, null, 2));
+  if (manifest.length < SHOTS.length && !ONLY.length) {
+    console.warn(`[capture] SHORT RUN: ${manifest.length} of ${SHOTS.length} shots written. `
+      + 'The set is incomplete and must not be scored as a full pass.');
+  }
 
   if (errors.length) {
     console.warn(`[capture] ${errors.length} console error(s):`);

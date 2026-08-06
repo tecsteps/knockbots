@@ -617,3 +617,34 @@ zone at clip frames 6-11. Fixed with a per-move `contact` override expressed in 
 `k.midKick` *overlapping* the defender by 14 cm while the shipping game whiffed it at every range.
 The difference is the extracted root yaw, which only exists once `Fighter` applies it. Do not
 reconstruct the pose outside the Fighter -- step the real one.
+
+---
+
+# Open defect: a black pole through the fighter in 06-stage-wide
+
+Found by the stage critic at **1x**, during the disk-full round when magnification was impossible —
+which is worth noting on its own: it had survived 23 rounds of magnified review and was caught by a
+critic reduced to looking at the whole frame.
+
+A dead-black vertical member runs from the top of frame to the floor at x≈1180 (1920-wide),
+**passing through Kestrel's torso**. It has one collar box at y≈560, no luminaire at the top, no
+base flange, and no shadow where it meets the floor. It is the only one of its kind in frame — no
+rhythm of stanchions for it to belong to.
+
+The damning part is the shading, not the placement: **it stands directly in front of the blown-out
+LED strip and receives ZERO rim.** An unlit black bar in front of the brightest object in the scene
+is a shading failure on stage geometry, in the one shot this axis is scored on.
+
+Almost certainly one leg of a rigging mast in `StageStructure.js#foreground()` — the pair at
+x = -3.6 and x = 4.45 — seen close to edge-on, so the cross-arm and lamps are cropped above the
+frame and the base is out of view, leaving a bare 0.075 m leg. That would explain "the only one of
+its kind": the rest of the mast simply is not in shot.
+
+**Not present at 01-hero-idle framing**, which is why it has gone unreported.
+
+**Not fixed, deliberately.** The obvious move — give the foreground occluders a rim response — is an
+unmeasured art change, and this project's own rule is that a fix without a measurement does not
+count. Whoever takes it should: confirm which member it is by hiding
+`arena.structure.foreground` and re-shooting; check whether the mast is cropped rather than
+misplaced, because *moving* it may beat *lighting* it; and measure the edge/background ratio on that
+member before and after, the same way the lighting axis measures silhouette separation.
