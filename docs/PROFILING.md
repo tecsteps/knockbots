@@ -915,3 +915,46 @@ Worth stating plainly because the number has now crept **three times without any
 sum. Either the ceiling is wrong and should be raised deliberately with a stated reason, or the
 arenas need a decimation pass — but drifting past it a fourth time is how a constraint stops meaning
 anything.
+
+---
+
+# The new arenas scored WORSE than the pit. My theory was wrong.
+
+Two critics, blind, each re-scoring the original pit **in the same pass** as a control:
+
+```
+skydeck   70    pit re-scored 72
+cistern   61    pit re-scored 74
+```
+
+The theory behind building them was that eight rounds of plateau were the *venue* — a closed box
+lit from above, judged against references that ship varied venues — rather than the tuning. **It is
+not.** Both new arenas lose to the one we have been tuning, one of them by thirteen points.
+
+The control is what makes this trustworthy. Both critics marked the pit DOWN, from 76 to 72 and 74,
+so they were harsher across the board — and the new venues still lost. Without re-scoring the pit
+in the same pass, a 70 would have looked like a near miss instead of a defeat.
+
+**What the gap actually is, stated better than any round has managed:**
+
+> The reference's LEAST detailed ninth of frame (0.0836) is more detailed than Knockbots' MOST
+> detailed ninth (0.0764). Neither venue comes within 2.4x of the reference in any band.
+
+Every other finding is downstream of that. Hue concentration, layer count, missing reflections,
+haze — all symptoms of *not enough differentiated material at every distance*. The reference earns
+depth by putting individually-varied stuff at each depth; we earn it by putting blur on flat
+coloured boxes. That is a content-density problem, and no lighting, tuning or venue change reaches
+it.
+
+**Each new venue does own exactly one thing the pit structurally cannot**, and both are currently
+squandered. Skydeck has real atmospheric perspective — far/near luminance-std 0.76 against the
+reference's 0.71, where the pit manages 0.92 and never could, because a closed box has no horizon.
+Having bought that horizon it then puts nothing on it: no cloud, no sun position, no skyline
+warmth, untextured solid-fill slabs where the city should be. Cistern has a continuous specular
+plane at grazing incidence across ~45% of frame — a full-frame mirror a dry plate deck cannot
+produce at any tuning — and does not use it to reflect the fighters.
+
+**And a real defect, found only at magnification:** a hard-edged translucent quad lies across the
+centre of the skydeck fighting plane, x777–1208, a 2.2x luminance step with flat plateaus either
+side whose edges cut across plate seams at angles no floor geometry follows. At 1x it reads as a
+vague smear. No score above 80 is available while it renders.
