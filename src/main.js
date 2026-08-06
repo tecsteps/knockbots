@@ -48,6 +48,14 @@ async function main() {
   window.KB.THREE = await import('three');
   window.dispatchEvent(new CustomEvent('knockbots:ready'));
 
+  // Telemetry last, and deliberately not awaited: it must never sit between the
+  // player and a playable game. It excludes itself from headless and localhost,
+  // so the capture harness -- which plays thousands of scripted matches per
+  // round -- cannot drown the real sessions it exists to count.
+  import('./core/Telemetry.js')
+    .then(({ Telemetry }) => { window.KB.telemetry = new Telemetry(); return window.KB.telemetry.init(); })
+    .catch(() => {});
+
   // Hold the boot screen long enough for the control legend to actually be
   // read. On a warm load the game is ready in well under a second, which would
   // flash the mapping past before anyone could take it in. The floor stays
