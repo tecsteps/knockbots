@@ -2483,18 +2483,46 @@ export class StageRooftop {
     // Low and horizontal: it rides along the very bottom edge and reads as a
     // black bar with a rim on its top-left arris. Broken by its own flanges so
     // it is not one unmodulated extrusion.
+    //
+    // **It was 0.56 m deep centred at y 0.72 and that hid a fighter's shins.**
+    // `scratchpad/occluders.mjs` — which projects every arena triangle through
+    // the fight camera against capsule proxies over 80 legal framings — scored
+    // this mesh at **15.5%** of a fighter's own silhouette at `fight x4.0 z+5.5
+    // sep8.0`: the pair fully forward and separated, camera at (3.41, 1.94,
+    // 12.92), duct at z 8.9 squarely between the lens and a body. That is the
+    // same class as the pit's logged "black pole through the fighter", and it
+    // is invisible in every capture because nobody photographs that pose.
+    //
+    // The fix is NOT the auditor's usual one. Its two rules — put it outboard
+    // of the play bound, or above 4.15 m where the frame's top edge cannot
+    // reach — both work here and both destroy the layer: at the wide framing
+    // the frustum is about 3.4 m either side of the camera axis at this depth,
+    // so anything outboard of |x| 9 is simply not in the scored shot, and a
+    // rooftop duct at four metres on sleepers is not a thing. The audit itself
+    // says the duct is **0.0% at the wide framing** — it is only ever in the
+    // way at one extreme fight pose.
+    //
+    // So it is lowered rather than moved: 0.30 m deep centred at y 0.30, which
+    // spans 0.15 to 0.45 instead of 0.44 to 1.00. It still crosses the bottom
+    // edge and still reads as the black bar the composition wants, and it now
+    // sits in the ankle-height band the auditor's own header calls floor
+    // furniture and fine. Re-measured after the change: **2.7%**, and the
+    // arena's verdict goes from FAIL to clean — the 2.7% that is left is the
+    // two davit posts, which are thin verticals and are the layer doing its
+    // job rather than a bar across the subject.
     const DZ = 8.9;
-    parts.push(place(bevelBox(17.0, 0.56, 0.74, 0.03), { pos: [-1.0, 0.72, DZ] }));
+    const DY = 0.30;
+    parts.push(place(bevelBox(17.0, 0.30, 0.74, 0.03), { pos: [-1.0, DY, DZ] }));
     let fx = -9.0;
     while (fx < 7.2) {
-      parts.push(place(bevelBox(0.07, 0.66, 0.84, 0.012), { pos: [fx, 0.72, DZ] }));
+      parts.push(place(bevelBox(0.07, 0.38, 0.84, 0.012), { pos: [fx, DY, DZ] }));
       fx += rng.range(1.8, 3.2);
     }
     let px2 = -9.2;
     while (px2 < 7.4) {
-      parts.push(place(bevelBox(0.3, 0.2, 1.3, 0.02), { pos: [px2, 0.1, DZ] }));
-      parts.push(place(bevelBox(0.09, 0.34, 0.09, 0.014), { pos: [px2, 0.32, DZ - 0.28] }));
-      parts.push(place(bevelBox(0.09, 0.34, 0.09, 0.014), { pos: [px2, 0.32, DZ + 0.28] }));
+      parts.push(place(bevelBox(0.3, 0.14, 1.3, 0.02), { pos: [px2, 0.07, DZ] }));
+      parts.push(place(bevelBox(0.09, 0.16, 0.09, 0.014), { pos: [px2, 0.15, DZ - 0.28] }));
+      parts.push(place(bevelBox(0.09, 0.16, 0.09, 0.014), { pos: [px2, 0.15, DZ + 0.28] }));
       px2 += rng.range(2.2, 3.4);
     }
 

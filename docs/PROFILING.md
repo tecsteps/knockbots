@@ -894,3 +894,24 @@ moved its own piers to ±10.9/11.2 for this reason.
 Not fixed here: moving set geometry changes the composition of `06-stage-wide`, which is the frame
 the highest-scoring axis is judged on, so it wants a before/after capture rather than a blind edit.
 The measurement above is everything needed to make it a small change.
+
+## Triangle budget: blown, and by how much
+
+Measured after the arena work landed, single-shot run with no arena swap involved:
+
+```
+before the arenas   ~939,000 tris   274 draw calls
+after               1,317,810       326 draw calls
+charter ceiling       900,000
+```
+
+**+378,000 triangles, 46% over the ceiling.** This is not the swap leaking — a run that never
+changes arena reads the same, so the geometry is in the base scene. Frame time still holds at 15.0 ms
+median / 66.7 fps, so the 60fps constraint is met and this is a budget breach rather than a
+performance one.
+
+Worth stating plainly because the number has now crept **three times without anyone owning it**:
+901k, then 939k, now 1.32M. Each increase was individually defensible and nobody was tracking the
+sum. Either the ceiling is wrong and should be raised deliberately with a stated reason, or the
+arenas need a decimation pass — but drifting past it a fourth time is how a constraint stops meaning
+anything.
