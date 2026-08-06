@@ -943,6 +943,20 @@ async function main() {
               KB.clock.getDelta = () => 0;
               const r = KB.renderer;
               if (r) {
+                // These three are RENDERER settings, not shot state, and nothing
+                // used to hand them back. 02-closeup-face is the only shot with
+                // pinTicks and it is shot number two, so from that point every
+                // remaining shot -- and the end-of-run perf probe -- rendered at
+                // native 1920x1080 instead of the high tier's 1632x918. That is
+                // the whole of the "48.1 fps" the manifest has been reporting
+                // since round 17: 5.8ms of resolution, not a leak and not a
+                // regression. See docs/PROFILING.md.
+                window.__kbPinnedRenderState = {
+                  adaptive: r.effects ? r.effects.adaptiveResolution : null,
+                  renderScale: r.renderScale,
+                  grain: r.look ? r.look.grain : null,
+                  chroma: r.look ? r.look.chroma : null,
+                };
                 if (r.effects) r.effects.adaptiveResolution = false;
                 r.renderScale = 1;
                 if (typeof r.resize === 'function') r.resize();
@@ -1189,7 +1203,24 @@ async function main() {
     // A shot that overrode the camera rig has to hand it back, or every shot
     // after it inherits the override and quietly photographs the wrong framing.
     if (shot.pinTicks) {
-      await page.evaluate(`(() => { ${RESTORE_CLOCK} window.KB.paused = false; })()`).catch(() => {});
+      // Hand the renderer settings back too, not just the clock.
+      //
+      // Restore to the TIER's scale rather than the value that was saved: the
+      // adaptive controller ratchets `_targetScale` down during the harness's
+      // own stalls, so replaying the saved figure leaves the controller churning
+      // `composer.setSize` all through the perf probe -- measured at 30.2ms,
+      // worse than the bug being fixed.
+      await page.evaluate(`(() => { ${RESTORE_CLOCK} window.KB.paused = false;
+        const s = window.__kbPinnedRenderState, r = window.KB.renderer;
+        if (s && r) {
+          r.renderScale = r.tier ? r.tier.renderScale : s.renderScale;
+          r._targetScale = r.renderScale;
+          if (typeof r.resize === 'function') r.resize();
+          if (r.effects && s.adaptive !== null) r.effects.adaptiveResolution = s.adaptive;
+          if (typeof r.setGrade === 'function' && s.grain !== null) r.setGrade({ grain: s.grain, chroma: s.chroma });
+          window.__kbPinnedRenderState = null;
+        }
+      })()`).catch(() => {});
     }
     if (shot.teardown) {
       await page.evaluate(`(() => { try { ${shot.teardown} } catch (e) { console.error('teardown', e); } })()`)
@@ -1211,9 +1242,19 @@ async function main() {
   // window of real rAF callbacks and report the median and p95 frame interval.
   // The median is the honest headline; p95 is what a player actually feels.
   const perf = await page.evaluate(`(() => new Promise((res) => {
-    const KB = window.KB;
+    const KB = window.KB, rp = KB.renderer;
     KB.paused = false;
     KB.startMatch(0, 1); KB.setPhase('fight'); KB.fightCamera.cinematic('fight');
+    // An fps figure is meaningless without the resolution it was taken at, and
+    // this probe used to inherit whatever the shot list happened to leave
+    // behind. Pin the tier's own scale, stop the adaptive controller, and report
+    // both alongside the number so it can never again be an unlabelled
+    // resolution.
+    if (rp) {
+      if (rp.effects) rp.effects.adaptiveResolution = false;
+      if (rp.tier) { rp.renderScale = rp.tier.renderScale; rp._targetScale = rp.tier.renderScale; }
+      if (typeof rp.resize === 'function') rp.resize();
+    }
     const dts = [];
     let last = performance.now(), warm = 0;
     const tick = (now) => {
@@ -1224,7 +1265,11 @@ async function main() {
         dts.sort((a, b) => a - b);
         res({ frames: dts.length,
               medianMs: +dts[dts.length >> 1].toFixed(2),
-              p95Ms: +dts[Math.floor(dts.length * 0.95)].toFixed(2) });
+              p95Ms: +dts[Math.floor(dts.length * 0.95)].toFixed(2),
+              quality: rp && rp.quality ? rp.quality : null,
+              renderScale: rp ? +(rp.renderScale ?? 0).toFixed(3) : null,
+              pixels: rp && rp.composer && rp.composer.readBuffer && rp.composer.readBuffer.width
+                ? rp.composer.readBuffer.width + 'x' + rp.composer.readBuffer.height : null });
       }
     };
     requestAnimationFrame(tick);

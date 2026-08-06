@@ -760,7 +760,8 @@ export class MenuSystem {
       (this._warmLog ||= []).push({ id: def.id, at: +_t0.toFixed(0) });
       const _log = this._warmLog[this._warmLog.length - 1];
       try {
-        const robot = buildRobot(def, createSkeleton(def.proportions), this.game.environment);
+        const skeleton = createSkeleton(def.proportions);
+        const robot = buildRobot(def, skeleton, this.game.environment);
         _log.build = +(performance.now() - _t0).toFixed(1);
         // The build is already being paid for; photograph it on the way to the
         // bin so the roster tiles can show the real machine instead of a
@@ -801,7 +802,17 @@ export class MenuSystem {
             // zero triangles and zero draw calls to every frame. It is a memory
             // charge and nothing else.
             if (!this._programAnchor) this._programAnchor = robot;
-            else { try { robot.dispose(); } catch { /* already gone */ } }
+            else {
+              try { robot.dispose(); } catch { /* already gone */ }
+              // `THREE.Skeleton` lazily allocates a 16x16 RGBA float bone
+              // texture the first frame a rig is drawn, and ONLY `dispose()`
+              // frees it -- not `robot.dispose()`, not removal from the scene.
+              // Nine of these were orphaned on every page load. It is a
+              // correctness fix and not a performance one: the leak was
+              // measured against frame time and costs nothing, because a
+              // skeleton in no render list is never bound to a sampler.
+              try { skeleton.dispose?.(); } catch { /* already gone */ }
+            }
             _log.step = +(performance.now() - _t0).toFixed(1);
             next();
           });

@@ -863,6 +863,23 @@ export class Fighter {
     if (this.robot?.group) this.group.remove(this.robot.group);
     const root = this.skeletonBundle?.byName?.root;
     if (root?.parent) root.parent.remove(root);
+    // The skeleton owns a GPU resource that `robot.dispose()` cannot see.
+    //
+    // `THREE.Skeleton` lazily allocates a bone DataTexture the first time the
+    // rig is rendered (`computeBoneTexture`), and it is freed by
+    // `Skeleton.dispose()` and by nothing else — not by disposing the meshes,
+    // not by dropping the bones out of the scene. Nothing in this project
+    // called it, so every character change orphaned one texture per fighter
+    // and `renderer.info.memory.textures` climbed for the life of the page.
+    //
+    // Measured: it is a resource leak and NOT a performance one. 300 orphaned
+    // bone textures — 25x what a full 20-shot capture pass leaks — moved the
+    // frame by 0.4 ms against a 17.6 ms floor, with the program count
+    // unchanged, so the "leaked textures push a shader past the texture-unit
+    // ceiling" theory is wrong on its own terms: an orphaned texture belongs to
+    // a skeleton that is no longer in any render list, and sampler counts are
+    // fixed when the program links. See docs/PROFILING.md.
+    this.skeletonBundle?.skeleton?.dispose?.();
     this.#buildRig();
   }
 

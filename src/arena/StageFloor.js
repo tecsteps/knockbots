@@ -434,8 +434,11 @@ function bakeFloorMaps(size) {
       // blotch.
       const agg = sampleWrap(aggregate, FIELD, fx * 8, fy * 8);
       const crk = sampleWrap(crackF, FIELD, fx, fy);
+      // F1 only. `puddleCells.id` is deliberately NOT read — see the wetness
+      // block below for what thresholding a piecewise-constant field did to
+      // this bake's histogram, and what it did to a neighbouring stage's
+      // fighting plane when the same construction went uncaught there.
       const pud = sampleWrap(puddleCells.f1, FIELD, fx, fy);
-      const pid = sampleWrap(puddleCells.id, FIELD, fx, fy);
       const oi = sampleWrap(oil, FIELD, fx, fy);
       const reg = sampleWrap(region, FIELD, fx, fy);
       const dry = sampleWrap(drying, FIELD, fx, fy);
@@ -495,21 +498,68 @@ function bakeFloorMaps(size) {
       const rim = smoothstep(4.5, 10.5, Math.max(Math.abs(wx) * 0.92, Math.abs(wz - 1)));
       const oily = clamp01(smoothstep(0.6, 0.9, oi) * (0.22 + rim * 1.15) + (oilMask[k] / 255) * 0.85);
 
-      // Wetness: everything is faintly damp, cells whose id passes the
-      // threshold hold standing water, and water pools where the slab dips.
-      // Three things then take water away again — a dry region, a rubber smear
-      // and an oil film all shed it — which is what breaks up the uniform sheen.
+      // Wetness: everything is faintly damp, and standing water sits at a
+      // LEVEL against the slab's relief — the shoreline is the zero set of a
+      // difference of two low-frequency fields, a curve rather than a chord.
       //
-      // The pool gate is deliberately generous on the dish and tight on the
-      // cell: fewer, wider pools sitting in the low spots read as a floor that
-      // drains somewhere, where many small ones read as speckle.
-      const puddleCell = smoothstep(0.38, 0.56, pid);
-      const pool = puddleCell * (1 - smoothstep(0.34, 0.74, pud)) * (1 - smoothstep(0.02, 0.4, h + 0.32));
+      // ***********************************************************************
+      // NEVER THRESHOLD `puddleCells.id`. THIS IS THE HARD-EDGED-CHORD DEFECT.
+      // ***********************************************************************
+      // This used to be
+      //
+      //   const puddleCell = smoothstep(0.38, 0.56, pid);
+      //   const pool = puddleCell * (1 - smoothstep(0.34, 0.74, pud))
+      //     * (1 - smoothstep(0.02, 0.4, h + 0.32));
+      //
+      // and `pid` was `worley(...).id` — piecewise CONSTANT over each cell. A
+      // smoothstep on a piecewise-constant field is not a soft gate, it is a
+      // binary one, and its boundary is the Voronoi CHORD between two cells: a
+      // dead-straight line at an arbitrary angle that has nothing to do with
+      // any floor feature. This exact construction, unfixed, is what put a
+      // hard-edged translucent quad across the skydeck's fighting plane (see
+      // StageRooftop.js). The pit got away with it by luck — an 11-cell field
+      // and a tight F1 fade closed the pond before the chord was reached — but
+      // the chord was still there underneath: measured on this bake, 3.0% of
+      // the field sat at wet==1.000 exactly, a top histogram bin nearly 5x its
+      // neighbour, i.e. a plateau, not a gradient. Anyone retuning the cell
+      // count (fewer cells, looser F1 fade — both individually reasonable
+      // tweaks) reintroduces the same quad the rooftop had, in the one frame
+      // the stage axis is scored on.
+      //
+      // It was ALSO the source of the "blue crumbs" complaint, by a second
+      // mechanism: the height gate compared against `h`, which by this point
+      // in the function also carries the fine aggregate grain, joints and
+      // cracks — genuine texel-frequency noise. Thresholding that put the
+      // puddle edge in and out of "underwater" from one texel to the next,
+      // which is isolated single-texel speckle by construction. `dish` (the
+      // macro slab fall alone, no texel-frequency content) is compared instead
+      // below, so the shoreline it draws stays smooth at any threshold.
+      //
+      // The replacement is the same physical statement StageRooftop.js now
+      // makes: water stands to a LEVEL, and the shoreline is where the relief
+      // rises through it. `pud` (Worley F1) still shapes the pond — it is
+      // continuous everywhere except a gradient break at the cell edge, so it
+      // can cluster puddles toward cell centres without ever cutting a chord.
+      const relief = dish;
+      // Built from fields neither `dish` (mac, reg) nor `damp` below (stn, reg)
+      // touch, so level, relief and the damp base are three independent
+      // low-frequency signals instead of a reuse that would correlate the
+      // deepest pools with the dampest patches and pile both into the same
+      // saturated blob. `dry` carries a NEGATIVE weight here — it is the same
+      // field `shed` below reads as "how much this area drains", so a texel
+      // that dries itself out must not also be pushed underwater by the level.
+      const level = (wr - 0.5) * 1.05 - (dry - 0.5) * 0.38 + (pud - 0.5) * 0.27;
+      const depth = level - relief;
+      // Generous on the region, tight on the cell: fewer, wider pools sitting
+      // in the low spots read as a floor that drains somewhere, where many
+      // small ones read as speckle.
+      const regionWet = smoothstep(-0.06, 0.50, depth);
+      const pool = regionWet * (1 - smoothstep(0.30, 0.72, pud));
       // The damp base follows the fall of the slab rather than sitting flat, so
       // one end of the pit is visibly wetter than the other instead of the
       // whole deck carrying the same sheen.
       const damp = clamp01(0.13 + stn * 0.4 + smoothstep(0.34, 0.78, reg) * 0.5 - Math.abs(wz - 1) * 0.01);
-      const puddle = clamp01(pool * 2.05 + joint * 0.35 * puddleCell);
+      const puddle = clamp01(pool * 1.18 + joint * 0.35 * regionWet);
       // A plate stands proud of the pour, so water runs off it and collects in
       // the grout line instead. Without this the wet multiplier below crushes
       // the steel back to the value of the concrete it is meant to read against.

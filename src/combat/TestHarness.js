@@ -207,6 +207,14 @@ export function makeTestHarness(game) {
     for (const e of lineup) {
       game.scene.remove(e.group);
       if (e.robot?.dispose) e.robot.dispose();
+      // One bone DataTexture per cast member, allocated lazily by
+      // `THREE.Skeleton.computeBoneTexture` on the frame the lineup is first
+      // drawn and freed only by `Skeleton.dispose()`. Tearing the robot down
+      // does not touch it, so a run that photographed 09-roster left ten of
+      // them behind — measured, and the single largest term in the +12 a full
+      // capture pass used to accumulate. See the note in Fighter.setCharacter
+      // for why this is a resource leak and not the frame-time one.
+      e.bundle?.skeleton?.dispose?.();
     }
     lineup = null;
   }

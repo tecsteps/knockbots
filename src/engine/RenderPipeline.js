@@ -1615,12 +1615,20 @@ const smoothstep01 = (e0, e1, x) => {
  * obvious-looking choice — puts a 30% blue floor under the whole frame,
  * because 0.09 linear is 0.33 display.
  *
- * The numbers below are set against the reference stills this project is
+ * ~~The numbers below are set against the reference stills this project is
  * measured on, which have genuinely black blacks: the pivot sits under
  * mid-grey and the lift is small enough that the bottom two percent of the
  * range resolves to zero. A lifted, tinted floor is the single tell that reads
  * as "browser demo" in a side-by-side, because it turns every unlit surface
- * into the same milky grey.
+ * into the same milky grey.~~
+ *
+ * **Struck out: both halves of that were measured and both are false.** The ten
+ * references do not have black blacks — the median of their darkest quartile is
+ * display code 31 and 0.00-1.63% of their pixels reach linear 3e-4, against
+ * code 6 and 8.30% for `06-stage-wide`. And it was not "the bottom two percent"
+ * that resolved to zero, it was the bottom thirteen. See the toe section below;
+ * the paragraph is kept rather than deleted because it is the reasoning that
+ * produced the defect and it looked completely reasonable for eight rounds.
  *
  * **The top end never clips.** The grade this replaced ran the contrast pivot
  * across the whole range and then clamped, which put everything the display
@@ -1659,24 +1667,127 @@ const smoothstep01 = (e0, e1, x) => {
  * three-framing table. 1.18 to 1.45 with exposure carrying the mid-tone back up
  * lands p50 on the reference median and p99 within 6% of it.
  *
+ * ## The toe, and the black clip this curve shipped with for eight rounds
+ *
+ * `lift` was documented above as leaving "the bottom two percent of the range"
+ * at zero. That is arithmetically wrong by a factor of six, and it was the
+ * single largest defect in the frame. The contrast segment is a straight line
+ * `pivot + (v - pivot) * contrast` clamped at zero, so it reaches zero at
+ *
+ *     v0 = pivot - pivot / contrast = 0.42 - 0.42 / 1.45 = 0.1303
+ *
+ * — thirteen percent of the display range, not two. Modelled through the whole
+ * pass (AgX at the shipped shoulder/latitude/lookFalloff, exposure 0.95, then
+ * this LUT), **every scene-linear radiance below 1.94e-2 left the pass as code
+ * (0,0,0)**, at any exposure the lighting could plausibly deliver. The live
+ * hemisphere fill is `intensity 0.143, sky #36506b`, which puts about 1e-3 of
+ * diffuse on an unlit albedo-0.3 surface: a factor of twenty below the clip.
+ * Multiplying that fill by ten moved the frame's sub-3e-4 fraction by less than
+ * the run-to-run noise, which is the correct output of a term that cannot reach
+ * the bottom of the curve — the same shape of error as the vault's soffit
+ * uplighters in docs/PROFILING.md, one stage further down the pipe.
+ *
+ * Measured on one frozen `06-stage-wide` frame, sim and grain stopped, single
+ * knob per arm (`shots/` and `scratchpad/probe-a`):
+ *
+ *     arm                     % <= 3e-4    darkest-quartile median
+ *     shipped                    3.2            0.0057
+ *     shipped, repeat            2.9            0.0064   <- the noise band
+ *     scene.environmentIntensity 0 -> 4.1        0.0046   <- IBL: no effect
+ *     fill x0 -> x10             3.9 -> 3.7      0.0045 -> 0.0049   <- no effect
+ *     GTAO off                   5.5            0.0032   <- not the occlusion
+ *     **LUT bypassed**           0.002          0.0180
+ *
+ * and the ten Tekken 8 references sit at 0.000-1.633% with a darkest-quartile
+ * median of 0.00445-0.05294 (median 0.01347). The premise written above — that
+ * the references "have genuinely black blacks" — does not survive being
+ * measured: their twelfth percentile is at code **31**, this frame's was at
+ * code **6**.
+ *
+ * So the segment below `TOE` is now a power toe rather than the bottom of a
+ * clamped line: it leaves `BLACK` at input zero, arrives at the contrast line
+ * at `TOE` carrying the contrast slope exactly (C1, so there is no visible
+ * kink), and is monotone by construction for any `k > 0`.
+ *
+ *     k = contrast * TOE / (lineY(TOE) - BLACK)
+ *     f(v) = BLACK + (lineY(TOE) - BLACK) * (v / TOE)^k
+ *
+ * `k > 1` is what makes it a *toe* rather than a ramp — the slope goes to zero
+ * at the black point, so the floor is flat and consistent instead of carrying
+ * the 8-bit quantisation noise that a steep segment at code 0-2 produces. At
+ * the shipped `TOE = 0.30`, `BLACK = 0.044` that is k = 2.15.
+ *
+ * **Nothing above `TOE` moves.** The mids, the shoulder, the split tone and the
+ * highlight roll-off are the round-24 curve unchanged, which is why the p50/p95
+ * /p99 landing documented on `look.exposure` still holds. Measured, the frame
+ * median moves 0.03795 -> 0.03868, under two percent.
+ *
+ * ## Why 0.30 / 0.044, and what the two knobs actually cost
+ *
+ * `rebuildGradeLut` swept both against the gates on one frozen `06-stage-wide`
+ * frame with a null arm re-taken between every armed arm (null-to-null spread:
+ * darkest-quartile median 0.00826-0.00831, saturation sd 0.206-0.207 — so a
+ * third digit is noise and a second is not). `fig/gnd` is the median luma inside
+ * a frame-differenced fighter mask over the median outside it; `rim` is a 1-3px
+ * band inside the silhouette over a 2-4px band outside; `grad` is p10/p02 of
+ * frame luminance, which is the gradient actually left in the shadows.
+ *
+ *     curve            %<=3e-4   darkMed   satSd   fig/gnd    rim    grad
+ *     no toe (r24)       3.912   0.00438   0.324    4.177    2.805  68.72
+ *     toe .30 b.014      0.000   0.00830   0.207    4.112    1.920   ~2.6
+ *     toe .30 b.044      0.000   0.00958   0.160    4.082    2.752   1.94
+ *     toe .30 b.060      0.000   0.01037   0.142    4.068    2.740   1.68
+ *     toe .30 b.100      0.000   0.01324   0.103    4.033    2.719   1.29
+ *     toe .36 b.044      0.000   0.01172   0.160    3.818    2.569   2.05
+ *     toe .46 b.022      0.000   0.01276   0.187    2.800*   1.759*  --
+ *     ten Tekken 8 refs  0.000     0.00445  0.075     --      --     1.69
+ *       min/median/max    0.121    0.01347  0.191                    3.38
+ *                         1.633    0.05294  0.292                   17.38
+ *     (* measured on a different pose; compare within a run only.)
+ *
+ * The two knobs are not interchangeable. **`BLACK` is nearly free and `TOE` is
+ * not**: taking `BLACK` from 0.014 to 0.044 costs 0.7% of figure/ground, while
+ * moving `TOE` from 0.30 to 0.36 costs 6.5% — the toe point is how much of the
+ * shadow range gets lifted, and lifting the *background's* shadows is what
+ * closes the gap on the fighters. And `BLACK` has its own ceiling, which is the
+ * `grad` column: past 0.044 the floor stops being a floor and becomes a
+ * plateau, and by 0.100 the shadow gradient (1.29) is below anything in the
+ * reference set (1.69 at the flattest). That is the black clip's own failure
+ * mode re-introduced one code value higher up, and it is why this is 0.044 and
+ * not the value that would land gate 2 on the reference median.
+ *
+ * What that costs is stated rather than hidden: the darkest-quartile median
+ * reaches 0.00958 against a reference median of 0.01347. The remaining gap is
+ * not available from a display transform — the references get there with light
+ * in the shadows (their p10/p02 is 3.4, ours is 1.9), not with a lifted floor.
+ *
+ * @param {{ toe?: number, black?: number, contrast?: number, pivot?: number,
+ *           lift?: number, shoulder?: number, endSlope?: number,
+ *           shadowTint?: number[], highTint?: number[] }} [opts]
  * @returns {THREE.DataTexture}
  */
-function buildGradeLut() {
+function buildGradeLut(opts = {}) {
   const n = LUT_SIZE;
   const width = n * n;
   const data = new Uint8Array(width * n * 4);
 
-  const shadowTint = [-0.004, 0.004, 0.014]; // cold teal, display-space delta
-  const highTint = [0.019, 0.004, -0.014];   // warm amber
-  const lift = 0.002;
-  const pivot = 0.42;
-  const contrast = 1.45;
-  const SHOULDER = 0.68;   // where contrast hands over to the roll-off
-  const END_SLOPE = 0.30;  // slope arriving at white; > 0 keeps it monotone
+  const shadowTint = opts.shadowTint ?? [-0.004, 0.004, 0.014]; // cold teal, display-space delta
+  const highTint = opts.highTint ?? [0.019, 0.004, -0.014];     // warm amber
+  const lift = opts.lift ?? 0.002;
+  const pivot = opts.pivot ?? 0.42;
+  const contrast = opts.contrast ?? 1.45;
+  const SHOULDER = opts.shoulder ?? 0.68;   // where contrast hands over to the roll-off
+  const END_SLOPE = opts.endSlope ?? 0.30;  // slope arriving at white; > 0 keeps it monotone
+  const TOE = opts.toe ?? 0.30;             // where the contrast line hands over to the toe
+  const BLACK = opts.black ?? 0.044;        // display value at input zero
 
   // Hermite endpoint: the contrast line evaluated at the hand-over point.
   const shoulderY = pivot + (SHOULDER - pivot) * contrast;
   const shoulderSpan = 1 - SHOULDER;
+  // Power toe: C1 with the contrast line at TOE, lands on BLACK at zero.
+  const toeY = pivot + (TOE - pivot) * contrast;
+  const toeSpan = Math.max(toeY - BLACK, 1e-6);
+  const toeK = (contrast * TOE) / toeSpan;
 
   for (let b = 0; b < n; b++) {
     for (let g = 0; g < n; g++) {
@@ -1707,6 +1818,10 @@ function buildGradeLut() {
 
         const shape = (x, tint) => {
           const v = x * (1 - lift) + lift;           // lifted blacks
+          // The toe. Below TOE the clamped contrast line used to hit zero at
+          // v = 0.1303 and stay there; this leaves BLACK at v = 0 instead and
+          // rejoins the line at TOE with matching value and slope.
+          if (v <= TOE) return clamp01(BLACK + toeSpan * Math.pow(v / TOE, toeK) + tint);
           if (v <= SHOULDER) return clamp01(pivot + (v - pivot) * contrast + tint);
           // Cubic Hermite from (SHOULDER, shoulderY) with the contrast slope to
           // (1, 1) with END_SLOPE. Both slopes stay under 3x the chord, which
@@ -2258,7 +2373,16 @@ export class RenderPipeline {
     this.dofFocus = { distance: 6.5, nearRange: 3.0, farRange: 18.0 };
     this._focusUnsub = bus.on('cameraFocus', (e) => this.setCameraFocus(e));
 
-    this._lut = buildGradeLut();
+    /**
+     * Live arguments to `buildGradeLut`. Kept as state rather than baked into
+     * the texture so `rebuildGradeLut` can sweep the curve inside one page
+     * session — which is the only way any of this has ever been measured
+     * honestly, because sequential capture runs on a shared machine attribute
+     * whatever the other agents are doing to whichever run went second.
+     * @type {Parameters<typeof buildGradeLut>[0]}
+     */
+    this.gradeCurve = {};
+    this._lut = buildGradeLut(this.gradeCurve);
     this._passes = {};
     this.composer = null;
     this._pcssActive = false;
@@ -2534,6 +2658,29 @@ export class RenderPipeline {
     g.uniforms.uDistortion.value = this.look.distortion;
     g.uniforms.uGrain.value = soft ? this.look.grain * 0.7 : this.look.grain;
     g.uniforms.uVignette.value = this.look.vignette;
+  }
+
+  /**
+   * Rebuilds the grade LUT in place from `gradeCurve` plus `values`.
+   *
+   * One 1024x32 `DataTexture` is regenerated and swapped into the grade pass's
+   * `tLut` uniform; no shader is recompiled and no pass is rebuilt, so an A/B
+   * costs a texture upload and nothing else. This exists so the toe and the
+   * contrast can be swept against the four dark-floor gates on a *frozen frame
+   * inside one session*, with a null arm, instead of across capture runs.
+   *
+   * @param {Parameters<typeof buildGradeLut>[0]} [values]
+   * @returns {Parameters<typeof buildGradeLut>[0]} the merged curve
+   */
+  rebuildGradeLut(values = {}) {
+    Object.assign(this.gradeCurve, values);
+    const next = buildGradeLut(this.gradeCurve);
+    const old = this._lut;
+    this._lut = next;
+    const g = this._passes.grade;
+    if (g) g.uniforms.tLut.value = next;
+    old?.dispose();
+    return { ...this.gradeCurve };
   }
 
   /**
