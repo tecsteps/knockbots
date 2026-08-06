@@ -713,6 +713,11 @@ function barrierBanner(width, seed, bands) {
  *
  * @param {object} [opts]
  * @param {'ultra'|'high'|'medium'|'low'} [opts.quality='high']
+ * @param {{warning?: string[], banners?: object[]}} [opts.signage] arena legends.
+ *   The plate and the barrier banner are the only two textures in this library
+ *   that say WHERE they are, and a stage that reads "test cell 09" on a rooftop
+ *   is worse than one with no legend at all. Everything else here is a material
+ *   and is shared unchanged.
  * @returns {{ materials: Record<string, THREE.Material>, textures: Record<string, THREE.Texture>, dispose(): void }}
  */
 export function makeArenaMaterials(opts = {}) {
@@ -757,8 +762,8 @@ export function makeArenaMaterials(opts = {}) {
     spark: radialSprite(48, 3.6, 0.9),
     steam: radialSprite(96, 1.6, 0.0),
     scorch: scorchDecal(256, 907),
-    warning: warningPlate(256, 1301, ['danger', 'test cell 09', 'no entry']),
-    banner: barrierBanner(big, 1601, [
+    warning: warningPlate(256, 1301, opts.signage?.warning ?? ['danger', 'test cell 09', 'no entry']),
+    banner: barrierBanner(big, 1601, opts.signage?.banners ?? [
       { text: 'knockbots industrial league', ground: 0x191d23, ink: 0xd9dde4 },
       { text: 'keep behind the line', ground: 0x62201a, ink: 0xe2dad1 },
       { text: 'test cell 09  heavy division', ground: 0x151a21, ink: 0xc8a13c },

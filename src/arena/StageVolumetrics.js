@@ -217,8 +217,12 @@ export class StageVolumetrics {
    * @param {object} deps
    * @param {Record<string, THREE.Texture>} deps.textures
    * @param {'ultra'|'high'|'medium'|'low'} [deps.quality]
+   * @param {object} [deps.air] arena atmosphere spec — `shafts`, `motes`, `jets`
+   *   and `deckHaze`. Absent means the pit's, which is what every value below
+   *   was authored for; a rooftop and a flooded vault want different air and
+   *   the *mechanism* is the same in all three.
    */
-  constructor({ textures, quality = 'high' }) {
+  constructor({ textures, quality = 'high', air = null }) {
     this.group = new THREE.Group();
     this.group.name = 'arena.volumetrics';
     this.quality = quality;
@@ -243,14 +247,19 @@ export class StageVolumetrics {
      * be bright, a splash is a flat additive sprite on the most detailed
      * surface in the frame and cannot.
      */
-    this.specs = [
+    this.specs = air?.shafts ?? [
       { pos: [-6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.95, round: 0.15, edge: 2.2, extinction: 0.16, slat: [1.02, 3.2], pool: 0.05 },
       { pos: [6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.95, round: 0.15, edge: 2.2, extinction: 0.16, slat: [1.02, 3.2], pool: 0.05 },
       { pos: [-9.5, 22.0, -18.4], rot: [0.34, 0.12, 0.16], half: [1.9, 1.5], spread: [0.035, 0.035], length: 23, color: 0x8fb4e8, intensity: 0.055, round: 0.55, edge: 2.1, extinction: 0.038, slat: [0, 0], pool: 0.02 },
       { pos: [2.0, 24.0, -18.4], rot: [0.4, -0.1, -0.13], half: [2.4, 1.9], spread: [0.035, 0.035], length: 25, color: 0x9dc0ee, intensity: 0.05, round: 0.55, edge: 2.0, extinction: 0.034, slat: [0, 0], pool: 0.018 },
       { pos: [-10.2, 4.6, -8.4], rot: [0.1, 0, -0.55], half: [1.1, 0.9], spread: [0.1, 0.1], length: 6.5, color: 0x9fdcff, intensity: 0.34, round: 0.85, edge: 2.2, extinction: 0.14, slat: [0, 0], pool: 0.032 },
     ];
-    const budget = quality === 'low' ? 2 : quality === 'medium' ? 3 : this.specs.length;
+    // Clamped to the list, not just to the tier. The pit authors five shafts and
+    // the tier ladder cuts to three and two; a rooftop at dusk authors two,
+    // because outdoor air is clear and a roof full of visible beams reads as a
+    // nightclub. Without the clamp `medium` indexed past the end of a two-entry
+    // list and threw during construction.
+    const budget = Math.min(this.specs.length, quality === 'low' ? 2 : quality === 'medium' ? 3 : this.specs.length);
 
     const clearCenter = new THREE.Vector3(...FIGHT_CLEAR_CENTER);
     const clearHalf = new THREE.Vector3(...FIGHT_CLEAR_HALF);
@@ -307,14 +316,15 @@ export class StageVolumetrics {
     }
 
     this.#lightPools(textures, budget);
-    this.#deckHaze(textures);
+    this.#deckHaze(textures, air?.deckHaze);
 
-    this.motes = new DustMotes(textures.dust, { x: 28, y: 8.5, z: 22, cx: 0, cy: 1.1, cz: -3 }, {
-      count: quality === 'low' ? 110 : quality === 'medium' ? 220 : 420,
-      color: 0xd6e6ff,
-      size: 0.024,
-      drift: 0.19,
-      intensity: 0.28,
+    const m = air?.motes ?? {};
+    this.motes = new DustMotes(textures.dust, m.box ?? { x: 28, y: 8.5, z: 22, cx: 0, cy: 1.1, cz: -3 }, {
+      count: Math.round((quality === 'low' ? 110 : quality === 'medium' ? 220 : 420) * (m.density ?? 1)),
+      color: m.color ?? 0xd6e6ff,
+      size: m.size ?? 0.024,
+      drift: m.drift ?? 0.19,
+      intensity: m.intensity ?? 0.28,
       maxPixels: 11,
       nearFade: [1.4, 4.0],
       floorY: this.floorY,
@@ -325,15 +335,16 @@ export class StageVolumetrics {
     // The plumes are pushed to the flanks and the far end of the hall. A jet
     // venting into the pit would be exactly the uniform veil this file exists
     // to avoid, however good the reference photo of one looks.
-    this.steam = new SteamJets(textures.steam, [
+    const j = air?.jets ?? {};
+    this.steam = new SteamJets(textures.steam, j.list ?? [
       { origin: [-16.2, 2.2, -4.6], dir: [0.75, 0.4, 0.1], rate: 1, speed: 1.4, life: 4.2, size: 0.7 },
       { origin: [16.2, 3.4, 8.2], dir: [-0.7, 0.45, -0.2], rate: 1, speed: 1.2, life: 4.8, size: 0.8 },
       { origin: [-6.5, 0.05, -15.5], dir: [0.05, 1.0, 0.1], rate: 1, speed: 0.55, life: 7.0, size: 1.0 },
       { origin: [9.4, 5.2, -13.6], dir: [-0.2, 0.9, 0.35], rate: 1, speed: 0.8, life: 5.5, size: 0.9 },
     ], {
       perJet: quality === 'low' ? 8 : 16,
-      opacity: 0.075,
-      color: 0x9fb3c8,
+      opacity: j.opacity ?? 0.075,
+      color: j.color ?? 0x9fb3c8,
       maxPixels: 120,
       nearFade: [3.0, 8.0],
       floorY: this.floorY,
@@ -411,7 +422,7 @@ export class StageVolumetrics {
    * inside twelve metres of the lens, because mist you are standing in is just
    * a lens filter.
    */
-  #deckHaze(textures) {
+  #deckHaze(textures, spec) {
     const geo = new THREE.PlaneGeometry(64, 56, 1, 1);
     geo.rotateX(-Math.PI / 2);
     this.hazeMaterial = new THREE.ShaderMaterial({
@@ -419,9 +430,9 @@ export class StageVolumetrics {
       uniforms: {
         uNoise: { value: textures.noise },
         uTime: { value: 0 },
-        uColor: { value: new THREE.Color(0x7d94b4) },
-        uIntensity: { value: 0.5 },
-        uThickness: { value: 1.6 },
+        uColor: { value: new THREE.Color(spec?.color ?? 0x7d94b4) },
+        uIntensity: { value: spec?.intensity ?? 0.5 },
+        uThickness: { value: spec?.thickness ?? 1.6 },
       },
       vertexShader: /* glsl */ `
         varying vec3 vWorld;

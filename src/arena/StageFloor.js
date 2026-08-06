@@ -1079,6 +1079,81 @@ float kbWetness = 0.0;`,
 
 // ---------------------------------------------------------------------------
 
+/**
+ * The pit's own surface, expressed in the same shape every other arena supplies.
+ *
+ * This is the default and it is authored to be **exactly** what the file did
+ * before it took a `surface` argument at all: every value below is the literal
+ * that used to sit in the uniform block or in a `#build*` method. That is the
+ * whole point of writing it out — `Arenas.js` can hand `StageFloor` a rooftop's
+ * bitumen or a vault's tank base without the pit's numbers moving, and the
+ * regression check is a geometry-and-uniform diff rather than an argument.
+ *
+ * @see src/arena/Arenas.js for the two that are not this one.
+ */
+export const PIT_SURFACE = {
+  bake: bakeFloorMaps,
+  detail: deckDetail,
+  detailTile: 1.3,
+  deckTone: 1.0,
+  deckCav: 0.85,
+  deckGain: 1.14,
+  deckRough: 0.35,
+  joint: new THREE.Vector3(0.016, 0.090, 0.6),
+  jointSlope: 0.95,
+  jointDark: 0.20,
+  reflStrength: 0.62,
+  reflFresnelBase: 0.03,
+  reflDistort: 0.028,
+  reflBlur: 0.075,
+  reflKnee: 1.0,
+  reflRough: new THREE.Vector2(0.30, 0.98),
+  /**
+   * Multiplier on the reflection strength `update()` derives from the mood.
+   *
+   * `reflStrength` above is only the value before the first mood resolves —
+   * `update()` overwrites it every frame from `envParams.floorRefl`, which is a
+   * lighting decision rather than a surface one. This is the surface's own say
+   * in it, and it is what lets a flooded vault and a dusty roof sit on the same
+   * mood curve and still be a mirror and a matte. 1 is the pit, exactly.
+   */
+  reflGain: 1.0,
+  detailScale: 2.4,
+  detailAmp: 0.55,
+  rippleScale: 0.35,
+  rippleAmp: 0.09,
+  floorTint: 0.82,
+  floorTintWet: 0.30,
+  floorTintVary: 0.22,
+  floorTintC: new THREE.Vector2(0, -0.6),
+  floorTintR: new THREE.Vector2(1 / 11.5, 1 / 10.5),
+  floorTintE: new THREE.Vector2(0.70, 1.35),
+  floorChroma: 1.6,
+  tintSat: 1.15,
+  /**
+   * Null means "resolve the warm and cool anchors from whatever the mood is
+   * emitting", which is what {@link StageFloor##updateTint} has always done and
+   * what a room full of its own fittings wants.
+   *
+   * An arena sets them explicitly when its practicals are NOT what lights its
+   * deck. The rooftop is the case: its four fittings total under ten units of
+   * power against a sun at 620, so the resolve would pick the sodium doorway as
+   * the warm anchor and the green roof sign as the cool one and paint the deck
+   * green. There, the two anchors are the sun and the sky.
+   */
+  floorWarm: null,
+  floorCool: null,
+  apronColor: 0x0a0b0d,
+  /** Recessed drainage runs: `{ pos: [x, 0, z], size: [length, width], rot }`. */
+  drains: [
+    { pos: [0, 0, -7.6], size: [22, 0.9], rot: 0 },
+    { pos: [-11.1, 0, 2.5], size: [17, 0.8], rot: Math.PI / 2 },
+    { pos: [11.1, 0, 2.5], size: [17, 0.8], rot: Math.PI / 2 },
+  ],
+  /** Linear radiance of scorched deck under an impact decal. */
+  decalTint: [0.016, 0.015, 0.017],
+};
+
 export class StageFloor {
   /**
    * @param {object} deps
@@ -1086,18 +1161,25 @@ export class StageFloor {
    * @param {Record<string, THREE.Material>} deps.materials arena material library
    * @param {Record<string, THREE.Texture>} deps.textures arena texture library
    * @param {'ultra'|'high'|'medium'|'low'} [deps.quality]
+   * @param {object} [deps.surface] arena surface spec; see {@link PIT_SURFACE}.
+   *   Sparse — anything absent falls back to the pit's value, so an arena only
+   *   states what it actually differs on.
    */
-  constructor({ reflector, materials, textures, bins, quality = 'high' }) {
+  constructor({ reflector, materials, textures, bins, quality = 'high', surface = null }) {
     this.reflector = reflector;
     this.group = new THREE.Group();
     this.group.name = 'arena.floor';
     this.floorY = GROUND_Y;
 
+    /** @type {typeof PIT_SURFACE} */
+    const S = surface ? { ...PIT_SURFACE, ...surface } : PIT_SURFACE;
+    this.surface = S;
+
     const res = quality === 'low' ? 512 : quality === 'medium' ? 1024 : 2048;
-    const maps = bakeFloorMaps(res);
+    const maps = S.bake(res);
     this.maps = maps;
     this.ripple = rippleNormal(quality === 'low' ? 128 : 256);
-    this.deckDetail = deckDetail(quality === 'low' ? 256 : 512);
+    this.deckDetail = S.detail(quality === 'low' ? 256 : 512);
 
     this.uniforms = {
       uReflection: { value: reflector.texture },
@@ -1107,25 +1189,35 @@ export class StageFloor {
       uWetMap: { value: maps.normal },
       uDeckDetail: { value: this.deckDetail },
       // 1 / tile size in metres.
-      uDeckTile: { value: 1 / 1.3 },
-      uDeckTone: { value: 1.0 },
-      uDeckCav: { value: 0.85 },
+      uDeckTile: { value: 1 / S.detailTile },
+      uDeckTone: { value: S.deckTone },
+      uDeckCav: { value: S.deckCav },
       uDeckCavNorm: { value: 1 / Math.max(1e-3, this.deckDetail.userData.cavMean) },
-      uDeckGain: { value: 1.14 },
-      uDeckRough: { value: 0.35 },
-      // groove half-width, chamfer outer edge (metres), sawn-joint scale
-      uJoint: { value: new THREE.Vector3(0.016, 0.090, 0.6) },
-      uJointSlope: { value: 0.95 },
-      uJointDark: { value: 0.20 },
-      uReflStrength: { value: 0.62 },
+      uDeckGain: { value: S.deckGain },
+      uDeckRough: { value: S.deckRough },
+      // groove half-width, chamfer outer edge (metres), sawn-joint scale.
+      //
+      // An arena with no expansion joints does NOT set this to (0,0,0). The hook
+      // evaluates `smoothstep(w0 * 0.75, w0 * 1.3, d)`, whose two edges are equal
+      // at w0 = 0 — undefined per the GLSL spec and, on the compilers this ships
+      // through, `(x - e0) / (e1 - e0)` and therefore 0/0 for any fragment whose
+      // interpolated world x or z is exactly zero. That is the arena centreline,
+      // the slab has a vertex column on it, and the NaN reaches `diffuseColor`.
+      // Use a tiny but strictly positive triple with `jointSlope: 0` instead:
+      // every smoothstep is then non-degenerate and the widest surviving feature
+      // is micrometres across. See `ROOF_SURFACE.joint`.
+      uJoint: { value: S.joint.clone() },
+      uJointSlope: { value: S.jointSlope },
+      uJointDark: { value: S.jointDark },
+      uReflStrength: { value: S.reflStrength },
       /**
        * Schlick floor for the deck's reflectance. See FRAG_REFLECT_HOOK: this
        * is the knob that decides whether anything the camera looks DOWN at
        * reflects, which is every framing this stage is scored on.
        */
-      uReflFresnelBase: { value: 0.03 },
-      uReflDistort: { value: 0.028 },
-      uReflBlur: { value: 0.075 },
+      uReflFresnelBase: { value: S.reflFresnelBase },
+      uReflDistort: { value: S.reflDistort },
+      uReflBlur: { value: S.reflBlur },
       /**
        * Reinhard knee on the reflected radiance, in scene-referred units.
        * 0 disables the term and restores the raw mirror. See the roll-off note
@@ -1145,29 +1237,29 @@ export class StageFloor {
        * and collapses the five-tap cross to one tap. It is inert: 0.012 changed
        * the band by 0.014/255 against a 0.79 floor. Not shipped.
        */
-      uReflKnee: { value: 1.0 },
+      uReflKnee: { value: S.reflKnee },
       // Roughness at which the reflection starts and finishes fading out.
-      uReflRough: { value: new THREE.Vector2(0.30, 0.98) },
-      uDetailScale: { value: 2.4 },
-      uDetailAmp: { value: 0.55 },
-      uRippleScale: { value: 0.35 },
-      uRippleAmp: { value: 0.09 },
+      uReflRough: { value: S.reflRough.clone() },
+      uDetailScale: { value: S.detailScale },
+      uDetailAmp: { value: S.detailAmp },
+      uRippleScale: { value: S.rippleScale },
+      uRippleAmp: { value: S.rippleAmp },
       uTime: { value: 0 },
       // --- practical colour in the diffuse (see FRAG_NORMAL_HOOK) ----------
       /** Master amount. 0 restores the achromatic deck exactly. */
-      uFloorTint: { value: 0.82 },
+      uFloorTint: { value: S.floorTint },
       /** Extra cast on damp concrete, as a fraction of the master. */
-      uFloorTintWet: { value: 0.30 },
+      uFloorTintWet: { value: S.floorTintWet },
       /** Amplitude of the two long waves that break the radial ramp. */
-      uFloorTintVary: { value: 0.22 },
+      uFloorTintVary: { value: S.floorTintVary },
       /** Centre of the warm/cool blend, biased back toward the white banks. */
-      uFloorTintC: { value: new THREE.Vector2(0, -0.6) },
+      uFloorTintC: { value: S.floorTintC.clone() },
       /** Reciprocal radii of the blend ellipse, in 1/metres. */
-      uFloorTintR: { value: new THREE.Vector2(1 / 11.5, 1 / 10.5) },
+      uFloorTintR: { value: S.floorTintR.clone() },
       /** Where the blend runs from cool to warm, in those units. */
-      uFloorTintE: { value: new THREE.Vector2(0.70, 1.35) },
+      uFloorTintE: { value: S.floorTintE.clone() },
       /** Luma-preserving chroma multiple on the deck's outgoing radiance. */
-      uFloorChroma: { value: 1.6 },
+      uFloorChroma: { value: S.floorChroma },
       uFloorWarm: { value: new THREE.Color(1, 1, 1) },
       uFloorCool: { value: new THREE.Color(1, 1, 1) },
       /** `aoMapIntensity` for the folded occlusion read; see FRAG_FOLD_AO. */
@@ -1180,8 +1272,19 @@ export class StageFloor {
      * luma-normalised first, so a saturated fitting normalises to a very strong
      * multiplier and this is a reduction rather than a gain.
      */
-    this.tintSat = 1.15;
+    this.tintSat = S.tintSat;
     this._tintKey = -1;
+    // Fixed anchors, when the arena's own emitters are not what lights its deck.
+    // Baked once through the same normalise-to-luma-1 path the resolve uses, so
+    // the two routes are interchangeable and neither can buy saturation with
+    // brightness. See `PIT_SURFACE.floorWarm`.
+    if (S.floorWarm != null && S.floorCool != null) {
+      this._fixedTint = true;
+      this.#bakeTint(_tintA.setHex(S.floorWarm, THREE.SRGBColorSpace), this.uniforms.uFloorWarm.value);
+      this.#bakeTint(_tintB.setHex(S.floorCool, THREE.SRGBColorSpace), this.uniforms.uFloorCool.value);
+    } else {
+      this._fixedTint = false;
+    }
 
     /** Scaled to zero when the quality tier turns the mirror pass off. */
     this.reflectionScale = 1;
@@ -1249,7 +1352,7 @@ export class StageFloor {
       new THREE.PlaneGeometry(160, 160),
       new THREE.MeshStandardMaterial({
         name: 'arena.apron',
-        color: 0x0a0b0d,
+        color: this.surface.apronColor,
         roughness: 0.9,
         metalness: 0,
         envMapIntensity: 0.25,
@@ -1273,12 +1376,7 @@ export class StageFloor {
    * slab up exactly where the eye would otherwise notice it tiling.
    */
   #buildDrains(bins) {
-    const runs = [
-      { pos: [0, 0, -7.6], size: [22, 0.9], rot: 0 },
-      { pos: [-11.1, 0, 2.5], size: [17, 0.8], rot: Math.PI / 2 },
-      { pos: [11.1, 0, 2.5], size: [17, 0.8], rot: Math.PI / 2 },
-    ];
-    for (const r of runs) {
+    for (const r of this.surface.drains) {
       const [w, d] = r.size;
       // The pit under the grating: a dark box, so the grating reads as holes.
       bins.dark.push(place(bevelBox(w, 0.34, d, 0.02), { pos: [r.pos[0], -0.19, r.pos[2]], rot: [0, r.rot, 0] }));
@@ -1309,7 +1407,7 @@ export class StageFloor {
     const mat = new THREE.ShaderMaterial({
       name: 'arena.floorDecal',
       // Linear radiance of scorched deck, not a multiplier — see the blend note.
-      uniforms: { map: { value: textures.scorch }, uTint: { value: new THREE.Color(0.016, 0.015, 0.017) } },
+      uniforms: { map: { value: textures.scorch }, uTint: { value: new THREE.Color(...this.surface.decalTint) } },
       vertexShader: /* glsl */ `
         attribute float aAlpha;
         varying vec2 vUv;
@@ -1605,8 +1703,31 @@ export class StageFloor {
    *
    * @param {object} p live Environment mood params
    */
+  /**
+   * Normalise one anchor colour to luma 1 and pull it back toward white by
+   * `tintSat`. Shared by the resolve below and by the fixed-anchor path in the
+   * constructor, so an arena that states its anchors and one that derives them
+   * land on the same units.
+   *
+   * A saturated fitting normalises to a very lopsided multiplier -- an amber
+   * band comes out near (2.5, 0.6, 0.0) -- so past `tintSat` ~1.2 the weak
+   * channel goes negative and the deck would multiply into negative radiance
+   * under a mood nobody rendered. Floor it well clear of zero rather than
+   * capping tintSat, so a magenta or sodium mood stays legal.
+   */
+  #bakeTint(src, dst) {
+    const s = this.tintSat;
+    const l = 0.2126 * src.r + 0.7152 * src.g + 0.0722 * src.b;
+    if (!(l > 1e-6)) { dst.setRGB(1, 1, 1); return; }
+    dst.setRGB(
+      Math.max(0.02, 1 + (src.r / l - 1) * s),
+      Math.max(0.02, 1 + (src.g / l - 1) * s),
+      Math.max(0.02, 1 + (src.b / l - 1) * s),
+    );
+  }
+
   #updateTint(p) {
-    if (!p) return;
+    if (!p || this._fixedTint) return;
     // Cheap identity for the resolved mood, so a cross-fade updates and a still
     // frame does not redo this every render. Numeric rather than a template
     // string: this runs once per rendered frame and a string here would be sixty
@@ -1640,23 +1761,8 @@ export class StageFloor {
     if (cSum <= 0) cool.copy(warm);
     if (wSum <= 0 && cSum <= 0) { warm.setRGB(1, 1, 1); cool.setRGB(1, 1, 1); }
 
-    const s = this.tintSat;
-    const bake = (src, dst) => {
-      const l = 0.2126 * src.r + 0.7152 * src.g + 0.0722 * src.b;
-      if (!(l > 1e-6)) { dst.setRGB(1, 1, 1); return; }
-      // A saturated fitting normalises to a very lopsided multiplier -- an
-      // amber band comes out near (2.5, 0.6, 0.0) -- so past `tintSat` ~1.2 the
-      // weak channel goes negative and the deck would multiply into negative
-      // radiance under a mood nobody rendered. Floor it well clear of zero
-      // rather than capping tintSat, so a magenta or sodium mood stays legal.
-      dst.setRGB(
-        Math.max(0.02, 1 + (src.r / l - 1) * s),
-        Math.max(0.02, 1 + (src.g / l - 1) * s),
-        Math.max(0.02, 1 + (src.b / l - 1) * s),
-      );
-    };
-    bake(warm, this.uniforms.uFloorWarm.value);
-    bake(cool, this.uniforms.uFloorCool.value);
+    this.#bakeTint(warm, this.uniforms.uFloorWarm.value);
+    this.#bakeTint(cool, this.uniforms.uFloorCool.value);
   }
 
   /** @param {number} dt @param {object} envParams live Environment mood params */
@@ -1668,8 +1774,11 @@ export class StageFloor {
     // the floor gets: the screen-space pass that used to sit on top of it in
     // the post chain carried about a third of the visible wet, and that third
     // has to come from the mirror instead of from nowhere.
+    // `reflStrength` in the surface spec is the seed the arena authored; the
+    // mood's own `floorRefl` is what actually drives it once one resolves, so a
+    // vault stays a mirror and a dusty roof does not, on the same curve.
     const refl = envParams?.floorRefl ?? 0.32;
-    this.uniforms.uReflStrength.value = (0.34 + refl * 1.45) * this.reflectionScale;
+    this.uniforms.uReflStrength.value = (0.34 + refl * 1.45) * this.reflectionScale * this.surface.reflGain;
     // Scuffs dry out over the round rather than vanishing on a timer.
     let dirty = false;
     for (let i = 0; i < this._decalLife.length; i++) {

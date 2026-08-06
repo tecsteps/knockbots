@@ -1214,6 +1214,357 @@ const MOODS = {
       practical([9.2, 3.2, 7.2], [0, 1.3, 0], 3.4, 2.4, 0x8fc0ff, 3.5, 0.02, 3.5, 0.89),
     ],
   },
+
+  /**
+   * **SKYDECK — dusk on an open rooftop.** The mood half of `src/arena/Arenas.js`'s
+   * `skydeck`; the set is `StageRooftop.js`.
+   *
+   * This exists to be a *different lighting problem* from `industrial`, not a
+   * different palette for the same one, and the difference is structural rather
+   * than chromatic:
+   *
+   *   - **The key is ten degrees off the horizon instead of thirty-eight.**
+   *     Shadow reach is `cot(elevation)` times the caster's height, so the pit's
+   *     38 degrees puts a 1.85 m robot's shadow 2.4 m away and this puts it
+   *     **7.4 m** away — three times the length, running out across open deck
+   *     where the camera can read it. Nothing in a closed box lit from twelve
+   *     metres up can produce that, which is the whole argument for the arena.
+   *   - **There is no ceiling term at all** (`ceiling.on: 0`, and the tier table
+   *     builds no strips anyway), so nothing lights a horizontal surface from
+   *     above except the sky itself. Upward-facing bevels get the cool zenith
+   *     and nothing else, which is the inverse of the pit, where they get the
+   *     banks and nothing else.
+   *   - **The warm/cool split is between the two ambient terms, not between the
+   *     key and a rim.** `fill.sky` is a genuine blue skylight at nearly twice
+   *     the pit's share of the key, because on a real roof at dusk the shadow
+   *     side is lit by half a hemisphere of blue and it is *not* dark. That
+   *     makes the sunlit face and the shadowed face of the same object two
+   *     different colours, which is the single cue the pit has never had.
+   *
+   * The azimuth is 200 degrees, so the sun sits beyond the -x end of the fight
+   * axis and every shadow runs toward +x and slightly toward the camera. The
+   * roof furniture in `StageRooftop` is placed against exactly that geometry.
+   *
+   * `envIntensity` is the highest of any mood here (0.72 against 0.52-0.60) and
+   * it is not a look decision: this is the only mood whose surround is a real
+   * sky, so the image-based term is carrying an enormous, genuinely bright
+   * source that the analytic rig does not represent. Cutting it to match the
+   * others would leave the armour reflecting a room that is not there.
+   */
+  duskRoof: {
+    sky: {
+      zenith: C(0x101f42),
+      horizon: C(0xff7a44),
+      ground: C(0x120d0c),
+      intensity: 1.15,
+      // High, so the warm band stays pinned near the horizon instead of washing
+      // half the dome — the rose has to be a band the towers stand against.
+      zenithPower: 0.85,
+      groundFalloff: 0.16,
+      hazeColor: C(0xffa878),
+      hazeStrength: 0.62,
+      hazeHeight: 0.05,
+    },
+    sun: {
+      dir: dir(200, 11),
+      color: C(0xffb070),
+      /**
+       * 340, not the 620 this shipped at first, and the cut is about the CUBE
+       * rather than about the sky.
+       *
+       * `sun.intensity` draws the disc into the environment cube, and the cube
+       * is PMREM-filtered into `scene.environment`. So the sun is counted twice
+       * on every surface: once as the directional key, and once as an
+       * enormously bright spot in the irradiance the IBL delivers. Every mood
+       * has that overlap and it is usually harmless because the disc is small
+       * and `envIntensity` is around 0.5; this mood pairs the table's brightest
+       * disc with its highest `envIntensity`, and the two multiply.
+       *
+       * Measured on the live page, deck band of the wide framing, everything
+       * else held: zeroing `scene.environmentIntensity` takes the deck from
+       * R 0.437 to 0.208 and its saturation from 0.81 to 0.64. Half the deck's
+       * value and a large part of its orange was arriving through the image, not
+       * through the key — which is why cutting the floor's own tint terms to
+       * nothing did not move the frame.
+       *
+       * The disc stays plainly HDR at 340 (the tone curve clips it either way)
+       * and `glowIntensity` carries the visible sunset independently, so what
+       * this costs is the double-counted irradiance and nothing that is looked
+       * at directly.
+       */
+      intensity: 340,
+      radius: 0.023,
+      glowIntensity: 2.1,
+      glowPower: 10,
+    },
+    // No roof. Every number after `on` is inert and kept only so a cross-fade
+    // into or out of this mood has something to interpolate against.
+    ceiling: {
+      on: 0,
+      height: 30,
+      spacing: 16,
+      sizeX: 0.08,
+      sizeY: 0.08,
+      falloff: 0.006,
+      color: C(0xffd0a0),
+      intensity: 5,
+    },
+    // The city below the parapet: a warm band of street and window light around
+    // the whole horizon, and lit office floors above it.
+    bands: { color: C(0xffb45a), intensity: 2.4, y: -0.015, width: 0.022, count: 23 },
+    screens: { color: C(0xff9a3c), intensity: 2.2, count: 15, y: 0.055, height: 0.032 },
+    // Neighbouring towers occluding the sky. Wide and few, because a skyline is
+    // a handful of big masses rather than a picket fence.
+    structure: { count: 8, width: 0.2, dark: 0.06 },
+    floorRefl: 0.3,
+    /**
+     * 14 degrees rather than the sun's own 11.
+     *
+     * The two are allowed to differ — the sun disc is what the surround and the
+     * bloom see, the key is what casts — and three degrees of separation is
+     * bought for a shadow-map reason. `_buildRig`'s ortho shadow camera is
+     * 25 m by 23 m around the pit with a 70 m far plane, and at 11 degrees a
+     * caster on the -x parapet throws 5.1 m of shadow past +x centre, which is
+     * inside it; at 8 it starts leaving through the side. 14 keeps the reach at
+     * 4.0 m per metre of height, which still puts a standing robot's shadow
+     * 7.4 m out and a 4 m plant unit's clean across the deck.
+     */
+    key: { color: C(0xffb478), intensity: 9.6, dir: dir(200, 14) },
+    // Skylight as the rim: the cold half of the frame, from the opposite flank
+    // and nearly level, exactly as every other mood places it.
+    rim: { color: C(0x64b4ff), intensity: 8.8, dir: dir(332, 15), hueDrift: 0.016 },
+    rimB: { color: C(0xffcf9a), intensity: 3.4, dir: dir(252, 10) },
+    // Off the roof deck itself, which at dusk is a warm grey membrane lit by a
+    // low sun — the one bounce in this table that is a real measured surface
+    // rather than a guess at a room. Cut with the fill raised, because the two
+    // share a ceiling and this is the warm half of the pair.
+    bounce: { color: C(0xb8794a), intensity: 0.18, dir: dir(28, -24) },
+    /**
+     * The largest hemisphere fill in the table, at nearly twice the pit's share
+     * of its key, and this is the one mood where that is right rather than
+     * sloppy.
+     *
+     * `MAX_FILL_SHARE` exists because an undirected lift adds equally to the lit
+     * plane, the side plane and the wall behind, and on a closed set that
+     * destroys form for nothing. On an open roof at dusk it is not a cheat: half
+     * a hemisphere of blue sky genuinely IS the only thing lighting every
+     * surface the sun cannot see, and the arena's whole premise is that a plant
+     * unit is amber on one face and blue on the other. Without a real cool
+     * ambient there is no second colour and the set reads as one warm mass —
+     * which is what the frame measured, at 80% of its pixels in one hue bin.
+     *
+     * 0.52 with `bounce` at 0.18 puts the pair at 0.70 against the 0.88 the
+     * ceiling allows, so it is inside the invariant rather than an exception to
+     * it.
+     */
+    fill: { sky: C(0x7ea6de), ground: C(0x2a201a), intensity: 0.52 },
+    /**
+     * Thinner than any interior mood, and warmer.
+     *
+     * Fog here is doing a different job: `StageRooftop` fades its towers and its
+     * skyline through their own exponential haze (a 12 m room's fog swallows a
+     * 300 m skyline whole), so scene fog only has to carry the 30 m of air
+     * between the fighters and the back parapet. At the pit's 0.034 it would
+     * take a fifth of the contrast off the roof furniture the raking shadows are
+     * drawn on, which is the thing this arena exists to show.
+     */
+    fog: { color: C(0x1c1620), density: 0.021 },
+    shaft: { color: C(0xffbf8c), intensity: 0.55 },
+    envIntensity: 0.72,
+    /**
+     * The highest `bgSky` in the table, because this is the only mood where the
+     * surround is meant to be seen. It is still well under one: the sky has to
+     * stay below the light landing on the fighters or a robot in front of it is
+     * a silhouette, and a silhouette is the failure mode an open-sky stage is
+     * most exposed to.
+     */
+    bgSky: 0.34,
+    bgLights: 0.5,
+    bgKnee: 0.55,
+    exposure: 1.0,
+    /**
+     * Matched one-for-one to `StageRooftop`'s `practicalPositions`: the sodium
+     * doorway of the stair bulkhead, the green roof sign on the back parapet,
+     * the aircraft-warning head on the -x mast, and a small white service
+     * fitting. They are an order of magnitude weaker than any interior mood's,
+     * and that is correct rather than an oversight — the sun is 620 and these
+     * are room lighting on a roof at dusk. They are here for hue and for the
+     * highlight they put on nearby metal, not to light the fight.
+     */
+    practicals: [
+      practical([11.0, 1.25, -6.13], [2.0, 1.1, -2.0], 1.02, 2.06, 0xff8a3c, 4.2, 0.05, 3.7, 0.13),
+      practical([-1.6, 0.78, -11.06], [0, 1.2, -4.0], 5.4, 0.62, 0x3cff8a, 2.6, 0.09, 1.9, 0.47),
+      practical([-13.2, 7.62, -8.6], [-4.0, 4.0, -3.0], 0.17, 0.17, 0xff2a1e, 1.1, 0.55, 0.42, 0.71),
+      practical([-4.2, 1.6, -8.68], [-1.0, 1.2, -3.0], 0.5, 0.34, 0xdfeaff, 1.8, 0.03, 8.2, 0.29),
+    ],
+  },
+
+  /**
+   * **THE CISTERN — a flooded underground plant vault.** The mood half of
+   * `src/arena/Arenas.js`'s `cistern`; the set is `StageVault.js`.
+   *
+   * The opposite failure mode to `duskRoof`, and deliberately so — between them
+   * the three arenas span the range rather than clustering:
+   *
+   *   - **There is no sky and no sun.** `sun.intensity` is zero, so the surround
+   *     contributes almost nothing and `envIntensity` is the lowest in the
+   *     table. A surface not facing a fitting is genuinely near black, which is
+   *     what makes the per-fighter shadowed key read HARD down here: there is no
+   *     ambient floor for its terminator to dissolve into.
+   *   - **The sources are the practicals, and they are strips.** Three mercury
+   *     runs at 22-27 units against the pit's 15, on `RectAreaLight`s 3.2 m by
+   *     10 cm. A source that long and that thin draws a hard bright line across
+   *     a plate rather than a soft patch, and because it sits two metres from
+   *     the wall it is bolted to, the falloff across that wall is visible in one
+   *     frame. The pit's banks are twelve metres up and cannot do either.
+   *   - **`bands` is the same fact told to the surround.** The horizontal ring
+   *     in the sky shader sits at `y = 0.086`, which is where a 2.35 m strip on
+   *     a wall 11 m away appears from the 1.4 m probe. So what the armour
+   *     reflects and what actually lights it are the same fixtures at the same
+   *     height, which is the property the whole practical system is built on.
+   *
+   * Hue is four bins by construction and not by tinting: mercury discharge is
+   * blue-white, low-pressure sodium is nearly monochromatic amber, the emergency
+   * fitting is green, and the water returns the first two mixed. `SLOT_BASE` in
+   * `StageVault.js` carries the same four colours, so the set and the rig agree.
+   */
+  cistern: {
+    sky: {
+      zenith: C(0x04060a),
+      horizon: C(0x0a1016),
+      ground: C(0x020304),
+      /**
+       * A third of the other moods', not a tenth, and the first draft was the
+       * tenth.
+       *
+       * The intent — "no sky and no soft ambient anywhere" — is right and it is
+       * what makes the shadowed key read hard down here. The first pass
+       * overshot it by about an order of magnitude and the frame proved it:
+       * measured at 1920x1080 with the HUD band cropped, median luma **0.4 of
+       * 255**, against the pit's 62.1 in the same run. More than half of every
+       * frame was at or below code value zero, which is not a dark room, it is
+       * an unlit one. A vault with nothing in it to see is not the opposite
+       * lighting problem to the rooftop, it is an absent one.
+       *
+       * This term is most of it, and the reason is where the set's light comes
+       * from. A fighter is only 6.4% image-based, but the *set* is 56.6%, so
+       * the surround is what decides whether an arena is visible — and this
+       * mood authored the surround black and then cut `envIntensity` on top of
+       * it. Both are raised, and the darkness now comes from the falloff
+       * between the strips rather than from there being no light at all.
+       */
+      intensity: 0.85,
+      zenithPower: 0.5,
+      groundFalloff: 0.3,
+      // The one ambient term allowed to be strong: damp air near the water,
+      // hugging the horizon, which is where the strips throw their scatter.
+      hazeColor: C(0x1c3346),
+      hazeStrength: 0.35,
+      hazeHeight: 0.22,
+    },
+    // Zero. Kept as a structurally complete block so a cross-fade from any
+    // outdoor mood has a disc to interpolate to rather than a missing key.
+    sun: {
+      dir: dir(96, 62),
+      color: C(0x8fb4d8),
+      intensity: 0,
+      radius: 0.02,
+      glowIntensity: 0,
+      glowPower: 24,
+    },
+    ceiling: {
+      on: 0,
+      height: 5.6,
+      spacing: 4.6,
+      sizeX: 0.04,
+      sizeY: 0.05,
+      falloff: 0.02,
+      color: C(0xd6e8ff),
+      intensity: 9,
+    },
+    /**
+     * The wall strips, as the surround sees them. `y` is the elevation a 2.35 m
+     * fitting on a wall 11.4 m out subtends from the 1.4 m probe; `count` is one
+     * dash per arcade bay so the ring reads as separate fittings rather than as
+     * a lit horizon; `width` is tight because a strip is 10 cm deep and a fat
+     * gaussian here would put a glow band round the whole room and undo the
+     * falloff the arena exists for.
+     */
+    bands: { color: C(0xd6e8ff), intensity: 11.5, y: 0.086, width: 0.028, count: 9 },
+    // Sodium: the bulkhead lamp and the machine hall through the arch, both
+    // lower and warmer than the mercury and both intermittent round the azimuth.
+    screens: { color: C(0xff9a3c), intensity: 5.6, count: 6, y: 0.035, height: 0.03 },
+    // The arcade. Thirteen piers, and darker than anything else in the table —
+    // a pier down here is lit on one face by its own strip and is black.
+    structure: { count: 13, width: 0.14, dark: 0.05 },
+    // Standing water over a third of the deck. The highest in the table, which
+    // is what puts the strips' mirror image under the fighters' feet.
+    floorRefl: 0.62,
+    /**
+     * Cold mercury, and only 6.2 against the pit's 8.6.
+     *
+     * The key is deliberately not the brightest thing in this room; the strips
+     * are. It is here to carve form and cast the hard shadow onto the weir wall
+     * `StageVault` built for it, not to light the set, and the set is lit by
+     * four `RectAreaLight`s at 22-27 units that no other mood comes near.
+     */
+    key: { color: C(0xcfe2ff), intensity: 8.0, dir: dir(38, 34) },
+    // The warm half of the rig, and it is the RIM rather than the key — the
+    // inverse of every other mood here. Sodium is the only warm source in the
+    // room, so the fighters' edges are where it has to land.
+    rim: { color: C(0xff9636), intensity: 8.4, dir: dir(212, 14), hueDrift: 0.01 },
+    rimB: { color: C(0x35ffb0), intensity: 2.6, dir: dir(326, 12) },
+    // Off wet concrete under blue-white strips.
+    bounce: { color: C(0x3d6a86), intensity: 0.26, dir: dir(276, -26) },
+    // Raised with the surround, and still the second-lowest in the table. The
+    // ceiling `holdKeyToFill` enforces is 0.736 against a key of 8.0 and this
+    // pair sits at 0.60, so the shadow side is off paper black and no more.
+    fill: { sky: C(0x22384c), ground: C(0x0d1014), intensity: 0.34 },
+    /**
+     * The densest fog in the table, and one of the darkest colours to go with
+     * it. Both halves matter and the file's own note on `industrial` says why:
+     * density is what the near field pays and colour is what the far field
+     * converges to. The vault's whole depth argument is a tunnel mouth 30 m
+     * back that has to fade to almost nothing while the arcade at 12 m is still
+     * readable, and that is a steep ramp on a dark asymptote rather than a lot
+     * of grey.
+     *
+     * Pulled back from 0.046 / 0x060a0e with the surround, and for the same
+     * measured reason. At 0.046 the ramp is 13% at the fighters, 50% at the
+     * arcade and 88% at the far wall, converging on a colour four code values
+     * off black — so the arcade, the machine hall and the tunnel all arrived at
+     * the same nothing and the frame had the three readable depth layers this
+     * arena was built to beat, not five. 0.036 on a lifted colour keeps the
+     * subject's 10% and the tunnel's 80% while leaving the arcade something to
+     * be seen against.
+     */
+    fog: { color: C(0x0d151c), density: 0.036 },
+    shaft: { color: C(0xbcd6ff), intensity: 1.1 },
+    // The lowest in the table. There is no room behind the room down here for
+    // the metal to reflect, and the reflection it does get is the strips, which
+    // arrive through the practicals instead.
+    envIntensity: 0.58,
+    bgSky: 0.2,
+    bgLights: 0.62,
+    bgKnee: 0.44,
+    // A stop of headroom: the frame is mostly dark and its top end is four small
+    // strips, so the tone curve has room the pit does not.
+    exposure: 1.15,
+    /**
+     * Matched one-for-one to `StageVault`'s four bright fittings — the two
+     * mercury strips on the tank walls (at deliberately different z, so the pair
+     * does not light both fighters identically), the mercury key raking over the
+     * weir from behind, and the sodium bulkhead lamp near-right. Sizes are the
+     * real fittings': 3.2 m by 10 cm is a tube, not a softbox, and it reflects
+     * as a line.
+     */
+    practicals: [
+      practical([-11.06, 2.35, 1.2], [-1.0, 1.2, 1.2], 3.2, 0.1, 0xd6e8ff, 22, 0.03, 6.4, 0.09),
+      practical([11.06, 2.35, -1.8], [1.0, 1.2, -1.8], 3.2, 0.1, 0xd6e8ff, 22, 0.035, 5.1, 0.53),
+      practical([-2.2, 3.86, -7.54], [-1.0, 1.1, -1.0], 4.6, 0.12, 0xcadfff, 27, 0.06, 2.7, 0.33),
+      practical([10.9, 2.05, 4.4], [2.0, 1.3, 2.0], 0.9, 0.42, 0xff9a3c, 6, 0.12, 1.6, 0.83),
+    ],
+  },
 };
 
 /**

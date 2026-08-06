@@ -422,6 +422,40 @@ const SHOTS = [
     settle: 1400,
   },
   {
+    name: '18-skydeck-wide',
+    note: 'Rooftop arena, wide — the open-sky light structure the pit cannot produce.',
+    // A new arena that nobody photographs is worth nothing. Round 15 built a
+    // 14-segment emissive board where neither scored frame could see it, and it
+    // read as shipped while contributing zero pixels. These two shots exist so
+    // the stage and lighting critics score the new venues at all.
+    preRoll: true,
+    setup: `(async () => { await window.KB.stage.setArena('skydeck');
+      window.KB.fightCamera.cinematic('wide', { dist: 14, height: 4.5 }); })()`,
+    reassert: `window.KB.fightCamera.cinematic('wide', { dist: 14, height: 4.5 });`,
+    settle: 2200,
+    verify: `(() => {
+      // Stage keeps the resolved definition on .arena, not an id string.
+      const id = window.KB.stage?.arena?.id ?? null;
+      return { arena: id, ok: id === 'skydeck' };
+    })()`,
+  },
+  {
+    name: '19-cistern-wide',
+    note: 'Vault arena, wide — no sky, hard emissive strips, steep falloff.',
+    preRoll: true,
+    setup: `(async () => { await window.KB.stage.setArena('cistern');
+      window.KB.fightCamera.cinematic('wide', { dist: 14, height: 4.5 }); })()`,
+    reassert: `window.KB.fightCamera.cinematic('wide', { dist: 14, height: 4.5 });`,
+    settle: 2200,
+    verify: `(() => {
+      const id = window.KB.stage?.arena?.id ?? null;
+      return { arena: id, ok: id === 'cistern' };
+    })()`,
+    // Put the pit back, so every later shot is captured in the arena the rest
+    // of the shot list assumes.
+    teardown: `window.KB.stage.setArena('sublevel09');`,
+  },
+  {
     name: '13-announce-fight',
     wantsBanner: true,
     note: 'Round-start announcement — a motion-design surface, in flight.',

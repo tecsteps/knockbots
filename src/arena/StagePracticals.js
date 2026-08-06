@@ -546,11 +546,33 @@ export class StagePracticals {
     const faces = [];
     const idx = [];
 
-    /** Adds an emitter quad tagged with its fixture index. */
+    /**
+     * Adds an emitter quad tagged with its fixture index.
+     *
+     * The tag array is sized off the NON-INDEXED vertex count, and that is the
+     * whole of a defect that shipped for several rounds. `PlaneGeometry` is
+     * indexed: it reports `position.count` 4 and contributes 6 vertices to the
+     * merge, because `GeoKit.mergeAll` calls `toNonIndexed()` first. Sizing the
+     * array off 4 therefore wrote four tags per six-vertex quad and left the
+     * tail of the buffer at zero, so the tags slid out of alignment:
+     *
+     *     quad 0  [0,0,0,0,1,1]    quad 2  [3,3,3,3,0,0]
+     *     quad 1  [1,1,2,2,2,2]    quad 3  [0,0,0,0,0,0]
+     *
+     * Three of the four faces were shading with a colour gradient across them
+     * between two fixtures' colours, and the fourth — the warm sign box on the
+     * near-right barrier, fixture 3 — was rendering **entirely in fixture 0's
+     * cool white**. In an arena whose measured defect is that 90% of its
+     * saturated pixels are cyan, its one warm emitter was being drawn cold.
+     *
+     * Found by `StageRooftop`'s author while reading this file as a reference.
+     * `#ceilingRuns` builds its tags the same way and is not affected: it lays
+     * them down after its own merge.
+     */
     const emitter = (w, h, transform, fixture) => {
       const g = place(new THREE.PlaneGeometry(w, h), transform);
-      const count = g.attributes.position.count;
-      const a = new Float32Array(count);
+      const flat = g.index ? g.toNonIndexed() : g;
+      const a = new Float32Array(flat.attributes.position.count);
       a.fill(fixture);
       idx.push(a);
       faces.push(g);

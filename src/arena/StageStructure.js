@@ -2406,7 +2406,14 @@ export class StageStructure {
    * @param {number} time seconds since the stage was built
    * @param {object} envParams live Environment mood parameters
    */
-  update(time, envParams) {
+  /**
+   * @param {number} dt seconds since the last rendered frame. Unused here — the
+   *   hangar animates off the absolute clock — but part of the signature every
+   *   arena set module shares, so `Stage` has one call for all three.
+   * @param {number} time seconds since the stage was built
+   * @param {object} envParams live Environment mood parameters
+   */
+  update(dt, time, envParams) { // eslint-disable-line no-unused-vars
     this.timeUniform.value = time;
     this.fan.rotation.z = time * 0.62;
 

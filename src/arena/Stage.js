@@ -1,6 +1,17 @@
 /**
  * Knockbots — the arena.
  *
+ * **Three of them, one at a time.** `Stage` is the composition and
+ * `src/arena/Arenas.js` is the table of what each one is made of: a floor
+ * surface, a combat-barrier preset, a set module, an atmosphere, a lighting
+ * mood, and its own signage. Nothing below branches on which arena is running —
+ * it reads the definition and builds it — and `setArena` tears one down and
+ * puts the next up in place, so the triangle budget is the largest arena rather
+ * than their sum.
+ *
+ * The rules in the next paragraphs are `sublevel09`'s, and they are stated at
+ * length because they are the ones the other two were designed against.
+ *
  * **SUBLEVEL 09 — MECH TEST CELL.** A derelict mech-proving hangar at night.
  * The fight happens in a recessed test pit eighteen metres across, bounded by
  * steel-and-concrete barriers with rubber impact pads. Above and behind it the
@@ -36,9 +47,9 @@ import { makeArenaMaterials } from './StageMaterials.js';
 import { PlanarReflector } from './PlanarReflector.js';
 import { StageFloor, CONTACT_COUNT } from './StageFloor.js';
 import { StageWalls } from './StageWalls.js';
-import { StageStructure } from './StageStructure.js';
 import { StageVolumetrics } from './StageVolumetrics.js';
 import { StagePracticals } from './StagePracticals.js';
+import { arenaDef, ARENA_IDS, DEFAULT_ARENA } from './Arenas.js';
 import { PointBurst } from './StageParticles.js';
 import { triCount, mergeAll, worldUv } from './GeoKit.js';
 
@@ -79,11 +90,19 @@ export class Stage {
   /**
    * @param {THREE.Scene} scene
    * @param {import('../engine/Environment.js').Environment} environment
+   * @param {{arena?: string}} [opts] which arena to build. Unknown ids resolve
+   *   to the default rather than throwing — see `Arenas.arenaDef`.
    */
-  constructor(scene, environment) {
+  constructor(scene, environment, opts = {}) {
     this.scene = scene;
     this.environment = environment;
     this.quality = environment?.quality ?? 'high';
+
+    /**
+     * The arena definition this Stage is currently built to.
+     * @type {import('./Arenas.js').ArenaDef}
+     */
+    this.arena = arenaDef(opts.arena ?? Stage.initialArena());
 
     /** @type {{halfWidth:number, halfDepth:number}} combat reads this. */
     this.bounds = { halfWidth: ARENA_HALF_WIDTH, halfDepth: ARENA_HALF_DEPTH };
@@ -110,8 +129,16 @@ export class Stage {
    */
   async init() {
     const yieldToPaint = () => new Promise((r) => setTimeout(r, 0));
+    const A = this.arena;
 
-    const lib = makeArenaMaterials({ quality: this.quality });
+    // The mood is part of the arena, not a separate setting. Told before
+    // anything is built, with a zero-second fade, so the first frame the floor
+    // and the set ever see is the right one — `StageFloor` resolves its warm and
+    // cool anchors from the live mood and `StageRooftop` reads the key's own
+    // direction for its shadow lines.
+    if (this.environment?.mood !== A.mood) this.environment?.setMood?.(A.mood, 0);
+
+    const lib = makeArenaMaterials({ quality: this.quality, signage: A.signage ?? undefined });
     this.materialLibrary = lib;
     this.materials = lib.materials;
     this.textures = lib.textures;
@@ -140,15 +167,24 @@ export class Stage {
       textures: this.textures,
       bins,
       quality: this.quality,
+      surface: A.surface,
     });
     this.root.add(this.floor.group);
     await yieldToPaint();
 
-    this.walls = new StageWalls({ materials: this.materials, textures: this.textures, bins });
+    this.walls = new StageWalls({ materials: this.materials, textures: this.textures, bins, barrier: A.barrier });
     this.root.add(this.walls.group);
     await yieldToPaint();
 
-    this.structure = new StageStructure({
+    /**
+     * The set: everything beyond the barriers. `StageStructure` for the pit,
+     * `StageRooftop` and `StageVault` for the other two. All three satisfy the
+     * same small contract — a group, a `noReflect` list, an optional
+     * `sparkPoint`, and `update(dt, time, envParams)` — so nothing downstream
+     * knows which one it has.
+     */
+    this.structure = new A.Set({
+      environment: this.environment,
       materials: this.materials,
       textures: this.textures,
       bins,
@@ -157,26 +193,36 @@ export class Stage {
     this.root.add(this.structure.group);
     await yieldToPaint();
 
-    this.volumetrics = new StageVolumetrics({ textures: this.textures, quality: this.quality });
+    this.volumetrics = new StageVolumetrics({ textures: this.textures, quality: this.quality, air: A.air });
     this.root.add(this.volumetrics.group);
 
-    this.practicals = new StagePracticals({
-      environment: this.environment,
-      materials: this.materials,
-      textures: this.textures,
-      bins,
-      sparkPoint: this.structure.sparkPoint,
-    });
-    this.root.add(this.practicals.group);
+    /**
+     * The pit's emitters are their own module because that set was built before
+     * arenas existed and its fittings, pools, washes, screens and arc are half
+     * the frame. The two newer sets own theirs, so they run without this one
+     * rather than inheriting a shop floor's light fittings — hence the flag in
+     * the registry rather than a `sparkPoint` check.
+     */
+    this.practicals = A.practicals
+      ? new StagePracticals({
+        environment: this.environment,
+        materials: this.materials,
+        textures: this.textures,
+        bins,
+        sparkPoint: this.structure.sparkPoint,
+      })
+      : null;
+    if (this.practicals) this.root.add(this.practicals.group);
 
     this.#commitBins(bins);
     await yieldToPaint();
 
     /**
      * Where the visible emitters are, so lighting can be matched to the set.
+     * Whichever module owns the emitters publishes it.
      * @type {{position: THREE.Vector3, color: THREE.Color, power: number, size: THREE.Vector2}[]}
      */
-    this.practicalPositions = this.practicals.practicalPositions;
+    this.practicalPositions = (this.practicals ?? this.structure).practicalPositions ?? [];
 
     this.#buildImpactFx();
     this.#wireReflection();
@@ -199,8 +245,8 @@ export class Stage {
       this.dust.points,
       this.walls.dents,
       ...this.mergedNoReflect,
-      ...this.structure.noReflect,
-      ...this.practicals.noReflect,
+      ...(this.structure.noReflect ?? []),
+      ...(this.practicals?.noReflect ?? []),
     ]);
 
     this.scene.add(this.root);
@@ -329,7 +375,7 @@ export class Stage {
     this._pixelScaleTargets = [
       this.dust.material, this.grit.material,
       this.volumetrics.motes.material, this.volumetrics.steam.material,
-      this.practicals.sparks.material,
+      ...(this.practicals ? [this.practicals.sparks.material] : []),
     ];
 
     const inner = this.floor.mesh.onBeforeRender;
@@ -375,11 +421,22 @@ export class Stage {
     // draws the scene more than once and only the main pass should pay for it.
     this.reflector.arm(++this._frame);
 
+    // The Environment's own animation clock — practical flicker, the rim hue
+    // drift, the mood cross-fade and the per-fighter rim rigs following their
+    // fighters. `StagePracticals` winds it when it exists, because it has to
+    // sync to the result in the same call; when it does not, the Stage winds it
+    // directly. Exactly one of these two runs per frame, and if neither did the
+    // cross-fade would never advance and a mood change would never land.
+    if (!this.practicals) env?.frame?.(dt);
+
     this.floor.update(dt, t, params);
     this.walls.update(dt, t);
-    this.structure.update(t, params);
+    // `StageStructure.update(time, params)` and the two newer sets'
+    // `update(dt, time, params)` are the same call with a leading dt; the sets
+    // that do not want it ignore it, so one signature covers all three.
+    this.structure.update(dt, t, params);
     this.volumetrics.update(t, env?.shaftIntensity ?? 0.5, params);
-    this.practicals.update(dt, t, params);
+    this.practicals?.update(dt, t, params);
     this.dust.update(dt);
     this.grit.update(dt);
     this.#updateContacts();
@@ -538,7 +595,8 @@ export class Stage {
     this.rng.reseed(0x53544147);
     this.floor.reset();
     this.walls.reset();
-    this.practicals.reset();
+    this.practicals?.reset();
+    this.structure.reset?.();
     this.dust.reset();
     this.grit.reset();
     this.wallLight.intensity = 0;
@@ -586,12 +644,73 @@ export class Stage {
     this.walls.dispose();
     this.structure.dispose();
     this.volumetrics.dispose();
-    this.practicals.dispose();
+    this.practicals?.dispose();
     this.dust.dispose();
     this.grit.dispose();
     for (const m of this.merged ?? []) m.geometry.dispose();
     this.reflector.dispose();
     this.materialLibrary.dispose();
     this.ready = false;
+  }
+
+  // -------------------------------------------------------------------------
+  // Arena selection
+  // -------------------------------------------------------------------------
+
+  /** Every arena, in menu order. @returns {import('./Arenas.js').ArenaDef[]} */
+  static list() {
+    return ARENA_IDS.map((id) => arenaDef(id));
+  }
+
+  /**
+   * The arena a fresh `Stage` builds when nobody says otherwise.
+   *
+   * It reads `?arena=` off the location so a capture run, a bug report or a
+   * bookmark can name a stage without going through the menu, and falls back to
+   * the default for anything it does not recognise. This is the only place the
+   * arena system touches the outside world, and it is read-only.
+   */
+  static initialArena() {
+    try {
+      const q = new URLSearchParams(globalThis.location?.search ?? '').get('arena');
+      if (q && ARENA_IDS.includes(q)) return q;
+    } catch { /* no location, or a hostile one; the default is always safe */ }
+    return DEFAULT_ARENA;
+  }
+
+  /**
+   * Tear this arena down and build another one in place.
+   *
+   * A full rebuild rather than a set of hidden groups, and that is the whole
+   * reason the budget works: only one arena's geometry, textures and materials
+   * exist at a time, so three arenas cost what the largest one costs. The pit
+   * alone is 273k triangles against a 900k whole-frame ceiling that already has
+   * two robots in it — three of them resident would not fit.
+   *
+   * It is `async` because it is: the floor's macro map is a 2048px CPU bake and
+   * the material library is another dozen, which is a second and a half of main
+   * thread. Callers should be showing something while it runs. `ready` is false
+   * throughout, and every per-frame method already returns early on that, so a
+   * render landing mid-swap draws the fighters over an empty scene rather than
+   * touching a half-built stage.
+   *
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  async setArena(id) {
+    const next = arenaDef(id);
+    if (next === this.arena && this.ready) return;
+    if (this.ready) this.dispose();
+    this.arena = next;
+    // A fresh root: the old one was removed from the scene and every mesh under
+    // it disposed, and reusing it would keep dead children alive in the graph.
+    this.root = new THREE.Group();
+    this.root.name = 'arena';
+    this.rng.reseed(0x53544147);
+    this._time = 0;
+    this._frame = 0;
+    this._reflectSize = { w: 0, h: 0 };
+    this._contactRoots = null;
+    await this.init();
   }
 }
