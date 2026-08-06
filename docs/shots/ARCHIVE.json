@@ -1,99 +1,98 @@
 {
- "rev": "0.26.0",
- "baseCommit": "7ac3fb2",
- "resolution": "1920x1080",
- "quality": 72,
- "note": "Per-round frame archive. Exported at the DELIVERED resolution so cross-round comparisons do not measure a resize -- a 1280x720 archive against 1920x1080 captures read as a 56-85% detail collapse that did not exist. Tracked in git: .gitignore was `shots/`, which matched this directory too, so 28 rounds of scores were computed against frames that survived nowhere.",
+ "head": "038ac200f5b5936152919b56c91968f114ad96d5",
+ "dirty": true,
+ "writtenBy": "tools/capture.mjs",
  "shots": {
   "01-hero-idle": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 270142
+   "bytes": 615395,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "02-closeup-face": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 307044
+   "bytes": 609978,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "03-full-body": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 285452
+   "bytes": 669701,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "04-impact": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 271766
+   "bytes": 552447,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "04b-impact-decay": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 285608
+   "bytes": 648071,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "05-juggle": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 268335
+   "bytes": 620130,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "06-stage-wide": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 264151
+   "bytes": 596885,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "07-super": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 218104
+   "bytes": 492541,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "08-hud": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 283844
+   "bytes": 494805,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "09-roster": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 303959
+   "bytes": 699718,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "10-ko": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 232509
+   "bytes": 607888,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "12-select-screen": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 205726
-  },
-  "13-announce-fight": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 266299
-  },
-  "14-victory": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 172824
-  },
-  "15-impact-light": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 257866
-  },
-  "16-impact-heavy": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 259243
+   "bytes": 441110,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "18-skydeck-wide": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 236395
+   "bytes": 534793,
+   "rendered": "1920x1080",
+   "renderScale": 1
   },
   "19-cistern-wide": {
-   "w": 1920,
-   "h": 1080,
-   "bytes": 232091
+   "bytes": 552696,
+   "rendered": "1920x1080",
+   "renderScale": 1
+  },
+  "13-announce-fight": {
+   "bytes": 592375,
+   "rendered": "1920x1080",
+   "renderScale": 1
+  },
+  "14-victory": {
+   "bytes": 390952,
+   "rendered": "1920x1080",
+   "renderScale": 1
+  },
+  "15-impact-light": {
+   "bytes": 599613,
+   "rendered": "1920x1080",
+   "renderScale": 1
+  },
+  "16-impact-heavy": {
+   "bytes": 604230,
+   "rendered": "1920x1080",
+   "renderScale": 1
   }
- }
+ },
+ "note": "Written by the capture run that produced these frames. `head` is read from git, not declared. If `dirty` is true the working tree had uncommitted changes and `head` does NOT fully describe the code that rendered them."
 }

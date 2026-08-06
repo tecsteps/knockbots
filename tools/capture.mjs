@@ -364,12 +364,36 @@ function chainStats(track, contact, tip) {
   };
   const order = ['hips', 'chest', 'shoulder_R', 'elbow_R', tip];
   const peaks = order.map((b) => ({ bone: b, ...(peakOf(b) || {}) })).filter((p) => p.c != null);
-  // Concordance: of every proximal/distal pair, the share that fire in the right
-  // order. 1.0 is a textbook chain, 0.5 is a coin flip, which is what the whole
-  // move set measured before round 28.
-  let ok = 0, n = 0;
+  /*
+   * Concordance: of every proximal/distal pair, the share that fire in the right
+   * order. 1.0 is a textbook chain, 0.5 is a coin flip.
+   *
+   * A TIE IS NOT A CHAIN, AND COUNTING IT AS ONE INVERTED THE METRIC. This test
+   * was `peaks[i].c <= peaks[j].c`, so two links peaking on the SAME tick scored
+   * as correctly ordered -- which means a move whose every link peaks
+   * simultaneously, the purest possible pose-to-pose robotic motion and the
+   * exact failure this metric exists to catch, scored a perfect 1.00. Verified
+   * on jab2 (clip p.straight): 1.00 under the old rule with all ten pairs tied,
+   * 0.00 under a strict one. Across 211 moves the tie rule reads median 0.70
+   * where strict reads 0.10, so essentially the whole apparent improvement lived
+   * in the tie.
+   *
+   * A tie now scores nothing. It is not counted as a failure either -- ties go
+   * to `n` but not to `ok`, so a fully simultaneous chain lands at 0.00 rather
+   * than being excluded and silently reported as an empty sample.
+   *
+   * `tied` is reported alongside, because "0.4 concordance with 60% ties" and
+   * "0.4 concordance with everything strictly ordered but half of it backwards"
+   * are different animation problems and the score alone cannot distinguish
+   * them.
+   */
+  let ok = 0, n = 0, tied = 0;
   for (let i = 0; i < peaks.length; i++) {
-    for (let j = i + 1; j < peaks.length; j++) { n++; if (peaks[i].c <= peaks[j].c) ok++; }
+    for (let j = i + 1; j < peaks.length; j++) {
+      n++;
+      if (peaks[i].c < peaks[j].c) ok++;
+      else if (peaks[i].c === peaks[j].c) tied++;
+    }
   }
   const hips = peaks.find((p) => p.bone === 'hips');
   const tipP = peaks.find((p) => p.bone === tip);
@@ -388,6 +412,7 @@ function chainStats(track, contact, tip) {
     window: contact != null ? [0, contact] : [win[0].clock, win[win.length - 1].clock],
     peakTicks: Object.fromEntries(peaks.map((p) => [p.bone, p.c])),
     concordance: n ? +(ok / n).toFixed(3) : null,
+    tiedPairs: n ? +(tied / n).toFixed(3) : null,
     hipsToTipLag: hips && tipP ? tipP.c - hips.c : null,
     hipsSpeedAtContactOverPeak: atContact,
   };
@@ -464,7 +489,7 @@ function stripSheet(D) {
     const ch = D.chain;
     g.fillStyle = '#8be36b';
     g.font = '600 13px ui-monospace, monospace';
-    g.fillText(`kinetic chain over ${ch.window[0]}..${ch.window[1]}:  concordance ${ch.concordance}`
+    g.fillText(`kinetic chain over ${ch.window[0]}..${ch.window[1]}:  concordance ${ch.concordance} (ties ${ch.tiedPairs})`
       + `   hips->tip lag ${ch.hipsToTipLag} ticks`
       + (ch.hipsSpeedAtContactOverPeak != null
         ? `   hips speed at contact ${ch.hipsSpeedAtContactOverPeak} of own peak` : ''), 12, 74);
@@ -2383,6 +2408,41 @@ async function main() {
      * 1080p reference is a sub-native render blown up by the viewport
      * screenshot, and the amount of upscaling was nowhere on the record.
      */
+    /*
+     * EVERY SHOT RENDERS AT NATIVE, WITH THE ADAPTIVE CONTROLLER OFF.
+     *
+     * Measured across a full pass before this: EIGHT distinct render scales,
+     * 0.72 to 1.00, with adaptive live on 17 of 18 shots. 03-full-body came out
+     * at 1555x874 and 19-cistern-wide at 1382x777, both written to disk as
+     * 1920x1080 by the viewport screenshot and then scored against native-1080p
+     * Tekken references. A 1.39x span in linear detail, set by whatever the
+     * machine's frame timing happened to be, so it is not even reproducible
+     * between two runs of the same build. Three critics found it independently
+     * and one had two of its three assigned shots at 58-66% of the pixels they
+     * claimed.
+     *
+     * The cause was mine. Round 26 made the pinTicks teardown hand the renderer
+     * settings BACK, to stop a single frozen shot leaving the whole run at
+     * native and corrupting the end-of-run fps probe. That fixed the perf
+     * instrument and silently degraded the evidence instrument for every other
+     * shot -- the same shape as five other findings this project has turned up:
+     * a change that protects one measurement while quietly breaking another.
+     *
+     * Pinned per shot rather than once at startup because the controller is
+     * re-enabled by quality-tier changes and by the pinTicks teardown, and a
+     * single startup pin would silently lapse. The perf probe re-pins to the
+     * TIER scale afterwards, because an fps number has to be taken at the
+     * resolution the game actually ships at -- the two instruments want
+     * different things and now each says which it used.
+     */
+    await page.evaluate(`(() => {
+      const r = window.KB && window.KB.renderer; if (!r) return;
+      if (r.effects) r.effects.adaptiveResolution = false;
+      r.renderScale = 1; r._targetScale = 1;
+      if (typeof r.resize === 'function') r.resize();
+    })()`).catch(() => {});
+    await page.evaluate(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`).catch(() => {});
+
     const res = await page.evaluate(`(() => {
       const r = window.KB && window.KB.renderer;
       const gl = r && r.renderer && r.renderer.getContext ? r.renderer.getContext() : null;
@@ -2574,6 +2634,87 @@ async function main() {
     console.warn(`[capture] ${errors.length} console error(s):`);
     for (const e of errors.slice(0, 10)) console.warn('  ', e);
   }
+  /*
+   * THE ARCHIVE IS WRITTEN HERE, BY THE RUN THAT PRODUCED THE FRAMES.
+   *
+   * Two rounds tried to fix "no capture survives in git" and neither took.
+   * Round 28 found the cause -- `.gitignore` said `shots/`, which matched
+   * `docs/shots/` too -- and fixed the pattern, but the archive was still
+   * exported by hand afterwards. So by the next round it was certifying
+   * `baseCommit 7ac3fb2` against frames produced by a commit an hour and a half
+   * newer, holding 18 shots where the run had 25, and recording every frame as
+   * 1920x1080 when they had rendered between 1382x778 and native. All four
+   * critics caught it independently and one said plainly that its "no
+   * regression" finding was an assumption rather than a measurement, because no
+   * before-frame existed anywhere in git.
+   *
+   * A hand-exported archive drifts by construction. This one is written by the
+   * run itself, from the same frames, and the commit is READ rather than
+   * declared -- `git rev-parse HEAD` plus a dirty flag, so a certification can
+   * never again name a commit that did not produce the pixels. Only complete
+   * runs archive: a subset run has nothing to say about a set it did not shoot.
+   */
+  if (complete) {
+    try {
+      const { execFileSync } = await import('node:child_process');
+      const git = (a) => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8' }).trim();
+      const head = git(['rev-parse', 'HEAD']);
+      const dirty = git(['status', '--porcelain']).length > 0;
+      const dst = resolve(ROOT, 'docs/shots');
+      mkdirSync(dst, { recursive: true });
+      const entry = {};
+      for (const m of manifest) {
+        const png = m.file;
+        if (!existsSync(png)) continue;
+        const jpg = resolve(dst, `${m.name}.jpg`);
+        // Tick strips are already written as JPEG, so they need copying rather
+        // than re-encoding. Skipping them archived 18 of 25 on the first run --
+        // and the seven it dropped were the per-clip animation strips, i.e.
+        // precisely the new evidence the animation axis is now scored on.
+        if (!png.endsWith('.png')) { writeFileSync(jpg, readFileSync(png)); continue; }
+        // Re-encoded in the page, because there is no image library in this
+        // tool's dependencies and adding one for an archive step is not worth a
+        // package. q92 4:4:4-ish via canvas rather than the previous q72 4:2:0:
+        // the archive is compared against q90 4:4:4 references, and a critic
+        // measured that the codec mismatch alone inflated our top-band energy
+        // by roughly 50%. An archive that is not codec-matched to the thing it
+        // exists to be compared against cannot carry a fine-scale statistic.
+        const b64 = readFileSync(png).toString('base64');
+        const out = await page.evaluate(`(async () => {
+          const im = await new Promise((res, rej) => {
+            const i = new Image(); i.onload = () => res(i); i.onerror = rej;
+            i.src = 'data:image/png;base64,${b64}';
+          });
+          const c = document.createElement('canvas');
+          c.width = im.width; c.height = im.height;
+          c.getContext('2d').drawImage(im, 0, 0);
+          return c.toDataURL('image/jpeg', 0.92).split(',')[1];
+        })()`);
+        writeFileSync(jpg, Buffer.from(out, 'base64'));
+        const r = (verified[m.name] || {}).res || {};
+        entry[m.name] = {
+          bytes: statSync(jpg).size,
+          // The size it was RENDERED at, not the size it was written at. The
+          // previous archive recorded the delivered 1920x1080 for every frame,
+          // which is the same class of error one level down from the one it was
+          // created to fix.
+          rendered: r.buffer ?? null, renderScale: r.renderScale ?? null,
+        };
+      }
+      writeFileSync(resolve(dst, 'ARCHIVE.json'), JSON.stringify({
+        head, dirty, writtenBy: 'tools/capture.mjs', shots: entry,
+        note: 'Written by the capture run that produced these frames. `head` is read '
+            + 'from git, not declared. If `dirty` is true the working tree had '
+            + 'uncommitted changes and `head` does NOT fully describe the code that '
+            + 'rendered them.',
+      }, null, 1));
+      console.log(`[capture] archived ${Object.keys(entry).length} frames to docs/shots at ${head.slice(0, 7)}`
+        + `${dirty ? ' (TREE DIRTY — head does not fully describe these pixels)' : ''}`);
+    } catch (e) {
+      console.warn(`[capture] archive failed: ${e.message.split('\n')[0]}`);
+    }
+  }
+
   console.log(`[capture] wrote ${manifest.length} shots to ${OUT}`);
   if (info) console.log(`[capture] draw calls ${info.calls}, tris ${info.triangles}`);
   if (perf) console.log(`[capture] frame time ${perf.medianMs}ms median, ${perf.p95Ms}ms p95 over ${perf.frames} frames`

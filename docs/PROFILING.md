@@ -1425,3 +1425,99 @@ before every animation edit this round, so judging on it would have judged round
 the manifest cannot catch this: `complete` validates the list against *itself*, so a shot that was
 never registered can never be reported missing. That is the round-27 defect in a new dress --
 certification can detect a corrupt present entry, never an absent one.
+
+---
+
+# Round 29: the evidence instrument had been degraded to protect the perf instrument
+
+Animation 67 -> 66, impact 66 -> 67, character 69 -> 69, stage 73 -> 73. Flat. The findings are not.
+
+**First, a correction of mine.** I committed a29's fix work with a message saying "the critics never
+ran" because the workflow's output file was 0 bytes when I looked. It filled later; all four critics
+ran and scored. The scores above are theirs. Nothing was invented, but I asserted a negative from a
+single observation of a file that was still being written -- the same single-sample error this
+project keeps paying for, made about my own tooling.
+
+## Twenty of twenty-five frames were rendered sub-native and scored against native references
+
+Per-shot `res`, measured across a full pass:
+
+```
+distinct renderScales   0.72 0.76 0.77 0.80 0.81 0.84 0.85 1.00     (a 1.39x span)
+adaptive live           17 of 18 shots
+03-full-body            renderScale 0.81   rendered 1555x874
+19-cistern-wide         renderScale 0.72   rendered 1382x777
+```
+
+Every one written to disk as 1920x1080 by the viewport screenshot, then scored against native-1080p
+Tekken references. And because the adaptive controller was live, the scale was set by whatever the
+machine's frame timing happened to be -- so it is not reproducible between two runs of the same
+build. Three critics found it independently; one had two of its three assigned shots at 58-66% of
+the pixels they claimed.
+
+**The cause was mine, in round 26.** I made the `pinTicks` teardown hand the renderer settings back,
+because one frozen shot was leaving the whole run at native and corrupting the end-of-run fps probe.
+That fixed the perf instrument and silently degraded the evidence instrument for every other shot.
+It is the same shape as five other findings here: **a change that protects one measurement while
+quietly breaking another, with nothing gating the second.**
+
+Fixed by pinning native with the controller off before every shot, re-asserted per shot rather than
+once at startup because a tier change or a pinTicks teardown silently lapses a single pin. The perf
+probe re-pins to the TIER scale afterwards -- the two instruments want different resolutions, and
+each now records which it used.
+
+## The chain metric awarded its maximum to the failure it exists to catch
+
+`peaks[i].c <= peaks[j].c` counted two links peaking on the SAME tick as correctly ordered. So a move
+whose every link peaks simultaneously -- the purest possible pose-to-pose robotic motion, and exactly
+what the metric was built to detect -- scored a perfect 1.00. Verified on jab2 (clip `p.straight`):
+1.00 under the tie rule with all ten pairs tied, 0.00 under a strict one. Across 211 moves, tie rule
+median 0.70 against strict median 0.10. **Essentially the entire round-28 "improvement" lived in the
+tie rule.**
+
+Ties now score nothing and are reported separately as `tiedPairs`, because "0.4 with 60% ties" and
+"0.4 with everything strictly ordered but half backwards" are different animation problems that one
+number cannot distinguish.
+
+Related and also mine to own: round 28's headline "median hips->tip lag 0 -> 4 ticks" does not
+reproduce. The true median over 211 moves is 0, with 150 at or below 0; **4 is near the top of the
+distribution, not the middle.** A maximum was reported as a median. That is the fourth consecutive
+round launched on a figure that did not survive re-derivation.
+
+## The frame archive: two rounds of fixes, neither of which took
+
+Round 28 correctly diagnosed `.gitignore: shots/` matching `docs/shots/` too, and fixed the pattern.
+But the archive was still exported BY HAND afterwards, so by the next round it was certifying
+`baseCommit 7ac3fb2` against frames produced by a commit ninety minutes newer, holding 18 shots where
+the run had 25, and recording every frame as 1920x1080 when they had rendered as low as 1382x778 --
+the same error one level down from the one it was created to fix. One critic stated plainly that its
+"no regression" finding was an assumption rather than a measurement, because no before-frame existed
+in git at all.
+
+**A hand-exported archive drifts by construction.** It is now written by the capture run itself, from
+the same frames, with the commit READ (`git rev-parse HEAD`) rather than declared, plus a `dirty`
+flag so a certification can never again name a commit that did not produce the pixels. It records the
+size each frame was RENDERED at, not the size it was written at. Only complete runs archive.
+
+First run of it archived 18 of 25 and the seven it dropped were the per-clip animation strips --
+precisely the new evidence the animation axis is now scored on -- because they are written as JPEG
+and the loop only re-encoded PNGs. Fixed.
+
+## The impact gate was measuring armour
+
+Round 28's gate defined effect ink as `luma > 0.90`. Scored against a per-pixel ground truth (the
+same frozen frame rendered with FX visible and hidden):
+
+```
+16-impact-heavy   precision 0.375   recall 0.191
+04-impact         precision 0.261   recall 0.151
+04b-impact-decay  precision 0.045   recall 0.043
+15-impact-light   precision 0.019   recall 0.077
+```
+
+Five pixels in eight it counted were not effect, and it missed four fifths of what was. The mask was
+landing on Kestrel's near-white armour plates, panel-edge speculars, the damage badge and the ring
+decal. Round 27's number did not reproduce; round 28's reproduces exactly and measures the wrong
+object, which is worse. Every figure this axis carried is withdrawn -- including the deltas that
+justified reverting the round-28 particle work, which sit an order of magnitude inside the
+run-to-run spread.
