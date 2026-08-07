@@ -2376,3 +2376,72 @@ table, a 5,000x premise retraction, six catalogued instrument failures, 60% of t
 volumetrics found drawing nothing, and the frame's largest single suspect bounded two ways that
 disagree. The measurement infrastructure is now better than the thing it measures, which is an
 uncomfortable sentence and an accurate one.
+
+---
+
+# Round 34: re-scored on repaired instruments. Every axis went down.
+
+```
+axis                    was    now    blind pick
+Animation quality        66     58    tekken8
+Character rendering      69     66    tekken8
+Impact & effects         72     71    tekken8
+Stage detail             74     67    tekken8
+Lighting & atmosphere    78     72    KNOCKBOTS   <- won its blind test and still scored down
+Interface craft          74     71    tekken8
+average                 72.8   67.5
+```
+
+**All six critics were asked whether their number is comparable to its predecessor. All six said no,
+unprompted and for different reasons.** That is the round's actual result: the old scores were not
+slightly optimistic, they were measuring different things, and the honest baseline is 67.5.
+
+The reasons matter more than the deltas:
+
+- **Animation 66 -> 58 is a widening of the sample, not a degradation.** The 66 was computed on ONE
+  clip out of 92 — every frame photographed `p.uppercut`, which is one of the *better* clips in the
+  library. This round is the first with `k.roundhouse`, `p.straight`, `r.launch` and a locomotion clip
+  on screen. The most damning line is the critic's own blind description of a crop it did not yet know
+  was ours: *"standing, both feet flat and parallel, knees near-straight, torso vertical"* — that is
+  the CONTACT frame of `p.straight`.
+- **Character should have gone UP and did not.** Both old biases — sub-native rendering and a 1280x720
+  archive — point the same way, softer and worse, so a like-for-like re-score at native should have
+  beaten 69. It landed at 66 for an unrelated reason the old instrument could not see.
+- **Impact 72 and 71 share no instrument at all.** The 72 was produced while the FX gate landed on
+  white armour at 0.019 precision, was blind to five of eight mesh-backed systems, scored the FIGHT
+  banner's fade as effect on three of four shots — and the flagship frame, `16-impact-heavy`, was a
+  dead capture and not in it.
+- **Lighting won its blind test and still scored down**, from 78 to 72, on an axis the capture defect
+  distorted *least*. Its critic could not credit the repair and instead found that the numbers the
+  previous grade decisions rested on do not re-derive.
+- **The "comparable subset" handed to critics was itself wrong.** `tekken8_06` is a rage-art frame
+  whose stage is fully occluded by a full-screen effect, and it has been in the stage axis's
+  comparison set for rounds.
+
+## The interface's typeface does not exist
+
+Found by the interface critic and confirmed here. `ui.css` declares:
+
+```
+--kb-font-display: 'Eurostile Extended', 'Bank Gothic', 'Segoe UI Semibold',
+                   'Arial Narrow', 'Helvetica Neue', Impact, sans-serif;
+```
+
+**None of the first three ship on macOS.** There is no `@font-face` and no `FontFace` registration
+anywhere in the tree, so nothing supplies them. The whole `#ui` subtree therefore resolves to **Arial
+Narrow** on this machine, to something else on every other platform, and to the intended face on
+none. A file comment already half-noticed this — *"THE DATA FACE, AND THE FIVE NAMES THAT WERE NEVER
+THERE"* — without following it to the conclusion that the first three names are also never there.
+
+It also violates the charter directly: no external assets, everything generated in code. The
+interface is the one surface still depending on fonts that happen to be installed.
+
+## What this round says about the previous thirty-three
+
+Not that the work was bad — the game demonstrably improved, and several of those rounds fixed real
+defects with real measurements. But **every score before this one was produced by tooling that has
+since been shown defective**, and when the tooling was repaired every single axis moved down. A
+scoring loop is only as good as its instruments, and this project spent thirty-three rounds tuning
+against numbers that were systematically kind to it.
+
+67.5 is the first average this project has produced that anyone should build on.
