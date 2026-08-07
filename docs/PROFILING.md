@@ -4209,3 +4209,47 @@ long session.
 **Concrete fix for whoever picks this up: `capture.mjs` should refuse to run while any scoring agent
 is live**, or scoring agents should read from an immutable snapshot directory rather than from
 `shots/` directly. The second is better — it removes the dependency on anyone remembering.
+
+## Stage, first admissible win-rate report: 0-0-4, and the crowd ramp's prediction held
+
+Spawned after the capture, so it read stable frames. **This is the first admissible record under the
+new protocol.**
+
+**The crowd ramp's falsification test passed on all three clauses**, and its author wrote all three
+before the evidence existed:
+
+- *"Does the crowd read as a front-to-back gradient?"* — **"Leans gradient, not flat. Front-of-fence
+  figures read warmer and higher-contrast, further-back shapes go cooler and lower-contrast toward the
+  top of the band. It is not a single flat slab anymore."**
+- *"Do you see six discrete bands?"* — **No**, with an honest resolution caveat: *"reads more like 2-3
+  loosely differentiated depth zones than a clean six-step ramp... a soft no, not a confident clean
+  pass."*
+- *"Do back-rank phones pop distractingly?"* — **No.** The predicted risk did not materialise.
+
+4 points of contrast across the terrace became 41, and it reads. That is a measured change with a
+pre-registered test, verified by a critic who did not know what had changed.
+
+## And the axis's real gap is one thing repeated four times
+
+The critic's own summary: *"losing every pair, driven by one repeated structural gap rather than by
+any single stage being broken."*
+
+**Every wide is "ring plus flat blurred backdrop."** Against `tekken8_02`'s storefronts, phone booths
+with legible text, potted plants, string lights and background pedestrians with actual form — and
+`tekken8_07`'s log cabins, stone walls, foliage, live animals at two depth planes and background NPCs.
+**There is nothing between the ring and the back wall in any of our three arenas.**
+
+Second: background architecture has no surface detail. Skydeck's buildings are *"flat lit blocks"*;
+cistern's arches are *"flat dark shapes with no carving, moss or texture"* — which is what loses pair 3
+despite its floor being *"the strongest element in the whole set."*
+
+Third, and new: **the horizontal bloom streak in the pit shots is actively hurting depth** —
+*"it flattens contrast across the whole background band, doing the opposite of selling depth."*
+
+And an explicit instruction not to work on something: *"Keep and lean into the wet-floor reflection
+work — it's the one element competitive with the references. Don't spend effort there."* A critic
+naming where NOT to spend a round is worth as much as its fixes.
+
+**Note the crowd ramp is not the fix for this axis.** It did what it was built to do and the axis
+still lost 4 of 4, because a contrast gradient on a flat card is not a midground. The critic said so
+directly: *"the ramp helps but doesn't fix the underlying flat-card geometry."*
