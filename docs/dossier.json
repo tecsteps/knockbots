@@ -1,37 +1,37 @@
 {
   "status": {
-    "rev": "0.35.0",
-    "commits": "199",
+    "rev": "0.36.0",
+    "commits": "208",
     "modules": 73,
-    "lines": "85k",
+    "lines": "86k",
     "clips": 92,
     "moves": 777,
     "characters": 10
   },
   "verdicts": [
     {
-      "axis": "Interface craft",
-      "score": 63
-    },
-    {
-      "axis": "Lighting & atmosphere",
-      "score": 60
+      "axis": "Interface",
+      "score": 81
     },
     {
       "axis": "Character rendering",
-      "score": 58
-    },
-    {
-      "axis": "Impact & effects",
-      "score": 54
-    },
-    {
-      "axis": "Animation quality",
-      "score": 52
+      "score": 64
     },
     {
       "axis": "Stage detail",
-      "score": 45
+      "score": 48
+    },
+    {
+      "axis": "Animation quality",
+      "score": 38
+    },
+    {
+      "axis": "Lighting & atmosphere",
+      "score": 38
+    },
+    {
+      "axis": "Impact & effects",
+      "score": 36
     }
   ],
   "log": [
@@ -1315,11 +1315,57 @@
           "state": "92% carried"
         }
       ]
+    },
+    {
+      "phase": "PHASE 41",
+      "when": "Round 39 — five fixes, and the first axis to ship",
+      "rev": "rev 0.36.0",
+      "title": "Interface clears the bar at 81, three axes fall, and every defect this round was wiring",
+      "paras": [
+        "Interface scores eighty-one against a ship bar of eighty. It is the first axis in this project to clear it. Craft seventy-nine last round became eighty-three, and usability fifty-two became eighty — and the critic verified both of the defects that this axis had historically been blind to, not by reading the code but by watching a scripted thumb find them: the menu control was located and tapped, and quit-to-title was located and tapped. The on-screen coaching text it called the actual answer to whether throws and specials are discoverable, delivered as legible words rather than a gesture a player has to guess.",
+        "The frame rate went up too. Seventy-six point nine at the shipping tier against seventy point nine before, with two hundred and fifty-six draw calls and just under a million triangles.",
+        "Everything else fell, and the round is worth reporting for what it revealed rather than for its average. Every single defect the four workstreams chased turned out to be wiring rather than authoring. The impact systems all existed — shockwave, debris, smoke, decals, fluid — every one constructed, in the scene graph, with live dispatch, and three columns of the hit table were zero, so a jab could physically only produce sparks. The material zones existed and were correctly assigned to parts too small to see. The finisher window had been broadcasting on the event bus since finishers shipped, with nothing listening. On a codebase this size the recurring question is not what is missing but what is built and unconnected.",
+        "The character work found the sharpest version of that. Five armour batches were really three: two of them were pixel-identical because an override was a no-op, two more were identical because a roughness offset was clamped away, and four pointed at the literal same texture object. The differentiation code existed and was being silently zeroed.",
+        "The animation story is the one to keep. A critic said the upper body looks the same whether the robot is punching or kicking. Three instruments were built to chase it. The first showed the off-hand is not frozen — a roundhouse throws it two metres. The second showed it travels through nearly the same space regardless of the move. The third showed why: on a straight punch, ninety-two per cent of that travel is the chest swinging a rigid arm. Six clips were re-authored, the arm now moves under its own power, and every anchor held to the millimetre.",
+        "And it did not fix what the critic saw. Because the thing dominating that silhouette is not the arm — it is a pair of exhaust stacks bolted to the shoulder, taller than the head, that barely move. A previous round had searched the source for a held weapon, found none, and recorded that no such object existed. The search terms were wrong. Two critics had described it correctly and the code was read instead of the picture.",
+        "Worse, and cheaper to fix: four of the five animation strips render the same robot. The axis has been asking whether the upper body differentiates between moves, exclusively of the one character wearing chimneys. Nobody has ever looked at the others.",
+        "Three axes fell this round by fourteen, eighteen and twenty-two points. Some of that is real. But the scoring system has never had its own noise measured, and until it does, a fall of that size cannot be told apart from a different critic on the same frames. That measurement is the next thing to build, because every decision this project makes rests on these numbers and nobody knows how repeatable they are."
+      ],
+      "tags": [
+        {
+          "label": "interface",
+          "state": "81 — SHIPS"
+        },
+        {
+          "label": "shipping tier",
+          "state": "76.9 fps"
+        },
+        {
+          "label": "all four defects",
+          "state": "wiring, not authoring"
+        },
+        {
+          "label": "off-arm",
+          "state": "92% carried, now 44-66% own"
+        },
+        {
+          "label": "the prop",
+          "state": "exists — I was wrong"
+        },
+        {
+          "label": "anim strips",
+          "state": "all one character"
+        },
+        {
+          "label": "critic noise",
+          "state": "never measured"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.35.0",
-    "note": "Deployed after the round 38 re-score. Source on github.com/tecsteps/knockbots."
+    "rev": "0.36.0",
+    "note": "Deployed after round 39. Source on github.com/tecsteps/knockbots."
   }
 }

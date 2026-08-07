@@ -3438,3 +3438,72 @@ neither critic could name and that I disproved out of existence with a bad searc
 
 Three passes at one finding, and the thing every pass got right was the *observation*. Every wrong
 answer was a *mechanism*, and two of the three wrong mechanisms were mine.
+
+---
+
+# Round 40 scores, and the number this project has never measured
+
+| axis | r38 | r40 | delta |
+|---|---:|---:|---:|
+| **Interface** | 63 | **81** | **+18 — SHIPS** |
+| Character | 58 | 64 | +6 |
+| Stage | 45 | 48 | +3 |
+| Animation | 52 | 38 | -14 |
+| Lighting | 60 | 38 | -22 |
+| Impact | 54 | 36 | -18 |
+| average | 55.3 | 50.8 | -4.5 |
+
+**Interface is the first axis in this project to clear the ship bar.** Craft 83, usability 80, and
+the usability half was verified by a scripted thumb finding the two controls a real player could not:
+the MENU button and QUIT TO TITLE were both located and tapped. The critic's own summary of the coach
+text: *"the actual answer to 'are throws/specials discoverable', delivered as legible on-screen text,
+not a gesture the player has to guess."*
+
+## Three axes fell, and nobody can currently say whether that is real
+
+Lighting fell 22 points. **The only lighting-relevant changes in round 39 were `armor.roughness`
+1 -> 0.90 and one added wash slot on the skydeck.** Neither plausibly costs 22 points, and the pit
+and cistern lighting rigs were untouched.
+
+Animation fell 14 after work that measurably tripled the off-arm's own motion across six clips with
+every anchor byte-identical. Impact fell 18 after three archetypes were switched on where the hit
+table had three columns of zeros.
+
+Two readings fit: the round-39 work made things worse in ways the instruments did not capture, or
+**the scoring system's noise is large enough to swamp these deltas.** The second is not a comfortable
+hypothesis and that is exactly why it needs testing rather than assuming.
+
+**The evidence that it is worth testing is already in this round.** On the same frames, two critics
+disagreed about whether a shockwave ring exists at all — one filed it as a juggle marker, one as a
+"ground shadow circle", and neither as impact energy. Round 38's animation critic and round 40's
+agreed on an observation and gave two different mechanisms, both wrong. And a critic reported "no
+debris" on a tier that has carried `debris: 8` since before the round.
+
+## The measurement to build next
+
+**Score one axis three times, on byte-identical frames, with three independent critic instances, and
+report the spread.** Nothing else. It costs three agents and it produces the one number every
+decision in this project has silently assumed: the repeatability of its own scoring.
+
+If the spread is 5 points, then a 22-point fall is real and lighting genuinely regressed. If the
+spread is 20, then **four rounds of this project have been steered by noise**, and every delta under
+that width in the whole history of `docs/dossier.json` needs re-reading as "no information."
+
+This is the same class of error as every entry above it, one level up: the axis scores have been
+treated as measurements without anyone establishing that they are repeatable. **An instrument with no
+known error bar is not an instrument.**
+
+## Credit where the method worked
+
+The round-40 impact critic did the single best piece of work in the round, and it was a control I
+should have run. I told it I could see debris chips near the fighters' feet. Rather than take that, it
+opened `01-hero-idle.png` — a **no-hit frame** — as a control, found the same octagon patches
+scattered into the far background, identified them as baked floor decals, and then refused to move in
+either direction:
+
+> *"I'm not going to claim debris is present when I can't separate it from stage texture, and I'm not
+> going to claim it's absent when the code says it fires."*
+
+I looked at one frame and pattern-matched. It looked at two and isolated a variable. The debris
+question remains open and is a job for an FX-on/FX-off render, which is the only instrument that
+settles it.
