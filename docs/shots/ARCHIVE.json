@@ -1,159 +1,140 @@
 {
- "head": "0bbe9ebb35e0690ed696373fdc01a4f69d05eb8a",
- "dirty": true,
- "writtenBy": "coordinator, from the round-33 clean set (runB)",
- "source": "runB: complete true, defects [], errors [], 25 shots, fps 60.6 at zero foreign browser roots",
- "note": "RE-ARCHIVED. The previous archive came from a run whose manifest read defects:[] but whose end-of-run fps was 35.8 -- i.e. taken under contention. That is the documented failure mode: the sim is tick-pinned so poses survive, the UI fades run on the wall clock and do not, so a contended capture yields correct fighters inside wrong interface states and passes every pose check. A clean manifest is NOT sufficient; check the run fps too.",
+ "head": "91c22a9c56c856cd9b91736e1098601a06ab0bb6",
+ "dirty": false,
+ "writtenBy": "tools/capture.mjs",
  "shots": {
   "01-hero-idle": {
-   "bytes": 628729,
+   "bytes": 622492,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "02-closeup-face": {
-   "bytes": 649404,
+   "bytes": 627909,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "03-full-body": {
-   "bytes": 678133,
+   "bytes": 674026,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "04-impact": {
-   "bytes": 559823,
+   "bytes": 591423,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "04b-impact-decay": {
-   "bytes": 652740,
+   "bytes": 573346,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "05-juggle": {
-   "bytes": 623370,
+   "bytes": 627694,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "06-stage-wide": {
-   "bytes": 595697,
+   "bytes": 597590,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "07-super": {
-   "bytes": 499894,
+   "bytes": 466569,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "08-hud": {
-   "bytes": 582241,
+   "bytes": 616668,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "08b-hud-motion": {
-   "bytes": 820161,
+   "bytes": 800080,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "09-roster": {
-   "bytes": 709051,
+   "bytes": 709551,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "10-ko": {
-   "bytes": 525364,
+   "bytes": 502676,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "12-select-screen": {
-   "bytes": 443371,
+   "bytes": 444064,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "18-skydeck-wide": {
-   "bytes": 534974,
+   "bytes": 535377,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "19-cistern-wide": {
-   "bytes": 552312,
+   "bytes": 552500,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "13-announce-fight": {
-   "bytes": 594968,
+   "bytes": 595958,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "14-victory": {
-   "bytes": 392372,
+   "bytes": 393797,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "17-anim-strip": {
-   "bytes": 3091360,
+   "bytes": 3089129,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "15-impact-light": {
-   "bytes": 600148,
+   "bytes": 599638,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "16-impact-heavy": {
-   "bytes": 605297,
+   "bytes": 606146,
    "rendered": "1920x1080",
-   "renderScale": 1,
-   "strip": false
+   "renderScale": 1
   },
   "20-anim-roundhouse": {
-   "bytes": 667289,
+   "bytes": 667129,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "21-anim-straight": {
-   "bytes": 631839,
+   "bytes": 631149,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "22-anim-reaction-launch": {
-   "bytes": 414721,
+   "bytes": 412291,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "23-anim-run": {
-   "bytes": 561880,
+   "bytes": 561135,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "24-anim-uppercut": {
-   "bytes": 733794,
+   "bytes": 739708,
    "rendered": null,
    "renderScale": null,
    "strip": true
   }
- }
+ },
+ "note": "Written by the capture run that produced these frames. `head` is read from git, not declared. If `dirty` is true the working tree had uncommitted changes and `head` does NOT fully describe the code that rendered them."
 }
