@@ -138,22 +138,45 @@ void main() {
   //   front     the shock itself: a razor line, ~5% of the band
   //   shoulder  the compressed air behind it
   //   wake      the long rarefaction, from the baked profile
+  //
+  // 'shoulder''s weight was 0.17 of the front's peak — so thin against the
+  // white-hot front that two critics, rounds apart, read the whole ring as one
+  // undifferentiated pale object and filed it as UI: a combo-state marker, not
+  // impact energy (see EffectsDirector's c.ring comment). The front carries
+  // its own hard-coded near-white mix below and has to stay the brightest
+  // pixel on the ring — that hierarchy is what keeps this a shock front and
+  // not the "flat salmon plastic" a uniformly-tinted band produced before this
+  // structure existed. Widening and brightening the shoulder gives the part of
+  // the band that DOES carry the hit's own colour enough area and weight to
+  // read at a glance, without touching that hierarchy.
   float front    = exp( -pow( ( u - 0.93 ) * 15.0, 2.0 ) );
-  float shoulder = exp( -pow( ( u - 0.66 ) * 5.2, 2.0 ) ) * 0.17;
+  float shoulder = exp( -pow( ( u - 0.66 ) * 4.3, 2.0 ) ) * 0.32;
   vec4 prof = texture2D( uRing, vec2( u, 0.5 ) );
   float wake = prof.r * pow( u, 2.4 ) * 0.09;
   float shape = clamp( front + shoulder + wake, 0.0, 1.0 );
 
-  float fade = pow( 1.0 - vT, 2.2 );
+  // Softened from 2.2 — same total life, same zero at t=1, but less of the
+  // ring's already-short window is spent in the steep first third of the
+  // falloff. Both 15-impact-light and 16-impact-heavy land at t~0.1-0.4 of
+  // the front's own life (see the FRONT_* notes in EffectsDirector, and the
+  // timing check in this round's report); at t=0.3 this recovers a few points
+  // of retained emission over the old curve, small on its own and additive
+  // with the colour and shoulder changes above rather than a fix by itself.
+  float fade = pow( 1.0 - vT, 1.9 );
 
-  // The front is the hot part. Tint belongs to the wake, where the impact's
-  // own colour survives; the leading edge of a compression front is white.
-  vec3 col = mix( vTint, vec3( 1.0, 0.97, 0.93 ), clamp( front * 1.5, 0.0, 1.0 ) );
+  // The front is the hot part and stays independent of vTint — a compression
+  // front's leading edge is white-hot in any light. Warmed off neutral
+  // (0.97, 0.93) toward hot metal (0.90, 0.78) and the mix threshold relaxed
+  // from front * 1.5 to front * 1.1, so the very peak still clips to a hot
+  // near-white but the front's own flanks — not just the shoulder — carry a
+  // trace of colour instead of being white on both sides of the seam.
+  vec3 col = mix( vTint, vec3( 1.0, 0.90, 0.78 ), clamp( front * 1.1, 0.0, 1.0 ) );
   col *= vHeat * fade * amp;
 
   // Coverage dies faster than emission, so a spent ring vanishes instead of
-  // hanging around as a grey wash once it has stopped being hot.
-  float a = shape * pow( 1.0 - vT, 2.8 ) * uOpacity * ( 0.45 + amp * 0.55 );
+  // hanging around as a grey wash once it has stopped being hot. Softened from
+  // 2.8 alongside fade, for the same reason and by the same margin.
+  float a = shape * pow( 1.0 - vT, 2.4 ) * uOpacity * ( 0.45 + amp * 0.55 );
   if ( a < 0.004 ) discard;
   gl_FragColor = vec4( col, a );
 }`;

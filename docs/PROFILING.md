@@ -3675,3 +3675,58 @@ So the unanimous list, in the order the critics themselves ranked it:
 clearest possible statement of what these agents are for: they see accurately and they measure badly.
 The charter asked for a blind comparison and got one that works. The score was the part nobody asked
 for.
+
+---
+
+# "Invisible by construction" was my arithmetic, and the real answer is better
+
+I briefed the impact agent with a hypothesis: the ring's life is 0.13-0.15 s, roughly 8-9 ticks, and
+the captures freeze at +1 and +8 — so **no captured frame can ever show it mid-expansion**, making it
+invisible to every critic by construction. I asked the agent to check it, and said it might be the
+whole finding.
+
+It checked, and it does not hold. Verified independently against `capture.mjs`:
+
+- **`15-impact-light` and `16-impact-heavy` both use `impactOffset: 1`.** Neither is the +8 shot. The
+  +1/+8 pair is `04-impact` / `04b-impact-decay`, a different shot on a different tier.
+- **0.13-0.15 s is the LIGHT and MEDIUM `ringLife`.** The launcher that `04b` captures is 0.21 s,
+  and the top tier is 0.28.
+
+**I merged two shots and two tiers into one number and built a hypothesis on it.** Worked through with
+the right constants, the launcher's ring at +8 frames is 55-76% grown with most of its coverage
+retained — solidly mid-expansion, the opposite of gone.
+
+## The diagnosis that replaces it is sharper
+
+What is actually on screen in `15` and `16` is not the authored `RING` beat at all. It is the
+**FLASH-beat front**: a compact, near-white, screen-facing disc at the contact point, ~30-40% grown at
++1 frame. The authored ring needs 2-3 ticks of FX time and the shutter lands before it.
+
+So a small white circle sits at chest height on a struck fighter, a few hundred pixels from a HUD that
+is also white — and **that is the gestalt two critics filed as a state marker.** Not a lifecycle bug.
+A shape, a size, a position and a palette that all say "badge".
+
+The fix shipped is palette and curve: the shared ring tint moved from 82% white to 68%, the coloured
+shoulder band's amplitude nearly doubled and narrowed so more of its area carries hue without
+touching the front's brightness, the front's forced-white target warmed to hot metal so its flank
+shows a fringe instead of white meeting white, and the fade exponents softened so more brightness is
+retained in the t≈0.1-0.4 window both frames actually land in. **Zero cost** — every change is a
+literal swap in existing shader math.
+
+It also declined to go further than the evidence supported: a previous round recorded that a 0.45
+tint produced *"flat salmon, painted plastic"*, so it stopped at 0.68 rather than reverting, and said
+why the old finding may no longer bind.
+
+## And its prediction is the good kind
+
+> *"If a critic still files it as HUD after this, the likely next lever isn't more saturation — it's
+> that a small, chest-height, screen-facing disc is just gestalt-similar to a badge regardless of
+> colour, which would point at shape and position rather than palette."*
+
+That is a falsifiable statement about the next observation, made before the observation. It is worth
+more than the change itself, because either result teaches something.
+
+**The pattern to keep: I supplied a confident mechanism with a number attached, and it was wrong for
+the third time this session.** The agent checked the premise instead of executing it — the second
+agent this round to do that, after the character agent refuted the assignment-count brief. Both times
+the correction was worth more than the task.

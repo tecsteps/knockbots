@@ -1438,10 +1438,22 @@ export class EffectsDirector {
 
     this.#palette(e.attacker, 'emissive', _c2);
     c.hot.copy(_c2).lerp(_c.setRGB(1, 0.95, 0.88), 0.7);
-    // A compression front is white-hot. The attacker's palette belongs in the
-    // wake as a hint, not across the whole band: at 0.45 the ring came out a
-    // flat salmon that read as painted plastic against the arena.
-    c.ring.copy(_c2).lerp(_c.setRGB(1, 1, 1), 0.82);
+    // A compression front is white-hot, and that stays true: the shader mixes
+    // the razor edge toward hot amber-white on its own (see the `col` mix in
+    // `ShockwaveSystem`'s fragment shader) regardless of what colour this is.
+    // At 0.45 the ring once came out a flat salmon that read as painted
+    // plastic — but that reading was of the WHOLE band going one uniform
+    // colour, on a shoulder that was a fifth of the front's weight and had
+    // nothing to contrast it with. Two critics a round apart have since read
+    // the ring at 0.82 (82% diluted to neutral) as UI chrome — a stance or
+    // combo-state marker, not impact energy — which is the opposite failure:
+    // not "too coloured" but "the same colourless white as everything else on
+    // screen that isn't the fight." 0.68 keeps the front's independent
+    // white-hot mix in charge of the brightest pixel on the ring and gives the
+    // shoulder and wake — now weighted to carry more of the ring's area, see
+    // the shader — a colour worth having, without returning to the flat wash
+    // 0.45 produced back when the shoulder had no structure of its own.
+    c.ring.copy(_c2).lerp(_c.setRGB(1, 1, 1), 0.68);
     this.#palette(e.defender, 'trim', c.shard);
     this.#palette(e.defender, 'emissive', c.coolant);
     return c;
