@@ -137,3 +137,83 @@ Two rules that follow, and both were bought expensively:
 
 The same caution applies to the character axis in reverse: it has six usable closeups, which is a
 real population — so character claims *can* carry a distribution and stage claims mostly cannot.
+
+---
+
+# SUPERSEDING CORRECTION: the score is not the verdict. The win rate is.
+
+Everything above stands except the one thing it was built around. **The 0-100 score is not a
+measurement and must not be used as one.**
+
+## The evidence
+
+Four critics were given **byte-identical frames, an identical brief and the same model**, and asked to
+score the lighting axis. They returned:
+
+```
+38    44    61    65        median 52.5    range 38-65    spread 27
+```
+
+Each one reproduced its own score exactly when asked again. So the error is not noise inside a critic
+— **it is that different instances anchor the 0-100 scale in different places and then hold that
+anchor firmly.** That is worse than randomness for anyone reading a single result, because one critic
+looks perfectly self-consistent and therefore trustworthy right up until a second is run.
+
+**Consequences, stated plainly:**
+
+- A ship bar of 80 applied to a number carrying **+/-13** cannot be cleared reliably by improving the
+  game. It can be cleared by a favourable draw.
+- **Any delta under about 27 points is not information.** Most movement recorded in
+  `docs/dossier.json` before round 41 falls under that width and must be re-read as a single draw
+  rather than a measurement. Those numbers stay in the record — deleting them would hide the mistake.
+
+## What was reliable in the same data
+
+In the same four runs, and in the three that followed on the next capture:
+
+- **the blind pick was unanimous every time** — 4 of 4, then 3 of 3, all losses;
+- all four named the **same three defects in the same order**;
+- all four named the **same strength**.
+
+The qualitative half converged completely while the scalar spanned 27 points. **The blind comparison
+this document was written to specify is the part that works. The score was an addition, and it is the
+part that does not.**
+
+## The verdict, from now on
+
+**1. The primary result of a round is the blind-pair win rate**, reported as `wins-draws-losses` over
+the matched pairs, pooled across at least three independent critics. It is countable, it has no scale
+to anchor, and it is the question the charter actually asks: *which image would you believe came from
+a shipped AAA title.*
+
+**A subsystem ships when it stops losing.** Concretely: **no losses across at least nine pooled pairs,
+with at least one outright win.** "Genuinely wowed, not merely satisfied" is a critic picking our
+frame over Tekken's, not a number crossing a line.
+
+**2. Scores may still be reported, but never alone and never as a single sample.** Minimum three
+independent critics, and always as `median (range lo-hi)`. A lone score in a brief, a dossier entry or
+a commit message is a defect.
+
+**3. The ranked findings outrank both.** Four critics naming "no independent coloured rim" is far
+stronger evidence than any of their four numbers, and it is the only part that is directly
+actionable. Steer on findings; use the win rate to decide whether to ship.
+
+**4. Critics' explanations are hypotheses, not data.** All four also explained the best-looking arena
+as *"a complementary colour key per fighter"*. **There is no per-fighter keying anywhere in this
+project** — both fighters take identical light colours in every arena, and that arena is simply the
+only one of seven with inverted key/rim temperature. Four independent observers agreeing produced a
+confident, specific, false mechanism that went into a brief as fact.
+
+**Unanimity does not protect against a shared wrong explanation**, because instances of one model
+share priors. Take what a critic *sees* as data and what it says *caused* it as a hypothesis to check.
+Every time an agent on this project checked a mechanism it was handed rather than executing it, the
+check was worth more than the task.
+
+**5. Ask the pointed question as well as the open one.** The blind protocol finds what is wrong. It
+does not reliably find whether the last change broke something, because a critic answers the question
+it is asked. Round 41 added one line — *is the rim over-applied?* — and 3 of 3 returned converging,
+load-bearing evidence of a regression. Without that line the honest answer to "is there a rim now"
+was yes, and the regression would have shipped.
+
+**Every round that changes something must ask its critics specifically about that change**, in
+addition to the blind pairs.
