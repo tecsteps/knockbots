@@ -2493,3 +2493,86 @@ real defect before being trusted — the same discipline that caught the esbuild
 **The general rule this project keeps rediscovering:** every generated artefact needs a validator that
 runs where the artefact is *built*, not only where it is *consumed*. Meshes, textures and audio are
 all generated in code here too, and none of them has one either.
+
+---
+
+# External audit: two findings that change what this project does next
+
+An independent model with no stake in this project's assumptions was given shell and read access, told
+to edit nothing, and asked to assume at least three uncaught measurement errors exist. It found six.
+Two of them change the project's direction and both were independently re-derived here before being
+accepted.
+
+## 1. The character deficit is a statistic mismatch — our MEAN against their p75
+
+The number that drove four rounds of character work: "fine-scale micro-contrast 8.22 for us against a
+reference min 11.52 / median 18.57 / max 24.91."
+
+The audit found that the quoted reference band aligns with the **75th-percentile row across images**,
+not the mean or the median. Our figure is a mean. **Someone compared our mean to their busiest
+quartile.** Round 36's own character agent re-derived the same thing independently and got our 8.18
+against the reported 8.22 — the OUR side reproduces; the REFERENCE side does not.
+
+Re-derived here, third instrument, 96px tiles on rows 175-960, near-black tiles excluded:
+
+```
+frame                 tiles    mean   median
+02-closeup-face         152   13.18    12.01
+01-hero-idle            152   21.99    20.44     <- exceeds the reference
+03-full-body            152   21.30    21.08     <- exceeds the reference
+REFERENCE pooled (6)    903   19.65    14.31
+```
+
+Absolute values differ from the audit's (different rect selection) but **the structure reproduces
+exactly**: our fight framings beat the reference pooled median, and only the parked 1.35m / 24-degree
+closeup sits near or below it. The audit also checked PNG-vs-JPEG at -0.01 — the codec is not the gap
+— and found the metric moves ~30% on framing and zoom alone with no surface change.
+
+**So the character axis does not have a general detail deficit.** It has one framing that reads below
+reference and two that read above it, and four rounds of work were steered by comparing incomparable
+statistics on the weakest of the three.
+
+## 2. Performance is measured at a different resolution from the one the charter names
+
+```
+charter                 "60fps at 1920x1080"
+perf probe measures at   renderScale 0.85  ->  1632x918
+critics score frames at  renderScale 1     ->  1920x1080
+documented native cost   21.80 ms = 45.9 fps
+```
+
+Every "we are 0.13ms short of 60fps" statement in this document is measured at **1632x918**, a
+resolution the charter does not name and the critics do not score. At the resolution the charter
+actually specifies, the documented figure is ~21.8ms — roughly **46 fps, not 59.5**.
+
+Two caveats, stated so this is not over-read. The 21.80ms figure dates from the round-26 pinTicks
+investigation and has not been re-measured cleanly since; and a quality tier that renders below native
+and upscales is a legitimate shipping strategy, which is exactly what the tier system exists for. But
+the charter says 1920x1080, and **this project has been reporting a near-miss against a constraint it
+was not testing.** Every performance claim needs two numbers from now on: native, and shipping tier.
+
+## The four other findings, all confirmed by re-derivation
+
+3. **The "15-20 degree reference band" for hip-shoulder twist was never measured.** It appears in
+   critic prose and in a source comment, and nowhere in any measurement of the Tekken frames — which
+   are 2D stills with no rig available. "Squarely inside the reference band" was built on an assertion.
+4. **The round-35 narrative describes the tree BEFORE its own fix landed.** Frontal roll is now 4.42
+   degrees, not 1.23; pelvic tilt 5.03, not 0.47. `contrapposto()` moved them and the published
+   summary was never updated. The "frontal plane is at zero" conclusion does not hold on the current
+   tree, and I wrote it.
+5. **"Three quarters of the library stands within 1 degree of vertical" does not re-derive** — median
+   on-screen lean is 9.85 degrees at rest and 10.22 at contact, with only 3% of contact frames within
+   a degree. The 0.87 figure predates `sagittal()`.
+6. **The camera-plane reasoning is partially inverted.** A 10-degree perturbation at `p.straight`
+   contact displaces: sagittal lean 22.3 px, frontal roll 7.8 px, twist yaw 6.0 px. The fight camera
+   resolves **sagittal lean** best — not frontal roll — and twist and roll are comparable. "We have
+   the axis the camera cannot see and none of the axes it can" overstates how hidden twist is.
+
+## What this says about the method
+
+Nine measurement errors were found by internal agents over 36 rounds. An outside model with no
+inherited assumptions found six more in a single pass, two of which redirect the project. The
+difference is not capability — it is that every internal agent was briefed with the numbers it was
+supposed to check, and inherited them as context rather than as claims.
+
+**A measurement record needs auditing by something that was not briefed from it.**
