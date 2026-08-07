@@ -1923,3 +1923,48 @@ visual neutrality, one session, frozen clock, readPixels, A/B/A'
 
 The positive control is the part that makes it trustworthy: it proves the toggle reaches the shader,
 so "no pixels changed" means the fold is neutral rather than that the switch did nothing.
+
+## The answer: the planar reflector is 5.4ms of a 17.4ms frame
+
+From the one run tonight whose A/A control passed. Null 17.2-19.5ms, 42 paired ABBA cycles per arm,
+frozen frame, tier-pinned:
+
+```
+CTRL A/A            (must be 0)      0.0 ms     <- control PASSED, so the rest is readable
+CTRL whole arena off (expect large) 15.5 ms
+shafts, all five off                 0.0 ms     [-1.5 ..  1.7]
+prac.pools off                       0.1 ms     [-2.6 .. 10.6]
+reflector off                        5.4 ms     [ 1.4 .. 14.7]     31% OF THE FRAME
+```
+
+**The entire transparent stack this round was chartered to attack is unmeasurable — indistinguishable
+from zero.** The planar reflector is 31% of the frame, and it is the one thing in the arena nobody had
+ever priced. That is consistent with everything the counting instruments said: the stack is 1.10
+layers deep of cheap additive shading, while the reflector re-shades 374,544 px — a quarter of the
+main pass — through the same 22-light rig at the main pass's per-pixel price.
+
+The follow-up sweep (half res, quarter res, every-other-frame, object-list) ran while the machine
+went hostile — nulls of 33-68ms and the A/A control reading 1.2ms — so **it is void and no number
+from it was quoted.** The untested arm worth taking to a quiet machine is **every-other-frame update**:
+the reflection is already blurred by floor roughness, so halving its update rate is a plausible
+2.7ms, and it is the single highest-value unanswered question in the project's performance budget.
+
+## An A/A control arm catches instrument defects, and it caught two today
+
+The first fine-grained paired design read **a 1.500 ms saving on an arm that changes nothing** —
+fixed-order bias, fixed by alternating ABBA instead of ABAB. The same control later voided the
+reflector sweep. It costs one extra arm and it has now caught two separate instrument defects in one
+session.
+
+**Any perf probe in this project carries an A/A control and voids the run if it is not zero.**
+
+## Built, measured, reverted
+
+Constant sample SPACING in the shaft raymarch instead of a fixed twelve steps: 24% fewer samples
+(mean 9.12 vs 12.0 over 418,721 fragments), whole-frame visual diff at the instrument's own noise
+floor (0.75% of pixels differing by >=1 display level against a 0.55% floor). Correct on every axis
+except the one that matters — it measured 0.1 ms +/- 1.9, indistinguishable from zero, **because the
+shafts cost nothing to begin with**. Reverted per the charter rule. The tree is untouched.
+
+This is the round's discipline working: a clean, well-measured, visually neutral optimisation of
+something that turned out not to be a cost.
