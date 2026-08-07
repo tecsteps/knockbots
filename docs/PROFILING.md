@@ -2204,3 +2204,91 @@ other as contention and neither ever takes a rep — observed for several minute
 **The wait must sit above `chromium.launch`**, or the script should take a lockfile before launching,
 the way `tools/capture.mjs` already does with `.capture-lock`. A politeness check that runs after you
 have already taken the resource is not a politeness check.
+
+---
+
+# Round 33: 0.45ms recovered, attributable per file, and the constraint is missed in ONE ARENA
+
+Every number below is from quiet windows with zero foreign browser roots, on the re-armed six-rep
+instrument, with its controls reported.
+
+## Attribution — one tree per change, 5-6 clean reps each
+
+```
+tree                                    median   fps      delta
+PRE   aef0aa0                            17.25   57.97       --
+  + StageFloor.js   (uWetMap fold)       17.20   58.14    -0.05
+  + StageVolumetrics.js                  17.30   57.80    +0.05
+  + StageMaterials.js (ORM fold)         17.00   58.82    -0.25
+  + RenderPipeline.js (splitShadowCasters) 17.00 58.82    -0.25
+HEAD  cf414ff (all of it)                16.80   59.52    -0.45
+```
+
+**Two changes carry the entire round**, 0.25ms each: the ORM fold and splitShadowCasters. The wet-map
+fold and the shaft work are zero within the instrument's resolution, and `Environment.js` is
+comment-only and cannot have contributed.
+
+**This corrects the ABBA rig**, which read splitShadowCasters at -0.10ms inside a +/-0.05 control. It
+is -0.25. That rig could not see it because -0.25ms is 1.5% of the frame while its control band sat on
+a 17.4ms — contended — base. The re-armed probe resolves 0.05ms because its spread is 0.10ms.
+
+## The constraint is missed by 0.13ms, and only in one arena
+
+```
+60fps = 16.667 ms      HEAD = 16.80 ms      miss = 0.13 ms (0.8%), 59.5 fps against 60
+
+pit (fight framing)   16.8 ms   59.5 fps   <- the only arena under
+cistern               15.3 ms   65.4 fps
+skydeck               13.6 ms   73.5 fps
+pit (wide)            11.2 ms
+roster                14.8 ms
+```
+
+**The charter is missed in one arena at one framing, not in the game.** Before this round the same
+instrument read 17.25ms, so the miss was 0.58ms; it is now 0.13ms.
+
+**Do not quote `capture.mjs`'s own end-of-run figure.** One quiet, defect-free run printed 16.5ms /
+60.6 fps — a single 480-frame block taken after 25 shots, reading 0.3ms fast. That is the identical
+lucky-single-reading shape as the 60.2 that started this round. The verdict is 16.80.
+
+## The archive comparison is impossible, and the control proves it
+
+Two captures of the **identical tree**, four minutes apart, differ as much as the archive does and on
+several shots more: 08-hud meanAbs 20.2 against the archive, **42.5 against itself**. `forceHit`
+lands on a different tick every run — 15-impact-light froze at 4520, 4860 and 4310 across three runs
+of one build. **Only 4 of 25 pairs are frame-matched**, and for those four the archive delta sits
+inside the same-build delta.
+
+So the question needs a different instrument: frozen frame, fighters hidden, stage clock pinned,
+**camera pinned to literal coordinates**, `page.screenshot`, three controls.
+
+```
+self-test         same session, 1s apart        meanAbs 0.001 - 0.002
+null arm          SAME TREE, two sessions       meanAbs 0.45 / 0.79 / 1.08
+positive control  key directional 7.36 -> 0     meanAbs 4.02, 22.7% of pixels >= 8
+ARMED             PRE vs HEAD, three arenas     meanAbs 0.36 / 0.40 / 0.87
+```
+
+**The armed arm is at or below the same-tree null on all three arenas**, against a positive control the
+instrument sees at 4-9x that null. The round is visually clean: nothing it changed is distinguishable
+from running the same build twice.
+
+Two earlier versions of that instrument failed their own controls, and both would have produced a
+confident wrong answer:
+
+1. **`KB.paused` does not stop the fighters.** The animator stays wound by the render loop; the
+   residual localised to 12,708 pixels exactly where the robots are. Worse, the first positive control
+   used — the fill light at intensity 0.34 — moved 0.34% of pixels, **less than the freeze's own
+   noise**. A control smaller than the noise floor proves nothing.
+2. **Stubbing `FightCamera.render/simulate` freezes the camera somewhere different every session.**
+   The same-tree cross-session null then read meanAbs 12-20 across 85-90% of the frame — four times
+   the difference between the two trees, and larger than killing the key light. Camera placement was
+   the entire signal. Pinning position and lookAt to literals dropped the null to 0.45-1.08.
+
+## The rule I wrote and then broke
+
+A capture and a frame-time probe must not be on the GPU together. It is the rule this round has
+broken most, it has now cost three capture runs — and the third was mine: I started
+`node tools/capture.mjs` concurrently with an `--label=env` probe, and it came back at 32.1ms / 31.2
+fps with a defect. The archive was re-built from the verification agent's certified set instead
+(complete, 0 defects, 0 errors, 25 shots, all renderScale 1, max deadFrac 0.039).
