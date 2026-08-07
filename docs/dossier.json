@@ -1,7 +1,7 @@
 {
   "status": {
-    "rev": "0.34.0",
-    "commits": "194",
+    "rev": "0.35.0",
+    "commits": "199",
     "modules": 73,
     "lines": "85k",
     "clips": 92,
@@ -10,28 +10,28 @@
   },
   "verdicts": [
     {
-      "axis": "Stage detail",
-      "score": 66
-    },
-    {
       "axis": "Interface craft",
-      "score": 76
+      "score": 63
     },
     {
       "axis": "Lighting & atmosphere",
-      "score": 72
+      "score": 60
     },
     {
       "axis": "Character rendering",
-      "score": 64
+      "score": 58
     },
     {
       "axis": "Impact & effects",
-      "score": 71
+      "score": 54
     },
     {
       "axis": "Animation quality",
-      "score": 62
+      "score": 52
+    },
+    {
+      "axis": "Stage detail",
+      "score": 45
     }
   ],
   "log": [
@@ -1268,11 +1268,58 @@
           "state": "did not exist"
         }
       ]
+    },
+    {
+      "phase": "PHASE 40",
+      "when": "Round 38 — the re-score",
+      "rev": "rev 0.35.0",
+      "title": "Every axis falls, nothing regressed, and the worst new bug was manufactured by our own instrument",
+      "paras": [
+        "Six blind critics re-scored the same certified frames, and every axis came down. Interface seventy-six to sixty-three, lighting seventy-two to sixty, character sixty-four to fifty-eight, impact seventy-one to fifty-four, animation sixty-two to fifty-two, stage sixty-six to forty-five. The average falls from sixty-eight and a half to fifty-five, the lowest this project has recorded.",
+        "Nothing regressed in the game. Nothing shipped between the old numbers and these except fixes. What changed is that the instruments producing the old numbers were retired — four of the six axes had been scored against targets that could not be computed at all — and the axes were judged by eye against the rubric instead. This is the second time a re-score on repaired instruments has lowered the average, and it is the larger of the two because four axes were carrying dead targets rather than one. A number that falls when you fix the ruler was never a number.",
+        "Each critic was handed its axis's retired target and told not to resurrect it, and deliberately not told its current score — the lesson from the external audits being that an agent briefed with the figure it is meant to check inherits it as a fact rather than a claim.",
+        "The interface axis split in two for the first time and the split is the finding. Craft seventy-nine, usability fifty-two. In the critic's own words: the axis is named interface craft, but an interface's job is to be operated, not photographed. It proposed a structural rule — that the axis score may never exceed usability by more than fifteen — so a craft number can never again paper over a control surface a thumb cannot work. That rule is worth more than any number the round produced, and it has been adopted.",
+        "Its concrete findings hold. The live fight screen shows a block pad, an overdrive pad and four numbered buttons, and nothing anywhere on it hints that the two-finger throw chord or the swipe specials exist, so a first-time player has nothing to notice. The menu control clears the forty-four pixel floor and still reads as a readout rather than a button — which the critic correctly identified as the exact class of defect the new touch gate cannot catch, because confirming an element exists and is large enough is not the same as confirming a human eye would parse it as interactive. That is the honest limit of the instrument built last round, stated better than its author stated it.",
+        "And then the round's worst new bug turned out to be manufactured by that same instrument. The critic filed a high-impact defect: the pause menu bleeding through the move list panel, the finisher card's text overlapping the options row. It checked the stylesheet, found the scrim at eighty-six per cent and the panel at ninety-eight, and reported plainly that the screen did not match what the code claimed. The code was right. The gate's move-list step waited for a class to land — which happens when the transition starts — and photographed on the next line, mid-fade.",
+        "The capture harness had the identical defect on the fight announcement and it was fixed earlier the same day, by gating on opacity rather than on a class. The touch gate was written hours later and did not carry the lesson across. It is fixed twice now: that step requires settled opacity, and every screenshot in the file waits for the page's animations to go quiet. Re-run with both controls holding, the panel is opaque and the menu beneath it is gone. A manufactured defect costs more than a missed one, because someone goes and fixes the thing that was never broken — and this one consumed a critic's highest-impact slot.",
+        "Two things came back working and should be protected rather than improved. The impact weight ladder is genuine categorical escalation: the heavy hit adds a light-beam column and ground debris that the light hit does not have, rather than more of the same sparks, and the burst is fully gone eight ticks after contact with no residual glow. And the cistern is the one arena whose floor holds real distorted colour reflections instead of a cosmetic sheen — the template the other two should be pulled toward, with the skydeck, a single low block against a flat uniform skyline, sitting closest to the rubric's literal failure case and first in line for work.",
+        "The animation axis got a diagnosis it has never had, produced entirely offline on the rig while the machine had no disk left to render anything. The off-hand is not frozen and it is not animated — it is carried. On a straight punch it travels eight hundred millimetres and ninety-two per cent of that is the chest swinging it; on a mid kick, ninety-three. The run reaches eighty-nine per cent of its own motion and is the only clip in the library carrying a collarbone track. The capability was authored once, for locomotion, and never for an attack. That gives the axis a target instead of an adjective, and an acceptance test that needs no camera."
+      ],
+      "tags": [
+        {
+          "label": "average",
+          "state": "68.5 -> 55.3"
+        },
+        {
+          "label": "interface",
+          "state": "craft 79 / usability 52"
+        },
+        {
+          "label": "ship gate",
+          "state": "score <= usability + 15"
+        },
+        {
+          "label": "stacking bug",
+          "state": "our instrument, not the game"
+        },
+        {
+          "label": "weight ladder",
+          "state": "passes"
+        },
+        {
+          "label": "cistern",
+          "state": "the template"
+        },
+        {
+          "label": "off-hand",
+          "state": "92% carried"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.34.0",
-    "note": "Deployed after the touch path gate. Source on github.com/tecsteps/knockbots."
+    "rev": "0.35.0",
+    "note": "Deployed after the round 38 re-score. Source on github.com/tecsteps/knockbots."
   }
 }
