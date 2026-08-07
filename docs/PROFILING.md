@@ -3217,3 +3217,68 @@ Two things, and both are worth protecting rather than improving:
   distorted coloured reflections rather than a cosmetic sheen. Ranking is cistern > pit > skydeck,
   and skydeck — one low block against a flat uniform skyline — sits closest to the rubric's literal
   failure case and is where stage work goes first.
+
+---
+
+# "Confirmed three ways" was confirmed twice, and the third was a category error
+
+Round 39's character brief opened by telling an agent the diagnosis was not in doubt, because three
+independent lines agreed that the robots read as one material:
+
+1. a blind critic, from pixels alone, losing both closeup pairs;
+2. `Materials.js:4166`'s own measurement — 92.6% of the subject's 1.52 Mpx in five `metalness = 1`
+   batches, one BRDF, one highlight shape;
+3. **the assignment counts** — 233 armour-family sites in `RobotBuilder.js` against 32 zoned ones.
+
+The agent audited every assignment site in the file and reported back that (3) is wrong, and it is
+right. **A count of quoted string literals is not a count of parts.** One literal inside a helper
+applies at every call of that helper:
+
+- `plated()` hardcodes `mat: 'gasket'` for the under-armour sleeve beneath every plate stack —
+  shoulder, forearm, thigh, shin — at `TIER.PRIMARY`, and is **called 7 times**. One string, dozens
+  of parts, on the primary tier rather than as greeble.
+- `addPipeRun` **defaults** to `gasket` and is called 6 times, so five of its six sites contribute no
+  `'gasket'` literal at all to the count.
+
+And the deeper problem is that neither a string count nor a call count is a **pixel** count, which is
+what the axis is actually judged on. I reached for the number that was easy to compute on a machine
+with no GPU and presented it as a third independent confirmation. It was neither independent nor a
+confirmation — it was a proxy I never validated against the thing it claimed to stand for, which is
+the exact failure this file exists to record, committed while briefing an agent about it.
+
+**What the audit found instead:** the zones are already assigned, to the right parts, for the stated
+reasons. Every rotary barrel — shoulder, elbow, wrist cuff, hip ball, hip collar, knee, ankle — is
+already `gasket`, under a comment reading *"every rotary barrel in the rig is a boot, not a billet"*
+and citing the same `Materials.js` measurement my brief quoted at it. Neck bellows, riser, visor and
+optic wells, and five of eight head variants' lens surrounds are already `bezel`.
+
+## So the finding survives and the cause moves
+
+(1) and (2) still stand, and they are the two that matter. The robots do read as one material, and
+92.6% of the subject's pixels really are one BRDF. **But that is not because the zones are
+unassigned. It is because the parts that are correctly zoned are small.** Barrels, hose, bellows and
+lens wells are the right things to be gasket and bezel, and together they are a few per cent of
+screen area. The armour plate is the other 92.6%, and it is one material.
+
+**The fix is therefore differentiation WITHIN the armour, not re-zoning** — which is a different and
+harder piece of work than the one the brief commissioned, and it would not have been found by acting
+on the brief. It was found by an agent that checked the premise it was handed.
+
+## Two things the agent declined, both correctly
+
+It left one `addPipeRun` override alone — the shoulder tap at `mat: 'trim'` — after establishing it is
+an electrical lead off a copper coil winding rather than a hydraulic line, so metal is right. It
+re-zoned exactly one site it could defend: RONIN's belt frog, `trim` -> `gasket`, because a belt frog
+is leather sitting between a tsuba and a lacquered sheath that are correctly metal.
+
+And it refused the seam work with a measured argument rather than a preference. The panel-gap AO is
+driven by vertex attributes consumed by a fragment shader that lives outside its pinned file, so the
+critic's "flat decal line" may not be fixable from `RobotBuilder.js` at all. More usefully it cited
+round 36's own finding — that reaching the micro-contrast target through geometry coverage alone
+would need roughly 47% surface coverage of relief detail, which no fastener can be scaled to — and
+asked for a number before a round is spent on it. **That is this project's standard, applied back at
+the person who wrote it.**
+
+What it did ship: `addPipeRun`'s `TubeGeometry` radial 6 -> 10, closing the hexagonal cross-section
+the critic saw as *"4-5 discrete flat bands"* on hero-distance tubes. +112 triangles per instance,
+six call sites, all `TIER.GREEBLE` so they cull at distance and drop at LOD1.
