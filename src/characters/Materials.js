@@ -859,11 +859,50 @@ function buildPanelLayout(rng, { minCell = 0.055, depth = 7, stopChance = 0.09 }
 
 /**
  * Brushed metal has no macro layout to give away a repeat, so it is authored at
- * half the plate resolution and tiled twice. Every map in the metal set shares
- * this factor, which is what keeps the scratch in the normal map lined up with
- * the same scratch in roughness.
+ * half the plate resolution and tiled. Every map in the metal set shares this
+ * factor, which is what keeps the scratch in the normal map lined up with the
+ * same scratch in roughness.
+ *
+ * WAS 2, AND 2 WAS A BRUSHED FINISH WITH A ONE-CENTIMETRE GRAIN. Re-derived
+ * offline from the geometry that ships (see the table in `resolveSizes`):
+ * `kb.darkMetal` runs at 918 texels/metre and `kb.piston` at 730, so at the
+ * framing the character axis is actually scored at — 2003 screen px/m — those
+ * two surfaces sat at **0.46 and 0.36 texels per screen pixel**. Every texel
+ * covered two to three screen pixels. One tile of the brush spanned 1.12 m of
+ * rod, so the "lay" was a marbling in centimetres rather than a finish.
+ * Together they are the largest surface on the robot: 32.6 of its 57 m^2, and
+ * ~19% of subject pixels in a closeup.
+ *
+ * At 4 they land at 0.92 and 0.73 texels per screen pixel and a tile spans
+ * 28 cm. **Both stay BELOW one texel per pixel at the tightest framing the game
+ * ever uses, so the change cannot alias** — the sampler is magnifying, mip 0 is
+ * selected, and doubling the rate strictly delivers more of a map that is
+ * already baked. It costs no VRAM, no sampler, no draw call and no bake time:
+ * it is one multiply in the UV transform.
+ *
+ * The floor is insulated: `makeFloorMaterial` clones these textures and sets its
+ * own repeat of 14 before use, so this constant is character-only.
  */
-const METAL_REPEAT = 2;
+const METAL_REPEAT = 4;
+
+/**
+ * Tiling of the carbon weave, in repeats per UV unit.
+ *
+ * Carbon was the one material in the library whose authored scale was checkable
+ * against a real object, and it did not survive the check. `buildCarbonDetail`
+ * lays `size >> 5` = 16 tows across a tile; the tile spanned 1.02 m on the
+ * geometry that ships, so each tow came out **64 mm wide**. Real 2x2 twill runs
+ * 3-6 mm. The surface was reading as a quilt, not as a weave, and at 502
+ * texels/metre it sat at 0.25 texels per screen pixel — four screen pixels to a
+ * texel — so it could not have carried a fibre striation even if the tows had
+ * been the right size.
+ *
+ * 4 puts the tow at 16 mm and the sheet at 1.00 texels per screen pixel at the
+ * scored closeup: still coarser than aerospace twill, exactly at the sampling
+ * rate, and the largest step that does not push the map into the mip chain.
+ * Nothing outside this file binds the carbon maps, so this is character-only.
+ */
+const CARBON_REPEAT = 4;
 
 /**
  * Tiling of the clearcoat peel normal, in repeats per UV unit.
@@ -2134,10 +2173,10 @@ function getShared(sizes, maxAniso) {
     softNormal: t(soft.normalPx, soft.size, 1),
     softOrm: t(soft.orm, soft.size, 1),
     softMod: t(soft.modPx, soft.size, 1, { srgb: true }),
-    carbonAlbedo: t(carbon.albedoPx, carbon.size, 1, { srgb: true }),
-    carbonNormal: t(carbon.normalPx, carbon.size, 1),
-    carbonOrm: t(carbon.orm, carbon.size, 1),
-    carbonAniso: t(carbon.anPx, carbon.size, 2),
+    carbonAlbedo: t(carbon.albedoPx, carbon.size, 1, { srgb: true, repeat: CARBON_REPEAT }),
+    carbonNormal: t(carbon.normalPx, carbon.size, 1, { repeat: CARBON_REPEAT }),
+    carbonOrm: t(carbon.orm, carbon.size, 1, { repeat: CARBON_REPEAT }),
+    carbonAniso: t(carbon.anPx, carbon.size, 2, { repeat: CARBON_REPEAT }),
     peelNormal: t(peel.normalPx, peel.size, 1, { repeat: PEEL_REPEAT }),
     glassNormal: t(glass.normalPx, glass.size, 1),
     glassOrm: t(glass.orm, glass.size, 1),
@@ -3373,28 +3412,90 @@ function paletteKey(p, sizes) {
 /**
  * Authoring resolution per bake.
  *
- * Texel density was measured at a head closeup (1.33 m, 32 deg fov, 1080p =
- * 1415 screen px per metre) as sqrt(uvArea/worldArea) * texSize * repeat:
+ * --- ROUND 36: BOTH HALVES OF THE OLD TABLE WERE STALE ---------------------
  *
- *     material     texels/metre   texels per screen pixel
- *     kb.rubber        3120              2.20
- *     kb.armor         2118              1.50
- *     kb.worn          1512              1.07
- *     kb.darkMetal      580              0.41
- *     kb.piston         365              0.26
+ * What stood here was measured "at a head closeup (1.33 m, 32 deg fov, 1080p =
+ * 1415 screen px per metre)". **The harness stopped using that framing eight
+ * minutes after this note was written** — ba87b88 added the table, d4489c4
+ * parked `02-closeup-face` at 1.35 m on a 24-degree lens later the same
+ * evening, and the note was never revisited across the twenty-three rounds
+ * since. The camera offset in tools/capture.mjs is D*(0.70, 0.30, 0.55) with
+ * D = 1.35, so the eye sits 1.268 m from the head bone and
  *
- * The metal bake looks badly under-sampled there, and raising it to 1024 with
- * `metalOrm`/`metalMod` un-halved does take kb.darkMetal to 1.64 texels/px and
- * kb.piston to 1.03 — a real 4x. **It changes the rendered image by nothing.**
- * Measured on the closeup rig against the pre-change capture, 1px band energy
- * went 3.490 -> 3.418 on the head crop, 2.192 -> 2.176 on the plate crop and
- * 3.034 -> 3.000 on Kestrel: flat to slightly negative, for +14MB of VRAM and
- * 4x the metal bake at load. Reverted.
+ *     1080 / (2 * 1.268 * tan(12 deg)) = 2003 screen px per metre
  *
- * The reason is that darkMetal's 41.6% share of the robot's *surface area* is
- * almost all interior frame hidden under the armour; what fills a closeup is
- * kb.armor, whose maps are already un-halved at 1024. Do not size a bake off its
- * surface-area share — size it off what it covers on screen.
+ * which is what capture.mjs's own pose-signature note independently calls
+ * "about 2000 px/m". Every "texels per screen pixel" figure below it was
+ * therefore 1.42x too high. The GRAIN note further up this file already quotes
+ * the corrected 1.1 for kb.armor; the two disagreed by 42% in one file.
+ *
+ * The texels/metre column was stale too — the geometry has moved a long way
+ * since round 12. Re-derived offline against the meshes that actually ship
+ * (bind pose, LOD0 plus the actuator group, area-weighted over every triangle,
+ * sqrt(uvArea/worldArea) * texSize * repeat; two builds agree bit for bit and
+ * scaling the UVs by 2 doubles every row exactly):
+ *
+ *     material      texels/m   tex/screen px   screen px/texel   area m^2
+ *     kb.worn          4408         2.20            0.45           3.30
+ *     kb.rubber        3463         1.73            0.58           0.91
+ *     kb.armor         2024         1.01            0.99          13.80
+ *     kb.darkMetal      918         0.46            2.18          20.57   -> 0.92 at METAL_REPEAT 4
+ *     kb.piston         730         0.36            2.75          12.08   -> 0.73 at METAL_REPEAT 4
+ *     kb.bezel          647         0.32            3.10           0.15
+ *     kb.gasket         572         0.29            3.50           5.69
+ *     kb.carbon         502         0.25            3.99           0.53   -> 1.00 at CARBON_REPEAT 4
+ *
+ * Against the old table: kb.armor reproduces (2118 -> 2024, -4%) and kb.rubber
+ * roughly (+11%), but **kb.worn is out by 2.9x, kb.piston by 2.0x and
+ * kb.darkMetal by 1.6x**. Do not trust a texel figure in this file that does
+ * not say which build it was taken on.
+ *
+ * kb.armor lands at 1.01 texels per screen pixel, and that is the whole answer
+ * to "why can a texture octave not buy fine scale on the plates": the plate
+ * atlas is already exactly at the screen's sampling rate at the tightest
+ * framing the game uses, so its finest expressible feature IS one screen pixel.
+ * There is no headroom above it — raising the plate bake would push it into the
+ * mip chain and get the new octave averaged straight back out — and no waste
+ * below it. Everything else in the table is either magnified (darkMetal,
+ * piston, gasket, carbon, bezel: 2 to 4 screen pixels per texel, so smooth by
+ * construction) or minified (worn at 2.20, rubber at 1.73: baked detail thrown
+ * away by the mip chain before it is ever shaded).
+ *
+ * Two of those are fixed this round for nothing, by tiling rather than by
+ * resolution — see METAL_REPEAT and CARBON_REPEAT. Raising a *repeat* costs one
+ * multiply; raising a *resolution* costs VRAM and bake time and, at these
+ * densities, buys the wrong end of the mip chain.
+ *
+ * STILL OPEN, and ranked: kb.gasket at 0.29 shares the `soft` bake with
+ * kb.rubber at 1.73 — a 6x split in UV density between two materials pointing
+ * at one texture, so no single repeat serves both. Gasket and rubber are 7.6%
+ * of subject pixels and carry the lowest measured micro-contrast of any surface
+ * on the character (7.09 against the armour's 9.46). Fixing it means either a
+ * cloned soft set at its own repeat (~5 MB of VRAM, no extra sampler) or
+ * bringing the gasket parts' UV scale up in RobotBuilder, which is free. The
+ * second is the right one and it was out of scope for this round.
+ *
+ * --- The round-13 metal-resolution experiment was run at the wrong framing ---
+ *
+ * It raised the metal bake to 1024 with `metalOrm`/`metalMod` un-halved, took
+ * "kb.darkMetal to 1.64 texels/px and kb.piston to 1.03 — a real 4x", found it
+ * "changes the rendered image by nothing" (1px band energy 3.490 -> 3.418 on
+ * the head crop, 2.192 -> 2.176 on the plate crop, 3.034 -> 3.000 on Kestrel)
+ * and reverted it for +14MB of VRAM. The band energies are whatever they are;
+ * the two texels/px are not. They were computed at 1415 px/m, so the note
+ * believed its treated arm sat at 1.64 texels/px — 0.71 of a mip level into
+ * minification, where a new fine octave provably cannot show — when at 2003
+ * px/m it sits at 1.16, which is 0.21 of a mip level and delivers nearly all of
+ * it. The revert may still be the right call; the reasoning attached to it is
+ * not evidence, because it describes the wrong sampling regime. In any case
+ * resolution is the expensive way to move this number: `METAL_REPEAT` buys the
+ * same density for one multiply and no VRAM at all, which is what this round
+ * did instead.
+ *
+ * The other half of that note stands and is worth keeping: darkMetal's 41.6%
+ * share of the robot's *surface area* is mostly interior frame hidden under the
+ * armour. Do not size a bake off its surface-area share — size it off what it
+ * covers on screen.
  *
  * --- What the closeup gap actually is -------------------------------------
  *

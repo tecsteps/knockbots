@@ -402,6 +402,68 @@ export class StageVolumetrics {
      * makes the difference between +28% and +19%. It is a count, so it is
      * immune to everything that has gone wrong with timing here. **It is not a
      * millisecond and nothing in this comment converts it into one.**
+     *
+     * ---------------------------------------------------------------------
+     *
+     * **AND THE CRITIC SAW NO NEW BEAM, because `fragments` is the wrong
+     * counter for the question "does it read".**
+     *
+     * The discard is `acc <= 0.0005` and `acc` does not contain `uIntensity`.
+     * The emitted colour is `uColor * (1 - exp(-acc * uIntensity))`. So a shaft
+     * can retire two per cent of the frame and deposit nothing on any of it,
+     * which is precisely what these three did. `scratchpad/r35-shaftfill.mjs`
+     * now reports the missing number as well — the linear radiance the shader
+     * actually writes, summarised over the fragments it keeps — and that is the
+     * number to equalise across emitters. Intensity is NOT: `acc` differs by
+     * 2.5x between a 3.1 m gantry strip seen end-on and a 1.15 m blade seen
+     * from seventeen metres, so equal intensities never meant equal beams.
+     *
+     * Two numbers in the brief that sent this round did not survive that
+     * instrument. The three intensities were reported as 0.071 / 0.065 / 0.44;
+     * the tree said 0.105 / 0.090 / 0.300. And "five times dimmer than the
+     * gantry beams", which this file itself claimed, is not what shipped
+     * either — in radiance it was 5.5x / 4.4x / **1.7x**, so the raking beam
+     * was already within a stop of a beam that plainly reads and still could
+     * not be found. Level alone was therefore never going to be the whole fix.
+     *
+     * What separates the two that read from the three that do not is INTERNAL
+     * RANGE, and that is measurable too: p90/p50 radiance is 6.14 on the gantry
+     * pair against 3.69 / 2.45 / 2.56. A beam is found by its core and its
+     * edge, not by its mean. Ablating shaft0's louvre — same geometry as
+     * shaft1, one field changed — drops its range from 6.14 to 3.00 and lifts
+     * its level by 61%, which identifies the property exactly and prices it.
+     *
+     * A louvre is the wrong way to buy it back here and that was measured, not
+     * assumed: at a 1.55 m pitch the whole 2.3 m blade sits inside one cell, so
+     * the term is a flat 0.5x dimming and the range comes out at 3.04. Six
+     * cells across a 2.3 m blade is a 0.38 m pitch, which is a picket fence on
+     * something described as skyglow through a structural slot.
+     *
+     * So the range is bought from the radial exponent instead. `edge` 2.1 -> 3.4
+     * gives the blade a core rather than a uniform cross-section, and it is the
+     * cheap direction: more of the rim falls under the discard, so the change
+     * takes fragments OFF. Then `intensity`, which costs exactly nothing, is
+     * solved so each addition lands at half the gantry pair's p90 radiance —
+     * a stated hierarchy rather than a taste.
+     *
+     * ```
+     * fight framing, quality 'high', 480x270 CPU raster
+     *                    I      RAD p50   RAD p90   p90/p50   vs gantry   FRAG%
+     *   gantry 0/1     0.950     0.0114    0.0700     6.14        1.0x    11.696
+     *   shaft2 before  0.105     0.0035    0.0129     3.69        5.5x     2.046
+     *   shaft2 after   0.420     0.0078    0.0337     4.32        2.1x     1.769
+     *   shaft3 before  0.090     0.0065    0.0159     2.45        4.4x     2.229
+     *   shaft3 after   0.300     0.0100    0.0343     3.43        2.0x     1.971
+     *   shaft4 before  0.300     0.0165    0.0423     2.56        1.7x     2.282
+     *   shaft4 after   0.360     0.0100    0.0355     3.55        2.0x     2.101
+     *
+     * the bill, same currency as the table above
+     *   fragments   6.557% -> 5.841% of frame   -0.716 pts   -14,864 at 1080p
+     *   whole layer 29.949% -> 29.233%          -2.4%
+     * ```
+     *
+     * The fix is fragment-NEGATIVE. It reproduces at 06-stage-wide (3.938% ->
+     * 3.554%) and at the five off-centre fight poses the instrument sweeps.
      */
     this.specs = air?.shafts ?? [
       // The cross-gantry pair. Untouched — these are the two that always
@@ -409,12 +471,12 @@ export class StageVolumetrics {
       { pos: [-6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.95, round: 0.15, edge: 2.2, extinction: 0.16, slat: [1.02, 3.2], pool: 0.05, steps: 12, tier: 0 },
       { pos: [6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.95, round: 0.15, edge: 2.2, extinction: 0.16, slat: [1.02, 3.2], pool: 0.05, steps: 12, tier: 0 },
       // Skyglow through the slot between the roof deck (ends z -14) and the
-      // shell wall (z -19). Narrow, dim, seventeen metres out, and tipped a
-      // little forward so they lean into the hall rather than hanging plumb.
-      { pos: [-6.4, 13.2, -14.9], rot: [-0.30, 0, 0.10], half: [1.15, 0.8], spread: [0.025, 0.025], length: 10.5, color: 0x8fb4e8, intensity: 0.105, round: 0.4, edge: 2.1, extinction: 0.055, slat: [0, 0], pool: 0, steps: 8, tier: 1 },
-      { pos: [4.0, 13.6, -15.6], rot: [-0.26, 0, -0.08], half: [1.35, 0.9], spread: [0.025, 0.025], length: 11.5, color: 0x9dc0ee, intensity: 0.09, round: 0.4, edge: 2.0, extinction: 0.05, slat: [0, 0], pool: 0, steps: 8, tier: 1 },
+      // shell wall (z -19). Narrow, seventeen metres out, and tipped a little
+      // forward so they lean into the hall rather than hanging plumb.
+      { pos: [-6.4, 13.2, -14.9], rot: [-0.30, 0, 0.10], half: [1.15, 0.8], spread: [0.025, 0.025], length: 10.5, color: 0x8fb4e8, intensity: 0.42, round: 0.4, edge: 3.4, extinction: 0.055, slat: [0, 0], pool: 0, steps: 8, tier: 1 },
+      { pos: [4.0, 13.6, -15.6], rot: [-0.26, 0, -0.08], half: [1.35, 0.9], spread: [0.025, 0.025], length: 11.5, color: 0x9dc0ee, intensity: 0.30, round: 0.4, edge: 3.4, extinction: 0.05, slat: [0, 0], pool: 0, steps: 8, tier: 1 },
       // The one raking beam, off the -x catwalk line and aimed inboard.
-      { pos: [-8.8, 4.45, -9.2], rot: [0.1, 0, 0.42], half: [0.58, 0.52], spread: [0.085, 0.085], length: 5.2, color: 0x9fdcff, intensity: 0.30, round: 0.85, edge: 2.2, extinction: 0.14, slat: [0, 0], pool: 0.028, steps: 8, tier: 2 },
+      { pos: [-8.8, 4.45, -9.2], rot: [0.1, 0, 0.42], half: [0.58, 0.52], spread: [0.085, 0.085], length: 5.2, color: 0x9fdcff, intensity: 0.36, round: 0.85, edge: 3.4, extinction: 0.14, slat: [0, 0], pool: 0.028, steps: 8, tier: 2 },
     ];
 
     /**
@@ -636,16 +698,81 @@ export class StageVolumetrics {
    * the barriers. It exists to separate the back wall from the mid-ground, not
    * to sit in front of the fighters.
    *
-   * Two details keep a horizontal mist plane from becoming a wall of white the
-   * moment a fight camera drops to eye level. The optical depth through the
+   * One detail keeps a horizontal mist plane from becoming a wall of white the
+   * moment a fight camera drops to eye level: the optical depth through the
    * slab saturates — `1 - exp(-tau)` rather than a linear accumulation — so a
-   * grazing view cannot integrate without bound; and the whole thing fades out
-   * inside twelve metres of the lens, because mist you are standing in is just
-   * a lens filter.
+   * grazing view cannot integrate without bound.
+   *
+   * ---------------------------------------------------------------------
+   *
+   * **THIS LAYER WAS THE SCREEN-SPACE LIGHT BAND ON THE SKYDECK**, and the
+   * mechanism is worth stating exactly because it is a class this project has
+   * shipped before, not a typo.
+   *
+   * Three of the four terms modulating a 64 x 56 m HORIZONTAL plane were
+   * functions of view distance and nothing else:
+   *
+   *     lens = smoothstep( 5.0, 12.0, dist )
+   *     far  = 1.0 - smoothstep( 32.0, 50.0, dist )
+   *     tau ~ 1.0 / max( abs( dir.y ), 0.16 )
+   *
+   * On a horizontal plane under a camera at a fixed height, `dist` is a
+   * function of the ray's elevation angle, which is a function of the SCREEN
+   * ROW. So the layer's entire envelope was a strip of screen rows. Worse, the
+   * `max(..., 0.16)` is a hard clamp on a monotone field — beyond `dist` about
+   * 25 m at the wide camera it holds `tau` at exactly one value, so the strip
+   * has a DEAD FLAT TOP whose boundary is the iso-elevation line, a perfectly
+   * horizontal line across the frame at a row set by the camera alone. That is
+   * the same defect class as the `smoothstep` across a Voronoi cell id that
+   * cost this project several rounds: a binary gate on a piecewise-constant
+   * field, drawing a straight edge at an arbitrary place.
+   *
+   * Measured offline with `scratchpad/r36-hazeband.mjs` — a CPU rasteriser for
+   * this one layer with a null arm and a world-gated positive control — at the
+   * shipping `cinematic('wide')` camera on the skydeck: the layer covers 62.0%
+   * of frame, 7.4% of it non-zero, and its row profile is a band peaking at row
+   * 85 of 270 with its half-max edge at row 82. The set behind that band is the
+   * CITY: the probe point under the band's own top edge is (-3.3, 0.50, -20.7),
+   * 20.7 m out along -z, past a parapet that stands at z about -12. A deck-level
+   * ground mist slab that continues thirty-two metres out over the edge of a
+   * roof is not air in a room; it is a smear hanging in the sky.
+   *
+   * Three changes, and the arena spec now owns the two numbers it should:
+   *
+   *   1. `uNearFade` is a LENS guard again, 2.0 -> 6.0 m, the same range the
+   *      shafts (1.2-4.5) and the motes (1.4-4.0) use. At 5-12 m it was not
+   *      guarding the lens, it was ramping across the middle of the deck.
+   *   2. `far` becomes a WORLD extent about the plane's own centre, so the
+   *      layer's outer boundary is a place in the set instead of a ring around
+   *      the lens. Default 16 -> 22 m: atmosphere belongs inside the room, and
+   *      no arena here has perimeter architecture past about 19 m.
+   *   3. `max(abs(dir.y), 0.16)` becomes `inversesqrt(dir.y*dir.y + 0.0256)`.
+   *      Same asymptote (6.25x looking along the slab, 1x looking down it),
+   *      same cost, but C-infinity — there is no plateau, so there is no edge.
+   *
+   * **And the arena's authored numbers were dead.** `update()` overwrote
+   * `uIntensity` with the pit's own `0.34 + breathe * 0.3` every frame, so the
+   * skydeck ran at 0.64 against the 0.26 it authored (2.46x) and the cistern at
+   * 0.64 against 0.72. The breathe term is now a MULTIPLIER on the authored
+   * value, arranged to reproduce the pit's shipped 0.34..0.64 exactly at its
+   * own default of 0.5, so the pit is bit-identical and the two new arenas get
+   * the air they asked for. Same for the colour: the mood's fog hue still sets
+   * the LEVEL, and an arena that states a colour now gets its hue at that
+   * level. The pit states no `deckHaze` at all, so it takes neither path.
    */
   #deckHaze(textures, spec) {
     const geo = new THREE.PlaneGeometry(64, 56, 1, 1);
     geo.rotateX(-Math.PI / 2);
+    /**
+     * The authored air, kept so `update` can scale it rather than replace it.
+     * `hasColor` is what keeps the pit off the new colour path entirely.
+     */
+    this._hazeBase = {
+      color: new THREE.Color(spec?.color ?? 0x7d94b4),
+      intensity: spec?.intensity ?? 0.5,
+      hasColor: spec?.color != null,
+    };
+    const extent = spec?.extent ?? [16, 22];
     this.hazeMaterial = new THREE.ShaderMaterial({
       name: 'arena.deckHaze',
       uniforms: {
@@ -654,6 +781,13 @@ export class StageVolumetrics {
         uColor: { value: new THREE.Color(spec?.color ?? 0x7d94b4) },
         uIntensity: { value: spec?.intensity ?? 0.5 },
         uThickness: { value: spec?.thickness ?? 1.6 },
+        // Where the layer stops, in metres from its own centre. A world
+        // boundary, so it belongs to the set; the old one was a ring of fixed
+        // radius around the lens and travelled with it.
+        uExtent: { value: new THREE.Vector2(extent[0], extent[1]) },
+        uCenter: { value: new THREE.Vector2(0, -4) },
+        // The lens guard, and only the lens guard.
+        uNearFade: { value: new THREE.Vector2(2.0, 6.0) },
       },
       vertexShader: /* glsl */ `
         varying vec3 vWorld;
@@ -669,6 +803,9 @@ export class StageVolumetrics {
         uniform vec3 uColor;
         uniform float uIntensity;
         uniform float uThickness;
+        uniform vec2 uExtent;
+        uniform vec2 uCenter;
+        uniform vec2 uNearFade;
         varying vec3 vWorld;
         void main() {
           vec3 toEye = cameraPosition - vWorld;
@@ -684,10 +821,20 @@ export class StageVolumetrics {
           float behind = smoothstep( -5.5, -12.0, vWorld.z );
           float flank = smoothstep( 10.0, 16.0, abs( vWorld.x ) );
           float band = max( behind, flank );
-          float lens = smoothstep( 5.0, 12.0, dist );
-          float far = 1.0 - smoothstep( 32.0, 50.0, dist );
+          // The lens guard, and nothing else may be keyed to view distance: on
+          // a horizontal plane, distance from the eye IS the screen row, so any
+          // gradient hung on it is a band painted across the frame.
+          float lens = smoothstep( uNearFade.x, uNearFade.y, dist );
+          // Where the layer ends, in the world. This is what the old
+          // 1 - smoothstep( 32, 50, dist ) was pretending to be.
+          float far = 1.0 - smoothstep( uExtent.x, uExtent.y, length( vWorld.xz - uCenter ) );
 
-          float tau = uIntensity * n * uThickness / max( abs( dir.y ), 0.16 );
+          // Path length through a slab of thickness uThickness along this view
+          // ray. The 0.16 is the grazing cap -- the same 6.25x ceiling the old
+          // max( abs( dir.y ), 0.16 ) had -- but reached smoothly, so the
+          // ceiling is not a straight line drawn across the picture.
+          float grazing = inversesqrt( dir.y * dir.y + 0.0256 );
+          float tau = uIntensity * n * uThickness * grazing;
           float k = ( 1.0 - exp( -tau ) ) * band * lens * far;
           if ( k <= 0.002 ) discard;
           gl_FragColor = vec4( uColor * k, 1.0 );
@@ -739,11 +886,27 @@ export class StageVolumetrics {
     }
 
     this.hazeMaterial.uniforms.uTime.value = time;
-    this.hazeMaterial.uniforms.uIntensity.value = 0.34 + breathe * 0.3;
+    // A MULTIPLIER on what the arena authored, not a replacement for it. The
+    // constants reproduce the pit's shipped 0.34..0.64 exactly at the pit's own
+    // default of 0.5 — 0.5 * (0.68 + 0.6b) === 0.34 + 0.3b — so the pit is
+    // bit-identical and the skydeck stops running the pit's air at 2.46x what
+    // it asked for.
+    this.hazeMaterial.uniforms.uIntensity.value = this._hazeBase.intensity * (0.68 + breathe * 0.6);
     // The mood's fog colour is the right hue but it is authored for FogExp2,
     // where it is a destination colour rather than an emitted one; scattering
-    // toward the eye needs it several stops up to register at all.
-    if (envParams?.fog?.color) this.hazeMaterial.uniforms.uColor.value.copy(envParams.fog.color).multiplyScalar(16);
+    // toward the eye needs it several stops up to register at all. It sets the
+    // LEVEL; an arena that states a colour of its own gets its hue at that
+    // level, which is why the scale factor is a luminance ratio. The pit states
+    // no deckHaze, so it never takes the second branch.
+    if (envParams?.fog?.color) {
+      const c = this.hazeMaterial.uniforms.uColor.value.copy(envParams.fog.color).multiplyScalar(16);
+      if (this._hazeBase.hasColor) {
+        const lvl = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+        const b = this._hazeBase.color;
+        const own = Math.max(1e-5, 0.2126 * b.r + 0.7152 * b.g + 0.0722 * b.b);
+        c.copy(b).multiplyScalar(lvl / own);
+      }
+    }
 
     this.motes.update(time, 0.55 + breathe * 0.7);
     this.steam.update(time);

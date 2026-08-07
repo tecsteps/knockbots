@@ -11,7 +11,7 @@
  * Axis conventions and the pose helpers live in ./idle.js.
  */
 
-import { STANCE, STANCE_Y, UPRIGHT, UPRIGHT_Y, add, over, makeClip, carry, contrapposto } from './idle.js';
+import { STANCE, STANCE_Y, UPRIGHT, UPRIGHT_Y, add, over, makeClip, carry, contrapposto, sagittal } from './idle.js';
 import { STRIDE_LEGS } from './locomotion.js';
 
 // ---------------------------------------------------------------------------
@@ -177,3 +177,23 @@ const CONTRA_TABLE = {
   'i.walkOn': [1, 'full-skipR'], 'i.powerUp': 0.8, 'i.stanceSet': 0.8, 'i.pointTaunt': 1,
 };
 for (const id in CONTRA_TABLE) contrapposto(INTRO_CLIPS[id], CONTRA_TABLE[id]);
+
+// ---------------------------------------------------------------------------
+// SAGITTAL LEAN. See the long note above `sagittal` in ./idle.js.
+//
+// Measured, not asserted: sagittal pitch converts to ON-SCREEN diagonal at very
+// nearly 1:1 under both cameras this axis is judged through, while the coronal
+// roll `contrapposto` writes converts at between -6.9 and +0.7 deg and at ~0 on
+// the attack contact frames. This operator never keys `hips`, so every bone from
+// the pelvis down is bit-identical -- 0.0000 mm on hips, hips, knees, ankles,
+// feet and toes at every tick -- and no foot skate, burial or leg-compensation
+// question arises at all.
+//
+// Amount is the largest the gate sweep accepted against a target of 10 deg of
+// on-screen lean. No clip here carries a hitbox, so the
+// only binding gate is the target itself.
+// ---------------------------------------------------------------------------
+const SAGITTAL_TABLE = {
+  'i.pointTaunt': 14, 'i.powerUp': 2, 'i.stanceSet': 14, 'i.walkOn': 16,
+};
+for (const id in SAGITTAL_TABLE) sagittal(INTRO_CLIPS[id], SAGITTAL_TABLE[id]);

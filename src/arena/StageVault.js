@@ -2310,10 +2310,23 @@ export class StageVault {
     const rng = this.rng;
     const count = this.quality === 'low' ? 34 : 92;
     const geo = worldUv(bevelBox(0.34, 0.05, 0.1, 0.012), 0.5);
-    const mesh = new THREE.InstancedMesh(geo, this.ironMaterial, count);
+    const mesh = new THREE.InstancedMesh(geo, this.#flotsamMaterial(), count);
     mesh.name = 'arena.vault.flotsam';
     mesh.castShadow = false;
     mesh.receiveShadow = true;
+    /**
+     * Per-instance tone, and it is not decoration.
+     *
+     * Ninety-two plates sharing one material is ninety-two samples of a single
+     * number, so whatever that number is the eye reads it as one object
+     * repeated — and if the number is near black it reads as ninety-two holes.
+     * Silt does not settle evenly: some of these have been under water since
+     * the tank filled and are pale with mineral, some fell last week and are
+     * still oxide. The spread is on a curve rather than uniform, so the set has
+     * a few bright ones rather than a grey average.
+     */
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
+    const _fc = new THREE.Color();
     for (let i = 0; i < count; i++) {
       const x = rng.range(-13.6, 13.6);
       // Solve the contour for this x: the fall is monotonic in z, so ten steps
@@ -2334,10 +2347,86 @@ export class StageVault {
         _s.set(rng.range(0.5, 2.6), rng.range(0.5, 1.4), rng.range(0.5, 2.2)),
       );
       mesh.setMatrixAt(i, _m);
+      const silt = Math.pow(rng.next(), 1.9);          // few pale, many dark
+      _fc.setRGB(
+        0.75 + silt * 0.95,
+        0.72 + silt * 0.88,
+        0.66 + silt * 0.78,
+      );
+      mesh.setColorAt(i, _fc);
     }
     mesh.instanceMatrix.needsUpdate = true;
+    mesh.instanceColor.needsUpdate = true;
     this.flotsam = mesh;
     this.group.add(mesh);
+  }
+
+  /**
+   * The flotsam's own surface, and the reason it needs one.
+   *
+   * **This is the fourteen unlit black quads a blind panel counted in the
+   * reflective floor**, and they are not unlit — they are lit correctly, by a
+   * material that is wrong for the one orientation they are used at.
+   *
+   * `castIronSet` bakes `metal = lerp(0.82, 0.06, rustMask)` over an albedo
+   * whose mean is 0.0198 linear, and its own comment says why the rusted end is
+   * pulled down: "Oxide is not a conductor. A fully rusted pipe at metalness 1
+   * renders as a black hole against this room's near-zero IBL." That reasoning
+   * is right and it does not reach far enough. Everything else built from this
+   * set — the pipework, the brackets, the cable gland, the pier stubs — stands
+   * VERTICAL, so it is seen from the side, catches the sodium rim and reflects
+   * the arcade. The flotsam lies FLAT. Its normal points at the deck soffit,
+   * which is the darkest thing in the room, and at metalness 0.82 there is no
+   * diffuse term to rescue it: the whole appearance is a 2%-F0 specular
+   * reflection of a black ceiling. Measured on `shots/19-cistern-wide`, over
+   * the deck band: the plates come back at a 2nd-percentile luminance of 10.9
+   * of 255 against a deck 60th percentile of 122.4 — 11.2x in code value and
+   * **57x in linear light**, which is a hole, not a dark object.
+   *
+   * Three corrections, and each of them is the plate's own physics rather than
+   * a brightness dial:
+   *
+   *   1. **It is all oxide.** Flotsam is by definition the stuff that has
+   *      already come off and been in the water since; there is no sound
+   *      painted ironwork in a strandline. `metalness` 0.14 puts the whole
+   *      instance at the rusted end of the map the bake already provides, which
+   *      is where the bake's own comment says a rusted surface belongs.
+   *   2. **A dielectric needs a real albedo.** At metalness 0.82 the 0.0198
+   *      map is an F0, not a reflectance; as a dielectric it has to be the
+   *      diffuse colour, and wet silted oxide is about 0.05 linear and warm.
+   *      The multiplier is on `color` because the map is shared with the
+   *      pipework and must not move under it.
+   *   3. **It is wet, and it is lying in a mirror.** `roughness` 0.72 on the
+   *      map's 0.42-0.93 gives 0.30-0.67, so a plate half in the water picks up
+   *      the strips the way the deck around it does instead of staying matte in
+   *      the middle of a wet floor; and `envMapIntensity` goes to 1.0 from the
+   *      pipework's 0.42, because a face-up plate sees the whole upper
+   *      hemisphere and the pipework's value was chosen for a surface seen
+   *      edge-on.
+   *
+   * The intent stays: these are still the darkest objects on the brightest part
+   * of the deck, and that contrast is what they were put there for. What they
+   * stop being is clipped to the frame's black point.
+   */
+  #flotsamMaterial() {
+    const t = this.sets.iron;
+    this.flotsamMaterial = new THREE.MeshStandardMaterial({
+      name: 'arena.vault.flotsam',
+      map: t.albedo,
+      normalMap: t.normal,
+      roughnessMap: t.orm,
+      metalnessMap: t.orm,
+      aoMap: t.orm,
+      normalScale: new THREE.Vector2(1.15, 1.15),
+      // Multipliers on the shared cast-iron maps. See the note above for each.
+      color: new THREE.Color(2.00, 1.85, 1.60),
+      roughness: 0.72,
+      metalness: 0.14,
+      envMapIntensity: 1.0,
+      dithering: true,
+    });
+    this.flotsamMaterial.shadowSide = THREE.FrontSide;
+    return this.flotsamMaterial;
   }
 
   // -------------------------------------------------------------------------
@@ -3457,6 +3546,7 @@ export class StageVault {
     this.castMaterial?.dispose();
     this.brickMaterial?.dispose();
     this.ironMaterial?.dispose();
+    this.flotsamMaterial?.dispose();
     this.hallMaterial?.dispose();
     this.tunnelMaterial?.dispose();
     this.emitterMaterial?.dispose();

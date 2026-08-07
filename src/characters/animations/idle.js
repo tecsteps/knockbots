@@ -565,6 +565,146 @@ export function contrapposto(clip, spec) {
   return clip;
 }
 
+// ---------------------------------------------------------------------------
+// SAGITTAL LEAN — the plane the fight camera actually resolves.
+//
+// MEASURED FIRST, offline through the rig, projected through the REAL cameras
+// the judged frames are shot with. Two of them, because this axis is judged
+// through two lenses and they do not agree:
+//
+//   fight   src/engine/FightCamera.js#framingFight with the pair at x = -1.7 /
+//           +1.7. m.x = 0, so its yaw term clamps to EXACTLY 0 and the camera
+//           sits on +Z looking down the fighter's own left-right axis. Dead
+//           side-on. This is 01-hero-idle, 03-full-body, 04-impact.
+//   strip   tools/animstrip.mjs and capture.mjs `clipStrip`: pos = aim +
+//           D * (facing*0.62, 0.24, 0.74), i.e. 40 deg off side. This is
+//           17-anim-strip and 20..24.
+//
+// WHAT AN 8-DEGREE PERTURBATION AT THE HIPS BUYS, in degrees of ON-SCREEN torso
+// lean, under the fight camera. Null column is the same measurement at 0 deg
+// and it reads exact zeros; a 45-degree control scales 5.5-6.3x:
+//
+//                    pitch(X)   yaw(Y)   roll(Z)   null
+//     idle.fight         8.16     0.30    -6.00    0.00
+//     p.straight         8.20     0.31    -0.60    0.00
+//     k.roundhouse       7.79    -1.76     0.42    0.00
+//     p.uppercut         8.14     0.58    -1.59    0.00
+//     p.jab              8.21     0.37    -6.92    0.00
+//     k.highKick         7.78    -1.94     0.65    0.00
+//
+// Sagittal pitch converts to on-screen diagonal at very nearly 1:1 on every
+// clip. Roll -- the axis `contrapposto` above was built to move, and which the
+// comment there calls "the one a side-on camera actually resolves" -- converts
+// at between -6.9 and +0.7 depending on the pose, and at ~0 on the attack
+// contact frames. The -6.0 it does buy on `idle.fight` is parallax from a
+// subject standing 1.7 m off the optical axis, not a pose the camera reads.
+//
+// The same split shows up in the spine. `spineBow` above is measured as the
+// chest's LATERAL (model X) deviation from the hips->head chord, and model X is
+// the axis pointing at the camera. Decomposed over all 92 clips at rest:
+//
+//     |bow| on model X (camera axis)   p25  3.44   med  6.22   p75 15.02 mm
+//     |bow| on model Z (IN SCREEN)     p25 19.04   med 19.09   p75 20.25 mm
+//
+// The in-screen component has an interquartile spread of 1.2 mm across the
+// whole library: it is a single constant inherited from the rest pose and NOT
+// ONE CLIP VARIES IT. That is the "spine a straight column" a critic described,
+// and no amount of `contrapposto` could have moved it, because `contrapposto`
+// only ever writes X.
+//
+// And the quantity itself, on-screen hips->chest lean off vertical, fight
+// camera, all 92 at rest and all 34 contact ticks:
+//
+//     at rest      min 0.01  p25 0.03  med 0.87  p75 0.90  max 93.71 deg
+//     at contact   min 0.38  p25 3.98  med 6.36  p75 12.59 max 31.98 deg
+//
+// Three quarters of the library stands within a degree of vertical.
+//
+// WHAT THIS OPERATOR IS. A sagittal C-curve through the spine, with a time
+// profile that peaks at the contact tick. Gains, in units of the `amount`:
+//
+//     spine01  +1.00   spine02  +0.70   chest  -0.35   neck  -0.60   head -0.40
+//
+// so the world pitch accumulated at the chest is 1.35x amount while the head
+// only takes 0.35x -- the belly leads, the ribcage trails it, and the skull
+// counter-cocks so the eyes stay on the opponent. The gradient between the
+// three spine joints is the curve; a rigid rotation would keep the column.
+//
+// WHY IT TOUCHES NOTHING BELOW THE HIPS, and this is the whole safety argument.
+// `hips` is not keyed by this operator, so both legs, both feet and the root
+// are bit-identical: no foot skate, no burial, no change to a planted contact,
+// and the leg-compensation problem that stopped `contrapposto` reaching the 13
+// kicks does not arise. What moves is the torso, the arms it carries, and the
+// head.
+//
+// WHICH IS WHY THE TABLE IS MOSTLY KICKS. A kick's hitbox is anchored on a foot
+// or a knee, so the entire upper body is free at the contact tick. A punch's is
+// anchored on a hand, and a hand is carried by the chest -- so a punch can only
+// take an amount small enough to keep its striking anchor inside the 1 mm gate,
+// which in practice is nothing. The eleven clips that take the most here are
+// exactly the ones `contrapposto` could take nothing at all on.
+//
+// GATED PER CLIP against the same clip without it, every gate on the rig:
+// duration, `impact.tick`, loop flag and blend counts identical; striking-anchor
+// movement at the contact tick <= 1 mm; every foot and ankle bit-identical at
+// every tick; and `check.mjs`'s own anchor-travel ratio neither below 0.40 nor
+// 0.03 worse than it started. The per-clip amounts below are DERIVED by sweeping
+// against those gates, not remembered.
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-bone share of a sagittal lean, in units of `amount`. Positive `amount`
+ * leans the torso FORWARD (+X bends forward on every one of these bones).
+ * @type {Record<string, number>}
+ */
+export const SAGITTAL = {
+  spine01: 1.0, spine02: 0.7, chest: -0.35, neck: -0.6, head: -0.4,
+};
+
+/**
+ * Time profile for the lean, evaluated at each key's own tick.
+ *
+ * A looping clip, or one with no contact, takes the lean flat — evaluating a
+ * ramp at `t` on a loop would make the wrap pop, and there is no moment on an
+ * idle that deserves the peak. An attack ramps from nothing at t=0 to the full
+ * amount exactly at `impact.tick` and relaxes to `tail` by the end, which is
+ * the shape a strike has anyway: the body loads, arrives with the hit, and
+ * settles out of it.
+ */
+function sagittalProfile(clip, t, tail) {
+  const tick = clip.impact?.tick;
+  if (clip.loop || typeof tick !== 'number' || tick <= 0) return 1;
+  if (t <= 0) return 0;
+  if (t <= tick) { const u = t / tick; return u * u * (3 - 2 * u); }
+  const span = Math.max(clip.duration - tick, 1e-6);
+  const u = Math.min((t - tick) / span, 1);
+  return 1 + (tail - 1) * (u * u * (3 - 2 * u));
+}
+
+/**
+ * Add `amount` degrees of sagittal lean to `clip`, profiled in time.
+ * Mutates and returns `clip`.
+ *
+ * Key TIMES are never touched, and no track is created, so `duration`,
+ * `impact.tick` and every startup/active/recovery count survive by
+ * construction. Only the five spine-and-skull bones are written; `hips` and
+ * everything below it are left bit-identical on purpose.
+ *
+ * @param {import('../AnimationFormat.js').Clip} clip
+ * @param {number|[number, number]} spec  amount in degrees, or `[amount, tail]`
+ */
+export function sagittal(clip, spec) {
+  const [amount, tail] = Array.isArray(spec) ? spec : [spec, 0.35];
+  if (!amount) return clip;
+  for (const bone in SAGITTAL) {
+    const keys = clip.tracks[bone];
+    if (!keys) continue;
+    const g = SAGITTAL[bone] * amount;
+    for (const k of keys) k.r[0] += g * sagittalProfile(clip, k.t, tail);
+  }
+  return clip;
+}
+
 /**
  * Transpose a list of whole-body keyframes into a Clip.
  *
@@ -976,3 +1116,21 @@ const IDLE_CONTRA = {
   'idle.fight': 1, 'idle.breathe': 1, 'idle.taunt': 1, 'idle.lowHealth': 1, 'idle.crouch': 1,
 };
 for (const id in IDLE_CONTRA) contrapposto(IDLE_CLIPS[id], IDLE_CONTRA[id]);
+
+// ---------------------------------------------------------------------------
+// SAGITTAL LEAN, applied to the idle set. See the long note above `sagittal`.
+//
+// `idle.fight` is on screen more than any other clip in the game and is what the
+// DEFENDER stands in for five of the seven panels of `17-anim-strip`. Measured
+// on it through the fight camera: on-screen torso lean -1.1 -> +10.5 deg and the
+// skull 2 -> 44 px forward of the pelvis centre line, at a cost of exactly
+// 0.0000 mm on every bone from the pelvis down.
+//
+// `idle.lowHealth` and `idle.crouch` take almost nothing because they had
+// already been authored to 10.5 and 6.7 deg -- they were the two clips in the
+// idle set that were not standing to attention.
+// ---------------------------------------------------------------------------
+const IDLE_SAGITTAL = {
+  'idle.fight': 16, 'idle.breathe': 12, 'idle.taunt': 14, 'idle.lowHealth': 2, 'idle.crouch': 4,
+};
+for (const id in IDLE_SAGITTAL) sagittal(IDLE_CLIPS[id], IDLE_SAGITTAL[id]);

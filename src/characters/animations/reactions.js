@@ -18,7 +18,7 @@
  */
 
 import { ease } from '../AnimationFormat.js';
-import { STANCE, STANCE_Y, CROUCH, add, over, makeClip, pinAt, carry, contrapposto } from './idle.js';
+import { STANCE, STANCE_Y, CROUCH, add, over, makeClip, pinAt, carry, contrapposto, sagittal } from './idle.js';
 
 // ---------------------------------------------------------------------------
 // OVERLAPPING ACTION — `whip`.
@@ -820,3 +820,29 @@ const CONTRA_TABLE = {
   'r.groundBounce': 1, 'r.koFall': 0.4, 'r.koSlump': [1, 'full-skipR'],
 };
 for (const id in CONTRA_TABLE) contrapposto(REACTION_CLIPS[id], CONTRA_TABLE[id]);
+
+// ---------------------------------------------------------------------------
+// SAGITTAL LEAN. See the long note above `sagittal` in ./idle.js.
+//
+// Measured, not asserted: sagittal pitch converts to ON-SCREEN diagonal at very
+// nearly 1:1 under both cameras this axis is judged through, while the coronal
+// roll `contrapposto` writes converts at between -6.9 and +0.7 deg and at ~0 on
+// the attack contact frames. This operator never keys `hips`, so every bone from
+// the pelvis down is bit-identical -- 0.0000 mm on hips, hips, knees, ankles,
+// feet and toes at every tick -- and no foot skate, burial or leg-compensation
+// question arises at all.
+//
+// Amount is the largest the gate sweep accepted against a target of 12 deg of
+// on-screen lean. Sign is the direction the body is being
+// taken: a block and a guard braces BACK, a launch/fall/spin arches BACK, a
+// flinch, stagger, crumple or slump folds FORWARD around the blow. The eight
+// ground and wall reactions take nothing -- `r.getUp` and `r.airFlail` already
+// read -93 deg of on-screen lean, `r.knockdownFace` +42, and adding to a body
+// that is already horizontal is not a diagonal.
+// ---------------------------------------------------------------------------
+const SAGITTAL_TABLE = {
+  'r.blockHigh': -16, 'r.blockImpact': -26, 'r.blockLow': -16, 'r.crumple': 16,
+  'r.flinchHigh': 16, 'r.flinchLow': 16, 'r.flinchMid': 16, 'r.koFall': -16, 'r.koSlump': 16,
+  'r.launch': -16, 'r.spinFall': -16, 'r.stagger': 16, 'r.sweepFall': -16,
+};
+for (const id in SAGITTAL_TABLE) sagittal(REACTION_CLIPS[id], SAGITTAL_TABLE[id]);

@@ -75,7 +75,7 @@
 
 import { validateClip } from '../AnimationFormat.js';
 import { whip, lead } from './reactions.js';
-import { carry } from './idle.js';
+import { carry, sagittal } from './idle.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -1920,6 +1920,49 @@ const CARRY = {
   'k.stomp': 2, 'k.diveKick': 2,
 };
 for (const id in CARRY) carry(KICK_CLIPS[id], { N: CARRY[id], pins: [KICK_CLIPS[id].impact.tick] });
+
+// ---------------------------------------------------------------------------
+// SAGITTAL LEAN. See the long note above `sagittal` in ./idle.js.
+//
+// THIS SET IS THE POINT OF THAT OPERATOR. `contrapposto` reached 77 of 92 clips
+// and NONE of the thirteen kicks, because a stance-solved leg compensation moves
+// a foot at -104 deg of hip flex by 60-210 mm. `sagittal` never keys `hips`, so
+// every bone from the pelvis down is bit-identical here — measured, 0.0000 mm on
+// hips, both hips, knees, ankles, feet and toes at every tick of every clip — and
+// a kick's hitbox lives on a foot or a knee, so the whole torso is free at the
+// contact tick.
+//
+// Sign is not chosen: where the clip already commits >= 3 deg of on-screen lean
+// the operator amplifies it, and where it does not the torso counterbalances the
+// sagittal travel of whichever limb the rig says actually swings.
+//
+// Amount is the largest the gate sweep accepted, targeting 18 deg of on-screen
+// lean at the contact tick under the fight camera. What it bought, measured at
+// each clip's own `impact.tick`, with the striking-anchor movement beside it:
+//
+//   k.midKick      -0.4 ->  -17.7 deg   anchor 0.000 mm   ratio 1.00 -> 1.00
+//   k.lowKick       0.6 ->  -17.8       anchor 0.000      1.00 -> 1.00
+//   k.sideKick      7.1 ->   18.1       anchor 0.000      1.00 -> 1.00
+//   k.highKick     -8.0 ->  -17.6       anchor 0.000      1.00 -> 1.00
+//   k.launcherKick -9.0 ->  -17.6       anchor 0.000      1.00 -> 1.00
+//   k.jumpKick      4.8 ->   17.9       anchor 0.000      0.61 -> 0.61
+//   k.kneeStrike    6.3 ->   17.4       anchor 0.000      0.99 -> 0.99
+//   k.axeKick     -12.6 ->  -17.3       anchor 0.000      1.00 -> 1.00
+//
+// FIVE KICKS TAKE NOTHING AND EACH FOR A NAMED REASON. `k.sweep` (-25 deg) and
+// `k.diveKick` (+24) are already past the target on their own. The other three
+// are blocked by their own move data rather than by the rig: `k.roundhouse`,
+// `k.spinKick` and `k.stomp` each declare a HAND box alongside the foot box
+// (`foot_R,ankle_R,hand_R,wrist_R` for the roundhouse), and a hand is carried by
+// the chest — so the smallest amount on the sweep already moves a declared
+// striking anchor 47, 631 and 262 mm. That is the 1 mm gate doing its job, and
+// it is worth knowing that those three "kicks" can hit with a fist.
+// ---------------------------------------------------------------------------
+const SAGITTAL_TABLE = {
+  'k.axeKick': -6, 'k.highKick': -10, 'k.jumpKick': 14, 'k.kneeStrike': 12,
+  'k.launcherKick': -10, 'k.lowKick': -22, 'k.midKick': -18, 'k.sideKick': 30,
+};
+for (const id in SAGITTAL_TABLE) sagittal(KICK_CLIPS[id], SAGITTAL_TABLE[id]);
 
 for (const id in KICK_CLIPS) validateClip(KICK_CLIPS[id], BONE_NAMES);
 

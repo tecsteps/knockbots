@@ -37,7 +37,7 @@
 
 import { validateClip } from '../AnimationFormat.js';
 import { lead } from './reactions.js';
-import { carry, contrapposto } from './idle.js';
+import { carry, contrapposto, sagittal } from './idle.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -697,3 +697,25 @@ const CONTRA_TABLE = {
   't.throwBreak': 1, 't.beingThrown': 1, 't.beingGrabbed': 1,
 };
 for (const id in CONTRA_TABLE) contrapposto(THROW_CLIPS[id], CONTRA_TABLE[id]);
+
+// ---------------------------------------------------------------------------
+// SAGITTAL LEAN. See the long note above `sagittal` in ./idle.js.
+//
+// Measured, not asserted: sagittal pitch converts to ON-SCREEN diagonal at very
+// nearly 1:1 under both cameras this axis is judged through, while the coronal
+// roll `contrapposto` writes converts at between -6.9 and +0.7 deg and at ~0 on
+// the attack contact frames. This operator never keys `hips`, so every bone from
+// the pelvis down is bit-identical -- 0.0000 mm on hips, hips, knees, ankles,
+// feet and toes at every tick -- and no foot skate, burial or leg-compensation
+// question arises at all.
+//
+// Amount is the largest the gate sweep accepted against a target of 10 deg of
+// on-screen lean. `t.grabAttempt` takes nothing: its
+// hitbox is on both hands and the smallest amount on the sweep moves them 451 mm.
+// `t.beingThrown` and `t.beingGrabbed` take nothing because a passive body has no
+// direction this operator can defend picking.
+// ---------------------------------------------------------------------------
+const SAGITTAL_TABLE = {
+  't.grabWhiff': 12, 't.throwBack': 12, 't.throwBreak': 12, 't.throwForward': 12,
+};
+for (const id in SAGITTAL_TABLE) sagittal(THROW_CLIPS[id], SAGITTAL_TABLE[id]);

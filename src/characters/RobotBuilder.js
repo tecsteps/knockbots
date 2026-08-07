@@ -5410,6 +5410,56 @@ function buildMechanism(rig, spec) {
 // is fifteen times, which no fastener can be scaled to; it has to be a relief
 // that covers a whole plate. Straps were the obvious candidate and they are
 // disproved below.
+//
+// --- ROUND 36: THE TARGET IT WAS AIMING AT DOES NOT RE-DERIVE ---------------
+//
+// "min 11.52, median 18.57, max 24.91 over the six closeup references" is the
+// number four rounds of work on this axis have been steered by, and it is not
+// the same statistic as the 8.2 it is compared against. Re-derived here from
+// the reference JPEGs and shots/02-closeup-face.png with ONE instrument applied
+// identically to both sides -- 96px non-overlapping tiles, mc = 100 * RMS(L -
+// box4 L) / mean(L) on Rec.709 luma of the stored sRGB bytes, tiles declared by
+// rects listed in the tool, null re-run bit-identical, positive controls a
+// sigma-1 blur (7.51 -> 4.40) and an 80% unsharp (7.51 -> 12.19):
+//
+//     statistic over on-subject tiles      ours    reference: min / median / max
+//     mean                                 8.18        7.75 / 13.79 / 24.03
+//     median                               7.51        6.41 / 12.90 / 23.30
+//     75th percentile                     10.24       10.27 / 20.05 / 29.66
+//
+// Our value reproduces: 8.18 against the reported 8.22, 0.5%. **The reference
+// band does not.** The reported 11.52 / 18.57 / 24.91 is nowhere near the mean
+// or median rows and sits right on the p75 row. So the deficit was computed
+// with our surface at its mean and the reference at its busiest quarter. On a
+// matched statistic we are at 59% of the reference median, not 44%, and we are
+// ABOVE the reference minimum rather than below it -- tekken8_03 measures 7.75
+// and tekken8_09 measures 9.35 on the same instrument.
+//
+// Two more things the same instrument says, and they matter more than the
+// halved gap:
+//
+//   1. The metric is a feature-DENSITY measure, not a material measure. Resample
+//      any image in the set by 1.45x and it falls 30-35% -- ours and every
+//      reference alike, monotone from 0.60x to 1.75x. A framing difference of
+//      the same size as the reported deficit produces the reported deficit.
+//   2. The SAME BUILD is at or above the reference median at both framings the
+//      game actually plays at. Mean over on-subject tiles: 01-hero-idle 27.30
+//      and 16.10 for the two fighters, 03-full-body 14.58, against the median
+//      of the six reference means, 13.79. Only the 2003 px/m parked closeup is
+//      below it.
+//
+// None of that says the surfaces are finished -- the axis is 66 because a critic
+// looked at them. It says the specific arithmetic this pass was tuned against
+// -- "reach 11.52, therefore 25% coverage, therefore a whole-plate relief" --
+// rests on an unmatched comparison, and the coverage target derived from it
+// should be re-derived before anyone spends another round of geometry on it.
+// Matched, the same mixing formula needs 8.18 -> 13.79 against an 18.2 surface,
+// which is 47% coverage, not 25%: the honest number is WORSE, and that is the
+// clearest argument yet that coverage is the wrong lever and the 9.46 of the
+// armour itself is the only one that can move this.
+//
+// (Also unreconciled and left as found: this pass is quoted at 18.23 here and
+// at 18.79 sixty lines further down, for the same measurement.)
 // ---------------------------------------------------------------------------
 
 /**
