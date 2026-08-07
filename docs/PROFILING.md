@@ -2445,3 +2445,51 @@ scoring loop is only as good as its instruments, and this project spent thirty-t
 against numbers that were systematically kind to it.
 
 67.5 is the first average this project has produced that anyone should build on.
+
+## A generated asset with no offline validator: the typeface shipped rejected
+
+All eight cuts of the generated face were refused by Chromium — "Invalid font data in ArrayBuffer" —
+so every UI element fell back to the system stack, **which is exactly the bug the generated face was
+written to fix**. The round-35 capture recorded it in `manifest.errors` and was not certifiable.
+
+One line, `FontBuilder.js` `cmapFormat4()`:
+
+```
+let sr = 2; let es = 0;          // sr seeded at 2, es at 0
+while (sr * 2 <= n) { sr *= 2; es++; }
+```
+
+`entrySelector` lands one below log2(searchRange). With segCount 11 it wrote **2 where the spec
+requires 3**, and Chromium's sanitiser validates that field and refuses the whole file. The identical
+computation in the sfnt header seeds `sr` at 1 and was correct — so the same invariant was written
+twice in one file, once right and once wrong.
+
+**Nothing in this project could have caught it.** `check.mjs` imports `Typeface.js` through a DOM shim
+where `FontFace` does not exist, so `installKbFonts()` takes its no-op path and returns `[]`. The font
+was never parsed by anything until it reached a browser. That is the same shape as every other silent
+failure recorded here: **the pipeline reported success because nothing was checking the artefact it
+produced.**
+
+The agent that found it verified against the arbiter rather than by inspection — it patched the single
+16-bit field in the *compiled bytes* first, watched Chrome go REJECTED -> LOADED, and only then
+changed the source. That is the right order: prove the diagnosis on the thing that rejects it before
+editing the thing that produces it.
+
+**Now guarded offline.** `compileAll()` runs fine in node — only registration needs a DOM — so
+`check.mjs` builds all eight cuts and validates the binary-search invariants in both places they
+appear, the sfnt header and every cmap format-4 subtable. Proven by reintroducing the exact defect:
+
+```
+with the bug     typeface: 8 cuts compiled, 16 structurally invalid
+                 FAIL font Knockbots Display 400: cmap4 searchRange/entrySelector/rangeShift
+                      16/2/6, expected 16/3/6 for segCount 11
+restored         typeface: 8 cuts compiled, 0 structurally invalid
+```
+
+A validator that has never been shown to fail is not a validator. This one was tested against the
+real defect before being trusted — the same discipline that caught the esbuild pre-flight reporting
+"whole graph parses" over a genuinely broken file.
+
+**The general rule this project keeps rediscovering:** every generated artefact needs a validator that
+runs where the artefact is *built*, not only where it is *consumed*. Meshes, textures and audio are
+all generated in code here too, and none of them has one either.

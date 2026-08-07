@@ -210,6 +210,77 @@ if (moves.mod?.MOVES && clips.mod?.CLIPS) {
   }
 } else if (moves.missing) warn.push('no move list yet');
 
+/*
+ * 3c. The generated typeface must be STRUCTURALLY VALID, not merely produced.
+ *
+ * All eight cuts shipped rejected by Chromium — "Invalid font data in
+ * ArrayBuffer" — so every UI element fell back to the system stack, which is
+ * precisely the bug the generated face exists to fix. The cause was one seed in
+ * `cmapFormat4`: `sr` started at 2 while `es` started at 0, so entrySelector
+ * landed one below log2(searchRange). With segCount 11 it wrote 2 where the spec
+ * requires 3, and Chromium's sanitiser validates that field and refuses the
+ * whole file.
+ *
+ * NOTHING IN THIS PROJECT COULD HAVE CAUGHT IT. This checker imports Typeface.js
+ * through a DOM shim where `FontFace` does not exist, so `installKbFonts()` takes
+ * its no-op path and returns []. The font was never parsed by anything until it
+ * reached a browser — a generated asset with no offline validator, which is the
+ * same shape as every other silent failure here: the pipeline reported success
+ * because nothing was checking the thing it produced.
+ *
+ * `compileAll()` runs fine in node — only registration needs a DOM — so the bytes
+ * can be validated offline. This checks the binary-search invariants that
+ * actually killed it, in both places they appear, rather than trusting either
+ * loop to have been written correctly.
+ */
+const typeface = await tryImport('src/ui/Typeface.js');
+if (typeface.mod?.compileAll) {
+  try {
+    const cuts = typeface.mod.compileAll();
+    let bad = 0;
+    for (const cut of cuts) {
+      const b = cut.bytes instanceof ArrayBuffer ? new DataView(cut.bytes) : new DataView(cut.bytes.buffer);
+      const name = `${cut.family} ${cut.weight}`;
+      // sfnt header: numTables, searchRange, entrySelector, rangeShift
+      const numTables = b.getUint16(4);
+      const sr = b.getUint16(6), es = b.getUint16(8), rs = b.getUint16(10);
+      const expSr = 16 * 2 ** Math.floor(Math.log2(numTables));
+      const expEs = Math.floor(Math.log2(numTables));
+      if (sr !== expSr || es !== expEs || rs !== numTables * 16 - expSr) {
+        bad++;
+        fail.push(`font ${name}: sfnt header searchRange/entrySelector/rangeShift `
+          + `${sr}/${es}/${rs}, expected ${expSr}/${expEs}/${numTables * 16 - expSr}`);
+      }
+      // Locate cmap and validate its format-4 subtable the same way.
+      for (let i = 0; i < numTables; i++) {
+        const off = 12 + i * 16;
+        const tag = String.fromCharCode(b.getUint8(off), b.getUint8(off + 1), b.getUint8(off + 2), b.getUint8(off + 3));
+        if (tag !== 'cmap') continue;
+        const cmapOff = b.getUint32(off + 8);
+        const nSub = b.getUint16(cmapOff + 2);
+        for (let s = 0; s < nSub; s++) {
+          const subOff = cmapOff + b.getUint32(cmapOff + 4 + s * 8 + 4);
+          if (b.getUint16(subOff) !== 4) continue;
+          const segX2 = b.getUint16(subOff + 6);
+          const csr = b.getUint16(subOff + 8), ces = b.getUint16(subOff + 10), crs = b.getUint16(subOff + 12);
+          const segCount = segX2 / 2;
+          const eSr = 2 * 2 ** Math.floor(Math.log2(segCount));
+          const eEs = Math.floor(Math.log2(segCount));
+          if (csr !== eSr || ces !== eEs || crs !== segX2 - eSr) {
+            bad++;
+            fail.push(`font ${name}: cmap4 searchRange/entrySelector/rangeShift ${csr}/${ces}/${crs}, `
+              + `expected ${eSr}/${eEs}/${segX2 - eSr} for segCount ${segCount} `
+              + '— Chromium rejects the whole file on this and every element falls back to a system font');
+          }
+        }
+      }
+    }
+    console.log(`typeface: ${cuts.length} cuts compiled, ${bad} structurally invalid`);
+  } catch (e) {
+    fail.push(`typeface: compileAll threw — ${e.message.split('\n')[0]}`);
+  }
+}
+
 // 4. Roster sanity.
 const roster = await tryImport('src/characters/roster.js');
 if (roster.mod?.ROSTER) {
