@@ -1807,6 +1807,22 @@ async function main() {
      * swapped -- with chars [1, 0], fighter 0 should be Kestrel, and that is the
      * assumption nobody has verified.
      *
+     * CONFIRMED, so nobody re-opens the "maybe the critic misread it" branch:
+     * the four palettes are unmistakable and could not be confused for each
+     * other. vulkan primary #4A2B1E with accent #FF6A1A is rust and orange;
+     * kestrel is #E8EEF5 white with #00A8FF blue; ronin is #141418 black over
+     * #E6E1D6 cream with a red accent; bastion is #2E3946 slate with #3A7BFF.
+     * A critic reporting "rust/copper on all four" is describing vulkan and
+     * cannot be describing any of the other three. The observation is sound and
+     * the change did not take.
+     *
+     * Also eliminated by static reading, so the next person does not repeat it:
+     * enterMatch(shot) runs at the top of the per-shot loop and the clipStrip
+     * branch is ~160 lines later, so ordering is not the problem; and the only
+     * remaining startMatch(0, 1) in the file after that point is the perf probe,
+     * which runs after every shot. The guard LOOKS correct. It is not doing what
+     * it looks like, and finding out why needs a run, not another read.
+     *
      * Treat the ANALYSIS above as sound and the MECHANISM as unproven. The axis
      * really has only ever been scored on one robot; this is still the right fix
      * to make; it is just not yet made. ***
