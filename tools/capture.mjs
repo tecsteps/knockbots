@@ -1578,6 +1578,29 @@ async function main() {
   await server.listen();
   const url = `http://127.0.0.1:${PORT}/`;
 
+  /*
+   * TAKE THE LOCK BEFORE LAUNCHING THE BROWSER, NOT AFTER.
+   *
+   * This used to sit below `newPage`, which leaves a window several seconds wide
+   * -- the whole of `chromium.launch` -- in which two processes have both found
+   * the directory unlocked and neither has written a lock. Two capture runs
+   * started eight seconds apart walked straight through it and shared one output
+   * directory for six minutes.
+   *
+   * That is the SECOND time two runs have shared an output directory here
+   * (c562242 was the first, and this lock is what that commit added). The lock
+   * was never wrong; its placement was. A mutual-exclusion check that runs after
+   * you have already acquired the expensive resource is not mutual exclusion --
+   * it is a report, delivered too late to act on.
+   *
+   * The identical ordering bug appeared this same round in a hand-written probe:
+   * two copies launched their browsers and THEN entered a wait-for-quiet loop, so
+   * each held a Chromium open while waiting for the other's to disappear and
+   * neither ever took a reading. Same shape, same round, two different authors.
+   * Acquire first, then spend.
+   */
+  takeLock(OUT);
+
   const browser = await chromium.launch({
     args: [
       '--use-angle=metal',
@@ -1591,8 +1614,7 @@ async function main() {
   });
   const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1 });
 
-  takeLock(OUT);
-  /*
+    /*
    * Write an INCOMPLETE manifest before taking a single shot.
    *
    * The real manifest is written last, after every shot. That meant a run which
