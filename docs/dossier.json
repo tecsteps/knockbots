@@ -1,7 +1,7 @@
 {
  "status": {
-  "rev": "0.29.0",
-  "commits": "158",
+  "rev": "0.30.0",
+  "commits": "170",
   "modules": 69,
   "lines": "63k",
   "clips": 92,
@@ -1047,11 +1047,54 @@
      "state": "next"
     }
    ]
+  },
+  {
+   "phase": "PHASE 35",
+   "when": "Rounds 32–33",
+   "rev": "rev 0.30.0",
+   "title": "Six instruments failed, three counters worked, and the frame came back 0.45 milliseconds",
+   "paras": [
+    "Two rounds spent on the one hard constraint the charter states outright: sixty frames a second at 1080p. The game was missing it. It is still missing it, by 0.13 milliseconds, in one arena at one camera — and meeting it everywhere else. Before these rounds the miss was 0.58.",
+    "Almost none of that time went on rendering. It went on discovering that this project could not measure itself, and then building instruments that can. Six timing instruments failed. Wall clock in separate windows read a null arm at 18, 40 and 62 milliseconds. Paired blocks drifted 37 to 55 between arms. GPU timer queries reported 223 milliseconds of work inside an 84 millisecond frame — monotone in fill, but uncalibrated by a factor nobody could pin down. Amplification, which raises the signal by drawing a surface sixteen times, raises the noise with it, because contention scales with frame time. Each of those announced itself with an impossible number: negative costs, effects larger than the frame.",
+    "The last two did not announce themselves, and they are the ones worth remembering. A probe measuring repeated blocks off a single match start watched its median fall from 16.9 to 11.8 milliseconds — a clean, monotone, entirely fictional gain, because by the seventh block it was timing a knockout cinematic rather than a fight. And a quiet-gate that waited for the machine to clear matched its own wrapper shell in the process list, so it waited fifteen minutes for a machine that was already free. One manufactures a result, the other manufactures an obstacle, and both look like the system working correctly while you watch.",
+    "What did work were counters rather than stopwatches. A fragment counter that renders each layer alone against a real depth buffer and sums the pixels it writes. A coverage counter. A pixel-identity check. All three are bit-reproducible and completely immune to a busy machine — two runs at two framings agreed to half a per cent while six foreign browsers competed for the GPU. The rule that falls out of it is short: where a question can be answered by counting, do not time it.",
+    "Those counters immediately retracted a premise this project had been steering by for five rounds. A volumetric mote sheet had been described as covering forty per cent of the screen at four layers deep. Measured, it is three hundred and fifty-seven fragments — three and a half orders of magnitude smaller, and impossible beforehand, since the shader caps every mote at eleven pixels square. The false belief came from a raycast: Three's raycaster tests points against a one-metre distance threshold that has nothing whatever to do with their rendered footprint. A raycast is not a render.",
+    "The same counters found something no stopwatch and no screenshot could: three of the arena's five authored light shafts draw nothing at all. Two sit behind the back wall, one is off the left edge. Sixty per cent of the venue's volumetric lighting is tinted, breathed and updated every frame and retires zero pixels — and the quality ladder that thins the shafts on lower tiers removes the only two visible ones last, so a tier drop takes away all remaining atmosphere before it takes away anything invisible.",
+    "The frames that were recovered came from two shader folds, and both were defended without a clock. One material bound the same texture to three separate samplers, so every shaded pixel fetched one texel three times; another read a wetness mask out of a texture the normal-map chunk had already sampled at the same coordinate one line earlier. Ten texture units became eight; thirteen became twelve. Both verified by pixel identity — nought differing pixels out of two million, against a positive control that moves a million — on materials this project had already documented as sitting at the sixteen-sampler hardware limit.",
+    "The honest close is that the per-file split of that 0.45 milliseconds is not established. A replication found the baseline itself drifting by 0.25 milliseconds between sessions, which is exactly the size of the effects being attributed to individual files. Totals survive that; splits do not. Before dividing a measured total among causes, the drift between measurements has to be smaller than the pieces — and this project has now been caught by that same shape three times.",
+    "Nothing about how the game looks changed in either round, and a frozen-frame instrument with the camera pinned to literal coordinates proves it: the difference between the tree before and after sits at or below the difference between two captures of the same build, measured against a control that sees the key light at four to nine times the noise."
+   ],
+   "tags": [
+    {
+     "label": "60fps",
+     "state": "0.13ms short"
+    },
+    {
+     "label": "instruments",
+     "state": "repaired"
+    },
+    {
+     "label": "mote premise",
+     "state": "retracted"
+    },
+    {
+     "label": "dead shafts",
+     "state": "found"
+    },
+    {
+     "label": "sampler folds",
+     "state": "done"
+    },
+    {
+     "label": "per-file split",
+     "state": "unresolved"
+    }
+   ]
   }
  ],
  "deploy": {
   "url": "https://knockbots.vercel.app",
-  "rev": "0.29.0",
-  "note": "Deployed after round 31. Source on github.com/tecsteps/knockbots."
+  "rev": "0.30.0",
+  "note": "Deployed after round 33. Source on github.com/tecsteps/knockbots."
  }
 }
