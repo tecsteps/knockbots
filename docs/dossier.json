@@ -1,7 +1,7 @@
 {
  "status": {
-  "rev": "0.32.0",
-  "commits": "176",
+  "rev": "0.33.0",
+  "commits": "180",
   "modules": 69,
   "lines": "63k",
   "clips": 92,
@@ -11,7 +11,7 @@
  "verdicts": [
   {
    "axis": "Stage detail",
-   "score": 64
+   "score": 66
   },
   {
    "axis": "Interface craft",
@@ -23,7 +23,7 @@
   },
   {
    "axis": "Character rendering",
-   "score": 66
+   "score": 64
   },
   {
    "axis": "Impact & effects",
@@ -31,7 +31,7 @@
   },
   {
    "axis": "Animation quality",
-   "score": 60
+   "score": 62
   }
  ],
  "log": [
@@ -1174,11 +1174,54 @@
      "state": "re-priced"
     }
    ]
+  },
+  {
+   "phase": "PHASE 38",
+   "when": "Round 36 + external audit",
+   "rev": "rev 0.33.0",
+   "title": "The axis we optimised for two rounds points at the camera",
+   "paras": [
+    "Interface 76, lighting 72, impact 71, stage 66, character 64, animation 62. Average 68.5. Two rounds of pose work were aimed at the wrong axis, and two independent parties found it in the same hour.",
+    "An outside model was brought in with shell access and no stake in this project's assumptions, told to edit nothing, and asked to assume at least three uncaught measurement errors existed. It found six. Separately, this round's animation agent reached the same central conclusion from the rig rather than from pixels. Both say the camera-plane reasoning was inverted.",
+    "Measured by projecting the posed rig through the fight camera itself: eight degrees at the hips buys about one degree of on-screen lean per degree of sagittal pitch, three tenths of a degree for yaw, and for roll — which is what the contrapposto operator writes — between minus seven and plus one, and approximately zero on the attack contact frames. The null reads exact zeros in all thirty-six cells. The camera sits at zero lateral offset, because its own framing code clamps that term to zero when the fighters are symmetric, so it looks straight down a fighter's left-right axis. Sagittal lean is what it resolves. The outside audit measured the same thing from pixels and got twenty-two pixels of displacement for lean against eight for roll and six for twist.",
+    "The spine told the same story and nobody had decomposed it. The bow measurement was taken on the model's X axis — which is the camera axis. Split into components, the in-screen curve is nineteen millimetres across ninety-two clips with an interquartile spread of one point two. The in-screen spine curve is a single constant inherited from the rest pose and not one clip varies it. That is precisely the critic's complaint about a straight column, and the operator shipped last round could never have moved it.",
+    "The fix named for this round turned out not to be implementable, and the reason is worth more than the fix. Re-solving the compensation per keyframe needs a shared key-time grid, and only five of ninety-two clips have one; the rest sit off-grid with fractional key times, and different bones disagree about the easing at the same tick. Resampling would mean linearising eased segments, and bisecting a snap misstates it by nearly a fifth of its range — around ten degrees mid-swing.",
+    "So the agent shipped something better instead: an operator that never touches the hips at all, which makes the legs, the feet, the root and every leg-compensation question disappear by construction. Fifty-six of ninety-two clips took it. The thirteen kicks the previous operator could not touch are the entire point — a kick's hitbox is on a foot, so the torso is free at the moment of contact — and eight of them now take the full delta at zero millimetres of anchor movement, verified against a positive control on the same code path where the hand moves up to twenty-seven centimetres. On-screen lean at the judged tick went from three degrees to twelve, and the number of clips standing within five degrees of vertical fell from fifty-five to eleven.",
+    "The audit's most valuable finding was not about animation at all. The character axis has been steered for four rounds by a comparison of our mean against the reference's seventy-fifth percentile. Re-derived here on a third instrument, our fight framings measure twenty and twenty-one against a reference pooled median of fourteen — they exceed it. Only the parked closeup sits below. There is no general detail deficit on that axis; there is one framing that reads below reference and two that read above, and the work was steered by the weakest of the three against an incomparable statistic.",
+    "And the performance constraint is measured at a resolution the charter does not name. The charter says sixty frames a second at 1920 by 1080. The probe measures at eighty-five per cent scale — 1632 by 918 — while the critics score frames at full resolution. At native the documented cost is closer to twenty-two milliseconds, which is forty-six frames a second, not fifty-nine and a half. Every performance claim in this project now needs two numbers.",
+    "The method lesson is the one to keep. Nine measurement errors were found by internal agents across thirty-six rounds; an outside model found six more in a single pass, two of which redirect the project. The difference is not capability. Every internal agent was briefed with the numbers it was meant to check, and inherited them as context rather than as claims. A measurement record needs auditing by something that was not briefed from it."
+   ],
+   "tags": [
+    {
+     "label": "sagittal",
+     "state": "shipped"
+    },
+    {
+     "label": "camera plane",
+     "state": "was inverted"
+    },
+    {
+     "label": "per-key IK",
+     "state": "not implementable"
+    },
+    {
+     "label": "character deficit",
+     "state": "statistic mismatch"
+    },
+    {
+     "label": "60fps",
+     "state": "measured at wrong resolution"
+    },
+    {
+     "label": "external audit",
+     "state": "6 findings"
+    }
+   ]
   }
  ],
  "deploy": {
   "url": "https://knockbots.vercel.app",
-  "rev": "0.32.0",
-  "note": "Deployed after round 35. Source on github.com/tecsteps/knockbots."
+  "rev": "0.33.0",
+  "note": "Deployed after round 36. Source on github.com/tecsteps/knockbots."
  }
 }
