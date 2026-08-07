@@ -3056,3 +3056,49 @@ instrument this machine can currently run.
 Also confirmed: the faceting. `addPipeRun` builds hose with `TubeGeometry(..., radial = 6)` — a
 hexagonal cross-section, which is exactly the "4-5 discrete flat bands" the critic saw on the tubes in
 an extreme closeup.
+
+## The off-hand is not frozen and not animated: it is CARRIED
+
+The two previous instruments left one ambiguity, and it turns out to be the whole finding. A hand can
+travel two metres with a completely rigid arm if the chest it hangs off rotates — and that is exactly
+what a critic would describe as "the arm doesn't move", correctly, because an arm carried by the torso
+has no follow-through, no counterbalance and no independent silhouette.
+
+`tools/offhandown.mjs` samples each clip twice: as authored, and with the off-arm's own tracks
+deleted so those bones sit at A-pose rest and the hand is carried by the torso alone. The difference
+is the arm's own contribution. Null control ablates a leg and reads 0.000000 mm; positive control
+ablates the striking arm on a straight punch and collapses it 2782 -> 337 mm, 88% own.
+
+```
+clip              off-hand(mm)  carried-only(mm)   own%   the off-arm's own tracks
+p.straight              804              740      8%   shoulder,elbow,wrist,hand
+k.midKick               866              803      7%   shoulder,elbow
+p.uppercut             1735             1411     19%   shoulder,elbow,wrist,hand
+k.highKick             1275             1027     19%   shoulder,elbow
+k.lowKick               727              421     42%   shoulder,elbow
+k.roundhouse           2089             1199     43%   shoulder,elbow
+loco.runFwd            1774              195     89%   clavicle,shoulder,elbow
+loco.walkFwd            132              145    -10%   shoulder
+```
+
+**On the two most-used attacks in the game, the off-arm contributes 7-8% of its own travel.** The
+other 92% is the chest swinging it. The critic said the upper body looks the same across move types
+and it does, because on a straight punch and a mid kick the off-arm is doing essentially nothing —
+its 800 mm of travel is a passenger's.
+
+**`loco.runFwd` is the proof the rig can do this and the target to author against.** Same skeleton,
+same format, 89% own motion, and it is the only clip in the table carrying a `clavicle` track. The
+capability is not missing; it was authored once, for locomotion, and never for attacks.
+
+`loco.walkFwd` reads **-10%** — deleting the authored shoulder track makes the hand travel FARTHER.
+That track is damping the torso's carry rather than adding to it, which is a small defect of its own
+and the only negative in the set.
+
+**The fix is now precisely specified and needs no capture to verify:** author off-arm tracks on
+attacks — clavicle included, as the run has and no attack does — and re-run this instrument until
+`own%` on `p.straight` and `k.midKick` approaches the run's. The acceptance test is this table, the
+anchors are the striking limb and both feet, and none of it needs a GPU.
+
+That matters, because the machine has no disk headroom to capture anything, and this is the shape of
+work that can still be measured honestly while that is true: **the axis's defect, its cause, its fix,
+its target value and its acceptance test, all derived offline on the rig.**
