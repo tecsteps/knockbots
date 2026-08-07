@@ -4009,3 +4009,50 @@ That is the fourth time this session an agent has checked a premise instead of e
 assignment count, the ring lifetime, the per-fighter key, and now this. **Three of those four premises
 were mine and wrong.** The pattern is now strong enough to be a rule rather than an observation: hand
 agents hypotheses, never conclusions, and say which it is.
+
+## First win-rate report: 0-0-5, and the rim residual the author predicted
+
+The first critic scored under the new protocol and reported its record rather than leading with a
+number: **0 wins, 0 draws, 5 losses.** It also did three things the old protocol never produced:
+
+- **It refused to force a pick.** Two of its five pairs used `tekken8_07`, the documented outlier, and
+  it flagged both as low-confidence rather than folding them into the record at full weight.
+- **It named its own sample size against the standard.** *"This is a single critic's run, not the
+  required 3-pooled minimum — treat as one data point... Recommend pooling with at least 2 more
+  independent critics before treating 0-0-5 as final."*
+- **It told me not to trust it.** *"Worth checking directly against source rather than trusting my
+  read of a compressed screenshot."*
+
+That is what asking for a record instead of a score bought. A 45 would have carried none of it.
+
+## The pointed question earned its keep again
+
+**(a) Rim.** It reports interior tracing still present on `02-closeup-face` — grille bars, the
+diagonal head-plate seam, the tusk ring bands — while reading clean on the wides. **I checked, and it
+is right.** Much fainter than the reverted version, but there.
+
+I had verified `03-full-body` after the fix and it was clean, and I did not re-check the extreme
+closeup. **The one framing I skipped is the one that still fires.**
+
+The author predicted exactly this residual and wrote the decision rule in advance: *"If anything on
+the cast stands more than 40 cm proud of the body it will still fire; that's most of a torso depth, so
+I doubt it, but I can't rule it out from here. **If the next capture still shows interior lines, do
+not spend another round on it** — `rimGain = 0` is still a uniform write with no recompile, and the
+black point, the DOF fix and the tonal recession stand on their own."*
+
+So the decision is already made and does not need re-litigating: **if the pooled record from the other
+two critics confirms the residual, the rim goes back to 0.** It buys a clean silhouette on four
+framings and costs an artifact on the closest one, and this axis has already spent two rounds on it.
+
+**(b) Black point.** A distinction nobody had drawn: *"environment can go dark, character core-shadow
+cannot."* The night wides do reach genuine black in unlit corners — the grade change worked — but
+shadow-facing armour never crosses into near-black, because rim and fill are always present on the
+shadow side. The fix landed on the scene and not on the subject.
+
+**(c) Defocus.** *"Consistently present and reads correctly across all five frames. No complaint
+here."* That one is closed.
+
+**(d) Tonal recession.** *"Defocus is present but is blur-only — no accompanying desaturation with
+distance."* The term was added this round, so either it is too weak to read or it is not reaching the
+surfaces that matter. Unresolved, and the crowd ramp shipped after this capture, so it is not in these
+frames.
