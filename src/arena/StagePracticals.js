@@ -30,6 +30,7 @@ import { Rng } from '../core/Rng.js';
 import { bevelBox, place, mergeAll, boltRing, insetPanel, worldUv } from './GeoKit.js';
 import { fbm, stampText, blur, clamp01, smoothstep, makeTexture, encodeSrgb } from './ProcTex.js';
 import { PointBurst } from './StageParticles.js';
+import { registerFlashLight, setFlashLight, unregisterFlashLight } from '../engine/RenderPipeline.js';
 
 const FIXTURES = 4;
 
@@ -1483,7 +1484,15 @@ export class StagePracticals {
     this.sparks.points.name = 'arena.practicals.sparks';
     this.group.add(this.sparks.points);
 
-    this.sparkLight = new THREE.PointLight(0xffd9a0, 0, 9, 2);
+    // Hidden while dark, and hidden as part of the ganged flash group rather
+    // than on its own — see the flash-light note in `RenderPipeline.js`. This
+    // one is the highest-duty member of the group by a wide margin: the arc
+    // fires every 1.4-5.2s and lives 0.06-0.16s, so it asks for light roughly 3%
+    // of the time and is billed for 100% of it. It is also the member whose
+    // toggling is least dangerous, because it fires on the machinery at
+    // (10.35, 6.05, -13.0) on its own timer and never on a contact frame.
+    this.sparkLight = registerFlashLight(new THREE.PointLight(0xffd9a0, 0, 9, 2));
+    this.sparkLight.name = 'arena.practicals.sparkLight';
     this.sparkLight.position.copy(this.sparkPoint);
     this.sparkLight.castShadow = false;
     this.group.add(this.sparkLight);
@@ -1706,21 +1715,24 @@ export class StagePracticals {
     }
     if (this._arc > 0) {
       this._arc = Math.max(0, this._arc - dt);
-      this.sparkLight.intensity = this._arc > 0 ? 22 * (0.4 + Math.random() * 0.6) : 0;
+      setFlashLight(this.sparkLight, this._arc > 0 ? 22 * (0.4 + Math.random() * 0.6) : 0);
     } else if (this.sparkLight.intensity !== 0) {
-      this.sparkLight.intensity = 0;
+      setFlashLight(this.sparkLight, 0);
     }
     this.sparks.update(dt);
   }
 
   reset() {
     this.sparks.reset();
-    this.sparkLight.intensity = 0;
+    setFlashLight(this.sparkLight, 0);
     this._arc = 0;
     this._nextArc = 1.5;
   }
 
   dispose() {
+    // An arena change disposes this set and builds another; a light left in the
+    // flash group would gate it on a dead arena's intent.
+    unregisterFlashLight(this.sparkLight);
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.emitterMaterial.dispose();
     this.runMaterial.dispose();

@@ -52,6 +52,7 @@ import { StagePracticals } from './StagePracticals.js';
 import { arenaDef, ARENA_IDS, DEFAULT_ARENA } from './Arenas.js';
 import { PointBurst } from './StageParticles.js';
 import { triCount, mergeAll, worldUv } from './GeoKit.js';
+import { registerFlashLight, setFlashLight, unregisterFlashLight } from '../engine/RenderPipeline.js';
 
 /** Reflection buffer as a fraction of the drawing buffer, per quality tier. */
 const REFLECT_SCALE = { ultra: 0.6, high: 0.5, medium: 0.36, low: 0 };
@@ -332,13 +333,23 @@ export class Stage {
 
     // ONE flash light for both barriers, repositioned on strike.
     //
-    // Created here, before RenderPipeline.warmup, so the light count never
-    // changes and no material ever recompiles — that is the same hazard that
-    // cost 437-831ms per stall in the effects director.
-    //
     // It is one light rather than two because a fighter can only be driven into
     // one barrier at a time, and an analytic light is evaluated per pixel over
     // the whole frame whether or not its intensity is zero.
+    //
+    // ROUND 37: IT IS ALSO HIDDEN WHILE DARK. This comment used to say the
+    // light was created before `RenderPipeline.warmup` "so the light count never
+    // changes and no material ever recompiles", and that was the right trade
+    // when the 60fps gap was believed to be 0.13ms. At 1920x1080 — the
+    // resolution the charter actually names and the one nothing in this project
+    // was measuring — the gap is 5.40ms, and this light plus the two others like
+    // it are 2.60ms of it. `registerFlashLight` enrols it in the ganged group
+    // described in `RenderPipeline.js`: the three are shown and hidden together
+    // so the frame can only ever present two point-light counts, and `warmup`
+    // compiles both. The recompile hazard is real and it is answered there, not
+    // wished away here.
+    //
+    // Everything below is unchanged and still holds:
     //
     // Measured, paired A/B with the sim paused, 1080p, render scale pinned,
     // six alternations per point, hero framing. A shadowless PointLight in this
@@ -359,7 +370,20 @@ export class Stage {
     // and matrix work. A light that is dark 99% of the match is not free; it is
     // only invisible. It is just not worth 9.7ms, and claiming that it was
     // would have made this change look like a regression when re-measured.
-    this.wallLight = new THREE.PointLight(0xffe0b0, 0, 11, 2);
+    //
+    // FLAGGED, NOT RETRACTED: three per-light figures are on record and they do
+    // not reconcile. This block says 1.46-1.55 ms/light. `EffectsDirector`'s
+    // round-8 note says 1 light 28.8ms against 3 lights 32.5ms, i.e. 1.85
+    // ms/light. Round 37 measured all three of them off at 2.60ms (min 2.60,
+    // max 2.70, n=3), i.e. 0.87 ms/light. High and low differ by 2.1x. The one
+    // resolvable difference is the one the round-36 audit found everywhere else
+    // in this project: "1080p, render scale pinned" above does not say pinned to
+    // WHAT, and at the `high` tier's 0.85 the buffer is 1632x918, which is 72%
+    // of the pixels of the 1920x1080 this line claims. That accounts for a
+    // factor of 1.4 at most, not 2.1. Do not build on any of the three without
+    // re-deriving it at a stated resolution.
+    this.wallLight = registerFlashLight(new THREE.PointLight(0xffe0b0, 0, 11, 2));
+    this.wallLight.name = 'arena.wallLight';
     this.wallLight.position.set(ARENA_HALF_WIDTH - 0.4, 2.0, 2.0);
     this.wallLight.castShadow = false;
     this.root.add(this.wallLight);
@@ -448,11 +472,14 @@ export class Stage {
     const fR = this.walls.flickerAt(1);
     const side = fR > fL ? 1 : 0;
     const f = side === 1 ? fR : fL;
+    // `setFlashLight` rather than a bare intensity write: it records the light's
+    // intent, and `RenderPipeline.gateFlashLights` turns the whole group on or
+    // off once per frame from the OR of those intents.
     if (f > 0) {
       this.wallLight.position.x = (side === 1 ? 1 : -1) * (ARENA_HALF_WIDTH - 0.4);
-      this.wallLight.intensity = f * f * 26 * (0.55 + Math.random() * 0.45);
+      setFlashLight(this.wallLight, f * f * 26 * (0.55 + Math.random() * 0.45));
     } else {
-      this.wallLight.intensity = 0;
+      setFlashLight(this.wallLight, 0);
     }
   }
 
@@ -599,7 +626,7 @@ export class Stage {
     this.structure.reset?.();
     this.dust.reset();
     this.grit.reset();
-    this.wallLight.intensity = 0;
+    setFlashLight(this.wallLight, 0);
   }
 
   /**
@@ -639,6 +666,10 @@ export class Stage {
 
   dispose() {
     if (!this.ready) return;
+    // Before anything else: `setArena` builds a fresh root and a fresh light, so
+    // a wall light left in the flash group would keep a dead arena's object
+    // alive and gate the group on its stale intent.
+    unregisterFlashLight(this.wallLight);
     this.scene.remove(this.root);
     this.floor.dispose();
     this.walls.dispose();

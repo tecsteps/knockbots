@@ -246,6 +246,163 @@ function restoreSplitLayers(scene) {
   });
 }
 
+/**
+ * The two camera masks `ScenePass.#renderSplit` swaps between, derived from
+ * whatever mask the camera is carrying.
+ *
+ * Module-level because `warmup` needs the same two masks to prime programs for,
+ * and a second hand-written copy of this expression is exactly the kind of
+ * duplicate that drifts.
+ *
+ * @param {number} base the camera's own mask
+ */
+function splitMasks(base) {
+  return {
+    arena: (base & ~(SPLIT_GEOMETRY_BIT | SPLIT_LIGHT_BIT)) | GLOBAL_LIGHT_BIT | ARENA_LIGHT_BIT,
+    fighter: SPLIT_GEOMETRY_BIT | SPLIT_LIGHT_BIT | GLOBAL_LIGHT_BIT,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The flash-light group: three point lights that are dark almost all the time
+//
+// `Stage.wallLight`, `StagePracticals.sparkLight` and `EffectsDirector.
+// impactLight` are shadowless point lights that spend the overwhelming majority
+// of the match at intensity 0. Until round 37 they were also permanently
+// `visible`, on the global light layer, and therefore integrated per fragment
+// across both halves of the split beauty pass — 85% of which is the arena.
+//
+// THAT WAS A DELIBERATE, DOCUMENTED TRADE AND IT HAS BEEN RE-PRICED, NOT
+// DISCOVERED. `EffectsDirector` has carried the cost — 2.6ms — and the reason
+// since round 8: toggling a light's `visible` moves the light counts that three
+// folds into every material's program cache key, and the recompile that follows
+// was measured at 494ms, 831ms and 437ms in a single frame. On the impact light
+// that stall lands on the contact frame, which is the worst frame in a fighting
+// game to lose. Paying 2.6ms every frame to never hitch was right when the
+// 60fps gap was believed to be 0.13ms. The gap is 5.40ms at 1920x1080, the
+// resolution the charter actually names, and 2.6ms is 48% of it.
+//
+// THREE THINGS MAKE THE HIDE SAFE NOW, AND ALL THREE ARE COUNTED, NOT TIMED.
+//
+//  1. **The group is ganged.** The three are shown and hidden TOGETHER, on the
+//     OR of what they want, rather than independently. Hidden independently the
+//     frame can present four point-light counts (0,1,2,3) and therefore four
+//     program variants per camera mask; ganged it can present exactly two, 0 and
+//     3. That is the minimum possible warm surface, and it costs nothing
+//     visually: a light nobody asked for is still at intensity 0, exactly as it
+//     is today. Counted offline in `scratchpad/lightvariants.mjs`.
+//
+//  2. **A light-count change is not by itself a stall — this frame already does
+//     two of them, every frame.** In r185 `WebGLRenderStates.get` returns the
+//     same render state for every top-level `renderer.render` in a frame, so the
+//     arena half and the fighter half — which see 7 and 17 analytic lights —
+//     flip `lights.state.version` against each other twice per frame already,
+//     and every material re-runs `getProgram` twice per frame at 58fps with no
+//     stutter. What costs 494ms is not the transition, it is `acquireProgram`
+//     missing the cache.
+//
+//  3. **In r185 that cache is per-material and monotonic.** `getProgram` keeps
+//     `materialProperties.programs` as a Map keyed by program cache key, and
+//     `releaseProgram` is reached only from `onMaterialDispose`. A variant a
+//     material has compiled once is never evicted while the material lives. So
+//     priming both counts at warmup is permanent, not merely first-frame.
+//
+// The residual risk is a material that appears AFTER warmup — an arena change
+// rebuilds every arena material, a character swap rebuilds a robot's. Such a
+// material would hold only the variant that was current when it was first
+// drawn, and the other one would compile on the first flash. `RenderPipeline.
+// render` therefore watches the size of the program cache and re-warms the
+// group on the frame after it grows, which puts every compile on a frame that
+// was already compiling and never on a quiet one.
+//
+// Frame cost is UNMEASURED here: this change was made offline, on mechanism and
+// on counting, with no browser. See the note on `warmLightVariants` for the arm
+// the verify agent should run.
+// ---------------------------------------------------------------------------
+
+/**
+ * Intensity at or below which a flash light counts as dark.
+ *
+ * Not simply `> 0`. All three envelopes land on an exact zero today, but an
+ * envelope that ever landed on a denormal instead would toggle the group's
+ * visibility once per frame and turn a two-variant scene into a per-frame
+ * program lookup churn. At 1e-3 candela through a 9m window the brightest
+ * fragment the light can reach moves by well under one part in 255, so this is
+ * "dark to the frame buffer" rather than "small".
+ */
+const FLASH_DARK = 1e-3;
+
+/**
+ * Every registered flash light. Module-level rather than per-pipeline because
+ * the owners — `Stage`, `StagePracticals`, `EffectsDirector` — are handed a
+ * scene and never a pipeline, and this game runs one renderer.
+ * @type {Set<THREE.Light>}
+ */
+const _flashLights = new Set();
+
+/**
+ * Registers a point light whose owner will run it dark most of the time, and
+ * hides it. The owner must set intensity through `setFlashLight` from then on,
+ * and must call `unregisterFlashLight` when it disposes the light.
+ * @param {THREE.Light} light
+ * @returns {THREE.Light} the same light, so this can wrap a constructor call
+ */
+export function registerFlashLight(light) {
+  light.userData.flashWant = false;
+  light.visible = false;
+  _flashLights.add(light);
+  return light;
+}
+
+/** @param {THREE.Light} light */
+export function unregisterFlashLight(light) {
+  _flashLights.delete(light);
+}
+
+/**
+ * Sets a registered flash light's intensity and records whether it wants to be
+ * drawn. Visibility is NOT changed here — the whole group is gated once per
+ * frame by `gateFlashLights`, which is what keeps the reachable light-count set
+ * down to two.
+ * @param {THREE.Light} light
+ * @param {number} intensity
+ */
+export function setFlashLight(light, intensity) {
+  light.intensity = intensity;
+  light.userData.flashWant = intensity > FLASH_DARK;
+}
+
+/**
+ * Shows or hides the whole group on the OR of what its members want. Called
+ * once per frame from `RenderPipeline.render`, before anything reads the scene.
+ *
+ * FOR ANYONE WRITING AN IN-PAGE PROBE: a rig that freezes the sim and drives
+ * `composer.render()` directly bypasses this, so the group keeps whatever
+ * visibility the last real frame left it with. If the probe stages a contact
+ * frame by calling into `EffectsDirector` and then renders the composer itself,
+ * it must call this or it will photograph an impact with the impact light
+ * hidden. The published ablation rigs go through `RenderPipeline.render` and
+ * are fine.
+ *
+ * @returns {boolean} whether the group is lit this frame
+ */
+export function gateFlashLights() {
+  let want = false;
+  for (const l of _flashLights) {
+    if (l.userData.flashWant) { want = true; break; }
+  }
+  for (const l of _flashLights) l.visible = want;
+  return want;
+}
+
+/** Forces the group on or off regardless of intent. `warmup` only. */
+function forceFlashLights(on) {
+  for (const l of _flashLights) l.visible = !!on;
+}
+
+/** How many flash lights are registered; 0 means there is nothing to warm. */
+export function flashLightCount() { return _flashLights.size; }
+
 // ---------------------------------------------------------------------------
 // PCSS shadows
 //
@@ -1113,9 +1270,7 @@ class ScenePass extends Pass {
   #renderSplit(renderer) {
     const cam = this.camera;
     const original = cam.layers.mask;
-    const arenaMask =
-      (original & ~(SPLIT_GEOMETRY_BIT | SPLIT_LIGHT_BIT)) | GLOBAL_LIGHT_BIT | ARENA_LIGHT_BIT;
-    const fighterMask = SPLIT_GEOMETRY_BIT | SPLIT_LIGHT_BIT | GLOBAL_LIGHT_BIT;
+    const { arena: arenaMask, fighter: fighterMask } = splitMasks(original);
     const background = this.scene.background;
     const env = this.scene.environmentIntensity;
     try {
@@ -2460,7 +2615,18 @@ export class RenderPipeline {
     this.stats = {
       fps: 60, frameMs: 16.7, drawCalls: 0, triangles: 0,
       sceneDrawCalls: 0, sceneTriangles: 0, renderScale: 1,
+      // Program-cache counters. `programs` is the size of the renderer's global
+      // program cache; `flashVariantPrograms` is what the flash group's second
+      // light-count variant cost the last time it was warmed. Integers, and
+      // bit-reproducible under load — which is why the flash-light change is
+      // argued on them rather than on a frame time. See `warmLightVariants`.
+      programs: 0, flashVariantPrograms: 0,
     };
+
+    /** Last observed program-cache size; a change arms one variant re-warm. */
+    this._programCount = 0;
+    this._flashRewarm = false;
+    this._flashRewarmCooldown = 0;
 
     this.renderScale = 1;
     this._targetScale = 1;
@@ -2874,9 +3040,99 @@ export class RenderPipeline {
       this.composer.renderToScreen = wasToScreen;
     }
 
+    this.warmLightVariants(scene, cam);
+
     this.renderer.setRenderTarget(null);
     this.renderer.clear();
     this.renderer.info.reset();
+    this._programCount = this.renderer.info.programs?.length ?? 0;
+  }
+
+  /**
+   * Compiles the programs for the flash group's OTHER light count, so that
+   * showing or hiding it is a program-cache hit rather than a compile.
+   *
+   * See the flash-light note above `FLASH_DARK` for why the group can be hidden
+   * at all. This is the half of that argument that has to run: hiding the group
+   * moves `numPointLights` from 3 to 0, and a material that has never been drawn
+   * at 0 has to build a program the first time it is, which is the 437-831ms
+   * stall this project measured in round 8.
+   *
+   * FOUR MASKS, BECAUSE THE FRAME RENDERS FROM FOUR CAMERAS. `getParameters`
+   * takes the light counts from whatever camera mask the render is running
+   * under, so a program primed for one mask is not primed for another:
+   *
+   *   base     the camera as given — the unsplit path, which is what `medium`
+   *            and `low` use, since neither allocates a `ScenePass`
+   *   arena    the first half of the split: global + arena lights only
+   *   fighter  the second half: split + global lights
+   *   all      `PlanarReflector` runs its mirror camera on `enableAll` minus
+   *            `LAYER.NO_REFLECT`, and no light in this scene is on NO_REFLECT,
+   *            so the mirror integrates the union of both halves. Counted
+   *            offline it is byte-identical to the fighter half today, because
+   *            `ARENA_LIGHT_LAYER` is currently unoccupied — this arm is here so
+   *            that stays a measured fact rather than an assumption.
+   *
+   * The mirror is also the reason this cannot be done by rendering the composer
+   * twice: the reflection is armed once per frame by `Stage.update`, which has
+   * not run when `warmup` does, so the mirror may draw nothing at all here.
+   * `renderer.compile` does not care whether anything is on screen.
+   *
+   * COUNTING INSTRUMENT. `stats.flashVariantPrograms` is the size of the global
+   * program cache after this minus before it — that is, exactly what the extra
+   * light-count variant costs in programs. `stats.programs` is the total. Both
+   * are integers and both are bit-reproducible; neither is a timing.
+   *
+   * FOR THE VERIFY AGENT. The frame cost of this change is unmeasured. The arm:
+   * at renderScale 1.0, 1920x1080, sim paused, log `stats.flashVariantPrograms`
+   * at load, then land a heavy and diff `renderer.info.programs.length` across
+   * the contact frame. **The number that decides this is the program delta on
+   * the contact frame: it must be 0.** If it is 0 and the frame still hitches,
+   * the hitch is not compilation and this note is wrong.
+   *
+   * @param {THREE.Scene} scene
+   * @param {THREE.Camera} camera
+   */
+  warmLightVariants(scene, camera) {
+    if (!flashLightCount()) return;
+    const cam = camera || this._lastCamera || this.camera;
+    if (!scene || !cam) return;
+
+    const before = this.renderer.info.programs?.length ?? 0;
+    const originalMask = cam.layers.mask;
+    const { arena, fighter } = splitMasks(originalMask);
+    // `enableAll` as a mask, without mutating the camera to read it back.
+    const all = 0xffffffff;
+    // Only the masks this tier's chain actually renders from. Compiling the
+    // split masks on an unsplit tier — or the plain mask on a split one, where
+    // `#classify` has moved every light off layer 0 — manufactures a lights-off
+    // variant nothing will ever draw and charges full price for it.
+    const split = !!this._passes.scene && this.effects.splitLighting && this.effects.depthPrepass;
+    const masks = split ? [arena, fighter, all] : [originalMask, all];
+
+    try {
+      // Lit first, dark second, so the group is left in the state a quiet frame
+      // will be in and the shipping path is the one that was warmed last.
+      for (const on of [true, false]) {
+        forceFlashLights(on);
+        for (const mask of masks) {
+          cam.layers.mask = mask;
+          this.renderer.compile(scene, cam);
+        }
+      }
+    } catch (err) {
+      // A half-built scene must not be fatal — but it must be visible, because
+      // a warm that silently did nothing is a hitch waiting for an impact.
+      console.warn('[RenderPipeline] light-variant warm failed', err);
+    } finally {
+      cam.layers.mask = originalMask;
+      gateFlashLights();
+    }
+
+    const after = this.renderer.info.programs?.length ?? 0;
+    this.stats.programs = after;
+    this.stats.flashVariantPrograms = after - before;
+    this._programCount = after;
   }
 
   /**
@@ -2895,6 +3151,29 @@ export class RenderPipeline {
     this.#recordFrame(frameMs);
 
     this.renderer.info.reset();
+
+    // Re-warm before anything is drawn, on the frame AFTER the program cache
+    // grew. Something appeared that warmup never saw — a new arena's materials,
+    // a swapped character — and it holds a program for only one of the flash
+    // group's two light counts. Doing it here piles the compile onto a frame
+    // that is already adjacent to a compile, which is the whole point: the
+    // frame this must never land on is a contact frame.
+    if (this._flashRewarm && this._flashRewarmCooldown <= 0) {
+      this._flashRewarm = false;
+      // Half a second between re-warms. A material built fresh every frame by
+      // some future system would otherwise put a `renderer.compile` on every
+      // frame forever, and the failure mode of an unbounded self-heal is a
+      // permanent regression that looks like nothing in particular.
+      this._flashRewarmCooldown = 30;
+      this.warmLightVariants(scene, cam);
+      this.renderer.info.reset();
+    } else if (this._flashRewarmCooldown > 0) {
+      this._flashRewarmCooldown--;
+    }
+
+    // One gate for the whole group, before any pass reads the light set. See
+    // the flash-light note above `FLASH_DARK`.
+    gateFlashLights();
 
     // Wall-clock, not the 'dt' argument: that one is scaled during hitstop, and
     // what reprojection actually measured is real elapsed frames.
@@ -2923,6 +3202,17 @@ export class RenderPipeline {
       this.stats.sceneDrawCalls = info.calls;
       this.stats.sceneTriangles = info.triangles;
     }
+
+    // The program cache is monotonic within a material's life, so a growth here
+    // means a material this pipeline has never compiled was drawn. Arm one
+    // re-warm; it converges, because the second pass finds the variant already
+    // there and the count stops moving.
+    const programs = this.renderer.info.programs?.length ?? 0;
+    if (programs !== this._programCount) {
+      this._programCount = programs;
+      this._flashRewarm = flashLightCount() > 0;
+    }
+    this.stats.programs = programs;
 
     if (this.effects.adaptiveResolution) this.#adaptResolution();
   }

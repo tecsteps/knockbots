@@ -63,6 +63,7 @@ import { ShockwaveSystem, MAX_DISTORT_RINGS } from './ShockwaveSystem.js';
 import { DecalSystem, DECAL } from './DecalSystem.js';
 import { TrailSystem } from './TrailSystem.js';
 import { OverlayPass } from './OverlayPass.js';
+import { registerFlashLight, setFlashLight, unregisterFlashLight } from '../engine/RenderPipeline.js';
 
 // --- scratch ---------------------------------------------------------------
 const _v = new THREE.Vector3();
@@ -892,10 +893,11 @@ const IMPACT_LIGHT_RATE = 18.0;
  * no trace at the contact point at all.
  *
  * This is the one element of that glow that cannot be occluded by the plate it
- * sits on, and it is free: the light is already in the scene and permanently
- * visible (see the note on `impactLight`), so this is an intensity ramp on an
- * object that is billed whether it is lit or not. Creating or toggling a light
- * costs 437-831ms of material recompiles; modulating one costs nothing.
+ * sits on, and it is nearly free: the light is already in the scene and already
+ * lit for the flash this tail extends, so the ember costs no light-count
+ * transition of its own — it rides out the visible window the flash already
+ * opened. It does hold that window open for up to 0.9s rather than 0.11s, which
+ * is the one real cost of this term now that the group is hidden while dark.
  *
  * `EMBER_SHARE` is a fraction of the same peak, so it scales with weight for
  * free. `EMBER_LIGHT_RATE` is 1/0.7s, the middle of the `coreLife` band, so the
@@ -1056,19 +1058,44 @@ export class EffectsDirector {
       this.flashes.mesh,
     );
 
-    // The impact light. Added to the scene once and never removed OR HIDDEN.
+    // The impact light. Added to the scene once and never removed.
     //
-    // Two separate mistakes were measured out of this one object.
+    // Three separate mistakes have been measured out of this one object, and the
+    // first of them was un-made in round 37. Read all three before touching it.
     //
     // The first was `visible`. three.js counts only *visible* lights when it
     // builds a material's shader key, so flashing a hidden light on impact walked
     // `numPointLights` 4 -> 5 -> 6 and recompiled every material that got drawn.
     // Diffing `renderer.info.programs` across the stall frame showed 12, 20 and 8
     // new programs on those transitions, blocking a single frame for 494ms, 831ms
-    // and 437ms. That is the mid-combat hitch. It also recurs once per light-count
-    // variant, so three flashes overlapping would have bought a 7-light variant
-    // and a fourth stall. The light now stays visible for the life of the scene
-    // and is silenced with `intensity = 0`, which is not part of any shader key.
+    // and 437ms. That is the mid-combat hitch, and on THIS light it lands on the
+    // contact frame — the single worst frame in a fighting game to stutter.
+    //
+    // ROUND 37 HIDES IT AGAIN, AND THE HAZARD ABOVE IS ANSWERED RATHER THAN
+    // DISBELIEVED. What was wrong in round 8 was not the measurement, it was the
+    // conclusion that the only way to avoid the stall is to keep the light lit.
+    // Two mechanisms in three r185, both read out of its source rather than
+    // guessed, say otherwise:
+    //
+    //   - `WebGLRenderer.getProgram` keeps `materialProperties.programs` as a Map
+    //     keyed by program cache key, and `programCache.releaseProgram` is
+    //     reached only from `onMaterialDispose`. A light-count variant a material
+    //     has compiled once is retained for the life of that material. So
+    //     compiling both counts at warmup is permanent.
+    //   - `WebGLRenderStates.get` hands every top-level `renderer.render` in a
+    //     frame the same render state, so the split beauty pass — 7 analytic
+    //     lights on the arena half against 17 on the fighter half — already flips
+    //     `lights.state.version` twice per frame, every frame, at 58fps. The
+    //     transition is not what costs 494ms; the cache MISS is.
+    //
+    // `registerFlashLight` therefore enrols this light in the ganged flash group
+    // in `RenderPipeline.js` alongside `Stage.wallLight` and
+    // `StagePracticals.sparkLight`. The three are shown and hidden together, so
+    // the frame can present exactly two point-light counts — 3 and 0 — and
+    // `RenderPipeline.warmLightVariants` compiles both across every camera mask
+    // the frame renders from. The frame cost of the change is UNMEASURED; the
+    // counting arm that decides it is in that method's docstring, and it is a
+    // program-count delta across the contact frame that must be zero.
     //
     // The second was the pool size. Holding three of them visible fixes the
     // stall and then charges for it forever: measured by slow alternation with
@@ -1079,7 +1106,8 @@ export class EffectsDirector {
     // juggle filler hits are 0.33s apart, so the second and third light were
     // almost always idle and always billed. One light, retargeted per impact,
     // with the brightest live flash winning — see `#flashLight`.
-    this.impactLight = new THREE.PointLight(0xffd9a8, 0, 9, 2);
+    this.impactLight = registerFlashLight(new THREE.PointLight(0xffd9a8, 0, 9, 2));
+    this.impactLight.name = 'fx.impactLight';
     this.impactLight.castShadow = false;
     this.impactLight.userData.decay = 0;
     this.impactLight.userData.ember = 0;
@@ -1996,8 +2024,12 @@ export class EffectsDirector {
   }
 
   /**
-   * Aims the single impact light at a contact point. Nothing is created, added
-   * or shown; the light already lives in the scene, so no material recompiles.
+   * Aims the single impact light at a contact point. Nothing is created or
+   * added; the light already lives in the scene. It may become VISIBLE on this
+   * frame if the flash group was dark — that is the light-count transition
+   * round 8 forbade and round 37 pre-compiled instead, and the program-cache
+   * delta across this frame is the number that says whether that worked. See
+   * `RenderPipeline.warmLightVariants`.
    *
    * With one light there is a contention rule to get right. Several beats can
    * flash in the same frame — a heavy connecting at 18 candela while a ground
@@ -2015,7 +2047,7 @@ export class EffectsDirector {
     if (want < (l.userData.hot || 0)) return;
     l.position.copy(at);
     l.color.setHex(hex);
-    l.intensity = want;
+    setFlashLight(l, want);
     l.userData.peak = want;
     l.userData.hot = want;
     l.distance = 6.5;
@@ -2183,9 +2215,15 @@ export class EffectsDirector {
    * brightens *suddenly*.
    *
    * One envelope now, `peak * d^2` over a fixed short window, which is fast at
-   * the front, lands exactly on zero, and needs no cutoff. Nothing is created,
-   * shown or hidden here — see the note on `impactLight` in the constructor for
-   * why toggling a light's visibility is forbidden in this file.
+   * the front, lands exactly on zero, and needs no cutoff.
+   *
+   * **Landing exactly on zero is now load-bearing and not merely tidy.** The
+   * flash group is hidden when every member is dark, and `setFlashLight` calls
+   * anything at or below `FLASH_DARK` dark. An envelope that asymptotically
+   * approached zero instead of reaching it would hold the group visible for the
+   * rest of the round and give back the whole 2.6ms; one that oscillated across
+   * the threshold would toggle the point-light count once per frame. The
+   * explicit clamp to 0 when both terms expire is what guarantees neither.
    */
   #updateLights(dt) {
     const l = this.impactLight;
@@ -2199,8 +2237,7 @@ export class EffectsDirector {
     u.decay = d;
     u.ember = e;
     u.hot = peak * d * d;
-    l.intensity = u.hot + peak * EMBER_SHARE * e * e;
-    if (d <= 0 && e <= 0) l.intensity = 0;
+    setFlashLight(l, (d <= 0 && e <= 0) ? 0 : u.hot + peak * EMBER_SHARE * e * e);
   }
 
   /** Feeds the arena lighting and the depth prepass into the smoke shader. */
@@ -2347,15 +2384,32 @@ export class EffectsDirector {
     const ultra = q === 'ultra';
     const high = ultra || q === 'high';
 
-    // Silenced, not hidden, on the lower tiers: the light stays in the scene so
-    // that changing tier mid-session cannot recompile the world either. It costs
-    // its 2.6ms on every tier, which is the price of the tier switch being free.
+    // ROUND 37: THE 2.6ms IS NO LONGER THE PRICE OF THE TIER SWITCH BEING FREE.
+    //
+    // This used to read: "Silenced, not hidden, on the lower tiers: the light
+    // stays in the scene so that changing tier mid-session cannot recompile the
+    // world either. It costs its 2.6ms on every tier, which is the price of the
+    // tier switch being free." Two things retire that sentence.
+    //
+    // The tier switch is not free and was not free then. `high` -> `medium`
+    // drops `tier.depth`, so `RenderPipeline` swaps its `ScenePass` for a stock
+    // `RenderPass`, `restoreSplitLayers` puts every light back on layer 0, and
+    // every material in the scene takes a light-count it has never held. On top
+    // of that `Environment.setQuality` moves the rim, key-box and practical
+    // counts on the same call. The world already recompiles at that boundary,
+    // and this light being lit does nothing about it.
+    //
+    // And the group's visibility no longer depends on the tier at all: the light
+    // is hidden whenever the whole flash group is dark, which on `medium` and
+    // `low` is whenever the wall and spark lights are also dark. Turning
+    // `lightsEnabled` off costs no transition, because the light was already
+    // asking for nothing.
     this.lightsEnabled = high;
     if (!high && this.impactLight) {
       // Clear the decay too: `#updateLights` is gated on `lightsEnabled`, so a
       // flash interrupted by a tier change would otherwise keep a live countdown
       // that nothing is advancing.
-      this.impactLight.intensity = 0;
+      setFlashLight(this.impactLight, 0);
       this.impactLight.userData.decay = 0;
       this.impactLight.userData.ember = 0;
       this.impactLight.userData.hot = 0;
@@ -2395,7 +2449,7 @@ export class EffectsDirector {
       }
     }
     if (this.impactLight) {
-      this.impactLight.intensity = 0;
+      setFlashLight(this.impactLight, 0);
       this.impactLight.userData.decay = 0;
       this.impactLight.userData.ember = 0;
       this.impactLight.userData.hot = 0;
@@ -2426,6 +2480,9 @@ export class EffectsDirector {
   dispose() {
     for (const off of this._unsub) off();
     this._unsub.length = 0;
+    // The flash group is module-level in `RenderPipeline`, so a light left in it
+    // after its owner is gone keeps gating the group on a dead object's intent.
+    if (this.impactLight) unregisterFlashLight(this.impactLight);
     this.scene.remove(this.group);
     this.sparks?.dispose();
     this.fluid?.dispose();

@@ -2661,3 +2661,77 @@ judged on.
 
 The method point is the same one the audit made and it is now proven twice over: **an instrument that
 is never asked what it is measuring will keep answering a different question than the one you asked.**
+
+---
+
+# Round 37: the shipping tier clears 60fps. Native is ~1.8ms short.
+
+Independently re-measured after the round, three reps each, zero foreign browser roots:
+
+```
+                    before          after                       verdict
+shipping tier       17.03 ms        14.1 / 14.1 / 14.1 ms       70.9 fps   CLEARS 60
+native 1920x1080    22.05 ms        18.2 / 18.5 / 18.8 ms       ~54 fps    ~1.8 ms short
+```
+
+The verify agent reported 17.65ms native and 14.00 at the tier. My tier figure matches it exactly; my
+native figure is ~0.9ms higher, which sits inside the ~1.5ms between-session drift its own report
+flagged. **Reporting the smaller saving.** The delta is causal and reproduces; the absolute wanders.
+
+## The ranked per-light cost table this project never had
+
+Base 18.20ms at native, sham floor 0.7ms across six runs, positive control 1.45ms:
+
+```
+arm                                    ms recovered   range        dp95
+allSplit (whole fighter-only rig)          5.45      5.20-5.70    -17.10
+fighterKeys (2 shadowed spots)             3.00      2.80-3.20     -1.70
+fighterRims (4 spots)                      2.70      2.50-3.00     -3.25
+key                                        2.25      2.10-2.50     -2.65
+fighterBoxes (3 RectArea, LTC)             1.70      1.50-2.10     -3.65
+practicals                                 1.55      1.40-1.80     -2.95
+reflQuarter (mirror 240x135)               1.35      1.20-1.40     -0.40
+reflHalf (mirror 480x270)                  1.05      0.90-1.20
+```
+
+Nine rounds of lighting work happened without this table existing. Every one of them was guessing at
+the price of its own change.
+
+## Three re-derivations that corrected the brief
+
+**"22 analytic lights, 8 RectArea" is the CONSTRUCTED count and no fragment sees it.** Five of the
+eight RectAreas are `visible = false` on every shipping tier. The arena half integrates **6** lights,
+the fighter half **17**. The LTC integral runs **once** on the arena half and three times on the
+fighter half — not eight anywhere. Two agents reached this independently from different censuses.
+
+**The 1.50ms mirror derivation is dead, and it died for an instructive reason.** It took `~11ms fixed`
+from the charter's 28.2ms-baseline curve and subtracted it from a 17.0ms total measured elsewhere —
+differencing two machine states. Fitting a line to each resolution sweep separately, the *slope*
+reproduces and the *intercept* does not. The measurement was right and the derivation that
+contradicted it was wrong.
+
+**"The tier switch is free" was already false before round 8's trade was made.** `high -> medium`
+drops `tier.depth`, so the pipeline swaps `ScenePass` for `RenderPass`, `restoreSplitLayers` puts
+every light back on layer 0, and `Environment.setQuality` moves rim, key-box and practical counts on
+the same call. **The world already recompiles at that boundary.** The 2.6ms was buying protection only
+across ultra-to-high and medium-to-low.
+
+## The p95 anomaly is a dropped presentation, not extra work
+
+```
+tier     median 17.1   p95 34.7   ratio 2.03      2 x 16.67 vsync = 33.3
+native   median 22.05  p95 24.1   ratio 1.09
+```
+
+`dts` are rAF deltas — wall-clock between presentations, not GPU work. A 17.1ms frame against a
+16.67ms cadence misses by 0.4ms and occasionally slips a whole interval, doubling the delta. A 22.1ms
+frame has already missed every interval, so there is nothing left to double. **The 34.7ms tail is one
+dropped presentation, not 10ms of work**, and it is not worth chasing. The discriminator, if anyone
+wants certainty: report the full percentile ladder — bimodal at 17 and 34 with an empty middle means
+dropped frames; a smooth ramp means real work.
+
+## One harness trap, found the expensive way
+
+`ps -ax -o command | grep chrome-headless-shell | grep -v -- --type= | grep -vc grep` **exits 1 on a
+zero count**, so `gate && node ...` silently skips the work it was guarding. It cost the verify agent
+a dead run. Use `N=$(...); [ "$N" -ne 0 ] && exit 1`.

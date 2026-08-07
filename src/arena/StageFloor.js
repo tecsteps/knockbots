@@ -20,6 +20,33 @@
  *      pass that used to sit in the post chain and add a second one on top of
  *      it is gone, and the roughness fade here was widened to cover the range
  *      that pass had been covering.
+ *
+ *      **This is the most expensive thing on the floor and it is not this
+ *      file.** `PlanarReflector` renders the whole scene a second time at 25.0%
+ *      of the main pass's pixel count — 960x540 at native, 816x459 at the
+ *      shipping tier — and its own docstring now carries the two retracted
+ *      estimates, the arithmetic that killed them, and a re-derived bracket of
+ *      2.5-3.4ms at native. It ships refreshing every OTHER frame
+ *      (`reflector.interval`, guarded against camera cuts), which halves that
+ *      into the mean frame time and takes nothing off the worst case. If the
+ *      reflection ever looks a frame late, that is where it comes from.
+ *
+ *      Nothing in this file's own gather has been changed on that account, and
+ *      the reason is a count rather than a preference. Both of the cheap
+ *      early-outs turn out to fire on **zero texels of this bake**, measured
+ *      over all 4,194,304 of them:
+ *
+ *          texels with wetness <= 0.02          0  (0.000%)  <- the SHIPPED guard
+ *          texels with roughness >= 0.98        0  (0.000%)  <- an exact k==0 early-out
+ *          max baked roughness              0.8784
+ *
+ *      So `if ( uReflStrength > 0.001 && wet > 0.02 )` reads like a gate and is
+ *      not one: **every shaded fragment of the deck takes all five
+ *      `texture2DProj` fetches**, and the deck is the largest surface in the
+ *      frame. That is an unpriced item and it is this file's, not the mirror's.
+ *      `uReflTaps` exists to price it — see the uniform — and the answer is not
+ *      being guessed at. Any threshold tighter than "exactly zero contribution"
+ *      is a visual budget, not a free lunch, and is not being spent blind.
  *   4. **Animated ripples**, scrolled in two directions and masked to the
  *      wetness channel. Amplitude is deliberately tiny: enough that the
  *      practicals crawl on the water, not enough to read as an ocean.
@@ -1237,12 +1264,26 @@ const FRAG_REFLECT_HOOK = /* glsl */ `
       coord.xy += wn.xz * uReflDistort * coord.w;
 
       // Roughness-proportional gather: a puddle mirrors, damp concrete smears.
+      //
+      // The wet > 0.02 test above reads like it keeps this off most of the
+      // deck. It does not — measured over the whole 2048px bake, ZERO texels sit
+      // at or below 0.02, so all five fetches run on every shaded floor
+      // fragment, and the floor is the largest surface in the frame. uReflTaps
+      // is the arm that prices them. At its shipped value of 5 the arithmetic
+      // below is unchanged to the bit; at 1 the cross collapses to the centre
+      // tap at full weight, which is four fewer RGBA16F fetches per floor pixel
+      // and a sharper, wrong-looking mirror. It is a PERF PROBE, not a tier
+      // setting, and it is a uniform rather than a define so both arms live in
+      // one compiled program and neither pays a recompile mid-measurement.
       float blurR = clamp( material.roughness * uReflBlur, 0.0, 0.030 ) * coord.w;
-      vec3 refl = texture2DProj( uReflection, coord ).rgb * 0.36;
-      refl += texture2DProj( uReflection, coord + vec4(  blurR, 0.0, 0.0, 0.0 ) ).rgb * 0.16;
-      refl += texture2DProj( uReflection, coord + vec4( -blurR, 0.0, 0.0, 0.0 ) ).rgb * 0.16;
-      refl += texture2DProj( uReflection, coord + vec4( 0.0,  blurR * 0.6, 0.0, 0.0 ) ).rgb * 0.16;
-      refl += texture2DProj( uReflection, coord + vec4( 0.0, -blurR * 0.6, 0.0, 0.0 ) ).rgb * 0.16;
+      vec3 refl = texture2DProj( uReflection, coord ).rgb;
+      if ( uReflTaps > 1.5 ) {
+        refl *= 0.36;
+        refl += texture2DProj( uReflection, coord + vec4(  blurR, 0.0, 0.0, 0.0 ) ).rgb * 0.16;
+        refl += texture2DProj( uReflection, coord + vec4( -blurR, 0.0, 0.0, 0.0 ) ).rgb * 0.16;
+        refl += texture2DProj( uReflection, coord + vec4( 0.0,  blurR * 0.6, 0.0, 0.0 ) ).rgb * 0.16;
+        refl += texture2DProj( uReflection, coord + vec4( 0.0, -blurR * 0.6, 0.0, 0.0 ) ).rgb * 0.16;
+      }
 
       // --- specular-lobe roll-off on the reflected radiance ------------------
       //
@@ -1348,6 +1389,7 @@ uniform float uReflFresnelBase;
 uniform float uReflDistort;
 uniform float uReflBlur;
 uniform float uReflKnee;
+uniform float uReflTaps;
 uniform vec2 uReflRough;
 uniform float uDetailScale;
 uniform float uDetailAmp;
@@ -1672,6 +1714,32 @@ export class StageFloor {
        * the band by 0.014/255 against a 0.79 floor. Not shipped.
        */
       uReflKnee: { value: S.reflKnee },
+      /**
+       * Taps in the reflection gather: 5 (shipped) or 1. A PERF ARM.
+       *
+       * It is here because the shipped guard on the gather turns out to guard
+       * nothing. `if ( uReflStrength > 0.001 && wet > 0.02 )` skips 0.000% of
+       * this bake — counted over all 4,194,304 texels, the minimum wetness on
+       * the deck is above 0.02 everywhere — so five `texture2DProj` fetches of
+       * an RGBA16F buffer run on every shaded fragment of the biggest surface in
+       * the frame, and nobody has ever priced them.
+       *
+       * 5 is bit-identical to the code this replaced. 1 collapses the cross to
+       * the centre tap at full weight: four fewer fetches per floor pixel, and a
+       * mirror that is sharper than the surface deserves. **Not a tier setting.**
+       * Both arms compile into one program through a uniform branch that is
+       * coherent across the whole draw, so an A/B costs no recompile and no
+       * divergence, which is the same discipline `uReflKnee` and
+       * `uReflFresnelBase` are held to two uniforms up.
+       *
+       * The arm to run: freeze a frame at native, alternate 5 / 1 / 5 / 1 in
+       * 2.5s holds, and report the delta with the base beside it. If it returns
+       * real milliseconds the gather is worth a proper separable blur on the
+       * mirror buffer instead of five taps per floor pixel; if it returns
+       * nothing, this uniform is the evidence that the deck is not fetch-bound
+       * and the next agent can stop looking here.
+       */
+      uReflTaps: { value: 5 },
       // Roughness at which the reflection starts and finishes fading out.
       uReflRough: { value: S.reflRough.clone() },
       uDetailScale: { value: S.detailScale },

@@ -30,27 +30,97 @@
  * frame where a decimated silhouette is legible as decimated, and the far level
  * is a level the game already considers acceptable at thirteen metres.
  *
- * What the pass actually costs, measured at 1080p on an M4 with the shipping
- * lighting rig: 51 draw calls and 4.1ms of a 41.8ms frame. Almost none of that
- * is the mirror's own geometry — deleting every merged stage mesh and the whole
- * hangar structure from it removes 27 of those draw calls and returns 1.2ms.
- * The cost is that a second set of fragments is shaded through the scene's
- * twenty-three real-time lights, eight of which are `RectAreaLight`s running
- * three's LTC integral. With those eight removed the entire reflection stack —
- * this pass plus the floor's gather — costs 0.6ms of a 16.4ms frame. The mirror
- * is not expensive; the shading it repeats is, and most of that repetition is
- * per-draw rather than per-pixel — rendering the same materials under a second
- * camera makes three refresh every material's uniforms, and with twenty-three
- * lights in the block that is not a small refresh. Hence `setSize` is not worth
- * tuning, and the only lever left here is the object list, which belongs to
- * whoever calls `exclude`.
+ * ---------------------------------------------------------------------------
+ * WHAT THIS PASS COSTS. Read this before touching anything, because three
+ * separate figures for it have been published here and two of them are dead.
  *
+ * RETRACTED, both of them, and the retractions are the useful part:
+ *
+ *   - **"51 draws, ~5ms of it fixed, so `setSize` is not worth tuning."** This
+ *     docstring used to carry a sweep — 540 lines to 360 returned 0.04ms, 540 to
+ *     120 returned 1.19ms, the pass switched off returned 6.42ms — and concluded
+ *     that five of six milliseconds were fixed per-frame cost. That triple is
+ *     **internally inconsistent and needs no external number to reject it.** If
+ *     OFF returns 6.42ms and dropping to 4.9% of the pixels returns only 1.19ms,
+ *     the pixel-proportional part is ~1.25ms and the fixed part ~5.2ms; but then
+ *     dropping to 44% of the pixels must return ~0.7ms, and it read 0.04ms.
+ *     Every reading was a single one, taken on a 40.5ms frame, i.e. a machine
+ *     state 1.8x slower than a quiet one today. Nothing in it survives.
+ *   - **"~1.50ms, derived from the charter decomposition."** That derivation
+ *     took a FIXED cost of ~11ms from the charter's 28.2ms-baseline curve and
+ *     subtracted it from a TOTAL of 17.0ms measured on a different machine
+ *     state, leaving "6.0ms of fill" and a rate of 4.00 ns/px. **A fixed cost
+ *     and a total from two different states cannot be differenced.** Fit a line
+ *     to each resolution sweep this project has recorded instead — the SLOPE is
+ *     what a resolution delta measures, and it reproduces where the intercept
+ *     does not:
+ *
+ *         dataset                                    F (ms)   k (ns/px)  max resid
+ *         charter decomposition, 28.2ms state, 3 pts   9.56     8.93       1.63
+ *         RenderPipeline sweep, 20.4ms state, 4 pts    6.68     6.64       0.09
+ *         round-37, quiet, native + tier, 2 pts        3.96     8.72       0.00
+ *
+ *     k lands in 6.6-8.9 ns/px across three unrelated sessions. F lands in
+ *     4.0-9.6ms and is an extrapolation to zero pixels. The 4.00 ns/px the
+ *     1.50ms figure was built on is low by 1.7-2.2x.
+ *
+ * WHAT THE PASS COSTS, RE-DERIVED, AND STILL NOT MEASURED AT NATIVE. The mirror
+ * is 25.0% of the main pass's pixel count at every renderScale, because both
+ * are struck from the same drawing buffer (`Stage.REFLECT_SCALE` 0.5 at `high`):
+ *
+ *     NATIVE  renderScale 1.00   main 1920x1080 = 2,073,600   mirror 960x540 = 518,400
+ *     tier    renderScale 0.85   main 1632x918  = 1,498,176   mirror 816x459 = 374,544
+ *
+ * **Every figure ever published for this pass was taken at the tier.** At native
+ * the mirror shades 518,400 px, 38% more than the number the round-32 derivation
+ * used. Priced at the whole-frame slope that is 3.4-4.6ms — an upper bound,
+ * because the whole-frame slope includes a post chain the mirror does not run.
+ * Net of post's 26% share of the resolution-scaling work, main-pass per-pixel
+ * parity puts it at **2.5-3.4ms at native**.
+ *
+ * AND IT IS NOT AT PARITY — IT IS ABOVE IT. This is the mechanism the 1.50ms
+ * derivation explicitly ruled out ("5.4ms would need the mirror's pixels to be
+ * four times more expensive than the main pass's, and nothing about it suggests
+ * they are"). Something does. `RenderPipeline` splits the beauty pass in two so
+ * the arena is not lit by the per-fighter rig; **this camera is `enableAll` and
+ * gets neither half, it gets the union.** Counted offline from the live rig at
+ * the `high` tier:
+ *
+ *     main pass, arena half     4 lights, 1 shadow map
+ *     main pass, fighter half  15 lights, 3 shadow maps
+ *     THIS PASS                15 lights, 3 shadow maps  <- on every fragment
+ *
+ * Re-count the arena half before quoting it: it read 5/10 earlier in this same
+ * round and 4/11 an hour later, because `Environment` moved `bounceLight` onto
+ * `SPLIT_LIGHT_LAYER` while this was being written. **15 and 3 are the stable
+ * numbers**, because the mirror gets the union and the union does not care where
+ * the boundary sits. The ratio to the arena half is the volatile part.
+ *
+ * So the mirror's arena fragments — the great majority of them — carry 3x the
+ * lights and 3x the PCSS lookups of the main-pass fragments they are mirroring.
+ * That is also a correctness wrinkle: the reflected walls and set are lit by two
+ * lights aimed at the robots, and the real ones are not.
+ *
+ * THE LIGHT COUNT ITSELF WAS WRONG EVERYWHERE IT WAS QUOTED. "Twenty-three
+ * lights, eight of them RectArea" was this docstring's; PROFILING.md says 22/8.
+ * Both are the **constructed** count. `WebGLRenderer.projectObject` early-returns
+ * on `object.visible === false`, so an invisible light never enters the render
+ * state. Counted at `high`: 20 constructed (8 RectArea), **15 visible (3
+ * RectArea, 3 shadowed)** — which is the charter's own "fifteen analytic lights",
+ * unread for thirty-odd rounds. The LTC integral runs three times, not eight.
+ *
+ * WHAT IS NOT THE LEVER. The object list. The mirror draws 23 of the arena's 41
+ * drawables (140,588 of 267,047 tris); dropping the three merged stage meshes
+ * removes 3 draws, and the charter prices a draw at 1.2 microseconds. That is
+ * 0.004ms. Triangles are not the lever either and never were.
+ *
+ * ---------------------------------------------------------------------------
  * The pass is driven from the floor mesh's `onBeforeRender`, exactly as
  * three's stock `Reflector` does, so it always sees the final camera transform
  * for the frame and never runs when the floor is culled. The RenderPipeline
- * renders the scene more than once per frame (main pass, then a normal/depth
- * prepass with `scene.overrideMaterial` set); a frame token from `Stage.update`
- * makes sure the reflection is built exactly once, during the main pass.
+ * renders the scene more than once per frame (a normal/depth prepass with
+ * `scene.overrideMaterial` set, then the two halves of the beauty pass); a frame
+ * token from `Stage.update` makes sure the reflection is built exactly once.
  */
 
 import * as THREE from 'three';
@@ -66,6 +136,7 @@ const _target = new THREE.Vector3();
 const _view = new THREE.Vector3();
 const _rot = new THREE.Matrix4();
 const _origin = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
 
 export class PlanarReflector {
   /**
@@ -76,6 +147,7 @@ export class PlanarReflector {
    * @param {number} [opts.height=512] render target height
    * @param {number} [opts.clipBias=0.004]
    * @param {boolean} [opts.coarseLod=true] draw LOD objects at their far level
+   * @param {number} [opts.interval=2] refresh every Nth frame; see {@link interval}
    */
   constructor(scene, opts = {}) {
     this.scene = scene;
@@ -84,6 +156,80 @@ export class PlanarReflector {
     this.enabled = true;
     /** Demote every `THREE.LOD` to its last level for the mirror pass. */
     this.coarseLod = opts.coarseLod !== false;
+
+    /**
+     * Refresh the buffer every Nth frame. 1 is every frame, 2 is every other.
+     *
+     * **THIS SHIPS AT 2 AND ITS FRAME COST IS UNMEASURED.** It is a lever rather
+     * than a tuning: it is the only one that is robust to the contradiction the
+     * class docstring is a monument to. Half resolution only pays if the pass is
+     * fill-bound; trimming the object list only pays if it is draw-bound; the
+     * two published figures disagree about which. Skipping the whole pass halves
+     * whichever it is, in the same proportion, without needing to know.
+     *
+     * WHAT IT BUYS AND WHAT IT DOES NOT, because the two are different
+     * statistics and this project has been burned by conflating them. Amortised
+     * over two frames it removes half the pass's cost from the **mean** frame
+     * time, which is the statistic every performance figure in `docs/PROFILING.md`
+     * is quoted as. It removes **nothing** from the worst case: the frame that
+     * does refresh costs exactly what it always did. A strict reading of the
+     * charter's "60fps at 1920x1080" is a per-frame deadline, and against that
+     * reading this change is worth zero until enough else is cut that the
+     * refreshing frame also fits in 16.667ms. Both numbers, always.
+     *
+     * WHY IT IS VISUALLY AFFORDABLE. The buffer is 25% of the main pass's pixel
+     * count, gathered by `StageFloor` over a five-tap roughness-proportional
+     * cross, and mixed in at a Fresnel-weighted fraction that measures ~0.11 at
+     * the wide framing. A one-frame-stale sample of that is a sub-pixel
+     * reprojection error on a signal that is already blurred. `textureMatrix` is
+     * deliberately NOT updated on a skipped frame — buffer and projection stay
+     * paired, so a stale reflection is a coherent reflection of a stale eye
+     * rather than a correct buffer sampled through the wrong matrix.
+     *
+     * WHAT IT WOULD BREAK IF UNGUARDED: a camera cut. A KO swing or a cinematic
+     * hands the floor a mirror of the previous shot for one frame. {@link cutEye}
+     * and {@link cutDot} force a refresh through the parity when the eye jumps,
+     * so the artefact is bounded to camera motion that is smooth enough for the
+     * reflection to be smooth too.
+     * @type {number}
+     */
+    this.interval = Math.max(1, Math.round(opts.interval ?? 2));
+    /**
+     * Force a refresh when the eye moves further than this in one frame, in
+     * metres. 0.35m at 60Hz is 21 m/s — a cut, not a dolly. The fight camera's
+     * spring-damper does not reach it under its own steam.
+     *
+     * IT DOES REACH IT ON A HEAVY HIT, and that is deliberate rather than an
+     * oversight. `FightCamera.SHAKE` is lateral 0.22 / vertical 0.16 / dolly
+     * 0.10 metres at full trauma, on a noise clock advancing 0.43 per frame, so
+     * a peak-trauma frame can displace the eye by ~0.5m and this guard fires
+     * through the whole decay. The pass therefore refreshes every frame for the
+     * few tenths of a second after a super or a launcher — the moment when the
+     * saving would be worth most and when a stale mirror would smear worst.
+     * Erring toward correct is the direction that cannot look wrong. If the perf
+     * arm wants the skip held through shake as well, raise this to 0.7; nothing
+     * else needs to change.
+     * @type {number}
+     */
+    this.cutEye = opts.cutEye ?? 0.35;
+    /**
+     * Force a refresh when the view direction turns further than this in one
+     * frame, as a cosine. 0.9945 is ~6 degrees, i.e. 360 deg/s.
+     * @type {number}
+     */
+    this.cutDot = opts.cutDot ?? 0.9945;
+    /**
+     * Refreshes and skips since construction. Not decoration: an A/B on
+     * `interval` needs a control that proves the arm is armed, and these are it.
+     * `skips` must stay 0 at `interval = 1` and must climb at 2.
+     */
+    this.refreshes = 0;
+    this.skips = 0;
+
+    this._lastEye = new THREE.Vector3();
+    this._lastFwd = new THREE.Vector3(0, 0, -1);
+    /** Frames skipped since the last refresh; primed so the first frame draws. */
+    this._sinceRefresh = Infinity;
 
     this.target = new THREE.WebGLRenderTarget(opts.width ?? 1024, opts.height ?? 512, {
       type: THREE.HalfFloatType,
@@ -120,23 +266,56 @@ export class PlanarReflector {
    * result is blurred by the floor's roughness anyway, and the saving buys the
    * second scene render.
    *
-   * Do not spend effort here. A cap was tried and reverted: at 1080p, taking
-   * the buffer from 540 lines down to 360 returned 0.04ms, and taking it all
-   * the way down to 120 — a twentieth of the pixels — returned 1.19ms of a
-   * 40.5ms frame, while switching the pass off entirely returned 6.42ms. Five
-   * of those six milliseconds are therefore fixed per-frame cost, not fill, and
-   * shrinking the buffer only trades reflection sharpness for nothing.
+   * **The "do not spend effort here" that used to sit in this docstring is
+   * withdrawn.** It rested on a sweep — 540 lines to 360 returning 0.04ms while
+   * the pass switched off returned 6.42ms — that cannot be true of the same
+   * pass; see the class docstring for the arithmetic. Whether resolution is the
+   * lever here is now an OPEN question and the arm to settle it is half and
+   * quarter of the shipped size, at native, interleaved and null-bracketed.
+   *
+   * A resize leaves the buffer's contents undefined, so it also drops the
+   * temporal cache: the next frame refreshes whatever {@link interval} says.
    */
   setSize(width, height) {
     const w = Math.max(64, Math.round(width));
     const h = Math.max(64, Math.round(height));
     if (this.target.width === w && this.target.height === h) return;
     this.target.setSize(w, h);
+    this.invalidate();
+  }
+
+  /**
+   * Drops the temporal cache: the next armed frame refreshes regardless of
+   * {@link interval}. Call after anything that makes the held buffer wrong —
+   * a resize, a re-enable, an arena swap, a camera cut the guards cannot see.
+   */
+  invalidate() {
+    this._sinceRefresh = Infinity;
   }
 
   /** Called once per game frame; arms the pass for the next scene render. */
   arm(token) {
     this._token = token;
+  }
+
+  /**
+   * Is this armed frame one that refreshes the buffer?
+   *
+   * Counts skips rather than testing the token's parity, so the answer does not
+   * depend on where the frame counter happened to start and a forced refresh
+   * re-phases the sequence instead of colliding with it.
+   *
+   * `_camPos` is already the eye position; `_fwd` is filled here because the
+   * caller needs it either way to record the pose that was captured.
+   * @param {THREE.Camera} camera
+   */
+  #due(camera) {
+    const e = camera.matrixWorld.elements;
+    _fwd.set(-e[8], -e[9], -e[10]).normalize();
+    if (this.interval <= 1) return true;
+    if (this._sinceRefresh >= this.interval - 1) return true;
+    if (_camPos.distanceToSquared(this._lastEye) > this.cutEye * this.cutEye) return true;
+    return _fwd.dot(this._lastFwd) < this.cutDot;
   }
 
   /**
@@ -150,12 +329,21 @@ export class PlanarReflector {
     if (!this.enabled || this._busy || this._token < 0) return;
     if (!camera.isPerspectiveCamera) return;
     this._token = -1;
-    this._busy = true;
 
     _camPos.setFromMatrixPosition(camera.matrixWorld);
     // A camera at or below the plane has nothing to mirror; keeping the last
     // frame's buffer is far less noticeable than a black flash.
-    if (_camPos.y <= this.planeY + 0.02) { this._busy = false; return; }
+    if (_camPos.y <= this.planeY + 0.02) return;
+
+    // The temporal gate. Everything above is cheap and everything below is the
+    // pass, so this is where the frame is either spent or not. On a skip the
+    // buffer AND `textureMatrix` are both left alone — see `interval`.
+    if (!this.#due(camera)) { this._sinceRefresh++; this.skips++; return; }
+    this._sinceRefresh = 0;
+    this.refreshes++;
+    this._lastEye.copy(_camPos);
+    this._lastFwd.copy(_fwd);
+    this._busy = true;
 
     _origin.set(0, this.planeY, 0);
 
@@ -213,6 +401,7 @@ export class PlanarReflector {
     const prevShadowAuto = renderer.shadowMap.autoUpdate;
     const prevOverride = this.scene.overrideMaterial;
     const prevAutoClear = renderer.autoClear;
+    const prevMatrixAuto = this.scene.matrixWorldAutoUpdate;
 
     // Shadow maps were built by the main pass a moment ago and are valid for
     // any camera; rebuilding them for the mirror would double the cost of the
@@ -220,6 +409,16 @@ export class PlanarReflector {
     renderer.shadowMap.autoUpdate = false;
     renderer.xr.enabled = false;
     this.scene.overrideMaterial = null;
+    // Same argument, for the same reason, one line further out.
+    // `WebGLRenderer.render` opens with `if ( scene.matrixWorldAutoUpdate )
+    // scene.updateMatrixWorld()`. This call is nested INSIDE the outer render's
+    // object loop — `onBeforeRender` cannot be reached any other way — so that
+    // walk has already run this frame and nothing between then and here can have
+    // moved a node. The saving is one full scene-graph traversal per frame and
+    // it is microseconds, not milliseconds: the arena graph is 45 nodes, and
+    // even with both robots and their skeletons the whole scene is order 10^3.
+    // It is here because it is provably redundant, not because it is large.
+    this.scene.matrixWorldAutoUpdate = false;
 
     const selfVisible = self ? self.visible : false;
     if (self) self.visible = false;
@@ -247,6 +446,7 @@ export class PlanarReflector {
     if (self) self.visible = selfVisible;
 
     renderer.autoClear = prevAutoClear;
+    this.scene.matrixWorldAutoUpdate = prevMatrixAuto;
     this.scene.overrideMaterial = prevOverride;
     renderer.xr.enabled = prevXr;
     renderer.shadowMap.autoUpdate = prevShadowAuto;

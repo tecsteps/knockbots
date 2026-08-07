@@ -115,26 +115,60 @@ const ENV_QUAD_LAYER = 3;
  * them. It is baked only on a mood change, so the cost is memory and a couple of
  * milliseconds on a cross-fade, not per frame.
  */
-// Area-light budget, and it is the whole frame. Measured at 1080p headless
-// (ANGLE/Metal) with a slow ladder — 4s settle per step, repeated four times,
-// because hiding a RectAreaLight changes NUM_RECT_AREA_LIGHTS and recompiles
-// every material, so a fast A/B measures the recompile and not the light:
+// Area-light budget. The ladder that used to sit here — "0 / 4 / 8 area lights
+// = 16.5 / 26.9 / 40.3 ms, linear, ~3.0 ms each" — described a rig that no
+// longer exists, and it was still being quoted as the reason for the count
+// below. **Eight RectAreaLights are built and three are ever uploaded.**
+// Re-derived offline against the real rig (scratchpad/lightrig.mjs: builds the
+// rig out of this file, replays `ScenePass.#classify`'s light rule verbatim and
+// asks `THREE.Layers` which lights each half of the split beauty pass sees;
+// positive control moves one light's layer and the arena count drops by exactly
+// one, null re-runs classify and nothing moves):
 //
-//     0 area lights   16.5 ms   61 fps
-//     4 area lights   26.9 ms   37 fps
-//     8 area lights   40.3 ms   25 fps
+//     RectAreaLight        tier.visible   arena half   fighter half
+//     practicals[0]            yes            YES          YES
+//     practicals[1..3]         no (1)          .            .
+//     ceilingStrip[0..1]       no (0)          .            .
+//     fighterKeyBox[0..1]      yes             .           YES
 //
-// Linear, ~3.0ms each. For comparison the entire post chain is 5.8ms and the
-// whole shadow pass 1.5ms — nothing else in the renderer is within an order of
-// magnitude, and the game is light-shader-bound rather than triangle-bound.
+// `tier.practicals` is 1 at ultra and high and 0 below; `tier.strips` is 0 at
+// EVERY tier. Three skips an invisible light in `WebGLRenderer.projectObject`
+// before it ever reaches `WebGLLights`, so those five are not in
+// `NUM_RECT_AREA_LIGHTS` and cost nothing per fragment. `NUM_RECT_AREA_LIGHTS`
+// is **1** in the arena half and **3** in the fighter half.
 //
-// So the count below is a deliberate spend, not a default. The one that earns
-// its 3ms is the per-fighter key box: it draws the long bar down the plate that
-// the player actually looks at. The four stage practicals sit at the same
-// positions as the brightest emissive quads in the cube, so PMREM already
-// carries their soft contribution — dropping them loses the crisp rectangular
-// specular on the *set*, which the camera is not pointed at. The ceiling strips
-// go for the same reason.
+// What one of them costs, counted rather than timed (scratchpad/lightops.mjs
+// walks three r185's own ShaderChunk sources, resolves the preprocessor against
+// each material's defines and inlines the call graph; null counts an empty body
+// at 0, positive doubles a body and gets exactly 2x). Per fragment, per light:
+//
+//     light type                  arena material        kb.armor (cc+aniso)
+//                                 ALU   tex   rel        ALU   tex   rel
+//     Hemisphere                    4     0   0.05x        4     0   0.05x
+//     Directional, no shadow       79     2   1.00x      131     2   1.60x
+//     Point                        90     2   1.13x      142     2   1.72x
+//     Spot, no shadow              93     2   1.16x      145     2   1.76x
+//     Directional + PCSS          107     4   1.41x      159     4   2.01x
+//     Spot + PCSS                 121     4   1.57x      173     4   2.17x
+//     RectArea (LTC)              239     2   2.84x      361     4   4.33x
+//
+// So a RectAreaLight is **2.8x** a plain directional on the set and **4.3x** on
+// the armour, not the order of magnitude the old ladder implied — r185 charges
+// every punctual light two `dfgLUT` fetches inside `BRDF_GGX_Multiscatter`,
+// which is most of why the gap closed. `USE_CLEARCOAT` is the other half: it
+// adds a THIRD `LTC_Evaluate` and two more LUT taps to every RectAreaLight,
+// which is why the same light costs half again as much on a fighter as on the
+// deck.
+//
+// The frame cost of all of this is UNMEASURED — see the ablation arms on
+// {@link ABLATE}, which exist so one verify pass can price the whole rig at
+// 1920x1080 without a recompile inside a rep.
+//
+// The count below is still a deliberate spend. The one that earns it is the
+// per-fighter key box; the stage practical sits at the same position as the
+// brightest emissive quad in the cube, so PMREM already carries its soft
+// contribution and what dropping it loses is the crisp rectangular specular on
+// the *set*, which the camera is not pointed at.
 /**
  * `keySpots` is the number of per-fighter keys and `keyShadows` how many of them
  * cast — two separate numbers because they cost completely different things.
@@ -206,6 +240,84 @@ const TIERS = {
   medium: { cube: 256, bg: 384, shadow: 1024, practicals: 0, rims: 2, boxes: 1, strips: 0, keySpots: 2, keyShadows: 0, keyShadow: 768 },
   low: { cube: 128, bg: 256, shadow: 512, practicals: 0, rims: 1, boxes: 0, strips: 0, keySpots: 2, keyShadows: 0, keyShadow: 512 },
 };
+
+/**
+ * Per-light ablation arms, for pricing the rig one light at a time.
+ *
+ * **The light rig has never been ablated one at a time.** Every lighting round
+ * in this project's history estimated the price of its own work, and the one
+ * ladder that was measured (see the note above {@link TIERS}) described a
+ * configuration that no longer exists. The charter names lights as one of only
+ * two levers that buy frames, so the price of each one is a number the project
+ * needs and does not have.
+ *
+ * It could not be taken with the existing knobs, for a reason `docs/PROFILING.md`
+ * records: `light.visible` feeds `NUM_*_LIGHTS`, which is in the program cache
+ * key, so toggling a light mid-session recompiles every material in the scene
+ * and a fast A/B measures the recompile. Every arm therefore has to be a fresh
+ * page with a fixed program set, and that is what this is: the set is read
+ * **once, in the constructor**, and nothing in this file changes it afterwards —
+ * `setQuality` re-applies it rather than overwriting it.
+ *
+ *     page.addInitScript(() => { window.KB_ABLATE = 'bounce,hemi'; });   // then goto
+ *     ?kbAblate=bounce,hemi                                             // or the URL
+ *     new Environment(r, s, { ablate: ['bounce'] })                     // or in code
+ *
+ * `addInitScript` is the one to use with `tools/capture.mjs`, which loads a bare
+ * URL with no query string. It has to run BEFORE the page's own scripts, because
+ * the set is read at module evaluation; setting `window.KB_ABLATE` from the
+ * console after load does nothing, which is the correct behaviour — a light that
+ * appeared mid-session would recompile every material and the arm would measure
+ * the recompile.
+ *
+ * Arms, and which half of the split beauty pass each one is in. The arena half
+ * is ~85% of the frame; the fighter half is the rest. `share` is that light's
+ * share of its half's per-fragment analytic-light work, counted by
+ * `scratchpad/lightops.mjs` — it is a COUNT, not a millisecond, and its only job
+ * is to rank the arms:
+ *
+ *     arm                  lights                       half      share of half
+ *     key                  keyLight                     both      16.3% arena
+ *     keyShadow            keyLight.castShadow only     both      (map + PCSS taps)
+ *     practicals           practicals[0]                both      32.7% arena
+ *     bounce               bounceLight                  fighter   11.5% arena before
+ *                                                                 this round's move
+ *     hemi                 fillLight                    both       0.5% arena
+ *     rims                 rimLight + rimLightB         fighter    2.0%*
+ *     fighterRims          4 per-fighter rim spots      fighter   19.3%*
+ *     fighterBoxes         2 RectArea key boxes         fighter   35.7%*  <- of which
+ *                                                                 practicals[0] is a third
+ *     fighterKeys          2 shadowed key spots         fighter   11.9%*
+ *     fighterKeyShadows    those two, shadow only       fighter   (map + PCSS taps)
+ *     allSplit             everything fighter-only      fighter   ~91%*
+ *
+ *     * shares marked with a star are of the FIGHTER half, which the same count
+ *       puts at 4.2x the arena half's per-fragment light work — on a small
+ *       fraction of the pixels. Do not add the two columns.
+ *
+ * The one arm that is NOT here on purpose is the three `PointLight`s at
+ * intensity exactly zero (`EffectsDirector.impactLight`, `StagePracticals`'
+ * spark and `Stage.wallLight`). They are 38.9% of the arena half's per-fragment
+ * light work — the largest single item in the 85% of the frame that is arena,
+ * larger than the shadowed key and larger than the practical — because three
+ * evaluates a light at intensity zero in full: `getPointLightInfo` writes
+ * `light.visible` and `RE_Direct_Physical` runs regardless. They belong to other
+ * files and are named here so whoever owns them has the number.
+ */
+const ABLATE = (() => {
+  const raw = (() => {
+    try {
+      if (typeof globalThis !== 'undefined' && typeof globalThis.KB_ABLATE === 'string') {
+        return globalThis.KB_ABLATE;
+      }
+      if (typeof location !== 'undefined' && location.search) {
+        return new URLSearchParams(location.search).get('kbAblate') ?? '';
+      }
+    } catch { /* no DOM, no globals: the shipping path */ }
+    return '';
+  })();
+  return new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+})();
 
 /** One rim rig per fighter; the game runs two. */
 const FIGHTER_RIG_COUNT = 2;
@@ -1875,6 +1987,15 @@ export class Environment {
     this.scene = scene;
 
     this.quality = opts.quality ?? 'high';
+    /**
+     * The ablation arms in force for this session, resolved ONCE — see
+     * {@link ABLATE}. Nothing in this file writes to it after construction, on
+     * purpose: a set that changed mid-session would change `NUM_*_LIGHTS` and
+     * recompile every material, which is the failure mode the whole mechanism
+     * exists to avoid.
+     * @type {Set<string>}
+     */
+    this.ablate = new Set([...ABLATE, ...(opts.ablate ?? [])]);
     this.mood = opts.mood ?? 'industrial';
     this.ready = false;
 
@@ -2163,7 +2284,8 @@ export class Environment {
     this._rig.name = 'lightRig';
 
     this.keyLight = new THREE.DirectionalLight(0xffffff, 1);
-    this.keyLight.castShadow = true;
+    this.keyLight.visible = !this.ablate.has('key');
+    this.keyLight.castShadow = !this.ablate.has('key') && !this.ablate.has('keyShadow');
     this.keyLight.shadow.mapSize.set(tier.shadow, tier.shadow);
     this.keyLight.shadow.bias = -0.00035;
     this.keyLight.shadow.normalBias = 0.022;
@@ -2192,6 +2314,7 @@ export class Environment {
     // the camera, and a target left on layer 0 would be evaluated in a pass
     // that cannot see its light.
     this.rimLight = new THREE.DirectionalLight(0xffffff, 1);
+    this.rimLight.visible = !this.ablate.has('rims') && !this.ablate.has('allSplit');
     this.rimLight.castShadow = false;
     this.rimLight.layers.set(SPLIT_LIGHT_LAYER);
     this.rimLight.target.layers.set(SPLIT_LIGHT_LAYER);
@@ -2201,6 +2324,7 @@ export class Environment {
     // Weaker complementary rim on the opposite flank so both fighters get an
     // edge regardless of which way the camera has swung.
     this.rimLightB = new THREE.DirectionalLight(0xffffff, 1);
+    this.rimLightB.visible = !this.ablate.has('rims') && !this.ablate.has('allSplit');
     this.rimLightB.castShadow = false;
     this.rimLightB.layers.set(SPLIT_LIGHT_LAYER);
     this.rimLightB.target.layers.set(SPLIT_LIGHT_LAYER);
@@ -2212,12 +2336,74 @@ export class Environment {
 
     // Ground bounce: low, from below the horizon, kills the dead black on the
     // undersides of thighs and forearms without flattening anything.
+    //
+    // **It is on `SPLIT_LIGHT_LAYER` from this round, and it was scene-wide
+    // before.** Its own comment says what it is for — undersides of thighs and
+    // forearms — and its own authored geometry says it cannot do anything else:
+    // every one of the seven moods places it at a NEGATIVE elevation (-20° to
+    // -30°, see the `bounce:` rows in `MOODS`), so `dot(N, L)` is zero for every
+    // up-facing surface in the game, in every mood, by construction. The deck is
+    // the largest up-facing surface in the frame and this light has never
+    // deposited a single photon on it.
+    //
+    // Re-derived rather than argued, offline against the real rig
+    // (`scratchpad/lightirr.mjs` — three r185's own `getDistanceAttenuation`,
+    // `getSpotAttenuation`, hemisphere mix and the exact LTC diffuse form factor
+    // ported to JS; null re-evaluates to 1e-12 and a zeroed light reads exactly
+    // 0, positive doubles an intensity and the term doubles). Share of the ARENA
+    // half's analytic diffuse irradiance BEFORE this change, MEAN over 1024
+    // Fibonacci normals at nine arena points, split by how the surface faces
+    // (rule 6: a mean over directions, not a median and not a peak):
+    //
+    //     facing   keyLight   practical0   bounceLight   fillLight
+    //     up         95.02%       4.49%        0.15%        0.34%
+    //     side       93.07%       5.83%        0.71%        0.39%
+    //     down       85.78%       9.36%        4.03%        0.82%
+    //
+    // Re-running the same instrument after the change is the positive control on
+    // the change itself: `bounceLight` disappears from the arena column in all
+    // seven moods and nothing else moves.
+    //
+    // Its best case anywhere on the set is 4.03% of the analytic budget on
+    // down-facing surfaces, and this file has already measured the deck as 56.6%
+    // env IBL — so against everything actually arriving it is under 2% in the
+    // one place it does anything at all. Against that it was 11.5% of the arena
+    // half's per-fragment analytic-light work, second only to the practical and
+    // the three zero-intensity points. That is the trade: a term worth under 2%
+    // of the light on the least-visible surfaces in the set, priced at an eighth
+    // of the light shader over 85% of the frame.
+    //
+    // On the fighters it keeps everything it had. The frame cost is UNMEASURED —
+    // `?kbAblate=bounce` is the arm, and the honest expectation is that it is
+    // small, because the whole analytic-light term is only part of the fill.
     this.bounceLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    this.bounceLight.visible = !this.ablate.has('bounce') && !this.ablate.has('allSplit');
     this.bounceLight.castShadow = false;
+    this.bounceLight.layers.set(SPLIT_LIGHT_LAYER);
+    this.bounceLight.target.layers.set(SPLIT_LIGHT_LAYER);
     this.bounceLight.target.position.set(0, 0.7, 0);
     this._rig.add(this.bounceLight, this.bounceLight.target);
 
+    // The hemisphere fill STAYS scene-wide, and this is a negative result worth
+    // recording because the round brief expected the opposite.
+    //
+    // It is the cheapest analytic term three has: 4 ALU, no texture fetch, no
+    // BRDF evaluation at all — `getHemisphereLightIrradiance` is a dot and a mix
+    // added straight into `irradiance`. Counted, it is **0.5%** of the arena
+    // half's per-fragment light work, against the shadowed key's 16.3% and the
+    // practical's 32.7%. Removing it cannot buy a frame.
+    //
+    // And it is the only analytic light left on an up-facing surface inside the
+    // key's shadow, because the key is shadowed and the bounce (above) is zero
+    // on up-facing surfaces in every mood. Deleting it would put every shadowed
+    // patch of deck on the IBL alone. And its size is mood-dependent in a way a
+    // single-mood measurement hides: the same instrument puts it at 0.14% of the
+    // arena's analytic irradiance on `neonCity` and **9.64%** on `duskRoof`,
+    // which authors the largest hemisphere fill in the table on purpose.
+    // Cheapest light in the frame, doing the one job nothing else can do, and on
+    // one mood it is doing a tenth of the set's analytic lighting: it stays.
     this.fillLight = new THREE.HemisphereLight(0xffffff, 0x202020, 0.7);
+    this.fillLight.visible = !this.ablate.has('hemi');
     this._rig.add(this.fillLight);
 
     // There is deliberately no arena-only fill light here, and the reason is a
@@ -2242,7 +2428,8 @@ export class Environment {
     for (let i = 0; i < PRACTICAL_COUNT; i++) {
       const p = this.params.practicals[i];
       const light = new THREE.RectAreaLight(0xffffff, 1, p.size.x, p.size.y);
-      light.visible = i < tier.practicals;
+      light.name = `stagePractical${i}`;
+      light.visible = i < tier.practicals && !this.ablate.has('practicals');
       this.practicals.push(light);
       this._rig.add(light);
     }
@@ -2272,7 +2459,8 @@ export class Environment {
         // measurements and for what the arena gives up (the spill, and only the
         // spill).
         l.layers.set(SPLIT_LIGHT_LAYER);
-        l.visible = k < tier.rims;
+        l.visible = k < tier.rims
+          && !this.ablate.has('fighterRims') && !this.ablate.has('allSplit');
         l.target.position.set(0, RIM.aimHeight, 0);
         this._rig.add(l, l.target);
         lights.push(l);
@@ -2281,7 +2469,8 @@ export class Environment {
       const box = new THREE.RectAreaLight(0xffffff, 0, KEY_BOX.width, KEY_BOX.height);
       box.name = `fighterKeyBox${i}`;
       box.layers.set(SPLIT_LIGHT_LAYER);
-      box.visible = tier.boxes > 0;
+      box.visible = tier.boxes > 0
+        && !this.ablate.has('fighterBoxes') && !this.ablate.has('allSplit');
       this._rig.add(box);
 
       // The shadowed key. Same layer discipline as everything else on this rig:
@@ -2295,8 +2484,10 @@ export class Environment {
       key.layers.set(SPLIT_LIGHT_LAYER);
       key.target.layers.set(SPLIT_LIGHT_LAYER);
       key.target.position.set(0, KEY_SPOT.aimHeight, 0);
-      key.visible = i < (tier.keySpots ?? 0);
-      key.castShadow = i < (tier.keyShadows ?? 0);
+      key.visible = i < (tier.keySpots ?? 0)
+        && !this.ablate.has('fighterKeys') && !this.ablate.has('allSplit');
+      key.castShadow = key.visible && i < (tier.keyShadows ?? 0)
+        && !this.ablate.has('fighterKeyShadows');
       this._configureKeyShadow(key, tier);
       this._rig.add(key, key.target);
 
@@ -2342,7 +2533,12 @@ export class Environment {
     for (let i = 0; i < STRIP.z.length; i++) {
       const l = new THREE.RectAreaLight(0xffffff, 0, STRIP.length, STRIP.width);
       l.name = `ceilingStrip${i}`;
-      l.visible = i < tier.strips;
+      // `tier.strips` is 0 at every tier, so this pair is built, driven every
+      // frame by `_updateStrips` and never uploaded — three drops an invisible
+      // light in `projectObject` before `WebGLLights` sees it, so they are not
+      // in `NUM_RECT_AREA_LIGHTS` and cost nothing per fragment. They are kept
+      // built because a tier that raises `strips` should not need a rebuild.
+      l.visible = i < tier.strips && !this.ablate.has('strips');
       l.position.set(0, STRIP.y, STRIP.z[i]);
       l.lookAt(0, STRIP.aim, STRIP.z[i] * STRIP.aimCross);
       this.strips.push(l);
@@ -2560,23 +2756,33 @@ export class Environment {
       this.keyLight.shadow.map?.dispose();
       this.keyLight.shadow.map = null;
     }
+    // Every visibility decision below is ANDed with the ablation set rather than
+    // written over it. An arm that switched itself back on at the first tier
+    // change would recompile every material in the middle of a measurement and
+    // then quietly measure the wrong configuration — see {@link ABLATE}.
+    const on = (arm) => !this.ablate.has(arm) && !this.ablate.has('allSplit');
     for (let i = 0; i < this.practicals.length; i++) {
-      this.practicals[i].visible = i < tier.practicals;
+      this.practicals[i].visible = i < tier.practicals && !this.ablate.has('practicals');
     }
     for (const rig of this.fighterRims) {
-      for (let k = 0; k < rig.lights.length; k++) rig.lights[k].visible = k < tier.rims;
-      rig.box.visible = tier.boxes > 0;
-      rig.key.visible = rig.index < (tier.keySpots ?? 0);
+      for (let k = 0; k < rig.lights.length; k++) {
+        rig.lights[k].visible = k < tier.rims && on('fighterRims');
+      }
+      rig.box.visible = tier.boxes > 0 && on('fighterBoxes');
+      rig.key.visible = rig.index < (tier.keySpots ?? 0) && on('fighterKeys');
       // The light and its shadow are separate tier decisions — see TIERS. A
       // spot the tier has switched off must lose `castShadow` too, or it would
       // still declare its `spotShadowMap` slot on every fighter material: the
       // whole cost of this light with none of it on screen.
-      rig.key.castShadow = rig.key.visible && rig.index < (tier.keyShadows ?? 0);
+      rig.key.castShadow = rig.key.visible && rig.index < (tier.keyShadows ?? 0)
+        && !this.ablate.has('fighterKeyShadows');
       rig.key.shadow.map?.dispose();
       rig.key.shadow.map = null;
       this._configureKeyShadow(rig.key, tier);
     }
-    for (let i = 0; i < this.strips.length; i++) this.strips[i].visible = i < tier.strips;
+    for (let i = 0; i < this.strips.length; i++) {
+      this.strips[i].visible = i < tier.strips && !this.ablate.has('strips');
+    }
     if (this.ready) {
       this._allocateTargets(tier);
       this._bake();
