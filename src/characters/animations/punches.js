@@ -332,7 +332,7 @@
 
 import { validateClip } from '../AnimationFormat.js';
 import { whip, lead } from './reactions.js';
-import { carry } from './idle.js';
+import { carry, contrapposto } from './idle.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -3219,3 +3219,26 @@ for (const id in CARRY) carry(PUNCH_CLIPS[id], { N: CARRY[id], pins: [PUNCH_CLIP
 for (const id in PUNCH_CLIPS) validateClip(PUNCH_CLIPS[id], BONE_NAMES);
 
 export default PUNCH_CLIPS;
+
+// ---------------------------------------------------------------------------
+// CONTRAPPOSTO. See the long note above `contrapposto` in ./idle.js. Amount and
+// subset per clip are the largest the per-clip gate sweep accepted: extra
+// grounded-foot burial >= -12 mm, extra foot skate <= 4 mm/tick, and where the
+// clip carries a hitbox, <= 1 mm of striking-anchor movement at the contact
+// tick and no loss of check.mjs's anchor-travel ratio.
+//
+// Every clip here is `core`: the hands are hitboxes, so the clavicle, neck and
+// head terms are forbidden and only the pelvis, legs and spine move. The
+// amounts are small -- 0.1 to 0.9, i.e. 1 to 8 degrees of pelvic tilt -- because
+// the 1 mm anchor gate binds first, and `p.lowJab` at 0.9 is the only one that
+// reads. `p.siegeSlam` takes nothing at any amount: it swings a leg, and a
+// stance-solved leg compensation moves that foot 50 mm.
+// ---------------------------------------------------------------------------
+const CONTRA_TABLE = {
+  'p.jab': [0.15, 'core'], 'p.jabAlt': [0.15, 'core'], 'p.straight': [0.15, 'core'],
+  'p.hook': [0.1, 'core'], 'p.uppercut': [0.4, 'core'], 'p.overhand': [0.15, 'core'],
+  'p.elbow': [0.3, 'core'], 'p.backfist': [0.3, 'core'], 'p.hammerFist': [0.15, 'core'],
+  'p.pistonRush': [0.3, 'core'], 'p.launcherPunch': [0.15, 'core'], 'p.lowJab': [0.9, 'core'],
+  'p.duckingStraight': [0.2, 'core'],
+};
+for (const id in CONTRA_TABLE) contrapposto(PUNCH_CLIPS[id], CONTRA_TABLE[id]);

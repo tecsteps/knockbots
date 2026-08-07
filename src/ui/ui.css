@@ -54,15 +54,61 @@
   --kb-text-dim: #93a0b6;
   --kb-text-faint: #5c6780;
 
-  /* Type */
-  --kb-font-display: 'Eurostile Extended', 'Bank Gothic', 'Segoe UI Semibold',
-    'Arial Narrow', 'Helvetica Neue', Impact, sans-serif;
-  /* Small HUD labels ("ROUND 1", "OVERDRIVE") route through this, not the
-   * procedural stencil face in Typeface.js — that face is cut for a 100px+
-   * cap height and its counters close up below ~16px. A clean condensed
-   * system sans, letterspaced, is what actually stays legible at label size. */
-  --kb-font-label: 'Bank Gothic', 'Eurostile Extended', 'Segoe UI Semibold',
-    'Arial Narrow', 'Helvetica Neue', Impact, sans-serif;
+  /* ---------------------------------------------------------------- *
+   * Type
+   *
+   * THE THREE NAMES IN FRONT ARE THE ONLY ONES THAT EVER RESOLVE, AND WE
+   * SHIP THEM OURSELVES.
+   *
+   * What was here asked for `'Eurostile Extended', 'Bank Gothic', 'Segoe UI
+   * Semibold', 'Arial Narrow', ...`. Counted with `system_profiler
+   * SPFontsDataType` on the machine every capture is taken on: Eurostile
+   * Extended 0 hits, Bank Gothic 0, Segoe UI Semibold 0, Arial Narrow 4. So
+   * the whole `#ui` subtree was set in Arial Narrow here, in something else
+   * on Windows, and in the intended face on no platform at all — the
+   * intended face is not installed on any of them. `--kb-font-label` named
+   * the same three absent families in a different order, so the design's two
+   * distinct faces were, in fact, one face.
+   *
+   * The note below this one had already found exactly this failure for the
+   * mono token and stopped one line short of noticing that the two lines
+   * above it had it too. It is kept, because the reasoning is right and
+   * because it is the record of how the fix got scoped.
+   *
+   * These three families are generated in code at boot — `src/ui/Glyphs.js`
+   * draws the outlines, `src/ui/FontBuilder.js` compiles them to TrueType,
+   * `src/ui/Typeface.js` registers them through the `FontFace` API. No
+   * network request, no embedded blob of licensed type: the charter's
+   * "everything generated in code" now includes the last surface that was
+   * not.
+   *
+   * The system names still trail each stack. They are a crash mat for the
+   * case where `FontFace` construction throws, NOT a plan — if any element
+   * is measured resolving to one of them, that is the bug, not the design.
+   * ---------------------------------------------------------------- */
+
+  /* The working face. Cut to survive small: x-height 0.771 of cap, wide
+   * counters, a chamfer pulled to 0.039 cap so it never eats one. Sized
+   * against what it replaces — Arial Narrow measures cap 0.7222 em,
+   * x-height 0.5244 em, mean uppercase advance 0.5527 em; this is cap
+   * 0.700, x-height 0.540, mean advance 0.5531 — so nothing reflows. */
+  --kb-font-ui: 'Knockbots Text', 'Arial Narrow', 'Helvetica Neue', sans-serif;
+
+  /* Headlines only. Set tight (advance 0.742–0.764 of cap against the text
+   * cut's 0.756–0.790), heavier, with a 0.085-cap chamfer that reads as a
+   * machined bevel at 40px+ and as mud at 11px, and a smaller lowercase
+   * (x-height 0.504 em against 0.540). That last one is why it is not the
+   * root family: an x-height is what a 14px label spends, and this cut has
+   * 10.1% less of it. */
+  --kb-font-display: 'Knockbots Display', 'Knockbots Text', 'Arial Narrow',
+    'Helvetica Neue', sans-serif;
+
+  /* Small HUD labels ("ROUND 1", "OVERDRIVE"). These used to be pushed to a
+   * system stack because the procedural face of the day was cut for a 100px+
+   * cap height and closed up below ~16px — a correct diagnosis with the
+   * wrong remedy, since the system stack it named did not exist either. The
+   * remedy is a text cut, and this token now points at it. */
+  --kb-font-label: 'Knockbots Text', 'Arial Narrow', 'Helvetica Neue', sans-serif;
   /*
    * THE DATA FACE, AND THE FIVE NAMES THAT WERE NEVER THERE.
    *
@@ -93,15 +139,15 @@
    * feet on it. Menlo has an even, load-bearing stem at that size and no
    * serifs, so it is what the mac branch lands on.
    *
-   * The aspirational names stay in front — if a future build ever ships one of
-   * them, it wins — but a stack whose only reachable entry is the generic is
-   * not a typographic choice, it is an accident. Every branch below now names a
-   * face that is actually installed on the platform it is there for:
-   * Menlo/Monaco (macOS, since 10.6), Consolas (Windows), DejaVu Sans Mono and
-   * Liberation Mono (Linux). `monospace` is the floor, not the plan.
+   * That fix stood for a round and is now finished rather than reversed: the
+   * data face is generated too, and its advance is pinned to 0.60205 em —
+   * Menlo's exact fixed advance, measured through CoreText — so every stat
+   * column, keycap row and frame-data table keeps the measure it was laid out
+   * against, to the pixel. Its figures are the same width as its letters and
+   * its zero is slashed, which is what the columns were asking for.
    */
-  --kb-font-mono: 'Chivo Mono', 'JetBrains Mono', 'SF Mono', 'Menlo', 'Monaco',
-    'Consolas', 'DejaVu Sans Mono', 'Liberation Mono', 'Roboto Mono', monospace;
+  --kb-font-mono: 'Knockbots Data', 'Menlo', 'Monaco', 'Consolas',
+    'DejaVu Sans Mono', 'Liberation Mono', monospace;
 
   /* Geometry */
   --kb-cut: 0.9em;
@@ -170,8 +216,29 @@
  * outside #ui, other systems own the rest of the page.
  * ---------------------------------------------------------------------- */
 #ui, #ui * { box-sizing: border-box; }
+/*
+ * THE ROOT INHERITS THE TEXT CUT, NOT THE DISPLAY CUT.
+ *
+ * This was `var(--kb-font-display)`, which every element that does not name a
+ * family of its own inherits — and that is most of the interface: the roster
+ * cards, the options rows, the results table, every button. Those run 9–21px.
+ * A display cut at 9px is a display cut used wrong, and it was only survivable
+ * before because the display token did not resolve to a display face either.
+ * Elements that genuinely want the headline cut ask for `--kb-font-display`
+ * explicitly, and there are seven of them.
+ *
+ * `font-synthesis: none` is a gate, not a nicety. All three families ship real
+ * 400/700/900 (data: 400/700), so CSS font matching never needs to fake a
+ * weight — and with synthesis off, a weight that somehow went missing shows up
+ * as a visibly wrong weight in a capture instead of being papered over with a
+ * smeared double-stamp. Nothing in this project sets `font-style: italic`
+ * (every rule that touches it sets `normal`), so the oblique half costs
+ * nothing.
+ */
 #ui {
-  font-family: var(--kb-font-display);
+  font-family: var(--kb-font-ui);
+  -webkit-font-synthesis: none;
+  font-synthesis: none;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }

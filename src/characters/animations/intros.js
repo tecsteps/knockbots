@@ -11,7 +11,7 @@
  * Axis conventions and the pose helpers live in ./idle.js.
  */
 
-import { STANCE, STANCE_Y, UPRIGHT, UPRIGHT_Y, add, over, makeClip, carry } from './idle.js';
+import { STANCE, STANCE_Y, UPRIGHT, UPRIGHT_Y, add, over, makeClip, carry, contrapposto } from './idle.js';
 import { STRIDE_LEGS } from './locomotion.js';
 
 // ---------------------------------------------------------------------------
@@ -165,3 +165,15 @@ export const INTRO_CLIPS = {
 // mid-flight interior keys and 64 of them were full stops, median carry 0.01.
 // ---------------------------------------------------------------------------
 for (const id in INTRO_CLIPS) carry(INTRO_CLIPS[id], { N: 2 });
+
+// ---------------------------------------------------------------------------
+// CONTRAPPOSTO. See the long note above `contrapposto` in ./idle.js. Amount and
+// subset per clip are the largest the per-clip gate sweep accepted: extra
+// grounded-foot burial >= -12 mm, extra foot skate <= 4 mm/tick, and where the
+// clip carries a hitbox, <= 1 mm of striking-anchor movement at the contact
+// tick and no loss of check.mjs's anchor-travel ratio.
+// ---------------------------------------------------------------------------
+const CONTRA_TABLE = {
+  'i.walkOn': [1, 'full-skipR'], 'i.powerUp': 0.8, 'i.stanceSet': 0.8, 'i.pointTaunt': 1,
+};
+for (const id in CONTRA_TABLE) contrapposto(INTRO_CLIPS[id], CONTRA_TABLE[id]);

@@ -37,7 +37,7 @@
 
 import { validateClip } from '../AnimationFormat.js';
 import { lead } from './reactions.js';
-import { carry } from './idle.js';
+import { carry, contrapposto } from './idle.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -681,3 +681,19 @@ for (const id in THROW_CLIPS) {
 for (const id in THROW_CLIPS) validateClip(THROW_CLIPS[id], BONE_NAMES);
 
 export default THROW_CLIPS;
+
+// ---------------------------------------------------------------------------
+// CONTRAPPOSTO. See the long note above `contrapposto` in ./idle.js. Amount and
+// subset per clip are the largest the per-clip gate sweep accepted: extra
+// grounded-foot burial >= -12 mm, extra foot skate <= 4 mm/tick, and where the
+// clip carries a hitbox, <= 1 mm of striking-anchor movement at the contact
+// tick and no loss of check.mjs's anchor-travel ratio.
+//
+// `t.grabAttempt` is the only clip here with a contact tick and it is the only
+// one held to `core`.
+// ---------------------------------------------------------------------------
+const CONTRA_TABLE = {
+  't.grabAttempt': [0.3, 'core'], 't.grabWhiff': 0.7, 't.throwForward': 0.8, 't.throwBack': 0.6,
+  't.throwBreak': 1, 't.beingThrown': 1, 't.beingGrabbed': 1,
+};
+for (const id in CONTRA_TABLE) contrapposto(THROW_CLIPS[id], CONTRA_TABLE[id]);

@@ -18,7 +18,7 @@
  */
 
 import { ease } from '../AnimationFormat.js';
-import { STANCE, STANCE_Y, CROUCH, add, over, makeClip, pinAt, carry } from './idle.js';
+import { STANCE, STANCE_Y, CROUCH, add, over, makeClip, pinAt, carry, contrapposto } from './idle.js';
 
 // ---------------------------------------------------------------------------
 // OVERLAPPING ACTION — `whip`.
@@ -799,3 +799,24 @@ const REACTION_CARRY = {
   'r.groundBounce': 2, 'r.koFall': 3, 'r.koSlump': 2,
 };
 for (const id in REACTION_CARRY) carry(REACTION_CLIPS[id], { N: REACTION_CARRY[id] });
+
+// ---------------------------------------------------------------------------
+// CONTRAPPOSTO. See the long note above `contrapposto` in ./idle.js. Amount and
+// subset per clip are the largest the per-clip gate sweep accepted: extra
+// grounded-foot burial >= -12 mm, extra foot skate <= 4 mm/tick, and where the
+// clip carries a hitbox, <= 1 mm of striking-anchor movement at the contact
+// tick and no loss of check.mjs's anchor-travel ratio.
+//
+// A defender carries no hitbox, so every clip here takes the upper terms. The
+// ground reactions take least: their poses are furthest from `STANCE`, so the
+// stance-solved leg compensation is worth least there and the burial gate bites.
+// ---------------------------------------------------------------------------
+const CONTRA_TABLE = {
+  'r.blockHigh': [1, 'full-skipR'], 'r.blockLow': 1, 'r.blockImpact': 1, 'r.flinchHigh': 0.5,
+  'r.flinchMid': 1, 'r.flinchLow': 0.6, 'r.stagger': 1, 'r.crumple': [1, 'full-skipR'],
+  'r.launch': 1, 'r.airFlail': 1, 'r.spinFall': 0.4, 'r.knockdownBack': [0.8, 'full-skipR'],
+  'r.knockdownFace': [0.5, 'full-skipR'], 'r.sweepFall': 1, 'r.wallSplat': [1, 'full-skipR'],
+  'r.wallSlide': [1, 'full-skipR'], 'r.getUp': [0.8, 'full-skipR'], 'r.getUpRoll': 0.7,
+  'r.groundBounce': 1, 'r.koFall': 0.4, 'r.koSlump': [1, 'full-skipR'],
+};
+for (const id in CONTRA_TABLE) contrapposto(REACTION_CLIPS[id], CONTRA_TABLE[id]);

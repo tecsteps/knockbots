@@ -295,9 +295,67 @@ export class StageVolumetrics {
     this.clear = { center: FIGHT_CLEAR_CENTER, half: FIGHT_CLEAR_HALF };
 
     /**
-     * Shaft placement. The two big ones hang off the cross-gantry above the
-     * back of the pit, at the same coordinates as the Environment's overhead
-     * practicals; the rest rake in through the shell wall's blown-out panels.
+     * Shaft placement, and **every position in this list is a measured one**.
+     *
+     * The two big ones hang off the cross-gantry above the back of the pit, at
+     * the same coordinates as the Environment's overhead practicals. The other
+     * three used to be described as raking in through the shell wall's
+     * blown-out panels. They did not rake in through anything: they drew
+     * **zero pixels** in the framing the game is played in.
+     *
+     * ```
+     * per-shaft fill BEFORE, CPU depth-buffer raster at 480x270
+     *                        fight framing        06-stage-wide       why
+     *                     coverage  fragments  coverage  fragments
+     *   shaft0             14.76%     11.70%    12.35%     9.94%     renders
+     *   shaft1             14.76%     11.70%    12.90%    10.83%     renders
+     *   shaft2  z -18.4     0.00%      0.00%     0.005%    0.005%    behind the set
+     *   shaft3  z -18.4     0.00%      0.00%     0.015%    0.015%    behind the set
+     *   shaft4  x -10.2     0.00%      0.00%     0.363%    0.363%    off the left edge
+     *   TOTAL              29.51%     23.39%    25.63%    21.16%
+     * ```
+     *
+     * Stated exactly: three of the five retire **zero** fragments at the fight
+     * framing and at five other fight poses swept, and between 0.005% and 0.36%
+     * of the frame at the establishing shot — which is a rounding error against
+     * the two that work, not a shaft. The zero survives the instrument's one
+     * known bias: it treats alpha cutouts as solid and so over-reports
+     * occlusion, and re-running with every cutout counted as a hole (a strict
+     * lower bound on occlusion) still returns exactly 0.00%.
+     *
+     * Three fifths of the arena's atmosphere was specified, tinted, breathed
+     * and uniform-updated every frame and drawn to nothing. It cost no GPU,
+     * which is exactly why it survived thirty rounds — neither a stopwatch nor
+     * a screenshot separates a shaft that is subtle from one that is absent.
+     * Only a fill counter does. See `scratchpad/r35-shaftfill.mjs`.
+     *
+     * **What the room actually allows.** The fight camera solves for two
+     * fighters, so at the back of the pit the top of frame is only about 3.8 m
+     * up at z -6 and 5.1 m up at z -13. The pit's ceiling is not in the shot.
+     * Mapping the visible, unoccluded, un-carved air (`r35-freeair.mjs`) leaves
+     * exactly two places a new beam can live:
+     *
+     *   - z -6 to -11, |x| 5..8, y 0..4  — the wedge the gantry pair already
+     *     fills, and
+     *   - z -12 to -15, |x| < 13, y 4.3..5.2 — a band right across the back of
+     *     the hall, seventeen metres out.
+     *
+     * The second one is the arena's own architecture asking for light: the roof
+     * deck stops at z -14 and the shell wall stands at z -19, so there is a
+     * five-metre slot open to the sky over the back of the hall, and
+     * `StageStructure#columnsAndRoof` says in its own comment that it stops the
+     * deck short for precisely that reason. Two narrow blades drop through that
+     * slot. They are seventeen to twenty metres from the lens against the
+     * gantry pair's eleven, they cross in front of and behind them as the
+     * camera tracks, and that parallax is the point — the pit's atmosphere was
+     * previously a single plane at one depth, which is the flattest thing a
+     * volumetric layer can be. They are also five times dimmer than the gantry
+     * beams, because a distant secondary source that matches a near key light
+     * for brightness destroys the depth it was added to create.
+     *
+     * `shaft4` is the one raking beam, off the -x catwalk line and aimed
+     * *inboard*. It used to aim outboard from x -10.2, which walked it off the
+     * left edge of the frame; the sign of its z-rotation is the whole fix.
      *
      * `extinction` is per-metre density decay and it is the parameter that
      * decides whether a shaft reads as light or as paint: the beam has to be
@@ -309,28 +367,111 @@ export class StageVolumetrics {
      * it from `intensity` is how a plausible shaft turns into a floodlit
      * floor: a beam is integrated along the whole view ray and can afford to
      * be bright, a splash is a flat additive sprite on the most detailed
-     * surface in the frame and cannot.
+     * surface in the frame and cannot. **A beam that is extinguished in mid-air
+     * gets `pool: 0` and no instance at all** — the two slot blades die at
+     * y ~3.5 above the machinery bank and never reach the deck, and a splash
+     * under a beam that does not land there is a light with no source.
+     *
+     * `steps` is the raymarch sample count, per emitter rather than global,
+     * because sample count should follow the beam's spatial frequency and not
+     * the shader's convenience. The gantry pair keeps twelve and is untouched;
+     * the three distant, soft, low-contrast additions take eight, which is what
+     * holds the arithmetic below to +19% instead of +28%.
+     *
+     * `tier` is the lowest quality tier that builds the emitter. See the
+     * ladder below for why this is a field and no longer an array index.
+     *
+     * ```
+     * fill AFTER, same instrument, same framings, quality 'high'
+     *                       fight framing            06-stage-wide
+     *                    coverage  fragments      coverage  fragments
+     *   shaft0            14.76%     11.70%        12.35%     9.94%   unchanged
+     *   shaft1            14.76%     11.70%        12.90%    10.83%   unchanged
+     *   shaft2             2.56%      2.05%         1.54%     1.27%
+     *   shaft3             2.58%      2.23%         1.65%     1.53%
+     *   shaft4             3.01%      2.28%         1.48%     1.14%
+     *   TOTAL             37.66%     29.95%        29.93%    24.71%
+     *
+     * the bill, in the only currency that is measurable on this machine
+     *   fragments   485,056 -> 621,024 at 1080p      +135,968   +28.0%
+     *   samples     5.82 M  -> 6.91 M   at 1080p     +1.09 M    +18.7%
+     * ```
+     *
+     * The second row is the one to price. `fragments x steps` is the count that
+     * drives this shader's texture fetches — two per sample — and it is what
+     * makes the difference between +28% and +19%. It is a count, so it is
+     * immune to everything that has gone wrong with timing here. **It is not a
+     * millisecond and nothing in this comment converts it into one.**
      */
     this.specs = air?.shafts ?? [
-      { pos: [-6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.95, round: 0.15, edge: 2.2, extinction: 0.16, slat: [1.02, 3.2], pool: 0.05 },
-      { pos: [6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.95, round: 0.15, edge: 2.2, extinction: 0.16, slat: [1.02, 3.2], pool: 0.05 },
-      { pos: [-9.5, 22.0, -18.4], rot: [0.34, 0.12, 0.16], half: [1.9, 1.5], spread: [0.035, 0.035], length: 23, color: 0x8fb4e8, intensity: 0.055, round: 0.55, edge: 2.1, extinction: 0.038, slat: [0, 0], pool: 0.02 },
-      { pos: [2.0, 24.0, -18.4], rot: [0.4, -0.1, -0.13], half: [2.4, 1.9], spread: [0.035, 0.035], length: 25, color: 0x9dc0ee, intensity: 0.05, round: 0.55, edge: 2.0, extinction: 0.034, slat: [0, 0], pool: 0.018 },
-      { pos: [-10.2, 4.6, -8.4], rot: [0.1, 0, -0.55], half: [1.1, 0.9], spread: [0.1, 0.1], length: 6.5, color: 0x9fdcff, intensity: 0.34, round: 0.85, edge: 2.2, extinction: 0.14, slat: [0, 0], pool: 0.032 },
+      // The cross-gantry pair. Untouched — these are the two that always
+      // rendered and they are the frame's key light in the air.
+      { pos: [-6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.95, round: 0.15, edge: 2.2, extinction: 0.16, slat: [1.02, 3.2], pool: 0.05, steps: 12, tier: 0 },
+      { pos: [6.6, 5.34, -6.2], rot: [0, 0, 0], half: [3.1, 0.28], spread: [0.09, 0.16], length: 5.5, color: 0xbfd8ff, intensity: 0.95, round: 0.15, edge: 2.2, extinction: 0.16, slat: [1.02, 3.2], pool: 0.05, steps: 12, tier: 0 },
+      // Skyglow through the slot between the roof deck (ends z -14) and the
+      // shell wall (z -19). Narrow, dim, seventeen metres out, and tipped a
+      // little forward so they lean into the hall rather than hanging plumb.
+      { pos: [-6.4, 13.2, -14.9], rot: [-0.30, 0, 0.10], half: [1.15, 0.8], spread: [0.025, 0.025], length: 10.5, color: 0x8fb4e8, intensity: 0.105, round: 0.4, edge: 2.1, extinction: 0.055, slat: [0, 0], pool: 0, steps: 8, tier: 1 },
+      { pos: [4.0, 13.6, -15.6], rot: [-0.26, 0, -0.08], half: [1.35, 0.9], spread: [0.025, 0.025], length: 11.5, color: 0x9dc0ee, intensity: 0.09, round: 0.4, edge: 2.0, extinction: 0.05, slat: [0, 0], pool: 0, steps: 8, tier: 1 },
+      // The one raking beam, off the -x catwalk line and aimed inboard.
+      { pos: [-8.8, 4.45, -9.2], rot: [0.1, 0, 0.42], half: [0.58, 0.52], spread: [0.085, 0.085], length: 5.2, color: 0x9fdcff, intensity: 0.30, round: 0.85, edge: 2.2, extinction: 0.14, slat: [0, 0], pool: 0.028, steps: 8, tier: 2 },
     ];
-    // Clamped to the list, not just to the tier. The pit authors five shafts and
-    // the tier ladder cuts to three and two; a rooftop at dusk authors two,
-    // because outdoor air is clear and a roof full of visible beams reads as a
-    // nightclub. Without the clamp `medium` indexed past the end of a two-entry
-    // list and threw during construction.
-    const budget = Math.min(this.specs.length, quality === 'low' ? 2 : quality === 'medium' ? 3 : this.specs.length);
+
+    /**
+     * The quality ladder, and it is two ladders because one of them was doing
+     * nothing.
+     *
+     * **Which emitters exist** used to be a prefix of the array: `low` took the
+     * first two, `medium` the first three. With three of the pit's five drawing
+     * zero pixels that ladder saved *literally nothing* — `low` dropped shafts
+     * 2, 3 and 4, all of which were already free. A tier that removes only
+     * invisible things is not a tier. It is a field now, so the drop order is
+     * declared by the author against measured cost instead of falling out of
+     * whatever order the array happens to be authored in, and the arenas that
+     * do not declare it keep exactly the old prefix behaviour (see the default
+     * below, which reproduces `low = 2, medium = 3` for any list).
+     *
+     * **How much each emitter costs** is the ladder that actually matters here,
+     * because the pit's expensive shafts are its two *composition* shafts and
+     * deleting either leaves the frame lit from one side. So the tiers scale
+     * the sample count instead: `low` halves it, `medium` takes three
+     * quarters, `high` and `ultra` are unscaled and therefore bit-identical to
+     * what shipped. That is a 50% cut in the layer's texture fetches at `low`
+     * with every beam still in the frame, which is the right trade for the
+     * machine that needs it — the previous ladder cut 0%.
+     *
+     * ```
+     * pit, fight framing, sample count for the whole shaft layer, %-of-frame
+     *                  shafts   fragments   samples      vs the old ladder
+     *   before, any tier   2      23.39%     280.7        (all three tiers)
+     *   ultra / high       5      29.95%     333.2        +18.7%
+     *   medium             4      28.27%     239.8        -14.6%
+     *   low                2      23.39%     140.3        -50.0%
+     * ```
+     */
+    const TIER_RANK = { low: 0, medium: 1, high: 2, ultra: 2 };
+    const rank = TIER_RANK[quality] ?? 2;
+    const STEP_SCALE = { low: 0.5, medium: 0.75, high: 1, ultra: 1 };
+    const stepScale = STEP_SCALE[quality] ?? 1;
 
     const clearCenter = new THREE.Vector3(...FIGHT_CLEAR_CENTER);
     const clearHalf = new THREE.Vector3(...FIGHT_CLEAR_HALF);
 
+    /**
+     * The emitters this tier actually builds, paired with their spec. Every
+     * per-frame loop in this file walks THIS, not `specs`, because the built
+     * set is no longer a prefix of the authored one.
+     * @type {{spec: object, mesh: THREE.Mesh}[]}
+     */
+    this.active = [];
     this.shafts = [];
-    for (let i = 0; i < budget; i++) {
+    for (let i = 0; i < this.specs.length; i++) {
       const s = this.specs[i];
+      // Absent `tier` reproduces the old index ladder exactly, so an arena that
+      // authors a bare list still degrades the way it always did.
+      const tier = s.tier ?? (i < 2 ? 0 : i < 3 ? 1 : 2);
+      if (rank < tier) continue;
+      const steps = Math.max(4, Math.round((s.steps ?? 12) * stepScale));
       const mat = new THREE.ShaderMaterial({
         name: `arena.shaft${i}`,
         uniforms: {
@@ -359,8 +500,8 @@ export class StageVolumetrics {
           // and not a count. 0 restores the old fixed twelve steps and is what
           // the A/B null arm sets.
           uStepLen: { value: SHAFT_STEP_LEN },
-          uMinSteps: { value: 4 },
-          uMaxSteps: { value: 12 },
+          uMinSteps: { value: Math.min(4, steps) },
+          uMaxSteps: { value: steps },
         },
         vertexShader: SHAFT_VERT,
         fragmentShader: SHAFT_FRAG,
@@ -383,9 +524,10 @@ export class StageVolumetrics {
       mesh.renderOrder = 6;
       this.group.add(mesh);
       this.shafts.push(mesh);
+      this.active.push({ spec: s, mesh });
     }
 
-    this.#lightPools(textures, budget);
+    this.#lightPools(textures);
     this.#deckHaze(textures, air?.deckHaze);
 
     const m = air?.motes ?? {};
@@ -433,8 +575,17 @@ export class StageVolumetrics {
    * around it rather than several stops over it. A pool that outshines the
    * floor is a white blob, and a white blob under a fighter's feet costs more
    * contrast than the pool ever buys in atmosphere.
+   *
+   * Only emitters with a non-zero `pool` get an instance. A beam that is
+   * extinguished in mid-air — the two slot blades die at y ~3.5, well above the
+   * machinery bank they hang over — has no contact with the deck, and the naive
+   * "drop the axis until it hits the floor" solve below would otherwise put a
+   * three-metre splash on the back of the pit under a beam that visibly never
+   * arrives there.
    */
-  #lightPools(textures, count) {
+  #lightPools(textures) {
+    const lit = this.active.filter((a) => (a.spec.pool ?? 0) > 0).map((a) => a.spec);
+    const count = lit.length;
     const geo = new THREE.PlaneGeometry(1, 1);
     geo.rotateX(-Math.PI / 2);
     const mat = new THREE.MeshBasicMaterial({
@@ -461,7 +612,7 @@ export class StageVolumetrics {
     const s = new THREE.Vector3();
     this._poolBase = [];
     for (let i = 0; i < count; i++) {
-      const spec = this.specs[i];
+      const spec = lit[i];
       const drop = spec.pos[1] - this.floorY;
       // Where the axis lands, allowing for the shaft's tilt.
       const dir = new THREE.Vector3(0, -1, 0).applyEuler(new THREE.Euler(spec.rot[0], spec.rot[1], spec.rot[2]));
@@ -567,13 +718,11 @@ export class StageVolumetrics {
     const breathe = Math.max(0, shaftIntensity);
     const tint = envParams?.shaft?.color;
 
-    for (let i = 0; i < this.shafts.length; i++) {
-      const mesh = this.shafts[i];
+    for (const { spec, mesh } of this.active) {
       const u = mesh.material.uniforms;
       u.uTime.value = time;
       mesh.updateMatrixWorld();
       u.uInvModel.value.copy(mesh.matrixWorld).invert();
-      const spec = this.specs[i];
       u.uIntensity.value = spec.intensity * (0.55 + breathe * 0.9);
       if (tint) u.uColor.value.copy(tint);
     }

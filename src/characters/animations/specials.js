@@ -38,7 +38,7 @@
 
 import { validateClip } from '../AnimationFormat.js';
 import { whip, lead } from './reactions.js';
-import { carry } from './idle.js';
+import { carry, contrapposto } from './idle.js';
 import { BONE_NAMES } from '../Skeleton.js';
 
 /** @type {Record<string, import('../AnimationFormat.js').Clip>} */
@@ -1178,3 +1178,22 @@ for (const id in CARRY) carry(SPECIAL_CLIPS[id], { N: CARRY[id] });
 for (const id in SPECIAL_CLIPS) validateClip(SPECIAL_CLIPS[id], BONE_NAMES);
 
 export default SPECIAL_CLIPS;
+
+// ---------------------------------------------------------------------------
+// CONTRAPPOSTO. See the long note above `contrapposto` in ./idle.js. Amount and
+// subset per clip are the largest the per-clip gate sweep accepted: extra
+// grounded-foot burial >= -12 mm, extra foot skate <= 4 mm/tick, and where the
+// clip carries a hitbox, <= 1 mm of striking-anchor movement at the contact
+// tick and no loss of check.mjs's anchor-travel ratio.
+//
+// The four non-attack clips take the full delta. The six that strike take
+// `core` at 0.2-0.7. `sp.groundSpike` takes nothing: it drives a knee into the
+// deck and a stance solve moves that foot 67 mm.
+// ---------------------------------------------------------------------------
+const CONTRA_TABLE = {
+  'sp.rocketPunch': [0.3, 'core'], 'sp.plasmaBurst': [0.3, 'core'],
+  'sp.chargeShoulder': [0.2, 'core'], 'sp.risingFang': [0.4, 'core'],
+  'sp.overdriveStart': [0.6, 'core'], 'sp.overdriveHit': 0.2, 'sp.overdriveFinish': 0.4,
+  'sp.counterStance': [1, 'core'], 'sp.parrySuccess': 1, 'sp.armorAbsorb': 1,
+};
+for (const id in CONTRA_TABLE) contrapposto(SPECIAL_CLIPS[id], CONTRA_TABLE[id]);

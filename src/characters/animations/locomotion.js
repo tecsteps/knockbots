@@ -15,7 +15,7 @@
  * Axis conventions and the pose helpers live in ./idle.js.
  */
 
-import { STANCE, STANCE_Y, CROUCH, CROUCH_Y, add, over, makeClip, carry } from './idle.js';
+import { STANCE, STANCE_Y, CROUCH, CROUCH_Y, add, over, makeClip, carry, contrapposto } from './idle.js';
 
 /** Fold a solved leg set and a torso offset onto the fight stance. */
 const step = (legs, torso) => (torso ? add(over(STANCE, legs), torso) : over(STANCE, legs));
@@ -403,3 +403,23 @@ for (const id in LOCO_CARRY) carry(LOCOMOTION_CLIPS[id], { N: LOCO_CARRY[id] });
 // source and nothing at runtime, and re-authoring them to match a speed nobody
 // drives would be the same mistake in a new coat.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// CONTRAPPOSTO. See the long note above `contrapposto` in ./idle.js. Amount and
+// subset per clip are the largest the per-clip gate sweep accepted: extra
+// grounded-foot burial >= -12 mm, extra foot skate <= 4 mm/tick, and where the
+// clip carries a hitbox, <= 1 mm of striking-anchor movement at the contact
+// tick and no loss of check.mjs's anchor-travel ratio.
+//
+// Nothing here carries a hitbox, so the whole set takes the upper terms too.
+// The two sidesteps and both jumps take the least, and `loco.runFwd`/`runBack`
+// drop the leg compensation on one side, because their feet are the thing they
+// are made of and a stance-solved leg term is worth least there.
+// ---------------------------------------------------------------------------
+const CONTRA_TABLE = {
+  'loco.walkFwd': 1, 'loco.walkBack': 1, 'loco.dashFwd': [1, 'full-skipR'], 'loco.dashBack': 1,
+  'loco.sidestepLeft': 0.6, 'loco.sidestepRight': 0.25, 'loco.jumpStart': 0.3, 'loco.jumpAir': 1,
+  'loco.jumpLand': 0.15, 'loco.crouchWalk': 1, 'loco.runFwd': [0.9, 'full-skipR'],
+  'loco.runBack': 0.9, 'loco.stopShort': 1,
+};
+for (const id in CONTRA_TABLE) contrapposto(LOCOMOTION_CLIPS[id], CONTRA_TABLE[id]);

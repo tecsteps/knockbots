@@ -395,6 +395,176 @@ export function carry(clip, opts = {}) {
 }
 
 
+// ---------------------------------------------------------------------------
+// CONTRAPPOSTO — the library's poses were symmetric, and that is what a critic
+// picks a reference out of a line-up by.
+//
+// MEASURED FIRST, through the rig, on all 92 clips at tick 0 and at every
+// contact tick. Four numbers, each an angle or a length in world space:
+//
+//   twist         horizontal angle from the hip line to the shoulder line
+//   frontal       the same two lines in the FRONTAL plane (shoulder roll minus
+//                 pelvis roll) -- the one a side-on camera actually resolves
+//   pelvicTilt    hip line off horizontal
+//   spineBow      chest's lateral deviation from the hips->head chord
+//
+// Across the 92, at rest:
+//
+//   |twist|        median 18.18 deg      <- NOT the defect. Already in band.
+//   |frontal|      median  1.23 deg      <- the defect
+//   |pelvicTilt|   median  0.47 deg      <- the defect, p25 is 0.00
+//   |spineBow|     median  3.46 mm       <- a column, over a 0.9 m spine
+//
+// The brief predicted all of these were near zero. Twist is not: `STANCE`
+// blades the pelvis -28 deg and counter-rotates the spine +19, which lands
+// inside the 15-20 deg the reference sits at. What is at zero is every axis in
+// the FRONTAL plane -- the plane the fight camera looks along. The pelvis is
+// level to half a degree and the shoulder line is parallel to it to 1.2, in
+// seventy-four of the ninety-two clips to the same three decimal places,
+// because they all inherit one symmetric `STANCE`.
+//
+// WHAT THIS IS. A pose delta, solved rather than authored, exactly the way
+// `SETTLE` above was: pick what must be true, let a numeric solve against the
+// rig's own forward kinematics find the Euler offsets, hard-code the answer.
+// Three things must be true, and two of them are what make it safe to apply:
+//
+//   1. the pelvis rolls 8 deg, right hip UP -- the rear foot carries the weight
+//      in this stance (its heel is off the floor and the pelvis projects 41% of
+//      the way from the rear foot to the lead one), and in a contrapposto the
+//      weight-bearing hip is the high one
+//   2. BOTH ankles and BOTH toes stay exactly where they were.  Residual 0.000 mm
+//   3. the CHEST keeps its world position AND orientation, so every arm bone,
+//      the neck and the head are carried unchanged.  Residual 1.82 mm of pure
+//      translation, 0.000 deg of rotation
+//
+// (3) is the whole trick. Pinning the chest means the shoulder line does not
+// move while the pelvis rolls under it, and a disagreement between them is what
+// contrapposto IS. It also means a striking hand cannot go anywhere: measured
+// against a PRISTINE CHECKOUT rather than against an object this file has
+// already mutated, the worst striking-anchor movement at any contact tick in
+// the library is 1.00 mm (sp.rocketPunch).
+//
+// The residual 1.82 mm is the floor for an operator of this shape and is worth
+// naming. A static Euler delta cannot pin both the chest and the feet across
+// poses that differ from `STANCE`, because the compensation it carries was
+// solved at `STANCE`. Driving it to zero needs the compensation re-solved per
+// key with two-bone IK, which is a different operator and a different round.
+//
+// WHAT IT COSTS, and why the per-clip table below is not uniform. The leg terms
+// are a stance solve; a leg that has left the floor cannot take them, so the
+// swinging side is dropped (`-skipL` / `-skipR`) or both are (`-noLeg`). The
+// upper terms MOVE THE ARMS by 20-26 mm, which is free on a clip whose hands
+// are not a hitbox and forbidden on one whose hands are -- hence `core`, which
+// is the same delta with the clavicles, neck and head left alone.
+//
+// GATED PER CLIP against the same clip without it, every gate measured on the
+// rig: extra grounded-foot burial >= -12 mm, extra per-tick foot skate <= 4 mm,
+// and for anything carrying a hitbox, striking-anchor movement at the contact
+// tick <= 1 mm, hand/head movement <= 6 mm anywhere, and `check.mjs`'s own
+// anchor-travel ratio neither below 0.40 nor 0.03 worse than it started.
+// 77 of 92 clips pass at some amount. The 15 that take nothing are the 13 kicks
+// plus p.siegeSlam and sp.groundSpike: all of them swing a leg, and a leg at
+// -104 deg of hip flex moves its foot 60-210 mm under a stance-solved
+// compensation, which is a hitbox on the wrong limb.
+//
+// MEASURED ACROSS TWO TREES, pristine against this one, all 92 clips at rest:
+//
+//                  before                       after
+//   |pelvicTilt|   p25 0.00  med 0.47  p75 0.47  ->  p25 1.67  med 5.03  p75 8.00
+//   |frontal|      p25 1.23  med 1.23  p75 1.28  ->  p25 1.23  med 5.01  p75 10.71
+//   |spineBow|     p25 2.60  med 3.46  p75 3.46  ->  p25 3.44  med 5.92  p75 15.02 mm
+//
+// and the safety side of the same run: 0 clips changed duration, `impact.tick`,
+// loop flag or blend counts; worst striking-anchor movement 1.00 mm; worst
+// extra grounded-foot burial -11.8 mm; worst extra foot skate 4.0 mm/tick.
+//
+// The per-clip table is DERIVED from the `CONTRA` constant below rather than
+// remembered alongside it: re-running the gate sweep against a pristine
+// checkout reproduces every entry bit-for-bit. An earlier table was swept
+// against a solver output that used random restarts, and it did not reproduce.
+//
+// WHERE THIS IS STILL SHORT, and it is the whole attack half of the library.
+// `idle.fight` gets pelvicTilt +1.0 -> -7.0 and frontal -1.7 -> +10.3, and so
+// do the walk, the blocks, the flinches and the reactions. `p.straight` gets
+// -0.5 -> -1.7 and frontal -1.2 -> 0.0, because the 1 mm anchor gate binds at
+// amount 0.15 and the 13 kicks cannot take any amount at all. The contact
+// frames -- the ones the critic picked a reference out of a line-up by -- are
+// barely touched. Closing that needs the leg and spine compensation re-solved
+// per key with two-bone IK instead of carried as a stance constant.
+// ---------------------------------------------------------------------------
+
+/**
+ * The solved contrapposto. Applied additively, scaled per clip.
+ *
+ * `hips` is the product; everything else is compensation or leaf work:
+ *   hip, knee, ankle      return both ankles and both toes to where the pelvis
+ *                         roll would otherwise have dragged them (0.000 mm)
+ *   spine01/02/chest      return the chest to its own world transform, with the
+ *                         spare degrees of freedom spent bowing spine02 16 mm
+ *                         laterally so the spine reads as a curve, not a column
+ *   clavicle_*            the shoulder line counter-tilts 4 deg against the
+ *                         pelvis. MOVES THE ARMS -- see `CONTRA_SETS.core`.
+ *   neck/head             the skull leaves the centre line by 30 mm and cocks
+ *                         5 deg against the neck's own lean, so the two do not
+ *                         read as one bone.
+ * @type {Record<string, [number, number, number]>}
+ */
+export const CONTRA = {
+  hips: [0, 0, -8],
+  hip_L: [-3.54, -5.25, 7.16], knee_L: [4.59, 0, 0], ankle_L: [-1.95, -0.8, -0.43],
+  hip_R: [3.15, -2.4, 8.31], knee_R: [-5.09, 0, 0], ankle_R: [2.79, 0.71, 0.36],
+  spine01: [0.72, -0.64, 11.5], spine02: [-3.02, 0.84, -0.07], chest: [2.61, -0.09, -3.37],
+  clavicle_L: [0, 0, 5.42], clavicle_R: [0, 0, 5.4],
+  neck: [0, 0, 16.77], head: [0, 0, -5],
+};
+
+const CONTRA_UPPER = ['clavicle_L', 'clavicle_R', 'neck', 'head'];
+const CONTRA_LEG = (s) => [`hip_${s}`, `knee_${s}`, `ankle_${s}`];
+
+/** Named subsets of `CONTRA` to leave alone, keyed the way the tables spell them. */
+export const CONTRA_SETS = {
+  'full': [],
+  'full-skipL': CONTRA_LEG('L'),
+  'full-skipR': CONTRA_LEG('R'),
+  'full-noLeg': [...CONTRA_LEG('L'), ...CONTRA_LEG('R')],
+  'core': CONTRA_UPPER,
+  'core-skipL': [...CONTRA_UPPER, ...CONTRA_LEG('L')],
+  'core-skipR': [...CONTRA_UPPER, ...CONTRA_LEG('R')],
+  'core-noLeg': [...CONTRA_UPPER, ...CONTRA_LEG('L'), ...CONTRA_LEG('R')],
+};
+
+/**
+ * Add `amount` of the solved contrapposto to every key of `clip`.
+ * Mutates and returns `clip`.
+ *
+ * Key TIMES are never touched, so `duration`, `impact.tick` and every startup,
+ * active and recovery count survive by construction. A bone the clip does not
+ * key is left at rest rather than given a track, because a clip that never
+ * mentions its legs is not standing in `STANCE` and a stance solve would be a
+ * lie there.
+ *
+ * @param {import('../AnimationFormat.js').Clip} clip
+ * @param {number|[number,string]} spec  amount, or `[amount, setName]`
+ */
+export function contrapposto(clip, spec) {
+  const [amount, set] = Array.isArray(spec) ? spec : [spec, 'full'];
+  if (!(amount > 0)) return clip;
+  const skip = CONTRA_SETS[set];
+  if (!skip) throw new Error(`contrapposto ${clip.name}: unknown set "${set}"`);
+  for (const bone in CONTRA) {
+    if (skip.includes(bone)) continue;
+    const keys = clip.tracks[bone];
+    if (!keys) continue;
+    const d = CONTRA[bone];
+    for (const k of keys) {
+      k.r[0] += d[0] * amount;
+      k.r[1] += d[1] * amount;
+      k.r[2] += d[2] * amount;
+    }
+  }
+  return clip;
+}
+
 /**
  * Transpose a list of whole-body keyframes into a Clip.
  *
@@ -791,3 +961,18 @@ export const IDLE_CLIPS = {
 // ---------------------------------------------------------------------------
 const IDLE_CARRY = { 'idle.fight': 2, 'idle.breathe': 3, 'idle.taunt': 2, 'idle.lowHealth': 3, 'idle.crouch': 3 };
 for (const id in IDLE_CARRY) carry(IDLE_CLIPS[id], { N: IDLE_CARRY[id] });
+
+// ---------------------------------------------------------------------------
+// CONTRAPPOSTO, applied to the idle set. See the note above `contrapposto`.
+//
+// All five take the full delta, which is the best result in the library and the
+// one that matters most: `idle.fight` is on screen more than any other clip and
+// is what the DEFENDER is standing in for five of the seven panels of
+// `17-anim-strip`. Measured on it: pelvicTilt +1.0 -> -7.0 deg, frontal
+// separation -1.7 -> +10.3, head 21 -> -28 mm off the centre line, at a cost of
+// 6.5 mm of extra grounded-foot burial and 0.4 mm/tick of extra skate.
+// ---------------------------------------------------------------------------
+const IDLE_CONTRA = {
+  'idle.fight': 1, 'idle.breathe': 1, 'idle.taunt': 1, 'idle.lowHealth': 1, 'idle.crouch': 1,
+};
+for (const id in IDLE_CONTRA) contrapposto(IDLE_CLIPS[id], IDLE_CONTRA[id]);

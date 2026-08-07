@@ -13,7 +13,7 @@
  * Axis conventions and the pose helpers live in ./idle.js.
  */
 
-import { STANCE, STANCE_Y, UPRIGHT, UPRIGHT_Y, add, over, makeClip, carry } from './idle.js';
+import { STANCE, STANCE_Y, UPRIGHT, UPRIGHT_Y, add, over, makeClip, carry, contrapposto } from './idle.js';
 
 // ---------------------------------------------------------------------------
 // Arm sets, solved against an opened-up torso.
@@ -187,3 +187,15 @@ export const VICTORY_CLIPS = {
 // VELOCITY CARRY. See the note above `carry` in idle.js.
 // ---------------------------------------------------------------------------
 for (const id in VICTORY_CLIPS) carry(VICTORY_CLIPS[id], { N: 2 });
+
+// ---------------------------------------------------------------------------
+// CONTRAPPOSTO. See the long note above `contrapposto` in ./idle.js. Amount and
+// subset per clip are the largest the per-clip gate sweep accepted: extra
+// grounded-foot burial >= -12 mm, extra foot skate <= 4 mm/tick, and where the
+// clip carries a hitbox, <= 1 mm of striking-anchor movement at the contact
+// tick and no loss of check.mjs's anchor-travel ratio.
+// ---------------------------------------------------------------------------
+const CONTRA_TABLE = {
+  'v.pose': 1, 'v.saluteCharge': 0.3, 'v.systemsNominal': 1, 'v.roundWin': 1,
+};
+for (const id in CONTRA_TABLE) contrapposto(VICTORY_CLIPS[id], CONTRA_TABLE[id]);

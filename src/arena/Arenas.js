@@ -75,9 +75,45 @@ const ROOF_AIR = {
    * They are also the only two, against the pit's five: outdoor air at dusk is
    * clear, and a rooftop full of visible beams reads as a nightclub.
    */
+  /**
+   * **BOTH OF THESE POINTED OFF THE BUILDING, and the round-1 versions of them
+   * retired zero fragments at every framing swept.**
+   *
+   * `shaftGeometry` sweeps the emitter rectangle along the shaft's LOCAL -Y, so
+   * a spec never states its beam direction — it implies it, through three Euler
+   * angles. `rot: [0, 0, -1.32]` takes local -Y to world (-0.969, -0.248, 0):
+   * the beam left x = -13.6 heading further into -x and met the ground at
+   * **x = -24.9**, nine metres beyond the parapet at x = -15. It raked away from
+   * the arena and off the roof. Both were authored by analogy with the pit's
+   * gantry shafts rather than by solving, and nothing in the pipeline complains
+   * about a beam nobody can see.
+   *
+   * Measured with `scratchpad/r35-shaftfill.mjs`, a CPU depth raster with a
+   * positive control, a null and a depth-off arm: 0.000% of fragments at the
+   * fight framing, at 06-stage-wide and at five off-centre fight poses.
+   *
+   * **Flipping the sign is not the fix, and that was measured too.** At
+   * `rot[2] = +1.32` shaft0 reaches 26.6% coverage at the fight framing and
+   * still 0.00% fragments, because a near-horizontal beam at y ~2 crossing
+   * x -4..+3 sits inside `StageVolumetrics`' fight-clear carve (half extents
+   * 6.5 / 2.9 / 3.4 about (0, 1.9, 0), feathered to 1.9x) and every sample is
+   * discarded. That carve is not negotiable — it is what keeps ambient
+   * atmosphere off the one band of the frame holding the deepest blacks.
+   *
+   * So the direction is solved from the mood rather than guessed, and the run
+   * is moved to where the carve is not. `key: dir(200, 14)` is the vector
+   * TOWARD the sun, so light travels along its negation, (0.912, -0.242, 0.332),
+   * which the Euler pair [-0.9409, 0, 1.1475] reproduces exactly. Both beams now
+   * rake the BACK of the deck at z -10.6 and -13.4, where |z| clears the carve's
+   * 6.46 m feathered edge entirely, and they end above the deck rather than
+   * running into it — 1% and 0% of their length carved, against 100% before.
+   *
+   * That band is also where the set has something for them to land on: the
+   * plant room, the stair bulkhead and the back parapet with the green sign.
+   */
   shafts: [
-    { pos: [-13.6, 2.9, -2.0], rot: [0, 0, -1.32], half: [1.5, 1.35], spread: [0.05, 0.02], length: 22, color: 0xffb98a, intensity: 0.085, round: 0.1, edge: 2.0, extinction: 0.03, slat: [0.42, 2.6], pool: 0.026 },
-    { pos: [-13.6, 2.4, 6.4], rot: [0.12, 0, -1.36], half: [1.2, 1.1], spread: [0.05, 0.02], length: 19, color: 0xffa878, intensity: 0.07, round: 0.1, edge: 2.0, extinction: 0.03, slat: [0.42, 2.6], pool: 0.02 },
+    { pos: [-12.8, 5.6, -10.6], rot: [-0.9409, 0, 1.1475], half: [1.5, 1.35], spread: [0.05, 0.02], length: 14, color: 0xffb98a, intensity: 0.085, round: 0.1, edge: 2.0, extinction: 0.03, slat: [0.42, 2.6], pool: 0.026 },
+    { pos: [-12.6, 5.0, -13.4], rot: [-0.9409, 0, 1.1475], half: [1.2, 1.1], spread: [0.05, 0.02], length: 15, color: 0xffa878, intensity: 0.07, round: 0.1, edge: 2.0, extinction: 0.03, slat: [0.42, 2.6], pool: 0.02 },
   ],
   /**
    * Airborne dust, warm and sparse. A quarter of the pit's count, lifted out of
@@ -115,11 +151,41 @@ const VAULT_AIR = {
    * gantry shafts run 0.16 over 5.5 m from twelve metres up, which is a
    * different physical situation and a different number.
    */
+  /**
+   * **Three of these four drew nothing, for two compounding reasons.**
+   *
+   * The first is the same defect as the rooftop's: the direction is implied by
+   * Euler angles rather than stated, and it was wrong. `rot: [0, 0, -1.18]` on
+   * the -x wall strip takes local -Y to (-0.925, -0.381, 0) — the beam left the
+   * fitting heading INTO the wall it is bolted to and met the ground at
+   * x = -16.7, five metres outside the tank. Its opposite number did the same
+   * on +x, and the sodium bulkhead beam likewise.
+   *
+   * The second reason is why simply re-aiming them does not work, and it is a
+   * property of the stage rather than of the spec. These three fittings sit at
+   * |x| ~11, and the fight camera's frame is about 2.9 m wide at the fighters
+   * and 4.3 m at 06-stage-wide. **Nothing at |x| 11 can be in either scored
+   * frame at any orientation** — measured, their NDC x ranges are [-2.51,-1.28]
+   * and [1.32, 3.07] at the wide framing, entirely outside [-1, 1]. They are
+   * real fittings and they stay; what they cannot have is a visible shaft.
+   *
+   * So the three beams are re-hung on fittings that ARE in shot. `StageVault`
+   * strips its arcade bays at y 2.85 on z -8.25 and lights its machine hall
+   * from a sodium fitting at z -17.1, and all of those sit behind the weir where
+   * |z| clears the fight-clear carve's 6.46 m feathered edge — the same reason
+   * the pit's own gantry shafts at z -6.2 read. Every direction below is solved
+   * from the fitting to where the beam should land rather than guessed, and
+   * every one is 0% carved over its whole run.
+   *
+   * The wall strips keep their washes and their deck pools, which is where
+   * their visible contribution already was; the mirror carries those, and a
+   * shaft is on `LAYER.NO_REFLECT` and never was in it.
+   */
   shafts: [
-    { pos: [-11.0, 2.35, 1.2], rot: [0, 0, -1.18], half: [1.6, 0.09], spread: [0.16, 0.30], length: 7.0, color: 0xd6e8ff, intensity: 0.62, round: 0.2, edge: 2.2, extinction: 0.22, slat: [0, 0], pool: 0.04 },
-    { pos: [11.0, 2.35, -1.8], rot: [0, 0, 1.18], half: [1.6, 0.09], spread: [0.16, 0.30], length: 7.0, color: 0xd6e8ff, intensity: 0.62, round: 0.2, edge: 2.2, extinction: 0.22, slat: [0, 0], pool: 0.04 },
+    { pos: [-4.6, 2.80, -8.25], rot: [-0.2915, 0, 0.3472], half: [1.4, 0.09], spread: [0.15, 0.30], length: 5.4, color: 0xd6e8ff, intensity: 0.62, round: 0.2, edge: 2.2, extinction: 0.22, slat: [0, 0], pool: 0.04 },
+    { pos: [4.2, 2.80, -8.25], rot: [-0.2783, 0, -0.3261], half: [1.4, 0.09], spread: [0.15, 0.30], length: 5.4, color: 0xd6e8ff, intensity: 0.62, round: 0.2, edge: 2.2, extinction: 0.22, slat: [0, 0], pool: 0.04 },
     { pos: [-2.2, 3.82, -7.5], rot: [0.62, 0, 0], half: [2.3, 0.1], spread: [0.06, 0.22], length: 6.4, color: 0xcadfff, intensity: 0.5, round: 0.15, edge: 2.3, extinction: 0.20, slat: [0, 0], pool: 0.05 },
-    { pos: [10.85, 2.05, 4.4], rot: [0.1, 0, 1.1], half: [0.42, 0.2], spread: [0.28, 0.28], length: 4.4, color: 0xff9a3c, intensity: 0.44, round: 0.8, edge: 2.1, extinction: 0.26, slat: [0, 0], pool: 0.03 },
+    { pos: [2.6, 4.30, -17.1], rot: [-0.3599, 0, -0.1003], half: [0.9, 0.26], spread: [0.22, 0.30], length: 6.0, color: 0xff9a3c, intensity: 0.44, round: 0.8, edge: 2.1, extinction: 0.26, slat: [0, 0], pool: 0.03 },
   ],
   /**
    * Denser and cooler than the pit's, and lower. A buried tank over standing
