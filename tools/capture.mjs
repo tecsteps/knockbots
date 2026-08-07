@@ -1790,6 +1790,27 @@ async function main() {
      * every existing shot is bit-identical; only the clip strips vary, and they
      * vary deliberately across silhouette classes rather than at random.
      *
+     * *** THIS DOES NOT CURRENTLY WORK AND THE COMMIT THAT ADDED IT WAS WRONG.
+     *
+     * A blind critic scoring the very next capture reported that shots 20, 21,
+     * 23 and 24 "all show the SAME rust/copper/teal chassis with the same
+     * diagonal exhaust-stack silhouette, matching Vulkan exactly. None show
+     * Kestrel's white/cream/blue palette or any third or fourth colour scheme."
+     * It could not answer the cross-chassis question it was asked, because the
+     * not-Vulkan strips do not render a different robot.
+     *
+     * Eliminated: the three other startMatch(0, 1) sites in this file are on the
+     * pinTicks and hit-retry paths, not the strip path, so they are not
+     * overwriting it. NOT eliminated, and where to look first: whether the
+     * __kbChars guard below ever evaluates true for a clip-strip shot, and
+     * whether subject: 0 selects the fighter assumed once the roster order is
+     * swapped -- with chars [1, 0], fighter 0 should be Kestrel, and that is the
+     * assumption nobody has verified.
+     *
+     * Treat the ANALYSIS above as sound and the MECHANISM as unproven. The axis
+     * really has only ever been scored on one robot; this is still the right fix
+     * to make; it is just not yet made. ***
+     *
      * An axis scored on a single subject is not measuring the system. It is
      * measuring that subject, and reporting the result as if it were the system.
      *
