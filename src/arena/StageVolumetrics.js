@@ -86,6 +86,9 @@ const SHAFT_FRAG = /* glsl */ `
   uniform vec2 uNearFade;    // view distances over which the shaft fades in
   uniform vec3 uClearCenter;
   uniform vec3 uClearHalf;
+  uniform float uStepLen;    // metres per march sample; <= 0 = fixed uMaxSteps
+  uniform float uMinSteps;
+  uniform float uMaxSteps;
   varying vec3 vLocal;
   varying vec3 vLocalEye;
   varying vec3 vWorld;
@@ -134,13 +137,41 @@ const SHAFT_FRAG = /* glsl */ `
     vec3 wd = normalize( vWorld - cameraPosition );
 
     float span = tExit - tEnter;
-    const int STEPS = 12;
-    float stepLen = span / float( STEPS );
-    // Blue-noise-ish jitter: without it twelve steps band visibly.
+
+    /*
+     * CONSTANT SAMPLE SPACING, not a constant sample count.
+     *
+     * The march used a fixed twelve steps for every fragment, which sets the
+     * sample spacing to span/12 — so a ray that grazes the beam and crosses
+     * half a metre of it got a sample every 4 cm, while a ray straight down the
+     * beam got one every 50 cm. The thin rays were paying twelve full samples,
+     * two dependent texture fetches each, to resolve detail far below anything
+     * the beam actually contains. Shafts 0 and 1 cover 22.4% of the frame at
+     * the shipping tier (measured, not guessed — the other three shafts cover
+     * zero), and this shader is the most expensive per-pixel thing the arena
+     * draws, so that oversampling is the single largest waste in the layer.
+     *
+     * Picking the step count from the span instead fixes the spacing at
+     * uStepLen metres. Rays that were already at or above that spacing are
+     * untouched — they still take the full twelve — so the beam's core, where
+     * the span is long and the scatter is bright, is bit-identical. Only the
+     * grazing edges take fewer, and there the spacing they end up with is the
+     * one the core was already considered acceptable at.
+     *
+     * uStepLen <= 0 restores the fixed twelve exactly, which is how the A/B is
+     * driven at runtime without a rebuild.
+     */
+    float steps = uStepLen > 0.0
+      ? clamp( ceil( span / uStepLen ), uMinSteps, uMaxSteps )
+      : uMaxSteps;
+    float stepLen = span / steps;
+    // Blue-noise-ish jitter: without it twelve steps band visibly, and fewer
+    // steps band harder — this is what lets the count come down at all.
     float jitter = hash12( gl_FragCoord.xy + uTime * 60.0 );
     float acc = 0.0;
 
-    for ( int i = 0; i < STEPS; i++ ) {
+    for ( int i = 0; i < 12; i++ ) {
+      if ( float( i ) >= steps ) break;
       float t = tEnter + ( float( i ) + jitter ) * stepLen;
       vec3 p = ro + rd * t;
       float d = -p.y;
@@ -190,6 +221,20 @@ const SHAFT_FRAG = /* glsl */ `
     gl_FragColor = vec4( uColor * ( 1.0 - exp( -acc * uIntensity ) ), 1.0 );
   }
 `;
+
+/**
+ * Metres between raymarch samples in a light shaft.
+ *
+ * The old shader spent a fixed twelve samples on every fragment regardless of
+ * how much shaft the ray actually crossed. This is the spacing those twelve
+ * samples produced on the rays that matter — the ones crossing the ~2.3 m depth
+ * of the pit's two visible shafts — so a fragment in the beam's core gets
+ * exactly what it got before, and only the grazing edges, which were sampling
+ * at 4 cm to resolve detail the beam does not contain, take fewer.
+ *
+ * Set to 0 to restore the unconditional twelve.
+ */
+const SHAFT_STEP_LEN = 0.19;
 
 /** Hexahedron bounding a shaft: emitter rectangle at y=0, swept to y=-length. */
 function shaftGeometry(halfX, halfZ, spreadX, spreadZ, length) {
@@ -291,6 +336,12 @@ export class StageVolumetrics {
           uNearFade: { value: new THREE.Vector2(1.2, 4.5) },
           uClearCenter: { value: clearCenter },
           uClearHalf: { value: clearHalf },
+          // Sample spacing in metres. See the march for why this is a spacing
+          // and not a count. 0 restores the old fixed twelve steps and is what
+          // the A/B null arm sets.
+          uStepLen: { value: SHAFT_STEP_LEN },
+          uMinSteps: { value: 4 },
+          uMaxSteps: { value: 12 },
         },
         vertexShader: SHAFT_VERT,
         fragmentShader: SHAFT_FRAG,

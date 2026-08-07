@@ -776,6 +776,57 @@ class ScenePass extends Pass {
     this.splitLighting = false;
     this.splitGroups = SPLIT_GROUPS;
     /**
+     * Draw the per-fighter shadow maps from the fighters ALONE.
+     *
+     * three picks a light's shadow casters with `object.layers.test(
+     * camera.layers )` — the frame's camera, not the light's — in
+     * `WebGLShadowMap.renderObject`. Every shadow map in the frame is therefore
+     * drawn from whatever mask happened to be on the camera during the frame's
+     * first `renderer.render`, which is the prepass. The prepass widens that
+     * mask to include the split geometry and the whole light rig, because the
+     * *directional* key genuinely needs to see every caster in the arena.
+     *
+     * The side effect is that the two per-fighter key spots — lights that
+     * `Environment` has deliberately confined to `SPLIT_LIGHT_LAYER` so they can
+     * only ever shade a robot — rasterise the entire arena into their 1024 maps
+     * as well. `Environment`'s own note records the cost and calls it
+     * unfixable ("not fixable from here without giving each light its own caster
+     * pass"), which is true of `Environment` and not of this file: it is fixable
+     * here, and this is that caster pass.
+     *
+     * The prepass is split in two. The first render carries a mask of split
+     * geometry plus split lights and nothing else, so the shadows drawn are
+     * exactly the per-fighter maps and the casters available to them are exactly
+     * the robots. `needsUpdate` is then re-armed and the second render carries
+     * the global lights and the whole scene, which draws the directional key's
+     * map from every caster as before and lays the real depth prepass. The extra
+     * draw is depth-only over two robots.
+     *
+     * What the arena gives up is its ability to occlude these two lights. Since
+     * the only surfaces these lights can shade are the robots, that is the arena
+     * casting a shadow onto a fighter through a light aimed at that fighter from
+     * three metres away and above — see the visual A/B in the round notes for
+     * what it actually moves.
+     * @type {boolean}
+     */
+    this.splitShadowCasters = true;
+    /** Set by `#classify`: are there split lights with shadow maps to draw? */
+    this._splitShadowLights = 0;
+    /**
+     * Camera for the split shadow-caster pass. Never draws anything.
+     *
+     * Its `layers` mask is what selects both the lights whose maps get drawn and
+     * the casters that go into them, and its frustum is deliberately empty — a
+     * one-degree cone from ten thousand kilometres away with a one-metre depth
+     * range — so the scene render that three performs after the shadow pass in
+     * the same `renderer.render` call finds nothing to put in its render list.
+     * A shadow pass needs the camera for its layer mask and for nothing else.
+     */
+    this._shadowOnlyCamera = new THREE.PerspectiveCamera(1, 1, 1e7, 1e7 + 1);
+    this._shadowOnlyCamera.position.set(0, 1e7, 0);
+    this._shadowOnlyCamera.layers.mask = SPLIT_GEOMETRY_BIT | SPLIT_LIGHT_BIT;
+    this._shadowOnlyCamera.updateMatrixWorld();
+    /**
      * Image-based lighting multiplier for the arena half only.
      *
      * The set loses more than diffuse when the per-fighter rig stops reaching
@@ -868,9 +919,11 @@ class ScenePass extends Pass {
     if (!found) return;
     this._classified = true;
 
+    let splitShadows = 0;
     this.scene.traverse((o) => {
       if (o.isLight) {
         if (!(o.layers.mask & (SPLIT_LIGHT_BIT | ARENA_LIGHT_BIT))) o.layers.enable(GLOBAL_LIGHT_LAYER);
+        else if (o.visible && o.castShadow && (o.layers.mask & SPLIT_LIGHT_BIT)) splitShadows++;
         o.layers.disable(LAYER.DEFAULT);
         return;
       }
@@ -885,6 +938,11 @@ class ScenePass extends Pass {
       o.layers.enable(SPLIT_GEOMETRY_LAYER);
       o.layers.disable(LAYER.DEFAULT);
     });
+    // Counted here rather than re-traversed in `#prepass`: this walk already
+    // visits every light, and the tiers that switch the per-fighter shadows off
+    // (medium and low keep both keys lit and neither casting) must not pay for a
+    // caster pass that would draw no maps.
+    this._splitShadowLights = splitShadows;
   }
 
   /**
@@ -987,6 +1045,50 @@ class ScenePass extends Pass {
     });
     const prevOverride = this.scene.overrideMaterial;
     this.scene.overrideMaterial = this._depthOnly;
+
+    // Stage one: the per-fighter shadow maps, from the fighters alone.
+    //
+    // Rendered through `_shadowOnlyCamera`, which exists to be TWO things at
+    // once. Its layer mask holds split geometry and split lights and nothing
+    // else — not layer 0, not the global lights — so `projectObject` puts only
+    // the per-fighter lights in `shadowsArray`, and `WebGLShadowMap`'s
+    // `object.layers.test( camera.layers )` finds only the robots to draw into
+    // their maps. And its frustum is empty, parked ten thousand kilometres away
+    // with a one-metre depth range, so the scene render that follows the shadow
+    // pass inside the same `renderer.render` draws nothing at all.
+    //
+    // The empty frustum is not a nicety, it is the difference between a saving
+    // and a loss. The first version of this used the real camera, and the
+    // counters said so exactly: it removed 16 draws and 255k triangles from the
+    // two shadow maps and added back 33 draws and 159k triangles of robot depth
+    // that stage two then cleared. Casters are culled against the LIGHT's
+    // frustum and selected by the camera's LAYERS, so nothing about the shadow
+    // pass needs the camera to be able to see anything.
+    //
+    // It runs AFTER the hide traverse above deliberately, so the caster set here
+    // is a subset of the one the single-stage prepass used and nothing can
+    // appear in a shadow that was not in it before.
+    //
+    // `shadowMap.autoUpdate` is false and `RenderPipeline.render` arms
+    // `needsUpdate` once a frame; the first render of the frame consumes it. Two
+    // shadow-drawing renders therefore need it armed twice, and the re-arm has
+    // to sit between them.
+    if (split && this.splitShadowCasters && this._splitShadowLights > 0
+        && renderer.shadowMap.enabled) {
+      // `scene.background` is not layer-tested — three unshifts it to the front
+      // of the opaque list on every render — so an empty frustum alone would
+      // still repaint the whole viewport.
+      const background = this.scene.background;
+      this.scene.background = null;
+      renderer.render(this.scene, this._shadowOnlyCamera);
+      this.scene.background = background;
+      renderer.shadowMap.needsUpdate = true;
+      // Stage two drops the split lights: their maps are already drawn, and
+      // leaving them visible would redraw both from the full scene and undo the
+      // whole point.
+      cam.layers.mask = originalMask | SPLIT_GEOMETRY_BIT | GLOBAL_LIGHT_BIT;
+    }
+
     renderer.render(this.scene, this.camera);
     this.scene.overrideMaterial = prevOverride;
     cam.layers.mask = originalMask;

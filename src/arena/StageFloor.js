@@ -848,13 +848,50 @@ const FRAG_FOLD_AO = /* glsl */ `
     #endif
   }`;
 
+/**
+ * The wetness fold, and it is the same class of redundancy as the ORM fold
+ * above.
+ *
+ * `uWetMap` was bound to `maps.normal` — **the same texture object three binds
+ * to `normalMap`** — and read at `vNormalMapUv`, **the same coordinate**
+ * `<normal_fragment_maps>` samples it at one line earlier. Three declares a
+ * separate `uniform sampler2D` per uniform and a compiler cannot know two
+ * samplers alias one texture, so it could not common up the fetch: every shaded
+ * pixel of a deck that covers most of the frame paid for two full fetches of
+ * one texel.
+ *
+ * It also cost a texture unit on `arena.floorWet`, which PROFILING.md names as
+ * one of the two materials sitting exactly on the sixteen-unit limit.
+ *
+ * So `<normal_fragment_maps>` is expanded here — verbatim, both branches of its
+ * one conditional kept — for the single purpose of keeping the `vec4` it throws
+ * away. The wetness then comes out of the alpha of the texel already fetched.
+ * Bit-identical by construction: same texture, same coordinate, same
+ * derivatives, therefore the same texel and the same alpha.
+ */
 const FRAG_NORMAL_HOOK = /* glsl */ `
-  #include <normal_fragment_maps>
+  #ifdef USE_NORMALMAP_TANGENTSPACE
+    vec4 kbNormalTexel = texture2D( normalMap, vNormalMapUv );
+    {
+      vec3 mapN = kbNormalTexel.xyz * 2.0 - 1.0;
+      #if defined( USE_PACKED_NORMALMAP )
+        mapN = vec3( mapN.xy, sqrt( saturate( 1.0 - dot( mapN.xy, mapN.xy ) ) ) );
+      #endif
+      mapN.xy *= normalScale;
+      normal = normalize( tbn * mapN );
+    }
+  #else
+    // Any surface that reaches this graft without a tangent-space normal map
+    // keeps three's own path and a dry deck, which is what the wet mask is
+    // stored alongside the normal to begin with.
+    vec4 kbNormalTexel = vec4( 0.5, 0.5, 1.0, 0.0 );
+    #include <normal_fragment_maps>
+  #endif
   {
     // View -> world for an orthonormal view matrix is a transpose, which in
     // GLSL is just the reversed multiply.
     vec3 kbWorldN = normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz );
-    kbWetness = texture2D( uWetMap, vNormalMapUv ).a;
+    kbWetness = kbNormalTexel.a;
 
     // --- the long warp, on the water only -----------------------------------
     //
@@ -1296,7 +1333,6 @@ function graftFloorShader(material, uniforms) {
 uniform sampler2D uReflection;
 uniform sampler2D uDetailNormal;
 uniform sampler2D uRippleMap;
-uniform sampler2D uWetMap;
 uniform sampler2D uDeckDetail;
 uniform float uDeckTile;
 uniform float uDeckTone;
@@ -1582,7 +1618,9 @@ export class StageFloor {
       uTextureMatrix: { value: reflector.textureMatrix },
       uDetailNormal: { value: textures.concreteNormal },
       uRippleMap: { value: this.ripple },
-      uWetMap: { value: maps.normal },
+      // No `uWetMap`. The wet mask is the alpha of `maps.normal`, which is the
+      // texture bound to `normalMap` below, and the graft now reads it out of
+      // the texel `<normal_fragment_maps>` already fetches. See FRAG_NORMAL_HOOK.
       uDeckDetail: { value: this.deckDetail },
       // 1 / tile size in metres.
       uDeckTile: { value: 1 / S.detailTile },

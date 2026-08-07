@@ -155,13 +155,39 @@ const ENV_QUAD_LAYER = 3;
  *     1 spot  @ 1024       14.0-14.1   +1.30 ms
  *
  * Halving the map in each direction — a quarter of the fill — costs **nothing**,
- * and halving the number of maps saves **half**. So the whole 2.4 ms is
- * rasterising casters, not shading texels, and the reason there is so much of it
- * is `RenderPipeline`'s depth prepass: it widens the camera mask so every light
- * sees every caster, which is what the directional key needs, so both of these
- * maps redraw the arena as well as the robots even though this light cannot
- * shade the arena at all. That is not fixable from here without giving each
- * light its own caster pass.
+ * and halving the number of maps saves **half**.
+ *
+ * **The conclusion drawn from that was wrong, and it is corrected here.** The
+ * note used to read "so the whole 2.4 ms is rasterising casters, not shading
+ * texels". That does not follow: this pipeline samples shadows with PCSS —
+ * twelve blocker taps plus sixteen filter taps, see `buildPcssChunk` in
+ * `RenderPipeline` — and a PCSS tap count is per SCREEN pixel, so the sampling
+ * half is just as indifferent to map size as the rasterising half. Map size
+ * being free is evidence about map size and about nothing else.
+ *
+ * Measured directly instead of inferred, by separating the two: `shadow.autoUpdate
+ * = false` skips the redraw while every material keeps sampling the map it
+ * already holds, so on a frozen frame the difference is rasterisation alone.
+ * Paired A/B, arm toggled on and off twelve times a rep, medians of the
+ * per-cycle differences, restated at the 16.95 ms shipping frame:
+ *
+ *     both spots, rasterise + sample (castShadow off)   -9.0%   -1.53 ms
+ *     both spots, rasterise only (map frozen)           -4.9%   -0.83 ms
+ *     => sampling                                       -4.1%   -0.70 ms
+ *     the DIRECTIONAL key's 2560 map, rasterise only    +1.2%    noise
+ *
+ * So it is roughly 55% draw and 45% read, not 100% draw. The tier ladder's
+ * decision is unaffected — dropping the shadow returns both halves — but the
+ * reason there was so much of the draw half is real and is now fixed: it was
+ * `RenderPipeline`'s depth prepass widening the camera mask so every light saw
+ * every caster, which is what the directional key needs, so both of these maps
+ * redrew the arena as well as the robots even though this light cannot shade the
+ * arena at all. This note used to say that was "not fixable from here without
+ * giving each light its own caster pass". It is fixable from `RenderPipeline`,
+ * and `ScenePass.splitShadowCasters` is that caster pass: it takes 87% of the
+ * geometry out of these two maps (52 draws and 380,792 triangles down to 30 and
+ * 50,432, counted, zero spread over three interleaved reps) and leaves the
+ * directional key's map bit-identical.
  *
  * Two consequences. Map size is free, so it is set for quality (1024 puts about
  * 4.7 mm per texel on the subject) and not trimmed. And the shadows are the

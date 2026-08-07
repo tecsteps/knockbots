@@ -904,6 +904,70 @@ function barrierBanner(width, seed, bands) {
  *   and is shared unchanged.
  * @returns {{ materials: Record<string, THREE.Material>, textures: Record<string, THREE.Texture>, dispose(): void }}
  */
+/**
+ * Folds the occlusion and metalness reads into the roughness texel.
+ *
+ * Maps here are packed on the glTF convention (R=AO, G=roughness, B=metalness)
+ * and ONE texture was bound to `roughnessMap`, `metalnessMap` and `aoMap`.
+ * Three declares a separate `uniform sampler2D` per slot and each of the three
+ * chunks issues its own `texture2D`, so every shaded pixel on every wall,
+ * girder, container and slab of concrete in the arena fetched the same texel
+ * out of the same texture at the same UV three times. Measured off the LINKED
+ * programs (active uniforms, so the compiler has already dropped anything no
+ * live branch reads): `arena.steel`, `arena.darkMetal`, `arena.container`,
+ * `arena.grating` and the rest sat at 10 texture units each, two of which were
+ * this redundancy.
+ *
+ * This is the same fold `Materials.js` does on `StoryPhysicalMaterial` and
+ * `StageFloor.js` does on `arena.floorWet`, where it took `kb.armor` and the
+ * deck from 15 units to 13 and measured at three differing pixels out of
+ * 2,073,600 — see the ORM fold section of docs/PROFILING.md.
+ *
+ * IT IS EXACT HERE, AND MORE CLEANLY THAN ON THE FLOOR. The floor's fold had to
+ * reason about `aoMap` defaulting to UV channel 1; on these materials all three
+ * samplers were verified at runtime to be the SAME texture object on channel 0
+ * with identical repeats, so the folded read is the identical texel by
+ * construction — there is no second UV set involved and nothing to drift.
+ * `aoMapIntensity` is 1 on every material in this file and the uniform is only
+ * declared under `USE_AOMAP`, so it is folded in as the literal it is.
+ *
+ * NOT MEASURED IN MILLISECONDS, and the round it was written in could not
+ * measure it: see the note in `makeArenaMaterials`. It is two fewer dependent
+ * texture fetches per shaded pixel across the surfaces that cover most of the
+ * frame, and it frees two of sixteen texture units on six materials, which is
+ * what a shadowed light needs. Both of those are true independently of the
+ * clock. Neither is a frame-time claim.
+ */
+function foldOrm(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader
+      // `texelRoughness` is declared by <roughnessmap_fragment> at function
+      // scope (three's chunk has no braces around it), so it is still live at
+      // both of the insertion points below.
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+  metalnessFactor *= texelRoughness.b;`)
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+  {
+    float ambientOcclusion = texelRoughness.r;
+    reflectedLight.indirectDiffuse *= ambientOcclusion;
+    #if defined( USE_CLEARCOAT )
+      clearcoatSpecularIndirect *= ambientOcclusion;
+    #endif
+    #if defined( USE_SHEEN )
+      sheenSpecularIndirect *= ambientOcclusion;
+    #endif
+    #if defined( USE_ENVMAP ) && defined( STANDARD )
+      float dotNV = saturate( dot( geometryNormal, geometryViewDir ) );
+      reflectedLight.indirectSpecular *= computeSpecularOcclusion( dotNV, ambientOcclusion, material.roughness );
+    #endif
+  }`);
+  };
+  // Distinct from the ungrafted program for the same parameters, and shared
+  // between every material that takes this fold.
+  material.customProgramCacheKey = () => 'kb-arena-orm';
+  return material;
+}
+
 export function makeArenaMaterials(opts = {}) {
   const q = opts.quality ?? 'high';
   const big = q === 'low' ? 256 : q === 'medium' ? 512 : 1024;
@@ -959,10 +1023,10 @@ export function makeArenaMaterials(opts = {}) {
   textures.dentNormal = dent.normal;
 
   /** Repeat is set per-mesh by world-scale UVs, so textures tile at 1:1 here. */
-  const std = (t, cfg) => new THREE.MeshStandardMaterial({
-    map: t.albedo, normalMap: t.normal, roughnessMap: t.orm, metalnessMap: t.orm, aoMap: t.orm,
+  const std = (t, cfg) => foldOrm(new THREE.MeshStandardMaterial({
+    map: t.albedo, normalMap: t.normal, roughnessMap: t.orm,
     roughness: 1, metalness: 1, dithering: true, ...cfg,
-  });
+  }));
 
   const materials = {
     steel: std(steelSet, { name: 'arena.steel', normalScale: new THREE.Vector2(1, 1), envMapIntensity: 0.7 }),
@@ -976,13 +1040,13 @@ export function makeArenaMaterials(opts = {}) {
     concrete: std(concSet, { name: 'arena.concrete', metalness: 0, normalScale: new THREE.Vector2(1.35, 1.35), envMapIntensity: 0.55 }),
     hazard: std(hazSet, { name: 'arena.hazard', metalness: 0, normalScale: new THREE.Vector2(0.85, 0.85), envMapIntensity: 0.32 }),
 
-    grating: new THREE.MeshStandardMaterial({
+    grating: foldOrm(new THREE.MeshStandardMaterial({
       name: 'arena.grating',
       color: 0x555559,
-      normalMap: grateSet.normal, roughnessMap: grateSet.orm, metalnessMap: grateSet.orm, aoMap: grateSet.orm,
+      normalMap: grateSet.normal, roughnessMap: grateSet.orm,
       alphaMap: grateSet.alpha, transparent: false, alphaTest: 0.5, side: THREE.DoubleSide,
       roughness: 1, metalness: 1, envMapIntensity: 0.8, dithering: true,
-    }),
+    })),
 
     // Left where it is on a measurement. The crowd band is the region furthest
     // below the Tekken 8 reference on local contrast, and this fence covers the
