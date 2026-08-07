@@ -30,6 +30,10 @@ const WIDTH = Number(arg('width', 1920));
 const HEIGHT = Number(arg('height', 1080));
 const ONLY = arg('shots', '').split(',').filter(Boolean);
 const KEEP = argv.includes('--keep');
+/** Pin the perf probe to an explicit renderScale. `--perf-scale 1` measures the
+ *  charter's native 1920x1080; omitted, the probe uses the shipping tier. */
+const PERF_SCALE = arg('perf-scale', '') ? Number(arg('perf-scale', '')) : null;
+
 const PORT = Number(arg('port', 5199));
 
 /**
@@ -2695,9 +2699,26 @@ async function main() {
     // behind. Pin the tier's own scale, stop the adaptive controller, and report
     // both alongside the number so it can never again be an unlabelled
     // resolution.
+    /*
+     * MEASURED AT BOTH RESOLUTIONS, because the charter names one and the tier
+     * ships another.
+     *
+     * The charter's constraint is "60fps at 1920x1080". This probe pinned the
+     * TIER's scale, 0.85 -> 1632x918, and every "we are 0.13ms short of 60fps"
+     * figure in this project's record was taken there. Meanwhile the critics
+     * score frames at renderScale 1, native. So performance and quality were
+     * being measured at different resolutions, and the constraint being reported
+     * against was not the one written down. An external auditor found it; nobody
+     * inside had, in 36 rounds.
+     *
+     * PERF_SCALE lets the probe be pinned explicitly. Every performance claim
+     * from here carries two numbers: the shipping tier, and native.
+     */
+    const forced = ${PERF_SCALE || 'null'};
     if (rp) {
       if (rp.effects) rp.effects.adaptiveResolution = false;
-      if (rp.tier) { rp.renderScale = rp.tier.renderScale; rp._targetScale = rp.tier.renderScale; }
+      const s = forced != null ? forced : (rp.tier ? rp.tier.renderScale : 1);
+      rp.renderScale = s; rp._targetScale = s;
       if (typeof rp.resize === 'function') rp.resize();
     }
     const dts = [];

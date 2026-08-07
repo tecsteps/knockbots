@@ -2617,3 +2617,47 @@ these do not.
 Worth stating plainly: this project's rule that every instrument needs a null that must not move has
 now caught errors in six internal instruments and one external one. It is the single highest-yield
 practice here, and it costs one extra arm.
+
+---
+
+# The 60fps constraint is missed by 5.4ms, not 0.13ms
+
+The external audit said performance was being measured at a resolution the charter does not name.
+Measured directly, three reps each, zero foreign browser roots, same build, minutes apart:
+
+```
+shipping tier   renderScale 0.85  ->  1632x918     17.1 / 17.1 / 17.0 ms     58.5 - 58.8 fps
+NATIVE          renderScale 1.00  ->  1920x1080    22.1 / 22.1 / 22.0 ms     45.2 - 45.5 fps
+
+charter: "60fps at 1920x1080"  =  16.667 ms
+miss at the shipping tier                            0.13 ms   (0.8%)
+miss at the resolution the charter names             5.40 ms   (32%)
+```
+
+**Every performance statement this project has made was measured at 1632x918.** The critics score
+frames at 1920x1080. The charter specifies 1920x1080. Nobody noticed for 36 rounds, and two entire
+rounds were spent hunting a 0.13ms gap that was the wrong gap by a factor of forty.
+
+This also retroactively vindicates a figure that had been treated as stale: the `renderScale 1.00 ->
+21.80ms` line recorded during the round-26 pinTicks investigation reproduces at 22.0-22.1ms today. It
+was correct and it was sitting in this document, unread, while the project reported 59.5 fps.
+
+One genuine surprise in the data: **p95 is BETTER at native** — 23.8-24.4ms against 34.7ms at the
+tier. The native frame is slower but far more consistent. Whatever produces the 34.7ms tail at 0.85
+is not raw fill, and is worth a look on its own.
+
+## What this changes
+
+The tier system is a legitimate shipping strategy and rendering below native then upscaling is what it
+exists for — so "the game ships at 58.5 fps on the high tier" remains true and is not a lie. But the
+charter's constraint is written against 1920x1080, and against that the game is 32% over budget, not
+0.8%. Those demand completely different responses: 0.13ms is a rounding error you close with one
+redundant light; 5.4ms is an architecture question about a frame that is ~11ms fixed and ~11ms fill at
+native, carrying 22 analytic lights, 8 of them RectArea running the LTC integral.
+
+`tools/capture.mjs` now takes `--perf-scale`, and **every performance claim from here carries two
+numbers**. The default remains the tier, because that is what ships; native is what the charter is
+judged on.
+
+The method point is the same one the audit made and it is now proven twice over: **an instrument that
+is never asked what it is measuring will keep answering a different question than the one you asked.**
