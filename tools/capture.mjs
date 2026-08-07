@@ -1031,8 +1031,11 @@ const SHOTS = [
       return { arena: id, ok: id === 'cistern' };
     })()`,
     // Put the pit back, so every later shot is captured in the arena the rest
-    // of the shot list assumes.
-    teardown: `window.KB.stage.setArena('sublevel09');`,
+    // of the shot list assumes. AWAITED: `setArena` is async and rebuilds the
+    // whole stage, and an un-awaited rebuild does not stay inside this shot --
+    // it starves the next one's main thread for over a second. See the teardown
+    // wrapper for the measurement.
+    teardown: `await window.KB.stage.setArena('sublevel09');`,
   },
   {
     name: '13-announce-fight',
@@ -1071,6 +1074,49 @@ const SHOTS = [
      * of the same family: gating on state that was supposed to imply the
      * pixels, instead of on the pixels.
      */
+    /*
+     * LATCH THE BANNER ON ITS HOLD BEAT, IN THE PAGE, BEFORE IT STARTS.
+     *
+     * The wait below asks for opacity >= 0.85, which is only true during the
+     * 1.24s hold. That was still a race, and it lost: this shot came back
+     * `opacity 0.00` in a full run whose fps was a healthy 60.2, so contention
+     * was not the cause. Measured with a per-frame sampler around the arena
+     * rebuild that precedes this shot: THE MAIN THREAD STALLS FOR UP TO 1.83s
+     * IN ONE UNBROKEN rAF GAP. The hold is 1.24s. One starvation gap is
+     * therefore wider than the entire window the wait is hunting for, so the
+     * driver can go from "not started" to "already faded out" without a single
+     * poll landing inside the hold -- and `waitFor` polls on rAF, the very
+     * thing being starved. Whether it passes is alignment, not correctness,
+     * which is why it survived several rounds and two isolation reruns.
+     *
+     * Waiting harder cannot fix a window narrower than the blind spot. So the
+     * banner is stopped ON the beat instead of chased through it: this watcher
+     * runs in the page off rAF, and the moment the FIGHT announcement starts it
+     * kills the three phase timers and clamps `data-phase` to `hold`. Opacity
+     * then stays 1 until the teardown releases it, the wait cannot miss it, and
+     * the frame is pinned to exactly the beat the shot is named for -- the one
+     * the CSS notes call "the beat the word is read on".
+     *
+     * Same principle as `pinTicks` for poses: freeze the subject rather than
+     * time the shutter. `animationend` for announceIn still fires into
+     * `#announcePhase('hold')`, which is idempotent and already the state we
+     * set, so latching does not fight the HUD's own machine.
+     */
+    prep: `(() => {
+      window.__kbBannerPinned = false;
+      const watch = () => {
+        const h = window.KB.hud, b = h && h.announceBanner;
+        if (b && b.dataset.kind === 'fight' && b.classList.contains('announce--run')) {
+          for (const t of h.announceTimers) clearTimeout(t);
+          h.announceTimers.length = 0;
+          b.dataset.phase = 'hold';
+          window.__kbBannerPinned = true;
+          return;
+        }
+        requestAnimationFrame(watch);
+      };
+      requestAnimationFrame(watch);
+    })()`,
     setup: `(() => {
       const h = window.KB.hud;
       if (h) {
@@ -1112,8 +1158,36 @@ const SHOTS = [
       if (!b || !inner) return null;
       const r = inner.getBoundingClientRect();
       const opacity = +parseFloat(getComputedStyle(b).opacity).toFixed(2);
-      return { kind: b.dataset.kind, opacity, ink: [Math.round(r.width), Math.round(r.height)],
+      return { kind: b.dataset.kind, opacity, pinned: !!window.__kbBannerPinned,
+               ink: [Math.round(r.width), Math.round(r.height)],
                ok: opacity >= 0.5 && r.width >= 40 };
+    })()`,
+    /*
+     * RELEASE THE LATCH. Not optional.
+     *
+     * The pin above kills the timer that would have called
+     * `#advanceAnnounceQueue`, and that call is the only thing that ever sets
+     * `announceBusy` back to false. Leaving it latched strands the HUD as
+     * permanently busy, and `NO_BANNER` -- which every `preRoll` shot after this
+     * one waits on -- is exactly `!busy && queue empty`. So a pin without a
+     * release does not damage this shot at all; it silently converts the NEXT
+     * shot's preRoll into a 15s timeout and a 'round-start banner never cleared'
+     * defect. That is the same shape as the round-26 renderScale regression:
+     * a change that fixes its own measurement and breaks its neighbour's.
+     */
+    teardown: `(() => {
+      const h = window.KB.hud; if (!h) return;
+      for (const t of h.announceTimers) clearTimeout(t);
+      h.announceTimers.length = 0;
+      h.announceQueue = [];
+      h.announceBusy = false;
+      const b = h.announceBanner;
+      if (b) {
+        b.classList.remove('announce--run');
+        b.removeAttribute('data-phase');
+        b.dataset.kind = '';
+      }
+      window.__kbBannerPinned = false;
     })()`,
   },
   {
@@ -2577,8 +2651,24 @@ async function main() {
         }
       })()`).catch(() => {});
     }
+    /*
+     * ASYNC IIFE, so a teardown that awaits is actually awaited.
+     *
+     * This wrapper used to be synchronous, which meant a teardown returning a
+     * promise had that promise dropped on the floor and the next shot started
+     * on top of it. 19-cistern-wide's teardown is `stage.setArena('sublevel09')`
+     * and `Stage.setArena` is `async` -- so the arena REBUILD ran concurrently
+     * with the following shot's setup, and it is not cheap: measured, it holds
+     * the main thread for 1.1s before it even returns and produces rAF gaps up
+     * to 1.83s. That is what made 13-announce-fight's hold window unwinnable.
+     *
+     * Setups already got this right (`await page.evaluate` on an async IIFE);
+     * only teardown was left synchronous, so the leak was invisible from the
+     * shot table -- 19's teardown reads exactly like 18's setup and behaves
+     * completely differently.
+     */
     if (shot.teardown) {
-      await page.evaluate(`(() => { try { ${shot.teardown} } catch (e) { console.error('teardown', e); } })()`)
+      await page.evaluate(`(async () => { try { ${shot.teardown} } catch (e) { console.error('teardown', e); } })()`)
         .catch((e) => console.warn(`[capture] teardown failed for ${shot.name}: ${e.message}`));
     }
     manifest.push({ name: shot.name, note: shot.note, file });
