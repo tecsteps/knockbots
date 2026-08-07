@@ -2292,3 +2292,47 @@ broken most, it has now cost three capture runs — and the third was mine: I st
 `node tools/capture.mjs` concurrently with an `--label=env` probe, and it came back at 32.1ms / 31.2
 fps with a defect. The archive was re-built from the verification agent's certified set instead
 (complete, 0 defects, 0 errors, 25 shots, all renderScale 1, max deadFrac 0.039).
+
+## CORRECTION: the 0.45ms total stands, the per-file split does not
+
+I committed the round-33 attribution as fact. A replication pass says the total is real and the
+split is not established, and its reason is the strongest argument in the round:
+
+```
+reported baseline   (session A)   17.25 ms
+replication baseline (session B)  17.50 ms
+cross-session drift in the BASELINE        0.25 ms
+per-file effect being attributed           0.25 ms each
+```
+
+**The baseline drifts between sessions by the same amount as the effect being attributed to a
+file.** Single-tree arms measured in different sessions therefore cannot separate a 0.25ms change
+from a 0.25ms drift, no matter how clean each individual session is. The totals survive because
+0.45-0.60ms is twice the drift; the per-file split does not.
+
+The replication also carried three defects its own author identified and reported:
+
+1. **It was not interleaved.** Only pass 1 ran, making it a fixed-order sweep with `base` first and
+   `head` last — so any settling or thermal drift over ten minutes accumulates as apparent
+   improvement and lands disproportionately on the last arm. Interleaving was the entire defence
+   against exactly the drift the baseline comparison then demonstrated.
+2. **The labels are not self-verifying.** `r33-frametime.mjs` tags output with whatever `--label=`
+   it is handed; it does not switch trees. The tree was materialised by an external `git checkout`
+   in the same working directory where another agent was also running `git checkout`. **A label
+   reading `env` is not evidence the tree was `env`.** Verify a tree by hashing its source files at
+   launch, not by trusting a flag.
+3. **The `env` row sits inside the contention window** — three reps against five elsewhere, taken
+   during the same minutes as two defective captures.
+
+So the honest statement of round 33 is: **0.45ms recovered in total, from four files, with the split
+between them unresolved.** The ORM fold and splitShadowCasters remain the most likely carriers on
+the original ABBA evidence, and a second pass credited `rp` with 0.50 alone — neither is settled.
+
+What a real replication needs, and it is a short list: reversed-order and interleaved passes, a quiet
+GPU, and each tree's identity verified by hash rather than by label. Until then the per-file numbers
+in the previous section should be read as provisional and the total as sound.
+
+**The general lesson is worth more than the attribution.** Before splitting a measured total across
+causes, establish that the drift between measurements is smaller than the pieces you are splitting
+into. This project has now been caught by the same shape three times — a delta on a contended base,
+a maximum reported as a median, and now a split finer than the drift.
