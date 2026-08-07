@@ -4305,3 +4305,55 @@ And it **excluded a mismatched pair from its own tally** rather than folding it 
 `tekken8_01` is a post-hit wordmark freeze against an active punch-connect, so it reported it for
 context and scored 3 pairs, not 4. That is the second critic this round to protect its own record from
 a bad pairing.
+
+## Character, admissible: 0-0-3 — and an edge-doubling artifact that is neither the rim nor chroma
+
+The highest-value finding of the round, and it survives every explanation this project already had.
+
+> *"Every panel corner, rivet and pipe edge shows a duplicated red/cyan-tinted offset copy — **not
+> chroma aberration (confirmed off)**, an edge-doubling/ghosting artifact — that blurs bevel
+> definition."* Present on `02-closeup-face`, `01-hero-idle`, `03-full-body` and `09-roster`.
+
+**It cannot be the three things it looks like.**
+
+- **Not chromatic aberration.** `look.chroma` is 0.0, and `capture.mjs` additionally zeroes it for
+  this very frame. The critic checked and said so unprompted.
+- **Not the screen-space rim.** `RIM_SS.gain` is 0, and this capture is post-disable.
+- **Not the analytic rim spots.** Those produce a wash across arms and thighs, not a doubled edge.
+
+I saw this fringing myself earlier in the session and attributed it to the rim. **That attribution is
+now falsified by the rim being off and the fringing still being there.** Its own hypothesis, which is
+the first plausible one anyone has offered: *"likely a TAA history / motion-vector issue, or a stuck
+impact-frame effect bleeding into non-impact frames."*
+
+It matters because of what it damages: **it smears exactly the bevel and highlight-shape detail this
+axis is scored on.** Every round spent widening material spread has been partly cancelled by an
+artifact nobody had isolated.
+
+## The material work landed, partially, and the critic graded it honestly
+
+**(a)** Real differentiation, not recolour — it separates four to five families by hand: brushed
+grained pipe with a tight metallic rim, oxidised cross-hatched riveted plate, a correctly
+non-reflective lens acting as a light source rather than a surface, a genuinely matte non-metallic
+cloth wrap, and a glossy machined chest disc against matte rubber straps. *"Consistent with the stated
+roughness/metalness spread actually landing."*
+
+**But narrow:** *"everything stays inside bronze-metal or white-ceramic; nothing reaches true
+low-gloss rubber-black or true diffuse cloth the way King's fur or Jin's suede do."* Real but
+incomplete — which is a more useful verdict than either a pass or a fail.
+
+**(b)** The over-differentiation risk I asked about **did not materialise**. But it found one genuine
+mismatch: *"the cylindrical pipe's diffuse texture is a linear wood-grain pattern, but its specular
+response is a tight saturated metallic rim. Shape and texture say hydraulic piston, the grain says
+wood."*
+
+**That is the second critic, rounds apart and independently, to call that surface wood grain.** The
+first was dismissed as a minor tell. Two independent reports of the same material reading the same
+wrong way is a texture-authoring defect, not an opinion.
+
+## And it protected its own record again
+
+Three of our six shots are wides or a lineup while every usable reference is a posed closeup, so it
+scored **three pairs, not six**, and reported the rest as context: *"flagging rather than folding
+in."* Third critic this round to decline a bad pairing. That behaviour has appeared in every critic
+since the protocol started asking for a record instead of a score.
