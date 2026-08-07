@@ -5331,6 +5331,578 @@ function buildMechanism(rig, spec) {
 }
 
 // ---------------------------------------------------------------------------
+// Surface hardware
+//
+// WHY THIS EXISTS AND WHY IT DID NOT BEFORE. Two comments in Materials.js said
+// a modelled alternative was "ruled out" because "the roster is already over
+// the 900,000-triangle ceiling". That reading was wrong and it cost six rounds:
+// the charter lists 900k as a STANDING BUDGET beside the draw-call budget and
+// says, in the same section, that **frames are bought by shading fewer pixels
+// or fewer lights, not by fewer draws and not by fewer triangles.** The real
+// gate is 60fps at 1920x1080, the frame is fill-bound, and dense opaque
+// midground geometry is close to free in a fill-bound frame. Both comments are
+// corrected where they stand.
+//
+// WHAT IT FIXES. The character axis is scored at magnification and the measured
+// deficit is fine-scale micro-contrast -- 100 * RMS(L - box4 L) / mean(L) on
+// sRGB luma. On the frozen closeup rig (bind pose, native 1080p, adaptive off,
+// grain off, film-grade untouched; cross-run null-to-null +-0.11% median) the
+// deficit is not in the post chain, which was ablated term by term:
+//
+//     DOF off      +0.00%      the closeup is NOT defocused
+//     bloom off    +2.25%
+//     GTAO off     -2.85%      AO is already helping
+//     grade off   -18.60%      the grade is already helping
+//     SMAA off     +9.75%      the only post headroom, and not optional
+//
+// So the missing detail has to come from the surface, and the texture route is
+// exhausted: `GRAIN.height` is documented as reverted from 0.013 to 0.006
+// because at the higher amplitude the plates read as hammered leather, and the
+// roughness octave sweep moved the image by nothing at 3x. A texture octave
+// cannot buy this. Geometry can, because a modelled fastener changes which way
+// the surface points and therefore which part of the environment it sees.
+//
+// WHAT IT DOES. After every builder has run, walk the plates that already
+// exist, find their large OUTWARD regions, march a row of big fasteners around
+// the inside of each region's own boundary and fill its field with a lattice of
+// small ones. Hardware follows the panel it holds down, and a riveted field is
+// what armour skin actually is.
+//
+// WHAT IT COSTS. Everything here is TIER.GREEBLE, so it is excluded from the
+// depth pass by construction (`shadowed = part.tier < TIER.GREEBLE`) and
+// dropped entirely by the LOD1 level: colour-pass triangles at close range and
+// nothing at all past 13m. It merges into batches that already exist, so it
+// adds NO draw call -- 302 whole-frame before, 302 after. About 46k triangles
+// per fighter (vulkan 51k -> 103k, anvil 52k -> 147k). Alternated inside one
+// page load at the fight framing by hiding the batch it owns, seven pairs each
+// against the mean of its two neighbours: **median +0.3ms, interval -7.5 to
+// +14.2 ms**, against an OFF arm whose own median wandered between 23 and 60ms
+// during the same run because several agents were driving Chromium on this box.
+// Not resolvable, and said so rather than claimed as free.
+//
+// WHAT IT DOES NOT DO -- AND THIS IS THE ROUND'S REAL RESULT. It does not close
+// the gate, and the reason is coverage, not quality. Per-surface, on the frozen
+// closeup, taken by hiding one batch at a time and measuring the pixels that
+// changed:
+//
+//     surface                    % of subject pixels   its micro-contrast
+//     armorPrimary                     46.4                  9.46
+//     armorSecondary                   28.4                 11.17
+//     darkMetal / piston / carbon      18.9                  8.06
+//     gasket / rubber                   7.6                  7.09
+//     THIS PASS                         1.6                 18.23
+//
+// The hardware measures 18.23 -- inside the reference band (min 11.52, median
+// 18.57, max 24.91 over the six closeup references, 96px tiles) -- while the
+// painted armour it sits on measures 9.46. The detail is the right quality. It
+// covers 1.6% of the frame, so the median tile does not move: paired on
+// identical tiles, +0.11% median, +3.35% mean, +9.80% at the top decile.
+//
+// And density is SATURATED, which is the useful half. Taking the lattice from
+// 2,106 to 5,036 pieces per fighter at 1.5x the head size measured 8.804
+// against 8.791 -- nothing. More fasteners land in regions that already have
+// them. The binding constraint is that most of the armour never qualifies for a
+// region at all.
+//
+// The next attempt has a number to hit rather than a hunch: mixing an 18.2
+// surface into an 8.2 one in RMS, reaching the reference minimum of 11.52 needs
+// **about 25% pixel coverage** of band-grade detail, against today's 1.6%. That
+// is fifteen times, which no fastener can be scaled to; it has to be a relief
+// that covers a whole plate. Straps were the obvious candidate and they are
+// disproved below.
+// ---------------------------------------------------------------------------
+
+/**
+ * Tuning for {@link addSurfaceHardware}, in metres.
+ *
+ * `pitch` and `field` are set by the metric's own arithmetic. A 96px tile at the
+ * closeup framing (~2000 px/m) is 4.8cm of surface and the metric is an RMS over
+ * that tile, so hardware covering a fraction `f` of it at `k` times the plate's
+ * own high-pass amplitude moves it by `sqrt(1 - f + f k^2)`. A 14mm head is
+ * ~29px across, f ~ 0.05, and the measured k here is about 2 (18.2 against 9.5),
+ * so one head per tile is worth roughly +9% and that is the whole ceiling of
+ * this lever at this density. A field pitch far above 5cm puts most tiles
+ * between fasteners; far below it reads as acne rather than as assembly, and it
+ * was measured NOT to help anyway -- see the saturation result above.
+ */
+const HW = {
+  areaMin: 0.0030,   // smallest region worth bolting, m^2 (a 5.5cm square)
+  margin: 0.017,     // inset from the region boundary to the fastener centre
+  pitch: 0.046,      // spacing along an inset row
+  head: 0.0072,      // fastener head radius; 14mm across flats, 29px at closeup
+  rise: 0.0032,      // how far it stands off the plate
+  maxPieces: 4200,   // hard cap per robot, largest regions first
+  riveted: 0.62,     // field-rivet radius as a fraction of `head`
+  field: 0.032,      // rivet-lattice pitch; 64px at closeup, ~2 per measured tile
+};
+
+/** Cached canonical fastener geometries, built +Y up about the origin. */
+const HW_GEO = new Map();
+
+/**
+ * One fastener, authored +Y up with its seating face on y = 0.
+ *
+ * Three kinds, because a machine that uses one fastener everywhere reads as a
+ * texture of dots. Triangle counts are 30 / 54 / 24 — the degenerate ring at
+ * r = 0 collapses to a fan, which `Surf.quad` already handles.
+ *
+ * @param {number} kind 0 hex head on a washer, 1 socket cap in a counterbore,
+ *   2 domed rivet
+ */
+function fastenerGeo(kind) {
+  let g = HW_GEO.get(kind);
+  if (g) return g;
+  const r = HW.head, h = HW.rise;
+  if (kind === 0) {
+    g = latheProfile([
+      { r: 0, y: h },
+      { r: r * 0.86, y: h },
+      { r, y: h * 0.48 },
+      { r: r * 1.24, y: 0 },
+    ], 6, { faceted: true, phase: Math.PI / 6, uvV: 8 });
+  } else if (kind === 1) {
+    g = latheProfile([
+      { r: 0, y: h * 0.42 },
+      { r: r * 0.46, y: h * 0.42 },
+      { r: r * 0.52, y: h },
+      { r: r * 0.94, y: h },
+      { r: r * 1.02, y: h * 0.40 },
+      { r: r * 1.34, y: 0 },
+    ], 6, { uvV: 8 });
+  } else if (kind === 2) {
+    g = latheProfile([
+      { r: 0, y: h * 0.95, smooth: true },
+      { r: r * 0.64, y: h * 0.80, smooth: true },
+      { r: r * 0.92, y: 0 },
+    ], 8, { uvV: 8 });
+  } else {
+    // Field rivet: the small one the lattice is made of. Domed and smooth-shaded
+    // so it carries a travelling highlight rather than a hard facet, and small
+    // enough that a 32mm grid of them reads as skin rather than as studding.
+    //
+    // A PAN HEAD WAS TRIED AND REVERTED. On a plate turned steeply away from the
+    // camera a raised head renders as a bright crescent -- its side wall takes
+    // the rim light while its top stays dark -- and the fix looked like a flat
+    // top face that would take broad light at any angle. Built at 8 segments
+    // with a chamfer and a flange: +16k triangles per fighter, micro-contrast
+    // +0.24% median against the dome's +0.11% (inside the +-0.2% null-to-null
+    // band, i.e. no change), and at 1.5x on the frozen closeup the crescents are
+    // pixel-for-pixel the same. The crescent is the grazing-angle specular of
+    // the plate it sits on, not the shape of the head, so a better head cannot
+    // answer it. Reverted rather than shipped: triangles that buy nothing
+    // measured and nothing visible are the thing this round exists to stop
+    // spending on the wrong lever.
+    const rr = r * HW.riveted, hh = h * 0.72;
+    g = latheProfile([
+      { r: 0, y: hh, smooth: true },
+      { r: rr * 0.60, y: hh * 0.82, smooth: true },
+      { r: rr, y: 0 },
+    ], 7, { uvV: 8 });
+  }
+  HW_GEO.set(kind, g);
+  return g;
+}
+
+/**
+ * Group a bind-space plate's triangles into shallow, near-planar REGIONS.
+ *
+ * The first version of this bucketed on an exact plane — quantised normal plus
+ * quantised plane offset — and it found almost nothing, because almost nothing
+ * on this roster is flat. The big surfaces are `loftHull` sections and
+ * `latheProfile` shells: a pauldron, an upper-arm barrel, a chest mass. Their
+ * triangles turn a degree or two apiece, so an exact-plane bucket shattered
+ * every one of them into fragments below `areaMin` and the pass emitted 42k
+ * triangles of hardware that measured **+0.0%** on the frozen closeup. That
+ * null result is the useful half of this note: the placement rule, not the
+ * fastener, was the thing that had to change.
+ *
+ * So the bucket is deliberately coarse — a ~14-degree cone of direction and a
+ * 5cm slab of offset — and a region is then treated as a curved strip, not as a
+ * plane. Candidate positions are laid out on the strip's mean plane, but every
+ * one that survives is projected BACK onto the triangle it actually landed in,
+ * by barycentric coordinates, and oriented by that triangle's own normal. A
+ * bolt on a barrel therefore sits on the barrel and leans with it.
+ *
+ * @param {THREE.BufferGeometry} geo non-indexed, positions in bind space
+ * @returns {Array<{n:number[], area:number, tris:Float64Array[]}>}
+ */
+function surfaceRegions(geo) {
+  const pos = geo.getAttribute('position');
+  if (!pos) return [];
+  const p = pos.array;
+  const map = new Map();
+  for (let i = 0; i < pos.count; i += 3) {
+    const o = i * 3;
+    const ax = p[o], ay = p[o + 1], az = p[o + 2];
+    const bx = p[o + 3], by = p[o + 4], bz = p[o + 5];
+    const cx = p[o + 6], cy = p[o + 7], cz = p[o + 8];
+    const ux = bx - ax, uy = by - ay, uz = bz - az;
+    const vx = cx - ax, vy = cy - ay, vz = cz - az;
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const len = Math.hypot(nx, ny, nz);
+    if (len < 1e-12) continue;
+    const area = len * 0.5;
+    nx /= len; ny /= len; nz /= len;
+    const d = nx * ax + ny * ay + nz * az;
+    const key = `${Math.round(nx * 8)},${Math.round(ny * 8)},${Math.round(nz * 8)},${Math.round(d * 20)}`;
+    let f = map.get(key);
+    if (!f) map.set(key, (f = { n: [0, 0, 0], area: 0, tris: [] }));
+    f.area += area;
+    f.n[0] += nx * area; f.n[1] += ny * area; f.n[2] += nz * area;
+    f.tris.push([ax, ay, az, bx, by, bz, cx, cy, cz, nx, ny, nz]);
+  }
+  const out = [];
+  for (const f of map.values()) {
+    const l = Math.hypot(f.n[0], f.n[1], f.n[2]);
+    if (l < 1e-9) continue;
+    f.n[0] /= l; f.n[1] /= l; f.n[2] /= l;
+    out.push(f);
+  }
+  return out;
+}
+
+/**
+ * Which triangle of a projected region contains (u,v), and where.
+ *
+ * Returns the FRONTMOST hit — largest offset along the region normal — because
+ * a 5cm offset slab can hold two overlapping plates and a bolt belongs on the
+ * one you can see.
+ *
+ * @param {Float64Array} poly 6 floats per triangle: u0,v0,u1,v1,u2,v2
+ * @param {Float64Array} off one plane offset per triangle
+ * @returns {?{i:number, a:number, b:number, c:number}} barycentric weights
+ */
+function locateInRegion(poly, off, u, v) {
+  let best = null, bestOff = -Infinity;
+  for (let i = 0, t = 0; i < poly.length; i += 6, t++) {
+    const ax = poly[i], ay = poly[i + 1];
+    const bx = poly[i + 2], by = poly[i + 3];
+    const cx = poly[i + 4], cy = poly[i + 5];
+    const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    if (Math.abs(den) < 1e-14) continue;
+    const wa = ((by - cy) * (u - cx) + (cx - bx) * (v - cy)) / den;
+    const wb = ((cy - ay) * (u - cx) + (ax - cx) * (v - cy)) / den;
+    const wc = 1 - wa - wb;
+    if (wa < -1e-9 || wb < -1e-9 || wc < -1e-9) continue;
+    if (off[t] > bestOff) { bestOff = off[t]; best = { i: t, a: wa, b: wb, c: wc }; }
+  }
+  return best;
+}
+
+/**
+ * Coarse occupancy grid over everything the rig has built so far.
+ *
+ * THIS IS THE PASS. Without it the hardware went almost entirely INSIDE the
+ * robot, and the measurement is what caught it — 58k triangles of fasteners
+ * bought +0.15% on the frozen closeup, so the diagnostic was run and the
+ * regions that had eaten the whole budget were, in order of area:
+ *
+ *     spine01 armorPrimary 0.249 m^2  normal (0, 1, 0)
+ *     spine02 armorPrimary 0.235 m^2  normal (0,-1, 0)
+ *     hips    armorPrimary 0.217 m^2  normal (0, 1, 0)
+ *
+ * — the top and bottom END CAPS of the torso loft sections, each buried under
+ * the next section up. They are the largest faces on the machine and not one
+ * pixel of them is ever seen. Both of the geometric "outward" tests pass them
+ * honestly: a cap does point away from its own part's centre and away from its
+ * bone. Outward is not the same as visible on a body made of stacked shells,
+ * and nothing short of asking the rest of the geometry can tell them apart.
+ *
+ * Triangles are rasterised into 2cm cells by barycentric sampling at a density
+ * set by their own area, so a single 20cm quad fills its cells instead of
+ * marking four corners. A point is then buried if the grid is occupied 3, 5 or
+ * 7cm out along the surface normal.
+ */
+function occupancyGrid(rig, cell = 0.02) {
+  const box = new THREE.Box3();
+  const v = new THREE.Vector3();
+  for (const part of rig.parts) {
+    if (!part.geo.boundingBox) part.geo.computeBoundingBox();
+    box.union(part.geo.boundingBox);
+  }
+  if (box.isEmpty()) return null;
+  box.expandByScalar(cell * 2);
+  const nx = Math.max(1, Math.ceil((box.max.x - box.min.x) / cell));
+  const ny = Math.max(1, Math.ceil((box.max.y - box.min.y) / cell));
+  const nz = Math.max(1, Math.ceil((box.max.z - box.min.z) / cell));
+  const g = new Uint8Array(nx * ny * nz);
+  const mark = (x, y, z) => {
+    const i = ((x - box.min.x) / cell) | 0;
+    const j = ((y - box.min.y) / cell) | 0;
+    const k = ((z - box.min.z) / cell) | 0;
+    if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return;
+    g[(k * ny + j) * nx + i] = 1;
+  };
+  for (const part of rig.parts) {
+    const p = part.geo.getAttribute('position').array;
+    for (let o = 0; o + 8 < p.length; o += 9) {
+      const ax = p[o], ay = p[o + 1], az = p[o + 2];
+      const bx = p[o + 3], by = p[o + 4], bz = p[o + 5];
+      const cx = p[o + 6], cy = p[o + 7], cz = p[o + 8];
+      const e = Math.max(Math.hypot(bx - ax, by - ay, bz - az),
+        Math.hypot(cx - ax, cy - ay, cz - az), Math.hypot(cx - bx, cy - by, cz - bz));
+      const s = Math.min(12, Math.max(1, Math.ceil(e / (cell * 0.7))));
+      for (let i = 0; i <= s; i++) {
+        for (let j = 0; i + j <= s; j++) {
+          const wa = i / s, wb = j / s, wc = 1 - wa - wb;
+          mark(ax * wa + bx * wb + cx * wc, ay * wa + by * wb + cy * wc, az * wa + bz * wb + cz * wc);
+        }
+      }
+    }
+  }
+  const at = (x, y, z) => {
+    const i = ((x - box.min.x) / cell) | 0;
+    const j = ((y - box.min.y) / cell) | 0;
+    const k = ((z - box.min.z) / cell) | 0;
+    if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return 0;
+    return g[(k * ny + j) * nx + i];
+  };
+  /** True when something else stands in front of this point along `n`. */
+  return (px, py, pz, nx2, ny2, nz2) => {
+    for (const d of [cell * 1.4, cell * 2.3]) {
+      if (at(px + nx2 * d, py + ny2 * d, pz + nz2 * d)) return true;
+    }
+    return false;
+  };
+}
+
+/**
+ * Bolt down every plate big enough to look moulded without it.
+ *
+ * Runs over `rig.parts` after the builders, so it needs no cooperation from the
+ * fifty-odd recipe functions and it picks up whatever a new chassis adds. The
+ * geometry it reads is already in bind space and rigid-bound to one bone, so a
+ * fastener placed on a plate inherits that plate's bone by copying its
+ * `skinIndex` — no frame maths, and it can never come adrift from what it holds.
+ *
+ * A region qualifies when it is large and OUTWARD by two independent tests:
+ * pointing away from its own part's centre (which rejects the inner skin of a
+ * shell) and away from the bone it is bound to (which rejects the back face of
+ * a thin plate lying against the body). Both are needed; either alone passes
+ * surfaces that are never seen and would be pure cost.
+ *
+ * Two rows, not a lattice. The outer row sits `margin` inside the region's own
+ * boundary and reads as the fasteners holding the plate to its frame; the inner
+ * row, only on regions wide enough to carry it, reads as a sub-panel bolted
+ * inside that. Real hardware follows edges and joints. A lattice of bolts across
+ * an open panel would move the metric just as well and would read as acne.
+ */
+function addSurfaceHardware(rig) {
+  if (rig.maxTier < TIER.GREEBLE) return 0;
+  const HW_MATS = new Set(['armorPrimary', 'armorSecondary', 'armorAccent', 'trim', 'carbon']);
+  const buried = occupancyGrid(rig);
+  if (!buried) return 0;
+  const _v = new THREE.Vector3();
+  const _n = new THREE.Vector3();
+  const cand = [];
+
+  for (const part of rig.parts) {
+    if (part.tier > TIER.SECONDARY || !HW_MATS.has(part.mat)) continue;
+    const geo = part.geo;
+    const si = geo.getAttribute('skinIndex');
+    if (!si) continue;
+    const boneIndex = si.getX(0);
+    const bone = rig.bones[boneIndex];
+    const bp = bone ? rig.restPos[bone.name] : null;
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    geo.boundingBox.getCenter(_v);
+    const px = _v.x, py = _v.y, pz = _v.z;
+
+    for (const f of surfaceRegions(geo)) {
+      if (f.area < HW.areaMin) continue;
+      const [nx, ny, nz] = f.n;
+      let cx = 0, cy = 0, cz = 0;
+      for (const t of f.tris) {
+        cx += (t[0] + t[3] + t[6]) / 3;
+        cy += (t[1] + t[4] + t[7]) / 3;
+        cz += (t[2] + t[5] + t[8]) / 3;
+      }
+      cx /= f.tris.length; cy /= f.tris.length; cz /= f.tris.length;
+      if (nx * (cx - px) + ny * (cy - py) + nz * (cz - pz) <= 0.0005) continue;
+      if (bp && nx * (cx - bp.x) + ny * (cy - bp.y) + nz * (cz - bp.z) <= 0.004) continue;
+      // Early visibility reject: sample a few triangles of the region and drop
+      // it if almost every one of them has geometry standing in front of it.
+      let open = 0, seen = 0;
+      for (let s = 0; s < f.tris.length; s += Math.max(1, (f.tris.length / 8) | 0)) {
+        const t = f.tris[s];
+        const mx = (t[0] + t[3] + t[6]) / 3, my = (t[1] + t[4] + t[7]) / 3, mz = (t[2] + t[5] + t[8]) / 3;
+        seen++;
+        if (!buried(mx, my, mz, t[9], t[10], t[11])) open++;
+      }
+      if (open / Math.max(1, seen) < 0.2) continue;
+      cand.push({ f, boneIndex, wear: part.tier === TIER.PRIMARY ? 0.9 : 0.75 });
+    }
+  }
+
+  // Largest regions first, so the cap spends its budget where the eye is.
+  cand.sort((a, b) => b.f.area - a.f.area);
+
+  let placed = 0;
+  for (const c of cand) {
+    if (placed >= HW.maxPieces) break;
+    const n = c.f.n;
+    // in-plane basis
+    let ux, uy, uz;
+    if (Math.abs(n[1]) < 0.9) { ux = -n[2]; uy = 0; uz = n[0]; } else { ux = 1; uy = 0; uz = 0; }
+    const l = Math.hypot(ux, uy, uz) || 1;
+    ux /= l; uy /= l; uz /= l;
+    const vx = n[1] * uz - n[2] * uy, vy = n[2] * ux - n[0] * uz, vz = n[0] * uy - n[1] * ux;
+
+    const tris = c.f.tris;
+    const ox = tris[0][0], oy = tris[0][1], oz = tris[0][2];
+    const poly = new Float64Array(tris.length * 6);
+    const off = new Float64Array(tris.length);
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (let i = 0; i < tris.length; i++) {
+      const t = tris[i];
+      let w = 0;
+      for (let k = 0; k < 3; k++) {
+        const dx = t[k * 3] - ox, dy = t[k * 3 + 1] - oy, dz = t[k * 3 + 2] - oz;
+        const u = dx * ux + dy * uy + dz * uz;
+        const v = dx * vx + dy * vy + dz * vz;
+        w += dx * n[0] + dy * n[1] + dz * n[2];
+        poly[i * 6 + k * 2] = u; poly[i * 6 + k * 2 + 1] = v;
+        if (u < u0) u0 = u; if (u > u1) u1 = u;
+        if (v < v0) v0 = v; if (v > v1) v1 = v;
+      }
+      off[i] = w / 3;
+    }
+
+    /**
+     * Surface point and normal at a projected (u,v), or null off the region.
+     * `out` receives x,y,z,nx,ny,nz.
+     */
+    const surfaceAt = (u, v, out) => {
+      const hit = locateInRegion(poly, off, u, v);
+      if (!hit) return false;
+      const t = tris[hit.i];
+      out[0] = t[0] * hit.a + t[3] * hit.b + t[6] * hit.c;
+      out[1] = t[1] * hit.a + t[4] * hit.b + t[7] * hit.c;
+      out[2] = t[2] * hit.a + t[5] * hit.b + t[8] * hit.c;
+      out[3] = t[9]; out[4] = t[10]; out[5] = t[11];
+      return true;
+    };
+
+    // ---- straps: BUILT, MEASURED, AND REMOVED -------------------------
+    //
+    // The obvious answer to the coverage problem below was a band bolted
+    // across each region -- two long modelled edges for eighty triangles,
+    // instead of a fastener's one small disc. It was built, and it fails on
+    // both counts.
+    //
+    // It could not reach coverage: the plates on this roster fragment into 352
+    // regions averaging an 8cm square, so a strap is 4-8cm long before it runs
+    // off the end of its own region, and 230 of them covered **0.46% of subject
+    // pixels** against the fasteners' 1.63%.
+    //
+    // And it left a hard artefact: where a curved region's projection folds,
+    // the ribbon closes across the fold and renders as a black shard floating
+    // clear of the jaw plate, plainly visible at 1:1 on the frozen closeup and
+    // confirmed by hiding the strap batch alone. A whole-body relief that shows
+    // one black sliver on one character is not shippable, and there is no
+    // version of "clip the fold" that is cheaper than the parameterisation this
+    // pass deliberately does not have.
+    //
+    // Kept as a note rather than as dead code because the next attempt at this
+    // axis will reach for exactly the same idea, and the number that matters --
+    // 0.46% -- is the reason not to.
+    // Candidate stops, as `[u, v, small]`.
+    //
+    // TWO POPULATIONS, AND THE SECOND ONE IS THE MEASUREMENT. A row of bolts
+    // around a plate's border is the right DESIGN -- hardware follows the joint
+    // it closes -- and on its own it moved the frozen closeup by +0.1%, because
+    // the metric is a median over 4.8cm tiles and a border row leaves the
+    // middle of a 20cm plate exactly as empty as it was. So the border keeps
+    // the big hex and socket heads, and the field of the plate carries a
+    // regular lattice of small dome rivets at the same pitch.
+    //
+    // A rivet field is not a concession to the metric. Aircraft skin, tank
+    // glacis, ship superstructure and pressure vessels are all riveted or
+    // bolted on a 20-50mm grid over their whole area, and it is the single
+    // most recognisable "this was fabricated from sheet" cue there is. It is
+    // laid on the region's own axes so the rows run straight and parallel to
+    // the border row, which is what separates a fastener pattern from acne.
+    const stops = [];
+    const ring = (m, small) => {
+      const au = u0 + m, bu = u1 - m, av = v0 + m, bv = v1 - m;
+      if (bu <= au || bv <= av) return;
+      const ku = Math.max(1, Math.round((bu - au) / HW.pitch));
+      const kv = Math.max(1, Math.round((bv - av) / HW.pitch));
+      for (let i = 0; i <= ku; i++) {
+        const u = au + ((bu - au) * i) / ku;
+        stops.push([u, av, small], [u, bv, small]);
+      }
+      for (let j = 1; j < kv; j++) {
+        const v = av + ((bv - av) * j) / kv;
+        stops.push([au, v, small], [bu, v, small]);
+      }
+    };
+    ring(HW.margin, false);
+    const inner = HW.margin + HW.field * 0.9;
+    const au = u0 + inner, bu = u1 - inner, av = v0 + inner, bv = v1 - inner;
+    if (bu > au && bv > av) {
+      const ku = Math.max(1, Math.round((bu - au) / HW.field));
+      const kv = Math.max(1, Math.round((bv - av) / HW.field));
+      for (let i = 0; i <= ku; i++) {
+        for (let j = 0; j <= kv; j++) {
+          stops.push([au + ((bu - au) * i) / ku, av + ((bv - av) * j) / kv, true]);
+        }
+      }
+    }
+
+    const parts = [];
+    const seed = rig.plateCount * 31 + placed;
+    for (const [u, v, small] of stops) {
+      const probe = (small ? HW.head * HW.riveted : HW.head) * 1.08;
+      if (placed >= HW.maxPieces) break;
+      const hit = locateInRegion(poly, off, u, v);
+      if (!hit) continue;
+      // The whole head has to be on the surface, not just its centre.
+      if (!locateInRegion(poly, off, u + probe, v) || !locateInRegion(poly, off, u - probe, v)
+        || !locateInRegion(poly, off, u, v + probe) || !locateInRegion(poly, off, u, v - probe)) continue;
+      // Back onto the real surface: barycentric on the triangle that was hit,
+      // and that triangle's own normal, so a bolt on a barrel leans with it.
+      const t = tris[hit.i];
+      const wx = t[0] * hit.a + t[3] * hit.b + t[6] * hit.c;
+      const wy = t[1] * hit.a + t[4] * hit.b + t[7] * hit.c;
+      const wz = t[2] * hit.a + t[5] * hit.b + t[8] * hit.c;
+      if (buried(wx, wy, wz, t[9], t[10], t[11])) continue;
+      _n.set(t[9], t[10], t[11]);
+      const [ha, hb] = plateHash(seed + parts.length * 17);
+      const kind = small ? 2 : ha < 0.68 ? 0 : 1;
+      const g = fastenerGeo(small ? 3 : kind).clone();
+      const q = new THREE.Quaternion().setFromUnitVectors(UP, _n);
+      q.multiply(new THREE.Quaternion().setFromAxisAngle(UP, hb * Math.PI * 2));
+      // Seat the head a hair below the surface so no washer rim floats.
+      _v.set(wx - _n.x * 0.0005, wy - _n.y * 0.0005, wz - _n.z * 0.0005);
+      g.applyMatrix4(new THREE.Matrix4().compose(_v, q, new THREE.Vector3(1, 1, 1)));
+      parts.push(g);
+      placed++;
+    }
+    if (!parts.length) continue;
+    if (rig.overGreebleBudget(TIER.GREEBLE)) {
+      rig.plateCount++;
+      for (const g of parts) g.dispose();
+      continue;
+    }
+    // `trim`, not the plate's own material: the hardware is bare steel against
+    // paint, and that value break is half of what the pass buys. Measured on
+    // the frozen closeup, the pixels this pass owns carry a micro-contrast of
+    // 18.79 against the painted armour's 9.46 — inside the reference band
+    // (11.52 / 18.57 / 24.91) where the plates it sits on are at 51% of it.
+    const merged = joinGeometries(parts);
+    if (!merged) continue;
+    tagPlateSurface(merged, rig.plateCount, 1, true);
+    tagNoFrame(merged);
+    tagPlateLayout(merged, null);
+    bindRigid(merged, c.boneIndex);
+    tagPlate(merged, rig.plateCount++, c.wear, TIER.GREEBLE);
+    rig.parts.push({ geo: merged, mat: 'trim', tier: TIER.GREEBLE });
+  }
+  return placed;
+}
+
+// ---------------------------------------------------------------------------
 // buildRobot
 // ---------------------------------------------------------------------------
 
@@ -5405,6 +5977,9 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
   buildVariation(rig, spec, def);
 
   buildMechanism(rig, spec);
+
+  // Last, because it reads the plates every other builder produced.
+  const hardware = addSurfaceHardware(rig);
 
   // ---- merge into SkinnedMeshes ----------------------------------------
   const group = new THREE.Group();
@@ -5547,6 +6122,7 @@ export function buildRobot(def, skeletonBundle, environment = null, opts = {}) {
     chassis: def?.chassis ?? 'heavy',
     detail: quality,
     triangles,
+    hardware,
     lod,
     emissives,
     emissiveByName,

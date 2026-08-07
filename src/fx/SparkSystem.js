@@ -38,6 +38,8 @@ const _tan = new THREE.Vector3();
 const _bit = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _alt = new THREE.Vector3(1, 0, 0);
+/** Scratch for the per-tier counts; `burst` must not allocate. */
+const _counts = [];
 
 /**
  * Size tiers inside a single burst.
@@ -86,11 +88,105 @@ const _alt = new THREE.Vector3(1, 0, 0);
  * fragments still leaves a clean gap between the populations — the mid tier
  * tops out at 1.16 against the fragments' bottom at 1.52.
  */
+/**
+ * THE SPALL TIER, AND WHY IT IS AN ADDITION RATHER THAN A REDISTRIBUTION
+ * ---------------------------------------------------------------------
+ * Measured with the round-31 gate — `tools/fxgate.py --attrib`, which isolates
+ * the sparks by hiding that one system on a frozen contact frame, so what is
+ * being described here is the spark layer alone and nothing else:
+ *
+ *     04-impact        74 spark components, largest 74,584 px, top 3 = 92.5%
+ *                      of all spark ink, 29% of that component over E 0.6
+ *     16-impact-heavy 171 spark components, largest 40,131 px, top 3 = 65.9%
+ *
+ * Look at the isolated mask and the diagnosis is unambiguous: the outer third of
+ * the fan is already a field of clean separated dashes and reads well, and the
+ * inner two thirds is ONE fused saturated wedge that holds nine tenths of the
+ * light. "A few large blobs where the references carry many small ones" is not a
+ * statement about how many particles are emitted. It is a statement about how
+ * many of them SURVIVE AS SEPARATE OBJECTS, and ours do not survive because the
+ * whole burst leaves one point inside one narrow lobe and the streaks overlap
+ * laterally before they have travelled far enough to part.
+ *
+ * The count is not the problem, and that was tested rather than assumed. Driving
+ * `countScale` to 3 — three times the sparks, same geometry, same everything —
+ * raises the discrete component count on all four gate shots, and on the two
+ * flagships the ranges do not overlap at all (16-impact-heavy N 106-219 at 1x
+ * against 223-233 at 3x; 04-impact 114-155 against 192-212). **The round-28
+ * reading that a bigger population "crowded out" the existing one through the
+ * pool or the alpha budget does not reproduce in either direction.** More
+ * sparks make more particles, and by the alternating-hold cost probe they are
+ * free: +0.2 ms at the contact frame at native 1080p, unchanged at 3x.
+ *
+ * So the new population is thrown OUT of the fan — a full hemisphere about the
+ * normal at double the speed — as particles a tenth the size of the burst's
+ * nominal. That is spall: the fine cold scatter that leaves a real impact in
+ * every direction while the hot jet goes one way. It lands as discrete specks
+ * across the frame, which is exactly the population the reference frames carry
+ * and ours had none of.
+ *
+ * IT IS ADDED, NOT TAKEN, AND THAT WAS THE FIRST ATTEMPT'S MISTAKE.
+ * The first cut of this took the spall out of the existing three tiers, holding
+ * the emitted count fixed at 0.34 / 0.34 / 0.24 / 0.08 — the last three being
+ * 0.60 / 0.30 / 0.10 scaled by 0.66, so the size hierarchy was untouched. It
+ * worked on the statistic it was aimed at and paid for it everywhere else.
+ * Measured, 5 runs before against 5 after:
+ *
+ *     04-impact          N 127 -> 198   maj90 45.6 -> 35.0   BUT energy 3.05 -> 2.23
+ *     16-impact-heavy    N 140 -> 244   maj90 44.1 -> 52.1       energy 2.64 -> 2.07
+ *     04b-impact-decay   N 163 -> 161   maj90 76.8 -> 50.8       energy 1.62 -> 0.90
+ *
+ * A third of the burst's light was moved into particles a tenth the area and
+ * 15% dimmer, so the hit lost 22-44% of its energy — and `fine`, the share of
+ * components under 6 px, went the WRONG WAY by 20-30% because the tier it was
+ * mostly taken from was the fine tier. Breaking the blob by removing the light
+ * that made it is not the trade this axis wants; the frame has to keep its
+ * punch and gain the scatter.
+ *
+ * It does not have to be a trade, because the count is free. The three original
+ * tiers are restored to 0.60 / 0.30 / 0.10 of the caller's count, EXACTLY as
+ * they were, and the spall is emitted on top as `mult` extra particles. Nothing
+ * that carried the punch has moved.
+ *
+ * `mult` is a multiple of the caller's count, not a share of it. `frac` is a
+ * share, and the three core tiers' fracs must sum to 1.
+ *
+ * `gain` is a per-tier radiance multiplier folded into the tint. The spall runs
+ * under the rest of the burst: it is cold ejecta, and a wide field of extra
+ * particles at full radiance would simply move the blob rather than add scatter.
+ *
+ * `lobe` multiplies the caller's `spread`. It replaces a hardcoded `ti === 2`
+ * test that did the same thing for the fragments.
+ *
+ * `streak` on the spall is low on purpose and it is the one place this file
+ * departs from "smear is a shutter, same for every tier". At double speed and a
+ * tenth the width, the shutter form would draw a 2.3-px-wide, 95-px needle:
+ * below the resolving limit across and a laser along, which is the failure this
+ * file has warned about since it was written, and worse, needles that long
+ * re-merge with their neighbours and rebuild the blob somewhere else. The
+ * physical reading is the fragment tier's argument taken further — spall tumbles
+ * and does not hold a line for the whole exposure.
+ *
+ * **0.035 was too low, and the gate said so in the statistic that matters most
+ * here.** At that value the spall is a 2.3-px disc, and a large new population
+ * of discs pulled the burst's median `elong` from 2.27 to 1.74 on `04-impact`
+ * and 2.64 to 1.92 on `16-impact-heavy` — toward round, which is the direction
+ * of docs/CRITIC.md's "generic round sprites" complaint and one of only two
+ * statistics on this axis stable enough to quote. Adding scatter is worthless if
+ * the scatter is the thing being complained about. At 0.090 the spall spans
+ * roughly 6-13 px major at aspect 2.7-5.8 across its own speed spread — short
+ * dashes rather than dots, which is what the reference frames carry — and it is
+ * still an order of magnitude short of the needle.
+ */
 const TIERS = [
-  { frac: 0.60, size: 0.24, speed: 1.35, life: 0.66, streak: 1.00, fine: 1.00, spread: 1.67 },
-  { frac: 0.30, size: 0.90, speed: 1.00, life: 1.00, streak: 1.00, fine: 0.62, spread: 1.67 },
-  { frac: 0.10, size: 2.00, speed: 0.85, life: 1.45, streak: 0.80, fine: 0.10, spread: 2.50 },
+  { frac: 0.60, size: 0.24, speed: 1.35, life: 0.66, streak: 1.00, fine: 1.00, spread: 1.67, gain: 1.00, lobe: 1.00, patch: 1.00 },
+  { frac: 0.30, size: 0.90, speed: 1.00, life: 1.00, streak: 1.00, fine: 0.62, spread: 1.67, gain: 1.00, lobe: 1.00, patch: 0.55 },
+  { frac: 0.10, size: 2.00, speed: 0.85, life: 1.45, streak: 0.80, fine: 0.10, spread: 2.50, gain: 1.00, lobe: 0.70, patch: 0.35 },
+  { mult: 0.55, size: 0.10, speed: 2.00, life: 1.30, streak: 0.090, fine: 1.00, spread: 2.60, gain: 0.90, lobe: 2.40, patch: 1.30 },
 ];
+
+/** Tiers before this index share `total`; the rest are emitted on top of it. */
+const CORE_TIERS = 3;
 
 const VERT = /* glsl */ `
 attribute vec3 aOrigin;
@@ -304,19 +400,34 @@ export class SparkSystem {
     this.mesh.renderOrder = 20;
     this.mesh.name = 'fx.sparks';
     this.mesh.matrixAutoUpdate = false;
+
+    /**
+     * Multiplies every burst's emitted count. Ships at 1 and nothing in the game
+     * writes it; it exists so `tools/fxgate.py` can answer "does emitting more
+     * sparks put more discrete particles on the frame?" by experiment instead of
+     * by editing the recipe table, which lives in a file this workstream does not
+     * own. The answer is on the record in that file and it is **no**.
+     */
+    this.countScale = 1;
   }
 
   /**
    * Emits a cone of sparks oriented by a surface normal, split across the three
-   * size tiers so the burst has a scale hierarchy rather than a single grain.
+   * core size tiers so the burst has a scale hierarchy rather than a single
+   * grain, plus the spall field emitted on top of them. See `TIERS`.
    * @param {THREE.Vector3} point contact point in world space
    * @param {THREE.Vector3} normal hit normal; the cone axis
    * @param {Object} [opts]
-   * @param {number} [opts.count]   total across all tiers
+   * @param {number} [opts.count]   total across the three CORE tiers. The spall
+   *   tier is emitted on top of this, so the particles written are
+   *   `count * (1 + mult)` — see `TIERS`.
    * @param {number} [opts.speed]   mean ejection speed, m/s
    * @param {number} [opts.spread]  0 = pencil beam, 1 = full hemisphere
    * @param {number} [opts.life]    seconds
    * @param {number} [opts.size]    metres
+   * @param {number} [opts.patch]   contact-patch radius, metres; defaults to
+   *   `size * 2.6`. The burst leaves from a disc this wide in the contact
+   *   plane rather than from a point.
    * @param {number} [opts.heat]   peak radiance at ignition
    * @param {THREE.Color|{r:number,g:number,b:number}} [opts.tint]
    * @param {THREE.Vector3} [opts.inherit] velocity added to every spark
@@ -326,7 +437,7 @@ export class SparkSystem {
    *   a white blob.
    */
   burst(point, normal, opts = {}) {
-    const total = Math.max(1, Math.round(opts.count ?? 40));
+    const total = Math.max(1, Math.round((opts.count ?? 40) * this.countScale));
     const speed = opts.speed ?? 7.5;
     const spread = opts.spread ?? 0.55;
     const life = opts.life ?? 0.9;
@@ -334,6 +445,11 @@ export class SparkSystem {
     const tint = opts.tint;
     const inherit = opts.inherit;
     const window = Math.max(0, opts.window ?? 0);
+    // Radius of the contact patch the burst leaves from, in metres. Derived
+    // from the burst's own particle size so it rides the weight ladder without
+    // a second number to keep in step: a base of 0.083 m for a jab and 0.104 m
+    // for a launcher, scaled per tier by `tier.patch`. See the origin write.
+    const patch = Math.max(0, opts.patch ?? size * 2.6);
 
     _dir.copy(normal);
     if (_dir.lengthSq() < 1e-6) _dir.set(0, 1, 0);
@@ -344,7 +460,34 @@ export class SparkSystem {
 
     const { aOrigin, aVel, aLife, aTint, aStyle } = this.pool.arrays;
     const cap = this.pool.capacity;
-    const first = this.pool.allocRun(total);
+
+    // Counts are resolved before anything is claimed, because the run has to be
+    // claimed once at its true length: the extra tiers are emitted ON TOP of the
+    // caller's `count`, so `total` is no longer the number of particles this
+    // burst writes. Claiming `total` and then writing more would silently
+    // scribble over the next burst's slots.
+    const counts = _counts;
+    let core = 0;
+    let emitted = 0;
+    for (let ti = 0; ti < TIERS.length; ti++) {
+      const tier = TIERS[ti];
+      let n;
+      if (tier.mult !== undefined) {
+        n = Math.round(total * tier.mult);
+      } else if (ti === CORE_TIERS - 1) {
+        // The last core tier takes the remainder so rounding never loses a
+        // particle or overruns.
+        n = total - core;
+        core += n;
+      } else {
+        n = Math.min(total - core, Math.round(total * tier.frac));
+        core += n;
+      }
+      counts[ti] = n;
+      emitted += n;
+    }
+
+    const first = this.pool.allocRun(emitted);
     const time = this.material.uniforms.uTime.value;
 
     // Per-burst radiance rides in the tint: one extra attribute would buy
@@ -357,11 +500,7 @@ export class SparkSystem {
     let k = 0;
     for (let ti = 0; ti < TIERS.length; ti++) {
       const tier = TIERS[ti];
-      // The last tier takes the remainder so rounding never loses a particle
-      // or overruns the run that was just claimed.
-      const n = ti === TIERS.length - 1
-        ? total - k
-        : Math.min(total - k, Math.round(total * tier.frac));
+      const n = counts[ti];
 
       for (let j = 0; j < n; j++, k++) {
         const i = (first + k) % cap;
@@ -375,7 +514,7 @@ export class SparkSystem {
         // stragglers the way a real one does without the bulk of the burst
         // losing the line of the blow.
         const wide = Math.random() < 0.07 ? 2.3 : 1;
-        const lobe = Math.min(1, spread * (ti === 2 ? 0.7 : 1) * wide);
+        const lobe = Math.min(1, spread * tier.lobe * wide);
         const u = Math.random();
         const phi = Math.random() * Math.PI * 2;
         const cosT = 1 - u * lobe * lobe;
@@ -408,12 +547,38 @@ export class SparkSystem {
         if (inherit) { vx += inherit.x; vy += inherit.y; vz += inherit.z; }
 
         const o = i * 3;
-        // Jitter the origin inside a small ball so the burst has volume.
-        aOrigin[o] = point.x + (Math.random() - 0.5) * 0.06;
-        aOrigin[o + 1] = point.y + (Math.random() - 0.5) * 0.06;
-        aOrigin[o + 2] = point.z + (Math.random() - 0.5) * 0.06;
+        // THE ORIGIN IS A CONTACT PATCH, NOT A POINT.
+        //
+        // This used to be a 6 cm cube of jitter, which projects to about
+        // thirty pixels — so every trajectory in the burst started inside a
+        // disc smaller than one of its own streaks and the fan was fused at
+        // the apex before it had left the plate. A fist landing on armour
+        // crushes a patch of it, and the ejecta leaves from all over that
+        // patch. Sampled on a disc IN the contact plane (uniform in area, via
+        // the sqrt), radius tied to the burst's own particle size so it stays
+        // on the weight ladder: a jab is a smaller patch than a launcher.
+        // Per tier, because a uniform patch cost the bottom of the ladder. With
+        // one radius for the whole burst, `15-impact-light` lost 41% of its
+        // effect energy and `04b-impact-decay` 54%: a jab's sparks are dim to
+        // start with, and dispersing them over an 8 cm disc drops a large part
+        // of the population under the gate's 0.02 floor entirely — which is the
+        // "a jab landing is indistinguishable from no jab landing" failure this
+        // file was already corrected for once. The reading is also the physical
+        // one: the fine motes are shed off the whole crushed area, but the
+        // heavy fragments come off the deepest part of the crush, which is a
+        // point. So the two bright tiers stay near it and the fines and the
+        // spall get the full patch.
+        const pr = patch * tier.patch * Math.sqrt(Math.random());
+        const pa = Math.random() * Math.PI * 2;
+        const pu = Math.cos(pa) * pr;
+        const pv = Math.sin(pa) * pr;
+        const pn = (Math.random() - 0.5) * 0.03;
+        aOrigin[o] = point.x + _tan.x * pu + _bit.x * pv + _dir.x * pn;
+        aOrigin[o + 1] = point.y + _tan.y * pu + _bit.y * pv + _dir.y * pn;
+        aOrigin[o + 2] = point.z + _tan.z * pu + _bit.z * pv + _dir.z * pn;
         aVel[o] = vx; aVel[o + 1] = vy; aVel[o + 2] = vz;
-        aTint[o] = tr; aTint[o + 1] = tg; aTint[o + 2] = tb;
+        const g = tier.gain;
+        aTint[o] = tr * g; aTint[o + 1] = tg * g; aTint[o + 2] = tb * g;
 
         // THE EMISSION WINDOW, and it is the largest single defect this axis
         // has had since the impact light. See the note above `TIERS`.

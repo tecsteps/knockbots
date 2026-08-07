@@ -2580,9 +2580,30 @@ float kbPx = sqrt( 1.0 / kbInvFoot );
 // facet is a firefly, not an edge. Below ~2.4px the tilt fades out and its
 // variance is handed to roughness, the same handoff the machining lay uses.
 //
-// Costs no triangle, no texture fetch and no draw call. That is not incidental:
-// the roster is already over the 900,000-triangle ceiling, so a modelled
-// chamfer on forty plates per fighter was never affordable.
+// Costs no triangle, no texture fetch and no draw call, which is a virtue and
+// nothing more.
+//
+// CORRECTION. This used to read "the roster is already over the
+// 900,000-triangle ceiling, so a modelled chamfer on forty plates per fighter
+// was never affordable", and that reasoning was wrong. 900k is a STANDING
+// BUDGET listed beside the draw-call budget, and the charter says in the same
+// section that a draw call costs 1.2 microseconds and is "a compliance metric,
+// not a performance one", and then in bold that **frames are bought by shading
+// fewer pixels or fewer lights, not by fewer draws and not by fewer
+// triangles**. The performance requirement is 60fps at 1920x1080 and the frame
+// is fill-bound: ~18ms proportional to shaded pixels against 11ms fixed. Dense
+// opaque midground geometry is close to free in a frame shaped like that.
+//
+// The sentence cost six rounds. Modelled surface hardware was ruled out on it
+// and is now shipped -- see addSurfaceHardware() in RobotBuilder.js, which adds
+// ~46k triangles per fighter, no draw call at all (it merges into batches that
+// already exist), and no shadow work (it is TIER.GREEBLE, which the depth pass
+// excludes by construction). Alternated inside one page load at the fight
+// framing, seven pairs: median +0.3ms, interval -7.5 to +14.2, against an OFF
+// arm whose own median wandered 23-60ms while other agents used the machine.
+// The analytic term below is still the right answer for a 2.8mm chamfer on
+// every plate edge in the game -- that is a scale where geometry aliases -- but
+// it is the right answer because of the SCALE, not because of the budget.
 vec3 kbGb1 = vec3( 0.0 ), kbGb2 = vec3( 0.0 );
 float kbGdet = 1.0;
 if ( kbChamfer.x > 0.0 ) {
@@ -3726,11 +3747,20 @@ function paletteKey(p, sizes) {
  * has to carry the band mask with it.
  *
  * FILL COST: no texture fetch, no bake, no triangle, no draw call — the term is
- * two derivative pairs and about twenty ALU behind a uniform branch, and the
- * triangle budget (915,870 against 900,000) rules out the modelled alternative.
- * Not separately timed; the comparable analytic term measured +0.35ms with the
+ * two derivative pairs and about twenty ALU behind a uniform branch. Not
+ * separately timed; the comparable analytic term measured +0.35ms with the
  * interval spanning -5.8 to +9.1, i.e. under half a millisecond and not
  * distinguishable from zero.
+ *
+ * CORRECTION. The sentence "the triangle budget (915,870 against 900,000) rules
+ * out the modelled alternative" was here, and it was wrong for the reason set
+ * out at the chamfer term above: 900k is a standing budget, the charter's
+ * performance requirement is 60fps at 1080p, and the frame is fill-bound so
+ * triangles are not what buys it. It ruled out modelled geometry on this axis
+ * for six rounds. Geometry is back — `addSurfaceHardware` in RobotBuilder.js —
+ * and the analytic terms here stand on their own merits, which are that a 2.8mm
+ * break is five pixels at the closeup and under one at fighting range, and
+ * sub-pixel geometry is a firefly rather than an edge.
  *
  * --- Round 17: specular antialiasing was built, measured, and REVERTED --------
  *

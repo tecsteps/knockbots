@@ -113,6 +113,12 @@ Until `capture.mjs` can put the contact frame on a deterministic camera and
 pose (see SHOT SET at the bottom of this file), use `--repeat` and quote the
 median of at least five runs, never a single number.
 
+The spreads in that table are also partly the banner: re-measured on clean
+pairs, five runs, they are cover 1.31-2.09x and N 1.30-2.07x rather than the
+4.97x and 2.89x above. The rule stands — a single run cannot resolve a factor
+of two on this axis — but the instrument was contributing to the number that
+justified it.
+
 FRAME COST does not resolve here either. The probe times 60 rendered frames of
 the frozen contact frame with the FX meshes shown and hidden. Over five runs the
 on-minus-off difference ran from -11.1 ms to +12.7 ms WITH THE SIGN FLIPPING, on
@@ -151,6 +157,113 @@ usage:
   python3 tools/fxgate.py --control DIR  resolution round-trip control
   python3 tools/fxgate.py --ref          image-only proxy over the reference
                                          subset, WITH its precision. Not a gate.
+  FXGATE_ATTRIB=1 python3 tools/fxgate.py --probe DIR   then --attrib DIR:
+                                         per-system share of cover and energy.
+  python3 tools/fxgate.py --cost DIR     FX frame cost at the contact frame at
+                                         NATIVE 1080p, by alternating holds.
+  FXGATE_COUNTSCALE=k                    multiplies every spark burst's count,
+                                         for --probe and --cost. An experiment
+                                         knob; ships at 1.
+
+THE NULL CONTROL DID NOT HOLD, AND WHAT IT WAS MEASURING WAS THE "FIGHT" BANNER
+-------------------------------------------------------------------------------
+The claim above — "the null pair reads 0.0000% here" — reproduces on ONE of the
+four shots. Re-derived, round 31:
+
+        frame               null cover    null energy
+        16-impact-heavy       0.0000        0.0000
+        15-impact-light       2.1387        0.7281
+        04-impact             2.2249        0.8702
+        04b-impact-decay      2.2493        0.8776
+
+Two point two per cent of the scene ROI, against a measured effect of 4.2 to
+11.1 per cent. On `15-impact-light` the instrument's own noise was HALF the
+signal. Localised, the contamination is a compact block at rows 448-641,
+columns 655-1294 — and cropping it out and looking at it, it is the round-start
+**"FIGHT" announcement**, a full-width DOM banner drawn across the middle of the
+contact frame and fading on wall-clock time.
+
+It is not merely noise in the null. `on.png` and `off.png` are separated by a
+90-frame cost probe, so the banner is visibly dimmer in the second, and
+`max(0, luma(on) - luma(off))` scored that fade AS EFFECT. Every cover, energy
+and N figure for those three shots was inflated by an announcement banner, and
+so was the light->heavy weight ladder, since 16-impact-heavy froze late enough
+to have no banner and 15-impact-light did not.
+
+`tools/capture.mjs` has gated on exactly this since round 14 and documents why
+("FIGHT was being drawn across the exact frames the impact and KO axes are
+judged on"). fxgate builds its own page and did not. **The same defect, fixed in
+one instrument and live in the other, which is the fourth time that shape
+appears in docs/PROFILING.md.**
+
+Fixed twice over, because waiting was not sufficient: `NO_BANNER` is true both
+after an announcement and before one is queued, and across runs the certified
+contact landed at tick 88 (banner still to come) and tick 195 (banner waited
+out) on the same shot. The probe now waits AND hard-hides `.announce-layer` at
+the freeze, pauses every running CSS animation, and records `bannerAtFreeze`.
+`--repeat` prints the null for every run and flags it, so this can never again
+be a number somebody checked once by hand.
+
+With that fixed the null reads 0.000000% on all four shots across five runs.
+
+THE GATE WAS BLIND TO FIVE OF THE EIGHT SYSTEMS (round 31)
+----------------------------------------------------------
+`EffectsDirector` owns eight mesh-backed systems — sparks, debris, trails,
+shock, smoke, fluid, flashes, decals — and the round-29 `FX()` toggle hid three
+of them. Everything the other five put on the contact frame was in BOTH halves
+of the pair, so it cancelled: shockwave rings, smoke, coolant spray, hit flashes
+and scorch decals were invisible to the instrument that scores this axis. A
+tuning pass driven by that gate would have been optimising three systems while
+five moved unmeasured.
+
+`FX()` now toggles all eight, and `--attrib` reports each system's own share by
+hiding exactly one at a time.
+
+The critic's figure for the size of the blind spot — 46% of coverage, 36% of
+energy — does NOT reproduce, and it is not a small correction. Measured with
+`--attrib` on a clean pair, what the three-system toggle could see was:
+
+        frame               of cover    of energy
+        15-impact-light       89.6%       95.2%
+        16-impact-heavy       75.6%       81.1%
+        04-impact             80.3%       82.5%
+        04b-impact-decay      64.5%       61.8%
+
+so the blind spot was 10-36% of cover and 5-38% of energy, not a flat 46/36.
+The direction was right and the fix was worth making; the magnitude was not.
+Two other things fell out of the same table and neither was expected:
+`fluid` contributes exactly 0.0000% on all four impact frames, and `debris`
+contributes 0.0-0.6% on three of the four — one of the three systems the old
+gate COULD see puts essentially nothing on a contact frame.
+
+Every round-29 `cover`/`energy`/`N` figure on this axis is superseded by the
+banner fix and the eight-system toggle together. They are not comparable and
+must not be differenced against anything measured here.
+
+FRAME COST DOES RESOLVE, ONCE IT IS MEASURED IN ALTERNATING HOLDS
+-----------------------------------------------------------------
+The note above says the FX cost at contact is below the noise of a headless rAF
+timer. That was a property of the probe, not of the frame: one 90-frame A block
+followed by one 90-frame B block puts every bit of the machine's second-scale
+load drift straight into the difference. docs/CHARTER.md measured the draw-call
+cost correctly by alternating short holds, and `--cost` now does the same —
+twelve ABAB holds of 40 frames, differenced WITHIN each pair, at NATIVE 1080p
+with the adaptive controller off. All eight FX systems, on against off, at the
+frozen contact frame:
+
+        16-impact-heavy   +0.200 ms   [-0.300, +0.400]
+        04-impact         +0.200 ms   [-2.800, +1.800]
+        04-impact (quiet) +0.100 ms   [-0.000, +0.500]
+
+and at FXGATE_COUNTSCALE=3 — three times the sparks — it is still +0.200 ms.
+**The particulate FX layer costs about a fifth of a millisecond at the contact
+frame and the spark count is not what the frame is spent on**, which is what
+the charter's fill-bound decomposition predicts: a few thousand small additive
+quads with an early `discard` against an arena covering 85% of the screen.
+
+Absolute frame time from this probe is NOT an fps claim. It was taken with a
+dozen other agents live in the same workspace and read 23-58 ms for the same
+build within one session. The paired delta is drift-immune; the absolute is not.
 """
 import os
 import subprocess
@@ -196,6 +309,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 const OUT = process.argv[2];
 const ROOT = process.argv[3];
 const PORT = Number(process.argv[4] || 5311);
+// Multiplies the emitted spark count without touching HIT_FX (owned by another
+// workstream). Used to settle the round-28 question -- does raising the count
+// raise or lower the count the gate measures? -- as an experiment rather than
+// a code change. 1 is the shipping behaviour.
+const CS = Number(process.env.FXGATE_COUNTSCALE || 1);
 mkdirSync(OUT, { recursive: true });
 
 const SHOTS = [
@@ -241,11 +359,57 @@ const ARM = (off) => `(() => {
   });
 })()`;
 
+// ALL EIGHT mesh-backed systems on EffectsDirector, not the three the round-29
+// version toggled. See "THE GATE WAS BLIND TO FIVE OF THE EIGHT SYSTEMS".
+const FX_SYSTEMS = ['sparks', 'debris', 'trails', 'shock', 'smoke', 'fluid', 'flashes', 'decals'];
 const FX = (v) => `(() => {
   const d = window.__kbFx && window.__kbFx.director;
   if (!d) return 'NO DIRECTOR';
-  for (const k of ['sparks', 'debris', 'trails']) if (d[k] && d[k].mesh) d[k].mesh.visible = ${v};
-  return ['sparks', 'debris', 'trails'].map((k) => k + '=' + (d[k] && d[k].mesh && d[k].mesh.visible)).join(' ');
+  const K = ${JSON.stringify(FX_SYSTEMS)};
+  for (const k of K) if (d[k] && d[k].mesh) d[k].mesh.visible = ${v};
+  return K.map((k) => k + '=' + (d[k] && d[k].mesh ? d[k].mesh.visible : 'MISSING')).join(' ');
+})()`;
+
+// Per-system attribution: hide exactly one system, grab, show it again. The
+// difference from the all-on frame is that system's own contribution, which is
+// the only way to tell which system a coverage change came from.
+const FX_ONE = (k, v) => `(() => {
+  const d = window.__kbFx && window.__kbFx.director;
+  if (!d || !d['${k}'] || !d['${k}'].mesh) return 'MISSING';
+  d['${k}'].mesh.visible = ${v};
+  return '${k}=' + d['${k}'].mesh.visible;
+})()`;
+
+// The probe re-enters the fight phase, which replays the round-start intro, so
+// a full-width "FIGHT" banner was being drawn over the middle of the contact
+// frame -- and it FADES between the on grab and the off grab, so its fade was
+// being scored as effect. tools/capture.mjs already gates on exactly this and
+// fxgate's own page setup did not. See "THE GATE WAS MEASURING THE FIGHT
+// BANNER" in the module docstring.
+const NO_BANNER = `(() => {
+  const q = window.KB && window.KB.hud && window.KB.hud.announceQueue;
+  const busy = window.KB && window.KB.hud && window.KB.hud.announceBusy;
+  const el = document.querySelector('.announce-layer');
+  const visible = el && getComputedStyle(el).opacity > 0.02 && el.textContent.trim();
+  return !busy && (!q || q.length === 0) && !visible;
+})()`;
+
+// The wait alone is NOT enough and that is measured. `NO_BANNER` is true both
+// AFTER an announcement and BEFORE one has been queued, so whether the probe
+// waits out the banner or sails straight past it depends on whether the page
+// happened to be in the fight phase already: across runs the certified contact
+// landed at tick 88 (no banner queued yet, banner still to come) and at tick
+// 195 (waited it out) on the same shot. So the freeze also HARD-HIDES the
+// announce layer, which is a DOM sibling of the canvas and contributes nothing
+// to the render. That makes the pair clean whatever the timing did, and
+// `bannerAtFreeze` records whether it was actually up.
+const FREEZE_DOM = `(() => {
+  const a = document.getAnimations ? document.getAnimations() : [];
+  a.forEach((x) => { try { x.pause(); } catch (e) { /* already finished */ } });
+  const el = document.querySelector('.announce-layer');
+  const up = !!(el && getComputedStyle(el).opacity > 0.02 && el.textContent.trim());
+  if (el) el.style.display = 'none';
+  return { anims: a.length, bannerAtFreeze: up };
 })()`;
 
 const settle = (page, n = 4) => page.evaluate(`new Promise((r) => {
@@ -285,9 +449,16 @@ for (const s of SHOTS) {
     if (window.KB.phase !== 'fight') { window.KB.startMatch(0, 1); window.KB.setPhase('fight'); }
   })()`);
   await page.waitForTimeout(1200);
+  await page.waitForFunction(NO_BANNER, null, { timeout: 20000 });
+  const bannerGone = await page.evaluate(NO_BANNER);
+  await page.evaluate(`(() => {
+    const d = window.__kbFx && window.__kbFx.director;
+    if (d && d.sparks) d.sparks.countScale = ${CS};
+  })()`);
   await page.evaluate(ARM(s.off));
   await page.evaluate(s.setup);
   await page.waitForFunction('window.__kbHit && window.__kbHit.frozen', null, { timeout: 8000 });
+  const dom = await page.evaluate(FREEZE_DOM);
   const hit = await page.evaluate('window.__kbHit');
   // Grab 0 is discarded: the post chain needs one presented frame after the
   // freeze pins the grade and the resolution. Measured, grab 0 is MAD 0.0129
@@ -297,14 +468,27 @@ for (const s of SHOTS) {
   await settle(page);
   await page.screenshot({ path: resolve(OUT, `${s.name}.on.png`) });
   const costOn = await page.evaluate(COST);
-  await page.evaluate(FX(false));
+  const visOff = await page.evaluate(FX(false));
   await settle(page);
   await page.screenshot({ path: resolve(OUT, `${s.name}.off.png`) });
   const costOff = await page.evaluate(COST);
   await page.evaluate(FX(true));
   await settle(page);
   await page.screenshot({ path: resolve(OUT, `${s.name}.on2.png`) });
-  manifest.pairs[s.name] = { ...hit, contactMsOn: costOn, contactMsOff: costOff };
+  // Per-system attribution: opt-in, because it is 8 extra 1080p PNGs per shot
+  // and a full disk took this workspace offline in round 27.
+  if (process.env.FXGATE_ATTRIB === '1') {
+    for (const k of FX_SYSTEMS) {
+      const r = await page.evaluate(FX_ONE(k, false));
+      if (r === 'MISSING') continue;
+      await settle(page);
+      await page.screenshot({ path: resolve(OUT, `${s.name}.no-${k}.png`) });
+      await page.evaluate(FX_ONE(k, true));
+    }
+    await settle(page);
+  }
+  manifest.pairs[s.name] = { ...hit, contactMsOn: costOn, contactMsOff: costOff,
+    systems: visOff, bannerGone, ...dom, countScale: CS };
   console.log(`[fxprobe] ${s.name} ${JSON.stringify(manifest.pairs[s.name])}`);
 }
 
@@ -442,14 +626,21 @@ def cmd_repeat(n, out):
     PNGs as it goes -- a 1080p pair set is ~40 MB and a full disk took every
     agent in this workspace offline for minutes in round 27."""
     runs = {s: [] for s in SHOTS}
+    nulls = {s: [] for s in SHOTS}
     ok = 0
     for i in range(int(n)):
         d = os.path.join(out, 'run%02d' % i)
         try:
             cmd_probe(d)
             for s in SHOTS:
-                a, b, _ = pair_paths(d, s)
+                a, b, c = pair_paths(d, s)
                 runs[s].append(measure(load(a), load(b)))
+                # The null goes in the table, every run. It was reported once, in
+                # a docstring, from a run in which three of the four shots were
+                # measuring the round-start banner -- and nothing in the loop
+                # would have said so. An instrument that only checks itself when
+                # somebody remembers to is not checked.
+                nulls[s].append(measure(load(a), load(c)))
             ok += 1
         except Exception as e:                                   # noqa: BLE001
             print('  run %d FAILED: %s' % (i, e))
@@ -467,6 +658,9 @@ def cmd_repeat(n, out):
             v = sorted(r[k] for r in runs[s])
             print('     %-7s min %9.3f  median %9.3f  max %9.3f   spread %.2fx'
                   % (k, v[0], float(np.median(v)), v[-1], v[-1] / max(v[0], 1e-9)))
+        nc = [r['cover'] for r in nulls[s]]
+        flag = 'OK' if max(nc) < 1e-6 else '*** CONTAMINATED ***'
+        print('     null    cover max %9.6f%%   %s' % (max(nc), flag))
 
 
 PROXIES = {
@@ -521,6 +715,190 @@ def cmd_control(d):
             print(row('  via %dp' % h, r) + '   cover %+.1f%%  N %+.1f%%'
                   % (100 * (r['cover'] - base['cover']) / max(base['cover'], 1e-9),
                      100 * (r['n'] - base['n']) / max(base['n'], 1)))
+
+
+FX_SYSTEMS = ['sparks', 'debris', 'trails', 'shock', 'smoke', 'fluid', 'flashes', 'decals']
+OLD_THREE = ['sparks', 'debris', 'trails']
+
+COST_JS = r'''
+/**
+ * FX frame cost at the CONTACT FRAME, by ALTERNATING HOLDS.
+ *
+ * The round-29 probe timed 90 frames with the FX shown, then 90 with them
+ * hidden, and the difference ran -11.1 to +12.7 ms WITH THE SIGN FLIPPING on a
+ * frame that itself varied 15.7-46.3 ms. That is not the FX being cheap; it is
+ * one long A block and one long B block on a machine whose load drifts over
+ * seconds, so the drift lands entirely in the difference.
+ *
+ * docs/CHARTER.md measured the draw-call cost the right way and says so:
+ * alternate the two states in short holds and pair them. Twelve holds of 40
+ * frames each, ABABAB..., first 10 frames of every hold discarded for the
+ * pipeline to settle, median per hold, then the difference is taken WITHIN each
+ * AB pair. Any drift slower than one hold cancels; what survives is the FX.
+ *
+ * Pinned to NATIVE 1920x1080 with the adaptive controller off, because the
+ * constraint the charter states is 60fps at 1920x1080 and an fps number without
+ * its resolution is the round-30 defect.
+ */
+import { createServer } from 'vite';
+import { chromium } from 'playwright';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const OUT = process.argv[2];
+const ROOT = process.argv[3];
+const PORT = Number(process.argv[4] || 5317);
+const CS = Number(process.env.FXGATE_COUNTSCALE || 1);
+mkdirSync(OUT, { recursive: true });
+
+const SHOTS = [
+  { name: '16-impact-heavy', setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'heavy', dist: 1.55 });` },
+  { name: '04-impact', setup: `window.KB.testHarness.forceHit({ attacker: 0, move: 'launcher' });` },
+];
+
+const FX_SYSTEMS = ['sparks', 'debris', 'trails', 'shock', 'smoke', 'fluid', 'flashes', 'decals'];
+const HOLDS = 12;
+const HOLD_FRAMES = 40;
+const HOLD_WARM = 10;
+
+const ALTERNATE = `(() => new Promise((res) => {
+  const K = ${JSON.stringify(FX_SYSTEMS)};
+  const d = window.__kbFx.director;
+  const set = (v) => { for (const k of K) if (d[k] && d[k].mesh) d[k].mesh.visible = v; };
+  const on = [], off = [];
+  let hold = 0, frame = 0, samples = [], last = performance.now();
+  set(true);
+  const step = () => {
+    const now = performance.now(); const dt = now - last; last = now;
+    if (frame >= ${HOLD_WARM}) samples.push(dt);
+    frame++;
+    if (frame >= ${HOLD_FRAMES}) {
+      samples.sort((a, b) => a - b);
+      (hold % 2 === 0 ? on : off).push(samples[samples.length >> 1]);
+      samples = []; frame = 0; hold++;
+      if (hold >= ${HOLDS * 2}) { set(true); return res({ on, off }); }
+      set(hold % 2 === 0);
+    }
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}))()`;
+
+const server = await createServer({
+  root: ROOT, server: { port: PORT, host: '127.0.0.1', hmr: false, watch: { ignored: ['**/*'] } },
+  logLevel: 'error',
+});
+await server.listen();
+const browser = await chromium.launch({
+  args: ['--use-angle=metal', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
+    '--enable-gpu-rasterization', '--enable-zero-copy', '--disable-frame-rate-limit',
+    '--force-device-scale-factor=1'],
+});
+const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
+const out = {};
+
+for (const s of SHOTS) {
+  await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load', timeout: 60000 });
+  await page.waitForFunction('window.KB && window.KB.fighters', null, { timeout: 90000 });
+  await page.waitForTimeout(1500);
+  await page.evaluate(`(() => {
+    window.KB.menus.show(null); window.KB.paused = false;
+    if (window.KB.phase !== 'fight') { window.KB.startMatch(0, 1); window.KB.setPhase('fight'); }
+    const d = window.__kbFx && window.__kbFx.director;
+    if (d && d.sparks) d.sparks.countScale = ${CS};
+  })()`);
+  await page.waitForTimeout(1500);
+  await page.evaluate(`(() => {
+    window.__kbHit = null;
+    window.KB.clock.getDelta = () => 1 / 60;
+    const stop = window.KB.bus.on('hit', () => { stop();
+      requestAnimationFrame(() => {
+        window.KB.paused = true;
+        window.KB.clock.getDelta = () => 0;
+        const fc = window.KB.fightCamera; fc.render = () => {}; fc.simulate = () => {};
+        const rp = window.KB.renderer;
+        rp.setGrade({ grain: 0 });
+        if (rp.effects) rp.effects.adaptiveResolution = false;
+        // NATIVE, not the tier scale: the constraint is 60fps at 1920x1080.
+        rp.renderScale = 1; rp._targetScale = 1;
+        if (typeof rp.resize === 'function') rp.resize();
+        window.__kbHit = { frozen: true, renderScale: rp.renderScale,
+          pixels: rp.composer && rp.composer.readBuffer
+            ? rp.composer.readBuffer.width + 'x' + rp.composer.readBuffer.height : null };
+      });
+    });
+  })()`);
+  await page.evaluate(s.setup);
+  await page.waitForFunction('window.__kbHit && window.__kbHit.frozen', null, { timeout: 8000 });
+  const meta = await page.evaluate('window.__kbHit');
+  await page.waitForTimeout(600);
+  const r = await page.evaluate(ALTERNATE);
+  out[s.name] = { ...meta, ...r, countScale: CS };
+  const pairs = r.on.map((v, i) => v - r.off[i]).sort((a, b) => a - b);
+  const med = (a) => a.slice().sort((x, y) => x - y)[a.length >> 1];
+  console.log(`[fxcost] ${s.name} ${meta.pixels} rs=${meta.renderScale} cs=${CS} `
+    + `on ${med(r.on).toFixed(2)}ms off ${med(r.off).toFixed(2)}ms  `
+    + `paired delta median ${pairs[pairs.length >> 1].toFixed(3)}ms `
+    + `[${pairs[0].toFixed(3)}, ${pairs[pairs.length - 1].toFixed(3)}]  `
+    + `fps(on) ${(1000 / med(r.on)).toFixed(1)}`);
+}
+
+writeFileSync(resolve(OUT, 'cost.json'), JSON.stringify(out, null, 2));
+await browser.close();
+await server.close();
+'''
+
+
+def cmd_cost(out):
+    js = os.path.join(out, '_fxcost.mjs')
+    os.makedirs(out, exist_ok=True)
+    with open(js, 'w') as f:
+        f.write(COST_JS)
+    subprocess.check_call(['node', js, out, REPO], cwd=REPO)
+
+
+def cmd_attrib(d):
+    """Per-system attribution. Requires a probe run with FXGATE_ATTRIB=1.
+
+    For each system k: `no-k` is the frozen frame with ONLY k hidden, so
+    (on - no-k) is k's own contribution and (on - off) is all eight. The share
+    each system holds of total cover/energy is what says how much the round-29
+    three-system toggle could not see.
+    """
+    print('PER-SYSTEM ATTRIBUTION — one system hidden at a time, same frozen frame.')
+    print('share = that system\'s own contribution as %% of the all-eight effect.\n')
+    for n in SHOTS:
+        a, b, _ = pair_paths(d, n)
+        if not os.path.exists(a):
+            continue
+        on, off = load(a), load(b)
+        allE = effect(on, off)
+        allm = allE > EFFECT_THR
+        tot_c, tot_e = float(allm.sum()), float(allE.sum())
+        print('  %s   all-eight cover=%.4f%% energy=%.4f' % (n, allm.mean() * 100, allE.mean() * 100))
+        if tot_c <= 0:
+            print('     (no effect in frame)')
+            continue
+        seen = {}
+        for k in FX_SYSTEMS:
+            p = os.path.join(d, '%s.no-%s.png' % (n, k))
+            if not os.path.exists(p):
+                print('     %-8s (no attribution frame)' % k)
+                continue
+            E = np.clip(luma(crop(on)) - luma(crop(load(p))), 0, None)
+            m = E > EFFECT_THR
+            seen[k] = (float(m.sum()), float(E.sum()))
+            print('     %-8s cover=%7.4f%% (%5.1f%% share)  energy=%7.4f (%5.1f%% share)  N=%d'
+                  % (k, m.mean() * 100, 100 * seen[k][0] / tot_c,
+                     E.mean() * 100, 100 * seen[k][1] / max(tot_e, 1e-9),
+                     len(components(m, on.shape[0] / 1080.0)[0])))
+        if seen:
+            oc = sum(seen[k][0] for k in OLD_THREE if k in seen)
+            oe = sum(seen[k][1] for k in OLD_THREE if k in seen)
+            print('     ---- round-29 gate saw %s: %.1f%% of cover, %.1f%% of energy'
+                  % ('+'.join(OLD_THREE), 100 * oc / tot_c, 100 * oe / max(tot_e, 1e-9)))
+            print('          BLIND to %.1f%% of cover, %.1f%% of energy'
+                  % (100 - 100 * oc / tot_c, 100 - 100 * oe / max(tot_e, 1e-9)))
 
 
 def cmd_ref():
@@ -593,6 +971,10 @@ def main():
             cmd_validate(args[i + 1])
         elif a == '--control':
             cmd_control(args[i + 1])
+        elif a == '--cost':
+            cmd_cost(args[i + 1])
+        elif a == '--attrib':
+            cmd_attrib(args[i + 1])
         elif a == '--ref':
             cmd_ref()
 

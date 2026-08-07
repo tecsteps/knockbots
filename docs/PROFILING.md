@@ -1521,3 +1521,76 @@ decal. Round 27's number did not reproduce; round 28's reproduces exactly and me
 object, which is worse. Every figure this axis carried is withdrawn -- including the deltas that
 justified reverting the round-28 particle work, which sit an order of magnitude inside the
 run-to-run spread.
+
+---
+
+# Round 31: the density theory was wrong, and the game is not at 60fps
+
+Impact 67 -> 72 (the largest single-axis gain in the project), stage 73 -> 74, character unscored
+(its critic died on an API error).
+
+## The premise I briefed does not reproduce, and the mechanism is exposure, not concentration
+
+For six rounds the stage critics said we spread detail evenly while the references concentrate it,
+and I briefed a round on it. The agent built the instrument the gate named and swept 48 definition
+variants. **No single definition reproduces the brief.**
+
+```
+                        briefed            re-derived
+tekken8_06 dead tiles   41.7%              41.6%   (reproduces exactly)
+OUR dead tiles          "5.6-19.4%"        31.0 / 45.9 / 39.9%   -- the skydeck is DEADER than ref06
+ref06 median tile       "lower than ours"  1.77 against our 1.49 / 1.14 / 1.49  -- BACKWARDS
+Gini ours / theirs      .235-.312 / .137-.482   .51-.55 / .31-.57 linear   -- neither reproduces
+p90 band                6.63-9.47 vs 9.34-19.85 -- only in GAMMA, and the gate said "linear light"
+```
+
+The two halves of the headline comparison were computed under **different definitions**, which is
+how our dead-tile fraction appeared to be a fifth of the reference's when it is comparable or worse.
+
+**And the metric is not a detail metric at all.** Absolute tile contrast is linear in image
+brightness:
+
+```
+frame      meanY   ABSp90   p90/median   RELp90 (log-luma, exposure-invariant)
+ours pit    8.30     6.17      4.52        51.27
+ref02      21.30    10.49      4.46        45.06
+ref06       9.09     8.70      4.93        59.55
+ref07      11.98    11.10      1.74       104.04
+```
+
+`ref02` has **the same peakedness ratio as us** and a 70% higher p90 purely from being 2.6x brighter.
+`ref07` is **less peaked than every one of our frames** and has the highest p90 in the set. On the
+exposure-invariant statistic we were already inside the reference band on concentration. The gap is
+LEVEL, not distribution — and the gate I set at 12.0 exceeds all three matched references in linear
+light, so it was unreachable by construction.
+
+Six rounds of critic advice, one round of work, and the finding is that the advice measured
+brightness and called it detail.
+
+## The 60fps constraint is not being met, and I reported that it was
+
+```
+HEAD                        58.5 / 58.5 / 58.8 fps
++ character & impact work   57.8 / 57.8
++ stage hero clusters       54.9
+```
+
+I have been reporting 60.2. That figure was real but it was the lucky end of a noisy distribution;
+three repeated measurements of an unchanged HEAD land at 58.5-58.8. **The shipped game does not meet
+its own charter constraint and has not for some time.**
+
+The stage geometry is out: ~1ms of cost, ~4fps at the full pass, for a gate that was not met and a
+theory that was disproved. That is the charter rule applied to a round I designed. The character and
+impact work stays: it costs ~0.7ms and bought the biggest axis gain the project has recorded.
+
+**What the charter says to do about it, in bold, in the section I misread the first time:** frames
+are bought by shading fewer pixels or fewer lights, not by fewer draws and not by fewer triangles.
+The frame is ~18ms proportional to shaded pixels and ~11ms fixed, with an arena covering ~85% of the
+screen through several overdraw layers, and fifteen analytic lights. That is where the 1.5ms has to
+come from, and it is the next round's only job.
+
+## What was still worth having
+
+The impact axis moved 67 -> 72 on the instrument rebuilt in round 30 — the one that renders each
+frame twice, with effects visible and hidden, so the difference IS the effect. That is the first
+axis gain in this project measured by an instrument nobody has since found a hole in.
