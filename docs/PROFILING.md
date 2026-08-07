@@ -1748,3 +1748,55 @@ raw timer query,  no-op arm      +12.70 ms over [-26.40, +22.80]
 result of this round, and it is worth more than the frame it was chartered to find. Every control arm
 that caught one of these cost about thirty seconds; the failures they prevented would have been
 confident, well-formatted numbers with noise floors twenty to a hundred times the effect.
+
+## Two load-bearing numbers in PlanarReflector.js contradict each other
+
+`PlanarReflector.js`'s docstring concludes the mirror is not fill-bound: "540 lines down to 360
+returned 0.04ms ... down to 120 returned 1.19ms, while switching the pass off entirely returned
+6.42ms. Five of those six milliseconds are therefore fixed per-frame cost, not fill" — and attributes
+the fixed part to three refreshing material uniforms across ~51 draws.
+
+**The charter measures a draw call at 1.2 microseconds.** So:
+
+```
+51 draws x 1.2us  =  0.061 ms          the docstring attributes ~5 ms to this
+to reach 5 ms at 1.2us/call you would need 4,167 draw calls
+```
+
+The stated mechanism is off by a factor of **82** from the cost it is offered to explain. Both figures
+are load-bearing — one governs whether the reflector is worth optimising, the other has been used to
+wave off draw-call work three times — and **both were taken as single readings in exactly the era this
+round is re-measuring**. At least one is wrong, and the honest reading is that the 5ms is real but
+misattributed: whatever it is, it is not 51 draw calls.
+
+What the mirror demonstrably IS: it re-shades **374,544 px, 25.0% of the main pass's pixel count**,
+through the same 22-light rig (8 of them RectArea running the LTC integral). The measured fragment
+counts put the whole transparent stack at 1.17 full-screen passes of *cheap* shading; the mirror is
+0.25 full-screen passes of *expensive* shading. That is where a millisecond is, if one is reachable.
+
+The experiment that settles it is three arms — reflector off, reflector half-res, null — interleaved
+and null-bracketed. If half-res returns real milliseconds the docstring is wrong and the lever is
+`REFLECT_SCALE`. If half-res returns nothing while OFF returns a lot, the docstring is right, and the
+lever is the mirror's object list rather than its resolution.
+
+## Three of the five light shafts render nothing
+
+Measured twice by fragment count: `shaft2`, `shaft3` and `shaft4` retire **zero fragments** at the
+fight framing. They are not culled and not disabled — all five are inside the frustum with non-zero
+intensity (0.065, 0.064, 0.44). They are fully depth-occluded by the set: shaft2 and shaft3 sit at
+z -18.4, **behind the back wall**; shaft4 sits at x -10.2 with NDC x [-2.29, -0.91], almost entirely
+off the left edge with the remaining sliver behind the side structure.
+
+So **60% of the arena's authored volumetric lighting is specified, tinted, breathed and
+uniform-updated every frame and draws to zero pixels.** It costs no GPU, so it never showed up as a
+performance problem — but the stage axis is not getting the atmosphere it believes it has bought, and
+the quality ladder that "cuts to three shafts and two" is cutting **the only two that are visible**
+last. A tier drop therefore removes all remaining atmosphere before it removes anything invisible.
+
+This is a content bug that only a fill-counting instrument could find. Neither a screenshot nor a
+stopwatch shows the difference between a shaft that is subtle and a shaft that is absent.
+
+## The charter's light count is stale
+
+The charter says "fifteen analytic lights". The scene has **22** (17 visible, 3 shadow-casting).
+Every frame-decomposition argument in that section was written against fifteen.
