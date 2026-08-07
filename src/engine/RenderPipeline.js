@@ -256,7 +256,54 @@ const RIM_SS = {
    * Below the bloom threshold (5.5) on purpose: this edge is meant to be a hard
    * line, and a bloomed rim is a soft one.
    */
-  gain: 0.9,
+  /*
+   * DISABLED AT 0. THE RIM SHIPPED AS AN OUTLINE AND THREE CRITICS CALLED IT.
+   *
+   * The reasoning below is sound and the term is left intact, because what it
+   * fails on is one gate, not the idea. At 0.9 it scored a unanimous regression:
+   * three blind critics, told only to watch for over-application, independently
+   * reported the same thing on the same frames.
+   *
+   *   "The cyan line runs along BOTH the leading and trailing edges of the same
+   *    limb, and both left and right edges of the head crest, simultaneously. A
+   *    single-direction rim physically cannot light two opposite-facing edges of
+   *    convex geometry at once -- that bilateral symmetry is the signature of a
+   *    per-panel outline shader."
+   *
+   *   "Traces interior panel seams, rivet rings and pipe segments in every one
+   *    [of six shots], not just the silhouette-vs-background edge."
+   *
+   * That is a geometric argument, not a preference, and it is right: the frames
+   * show both robots criss-crossed along interior plate seams.
+   *
+   * WHY THE GATE FAILS, AND IT IS NOT THE STEP-VS-SLOPE TEST. That test was
+   * built to reject the deck and it does -- simulated at the hero framing's
+   * grazing angle the floor's per-2.5px depth change is 0.061 m against a
+   * 0.060 m threshold, and the replacement term cancels a ramp exactly at any
+   * angle: deck 0.000, silhouette 0.794. Excellent work, and not the problem.
+   *
+   * The problem is that these robots are not smooth. **Their panel gaps are
+   * modelled geometry with real, sharp, small depth steps** -- `plated()` builds
+   * an under-armour sleeve beneath every plate stack precisely so the gaps hold
+   * shadow. A seam is exactly the shape a step-not-slope test is designed to
+   * accept. Distinguishing them needs a step MAGNITUDE scaled to the fighter's
+   * own depth extent: a silhouette jumps metres to the background, a panel gap
+   * jumps a centimetre.
+   *
+   * Kept rather than deleted because the analysis that motivated it stands and
+   * is worth more than the term. An analytic rim CANNOT do this job on this
+   * cast: forward PBR multiplies the rim by the surface, diffuse by albedo and
+   * specular by F0, and for a metal F0 IS the albedo -- so a cyan rim on a
+   * cream-and-amber robot returns that robot's blue reflectance, which is
+   * nearly nothing. `RIM` records a four-placement sweep finding every grazing
+   * arm worse on every metric: "on a faceted hard-surface robot no analytic
+   * light draws an outline." Screen space is still the right answer. The gate
+   * is not finished.
+   *
+   * Restore by setting this to 0.9 AFTER adding a magnitude term. Do not
+   * restore it without one.
+   */
+  gain: 0,
   /**
    * Tap radius in render pixels, which is also very nearly the width of the
    * band: a pixel further inside the silhouette than this taps a neighbour that
@@ -273,14 +320,60 @@ const RIM_SS = {
   /** Fraction of the band inside which the depth gate is at full strength. */
   slabSoft: 0.7,
   /**
-   * Depth step that starts and finishes the edge ramp, as a fraction of the
-   * pixel's own view distance. At a typical 8 m fight framing that is 8 cm to
-   * 44 cm: an arm crossing a torso (15-25 cm) takes a partial rim, which is
-   * correct and is where a rim reads as form; the outer silhouette against a
-   * barrier metres behind takes the full one.
+   * Depth step, IN METRES, that starts and finishes the edge ramp.
+   *
+   * ## These were fractions of the view distance and that was a real regression
+   *
+   * Shipped in round 41 as `0.010 * dc` to `0.055 * dc`, on the reasoning that
+   * expressing a threshold as a fraction of the pixel's own distance makes it
+   * framing-invariant. It does the opposite, and a blind critic found the result
+   * before anyone here looked at it:
+   *
+   * > *"Kestrel's cyan line runs along both leading AND trailing edges of the
+   * > same limb, and along both left and right edges of the head crest. A single
+   * > directional rim cannot light two opposite-facing edges of a convex limb at
+   * > once — that symmetric bilateral highlighting is the signature of a
+   * > per-panel outline/edge-detect shader, not a Fresnel rim."*
+   *
+   * Two candidate mechanisms were simulated against synthetic depth fields.
+   * **Curvature was not it** — a convex limb at 5 m produces a 4 mm step across
+   * a 2.5 px tap and the ramp-cancellation term above rejects it, as do modelled
+   * panel grooves at 2 cm. The comment claiming so is correct and was checked
+   * rather than trusted.
+   *
+   * **Proud armour plates were it.** These robots are not a smooth skin; they
+   * are plates standing 5-25 cm off a body, and a plate edge is a genuine depth
+   * step of exactly that size. Simulated at the `03-full-body` framing (subject
+   * 5 m, ~350 px/m), against the old relative threshold:
+   *
+   *     plate stands proud   gap     edge   cyan (left lip)   rose (right lip)
+   *      8 cm                0.08 m  0.05       0.042              0.019
+   *     15 cm                0.15 m  0.45       0.355              0.165
+   *     25 cm                0.25 m  0.99       0.787              0.366
+   *     true silhouette      3.00 m  1.00       0.794              0.369
+   *
+   * A 25 cm plate edge was reading at 99% of a true silhouette. And because the
+   * two rim arms are on opposing azimuths, every plate took cyan on one lip and
+   * rose on the other — which is the "doubled outline" and the "red fringing on
+   * the opposing edges" in the report, arrived at from the arithmetic rather
+   * than from the picture.
+   *
+   * The framing dependence is the tell and it matches where the defect was seen.
+   * `0.010 * dc` is 5 cm at the full-body framing and 14 cm at the wide, so the
+   * *closer* the camera, the *more* interior geometry qualified: the same 15 cm
+   * plate scores 0.45 on `03-full-body` and 0.00 on `06-stage-wide`. Scaling by
+   * distance is right for a *slope* (whose step grows with the tap's world
+   * footprint) and wrong for a *step* (whose size is a property of the model).
+   * Gate 2 tests a step.
+   *
+   * 0.40 m is above every plate on the cast and below every gap to the set.
+   * What it costs, stated: an arm crossing a torso at 20-25 cm no longer takes
+   * the partial rim it used to, so internal form is not drawn. That is deliberate
+   * — the internal-form case and the plate-edge artifact are the same
+   * measurement, and there is no threshold that keeps one and drops the other.
    */
-  minGap: 0.010,
-  fullGap: 0.055,
+  minStep: 0.40,
+  fullStep: 1.20,
   /** Floor on the half-depth of the gate, metres, and the pad added to the pair's spread. */
   minSlab: 2.2,
   slabPad: 1.6,
@@ -1163,13 +1256,17 @@ class ScenePass extends Pass {
               // is wanted — a rim belongs on the outline, not on every rounded
               // plate that happens to turn away.
               //
-              // Scaled by the pixel's own distance so the thresholds are
-              // framing-invariant.
+              // The threshold is in METRES and not in multiples of 'dc', and
+              // that is the whole of the round-41 rim regression. See
+              // RIM_SS.minStep for the reproduction; the short version is that a
+              // robot's armour plates are a fixed physical size, so the number
+              // that separates "plate edge" from "background" cannot be a
+              // function of how far away the camera is standing.
               float hi = max( max( dl, dr ), max( dd, du ) );
               float lo = min( min( dl, dr ), min( dd, du ) );
               float gap = ( hi - dc ) - max( dc - lo, 0.0 );
               float edge = smoothstep(
-                ${RIM_SS.minGap.toFixed(4)} * dc, ${RIM_SS.fullGap.toFixed(4)} * dc, gap );
+                ${RIM_SS.minStep.toFixed(2)}, ${RIM_SS.fullStep.toFixed(2)}, gap );
               if ( edge > 0.0 ) {
                 // Gate 3, and the one that makes this a rim light rather than an
                 // outline filter. The screen-space depth gradient points away

@@ -3858,3 +3858,80 @@ fired on the deck itself: at the hero framing's grazing angle the floor's per-2.
 **0.061 m against a 0.060 m threshold** — inside a factor of one, so a slightly lower camera would
 have laid a cool wash across the whole floor. Replaced with a term that cancels a ramp exactly at any
 angle: deck 0.000, silhouette 0.794 unchanged.
+
+---
+
+# Round 41 scored by median-of-three, and the rim came out
+
+First round scored the way the repeatability result demands — three critics, median and range, never a
+single number.
+
+```
+                     samples          median   range   spread
+before (round 40)    38 44 61 65       52.5    38-65     27
+after  (round 41)    42 48 58          48      42-58     16
+```
+
+**The median moved down 4.5 and the whole after-range sits inside the before-range.** On an instrument
+with a 27-point spread that is not a regression signal — it is not a signal at all. What decides this
+round is the qualitative finding, and there it is unanimous.
+
+## Three critics, independently, caught the same regression
+
+All three were told to watch for rim over-application. All three found it, in every shot they opened,
+and one made it a geometric argument rather than a preference:
+
+> *"The cyan line runs along BOTH the leading and trailing edges of the same limb, and both left and
+> right edges of the head crest, simultaneously. **A single-direction rim physically cannot light two
+> opposite-facing edges of convex geometry at once** — that bilateral symmetry is the signature of a
+> per-panel outline shader."*
+
+> *"Traces interior panel seams, rivet rings and pipe segments in every one of six shots, not just the
+> silhouette-vs-background edge."*
+
+Confirmed by opening `03-full-body`: both robots criss-crossed along interior plate seams, with red
+fringing on the opposing edges.
+
+**And the agent that wrote it had predicted this exact failure, in advance, in writing:** *"Nothing on
+the helmet crown or shoulder caps — if the crown is rimmed my screen-space y sign is inverted."* The
+crown was rimmed. Its own falsification test fired before anyone looked.
+
+## Why the gate failed, and it is not the part that was cleverest
+
+The step-versus-slope test was built to reject the deck and it does — simulated at the hero framing's
+grazing angle the floor's per-2.5px depth change is 0.061 m against a 0.060 m threshold, and the
+replacement term cancels a ramp exactly at any angle: deck 0.000, silhouette 0.794 unchanged. That
+work is correct and is not the problem.
+
+**The problem is that these robots are not smooth.** `plated()` builds an under-armour sleeve beneath
+every plate stack precisely so the gaps hold shadow — so every panel seam is modelled geometry with a
+real, sharp, small depth step. **A seam is exactly the shape a step-not-slope test is designed to
+accept.** Separating them needs a step *magnitude* scaled to the fighter's own depth extent: a
+silhouette jumps metres to the background, a panel gap jumps a centimetre.
+
+`RIM_SS.gain` is 0. The term and its analysis are kept, with the reason and the restore condition
+written at the constant — **restore only after adding a magnitude term, never without one.**
+
+## The other three landed and stay
+
+- **DOF.** Unambiguous. The `uMaxRadius` double-duty bug — one uniform serving as both the gather
+  radius cap and the blend-strength divisor, so raising the cap to permit bokeh simultaneously
+  weakened every blur — was a real find. Even the critic that scored 48 volunteered *"real
+  depth-of-field discipline, better than the character lighting."*
+- **Black point.** 0.044 -> 0.022. The darkest pixel this transform could produce was
+  (0.040, 0.048, 0.058) by construction, in every frame ever shipped.
+- **Tonal recession.** There was no saturation-versus-distance term anywhere in the project; value had
+  been ramped and measured repeatedly, chroma never touched once.
+
+Final capture: **73.5 fps, 256 draw calls, 13.6 ms median, 17.3 ms p95** — against 30.4 ms p95 before
+the round. The stability win survived the revert.
+
+## The method note worth keeping
+
+I asked the critics one extra question this round — *is the rim over-applied?* — and three of three
+answered it with specific, converging, load-bearing evidence. Had I only asked "is there a rim now",
+the honest answer would have been yes, and a regression would have shipped.
+
+**A critic answers the question it is asked.** The blind protocol finds what is wrong; a pointed
+question finds whether the last fix broke something. Both are needed and they are not the same
+instrument.
