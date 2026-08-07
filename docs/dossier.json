@@ -1,7 +1,7 @@
 {
  "status": {
-  "rev": "0.31.0",
-  "commits": "173",
+  "rev": "0.32.0",
+  "commits": "176",
   "modules": 69,
   "lines": "63k",
   "clips": 92,
@@ -11,11 +11,11 @@
  "verdicts": [
   {
    "axis": "Stage detail",
-   "score": 67
+   "score": 64
   },
   {
    "axis": "Interface craft",
-   "score": 71
+   "score": 76
   },
   {
    "axis": "Lighting & atmosphere",
@@ -31,7 +31,7 @@
   },
   {
    "axis": "Animation quality",
-   "score": 58
+   "score": 60
   }
  ],
  "log": [
@@ -1131,11 +1131,54 @@
      "state": "67.5"
     }
    ]
+  },
+  {
+   "phase": "PHASE 37",
+   "when": "Round 35",
+   "rev": "rev 0.32.0",
+   "title": "We had the axis the camera cannot see, and none of the axes it can",
+   "paras": [
+    "Interface 76, lighting 72, impact 71, stage 64, character 66, animation 60. Interface gained five, the best single-axis move in many rounds; animation two; stage lost three, and that loss is a re-pricing rather than a regression.",
+    "The interface's typeface did not exist. Counted on this machine: Eurostile Extended zero, Bank Gothic zero, Segoe UI Semibold zero, Arial Narrow four. And it was worse than reported — the label stack names the same three absent families in a different order, so the design's two distinct faces had been one face all along. It is now three families compiled to real TrueType at boot and registered through the font API: eight cuts, a hundred and twelve glyphs each, a hundred kilobytes, twelve milliseconds once at startup, no network and no borrowed outlines.",
+    "That face shipped rejected the first time. Every one of the eight cuts was refused by the browser over a single seed in one loop, so every element fell back to the system stack — precisely the bug the generated face existed to fix. Nothing in the project could have caught it: the checker imports the typeface through a shim where the font API does not exist, so the installer takes its no-op path and the font was never parsed by anything until it reached a browser. A generated asset with no validator that runs where it is built. The checker now compiles all eight cuts offline and validates them, and that guard was tested by putting the bug back and watching it fail sixteen times before it was trusted.",
+    "The animation result is the most useful thing in the round because it half-falsified the brief I wrote. I predicted the library's contrapposto angles were near zero. For twist that is false — the stance blades the pelvis twenty-eight degrees and counter-rotates the spine nineteen, giving a median of eighteen degrees of hip-to-shoulder separation, squarely inside the reference band the critic itself quoted. It is true for every axis in the frontal plane: pelvis level to half a degree, shoulder line parallel to it within one, spine straight to three millimetres over its whole span. In other words the library already had the axis a side-on fight camera cannot resolve, and none of the axes it can.",
+    "A second finding nobody asked for: twenty-eight of thirty-four attacks lose what separation they have at the moment of contact. The straight punch goes from eighteen degrees to eight. The critic had described that exact frame, blind, as shoulders parallel to hips — and it is, but only there.",
+    "The fix is a solved pose delta rather than ninety-two hand edits: the pelvis rolls eight degrees and the compensation is solved numerically against the rig's own kinematics so that both ankles and both toes land at zero displacement and the chest keeps its world position, which is what keeps the arms, neck and head where the animator put them. Seventy-seven of ninety-two clips took it, no clip changed duration or contact tick, and the worst movement of any striking anchor is one millimetre. It is honestly short: the thirteen kicks took nothing and the attacks took almost nothing, so the contact frames a critic actually picks references out of are barely touched. The named next step is re-solving that compensation per keyframe with the two-bone solver the animator already carries.",
+    "Stage fell three points without anything getting worse. The panel caught a screen-space light band on the rooftop and fourteen unlit black quads sitting in the cistern's reflective floor, and both are present, byte for byte, in the previous round's capture. They are newly counted, not newly broken — the earlier sixty-seven was pricing an arena set that contained them.",
+    "The dead light shafts were repositioned and the fix landed, verified by an offline depth rasteriser rather than a stopwatch: three shafts that retired exactly zero fragments now retire two per cent each, total atmosphere fill up from twenty-three per cent of frame to thirty-six, at no measurable frame cost. And yet the critic found no new beam visible anywhere in the pit. Both are true. They exist now and they are still too faint to read as light. Existence was the fix; visibility is the next one.",
+    "That agent also corrected three numbers in the brief it was given and one in the project's own profiling notes — including a coverage split that cannot arise from mirror-image geometry at a centred camera, and a complaint about the quality ladder that was inverted: the ladder had been dropping only the invisible shafts, so it was cutting none of the cost."
+   ],
+   "tags": [
+    {
+     "label": "typeface",
+     "state": "generated"
+    },
+    {
+     "label": "font validator",
+     "state": "added"
+    },
+    {
+     "label": "contrapposto",
+     "state": "partial"
+    },
+    {
+     "label": "frontal plane",
+     "state": "the real gap"
+    },
+    {
+     "label": "dead shafts",
+     "state": "render, still faint"
+    },
+    {
+     "label": "stage -3",
+     "state": "re-priced"
+    }
+   ]
   }
  ],
  "deploy": {
   "url": "https://knockbots.vercel.app",
-  "rev": "0.31.0",
-  "note": "Deployed after round 34. Source on github.com/tecsteps/knockbots."
+  "rev": "0.32.0",
+  "note": "Deployed after round 35. Source on github.com/tecsteps/knockbots."
  }
 }
