@@ -3935,3 +3935,77 @@ the honest answer would have been yes, and a regression would have shipped.
 **A critic answers the question it is asked.** The blind protocol finds what is wrong; a pointed
 question finds whether the last fix broke something. Both are needed and they are not the same
 instrument.
+
+---
+
+# The rim is back, and the mechanism was sharper than the hypothesis
+
+I disabled `RIM_SS.gain` with a restore condition written at the constant: *only after adding a
+magnitude term, never without one.* The term now exists and the rim is restored at 0.9.
+
+**My hypothesis was right and incomplete.** I guessed panel seams. The agent tested that and something
+better: it **falsified its own first guess before touching anything.** Curvature is not the cause — a
+convex limb at r = 0.15 m and 5 m produces a **4 mm** step across a 2.5 px tap, and the ramp-cancellation
+term rejects it. Modelled 2 cm grooves: also rejected. The file's existing comment claiming curvature
+is suppressed turned out to be correct, which is only known because someone went to disprove it.
+
+**It was proud armour plates.** These robots are plates standing 5-25 cm off a body, and a plate edge
+is a genuine depth step of exactly that size:
+
+```
+plate stands proud   gap      edge   cyan (left lip)   rose (right lip)
+ 8 cm                0.08 m   0.05       0.042              0.019
+15 cm                0.15 m   0.45       0.355              0.165
+25 cm                0.25 m   0.99       0.787              0.366
+true silhouette      3.00 m   1.00       0.794              0.369
+```
+
+**A 25 cm plate edge read at 99% of a true silhouette** — and because the two rim arms sit on opposing
+azimuths, every plate took cyan on one lip and rose on the other. That *is* the "doubled outline with
+red fringing on the opposing edges" three critics reported, derived from arithmetic rather than from
+the picture.
+
+## The error, and the tell that identifies it
+
+`minGap` was `0.010 * dc` — the threshold scaled by view distance, for framing invariance.
+
+**That is right for a SLOPE**, whose step grows with the tap's world footprint; it is exactly what
+made the deck test work. **It is exactly wrong for a STEP**, whose size is a property of the model.
+Gate 2 tests a step. So the closer the camera stood, the tighter the threshold got and the more
+interior geometry qualified: 5 cm at the full-body framing against 14 cm at the wide, and the same
+15 cm plate scores 0.45 on `03-full-body` and 0.00 on `06-stage-wide`.
+
+**The framing dependence was backwards, and that is why the artifact appeared on one shot and not the
+others.** A defect that varies with the camera in the wrong direction is naming its own cause.
+
+Fixed with `minStep: 0.40` / `fullStep: 1.20` **in metres** — above every plate on the cast, below
+every gap to the set. Twelve-case regression passing: silhouettes 0.794 / 0.369 unchanged, every proud
+plate 0.000, deck at grazing 0.000, one pixel outside the silhouette 0.000.
+
+## Predictions, checked against the capture
+
+1. *"No cyan or red lines anywhere in the interior of either robot."* **Held.** Both robots read clean.
+2. *"The outer silhouette keeps exactly the strength it has now."* Held — the fix does not touch it.
+3. *"The wides should look unchanged."* Consistent with the model: at 13.8 m the old threshold was
+   already 14 cm and rejecting most plate edges.
+4. *"Cost is zero — same shader, same taps, two float literals."* **Held: 256 draw calls, 13.2 ms
+   median, 75.8 fps** against 13.3 / 75.2 before.
+
+## What it costs, stated in advance rather than discovered later
+
+**Internal form is no longer drawn.** An arm crossing a torso at 20-25 cm took a partial rim (0.287)
+and now takes zero. There is no threshold that keeps it: **the internal-form case and the plate-edge
+artifact are the same measurement at the same magnitude.** The rim is now strictly an outline against
+the set, plus fighter-over-fighter. That is a real loss, chosen knowingly, and written here so nobody
+rediscovers it as a bug.
+
+## The method note
+
+I gave the agent my diagnosis explicitly framed as *a hypothesis for you to check rather than a
+conclusion*, and it came back: *"Thank you for framing it that way. I would have gone straight at
+curvature and been wrong."*
+
+That is the fourth time this session an agent has checked a premise instead of executing it — the
+assignment count, the ring lifetime, the per-fighter key, and now this. **Three of those four premises
+were mine and wrong.** The pattern is now strong enough to be a rule rather than an observation: hand
+agents hypotheses, never conclusions, and say which it is.

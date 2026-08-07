@@ -300,10 +300,38 @@ const RIM_SS = {
    * light draws an outline." Screen space is still the right answer. The gate
    * is not finished.
    *
-   * Restore by setting this to 0.9 AFTER adding a magnitude term. Do not
-   * restore it without one.
+   * RESTORED at 0.9. The magnitude term now exists -- `minStep`/`fullStep`
+   * below, in METRES -- and the mechanism turned out to be sharper than the
+   * hypothesis that motivated it.
+   *
+   * It was not curvature, which was the first guess and was falsified before
+   * anything was touched: a convex limb at r = 0.15 m and 5 m produces a 4 mm
+   * step across a 2.5 px tap, and the ramp-cancellation term rejects it. It was
+   * PROUD ARMOUR PLATES. These robots are plates standing 5-25 cm off a body,
+   * and a plate edge is a real depth step of exactly that size. Simulated at the
+   * 03-full-body framing against the shipped threshold, a 25 cm plate edge read
+   * 0.99 against a true silhouette's 1.00 -- and because the two rim arms sit on
+   * opposing azimuths, every plate took cyan on one lip and rose on the other,
+   * which is precisely the "doubled outline with red fringing" three critics
+   * reported, derived from arithmetic rather than from the picture.
+   *
+   * THE ERROR WAS SCALING A STEP THRESHOLD BY VIEW DISTANCE. `minGap` was
+   * `0.010 * dc`, for framing invariance. That is right for a SLOPE, whose step
+   * grows with the tap's world footprint -- it is what made the deck test work.
+   * It is exactly wrong for a STEP, whose size is a property of the model. So the
+   * closer the camera stood the tighter the threshold got: 5 cm at the full-body
+   * framing against 14 cm at the wide, which is why the artifact appeared on one
+   * and not the other. The framing dependence was backwards, and that was the
+   * tell.
+   *
+   * WHAT IT COSTS, stated rather than discovered later: internal form is no
+   * longer drawn. An arm crossing a torso at 20-25 cm took a partial rim and now
+   * takes zero. That is deliberate and no threshold avoids it -- the
+   * internal-form case and the plate-edge artifact are the same measurement at
+   * the same magnitude. The rim is now strictly an outline against the set, plus
+   * fighter over fighter.
    */
-  gain: 0,
+  gain: 0.9,
   /**
    * Tap radius in render pixels, which is also very nearly the width of the
    * band: a pixel further inside the silhouette than this taps a neighbour that
