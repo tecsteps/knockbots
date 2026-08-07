@@ -1867,3 +1867,59 @@ Defended on two grounds independent of any clock — one fewer dependent texture
 across ~46% of the frame, and one fewer sampler on a material this file already names as sitting at
 the sixteen-unit limit — and on zero pixels of visual change. **It is not a frame-time claim**, and
 the round's honest position is that no frame-time claim is available.
+
+# The duplication had one cause, and it was me resuming workflow agents by message
+
+Round 32 produced: two UI agents building the same move list, two agents building the same
+amplification rig and clobbering each other's output files, two agents writing the same ORM fold in
+the same file within an hour, and finally two agents who each believed they were the sole
+stage-surfaces agent — one reporting it had shipped the `uWetMap` fold, the other reporting that same
+fold as a stranger editing its exclusive file. Both were right. There were two of them.
+
+**Every one of those pairs came from me sending `SendMessage` to a workflow agent.** The tool reports
+`had no active task; resumed from transcript in the background` — which spawns a SECOND continuation
+of that agent, carrying the same brief and the same exclusive file list, running concurrently with
+whatever the workflow itself does next. I did this to five agents today, to hand them corrections and
+a contract. Each time I created the collision I then spent messages arbitrating.
+
+**Rule: do not `SendMessage` a workflow agent mid-round.** If a workflow agent needs new information,
+either put it somewhere the agent will read (a file in the shared scratchpad worked — the process
+list showed agents adopting `COORDINATION.md`'s naming convention within minutes), or let the round
+finish and brief the next one. A message is not a channel to a running agent; it is a fork of it.
+
+The corollary is that "exclusive file ownership" was never violated by any agent. It was violated by
+the coordinator handing the same exclusivity to two copies of the same worker. Every agent involved
+behaved correctly: each detected the collision, each killed its own run rather than the other's, and
+two of them adopted the other's harness after judging it better.
+
+## The sharpest statement of this round's lesson, from the agent that hit it
+
+> "Rep 1 alone would have let me report *the floor material costs 0.85ms* with a tight IQR that
+> excluded 1.0. Reps 2 and 3 destroy it."
+
+Its control arm — a change that does nothing — read **+4.3% of frame, range -1.3% to +13.7% over six
+takes**. Its floor arm read +9.7%, -9.3%, +7.7% on three interleaved reps. A single rep would have
+produced a publishable number with a convincing spread, pointing the wrong way, and nothing in it
+would have looked wrong.
+
+That is exactly what happened to me: I put 60.2fps in this project's dossier from one probe when
+repeated measurement says 58.5, and briefed a round to find 1.5ms that was never there.
+
+**Ask of any frame-time delta reported today: what did its null arm read?** If the answer is not a
+number, the delta is not one either.
+
+## Second fold, also shipped and also defended without a clock
+
+All six arena set materials (steel, darkMetal, container, concrete, hazard, grating) bound ONE packed
+ORM texture to `roughnessMap`, `metalnessMap` AND `aoMap` — so every shaded pixel fetched the same
+texel three times. Verified off the linked programs: **10 texture units -> 8 on each**.
+
+```
+visual neutrality, one session, frozen clock, readPixels, A/B/A'
+  pit       2 differing pixels of 2,073,600      noise floor exactly 0
+  skydeck   0                                    positive control moves 40k-1.1M px
+  cistern   0
+```
+
+The positive control is the part that makes it trustworthy: it proves the toggle reaches the shader,
+so "no pixels changed" means the fold is neutral rather than that the switch did nothing.
