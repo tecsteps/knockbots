@@ -3,9 +3,18 @@
  *
  * WHY THIS EXISTS
  *
- * Interface is the highest-scoring of the six axes at 76/100. It is also the
- * axis that has missed every interface defect this project has actually
- * shipped, because what it scores is the CRAFT OF CHROME ALREADY ON SCREEN --
+ * Interface has been the highest-scoring of the six axes. It is also the axis
+ * that has missed every interface defect this project has actually shipped,
+ * because what it scores is the CRAFT OF CHROME ALREADY ON SCREEN --
+ *
+ * (The score itself used to be written here. It is deliberately gone: critics
+ * are briefed NOT to look up the number for the axis they are scoring, because
+ * an agent briefed with the number it is meant to check inherits it as a fact
+ * rather than a claim -- and this round's interface critic was pointed at this
+ * very file BY that brief, read the figure here, and had to disclose it
+ * unprompted before scoring. A file that a critic is told to read must not
+ * carry the answer.)
+ *
  * type hierarchy, bar design, motion -- judged from static captures.
  *
  * Things that scored 76 or better while broken:
@@ -214,7 +223,33 @@ const PATH = [
     id: 'movelist',
     goal: 'Read the move list, which is where signatures and finishers live',
     find: /MOVE ?LIST/,
-    done: `!!document.querySelector('.kbm--on')`,
+    /*
+     * SETTLED, not merely PRESENT.
+     *
+     * This read `!!document.querySelector('.kbm--on')`, which is true the
+     * instant the class lands -- which is when the CSS transition STARTS. The
+     * step then screenshots immediately, catching the panel mid-fade at partial
+     * opacity, with the pause menu still legible through it.
+     *
+     * A critic read that frame and filed a high-impact stacking bug: PAUSED,
+     * RESUME, QUIT TO TITLE and the CPU-difficulty readout all showing through
+     * the move list, with the finisher card's text overlapping OPTIONS. The
+     * panel's own CSS says it should occlude -- scrim at 0.86, panel at 0.985 --
+     * and it does. It simply had not got there yet when the shutter fired.
+     *
+     * `capture.mjs` had this exact defect on `13-announce-fight` and it was
+     * fixed EARLIER THE SAME DAY, by gating on opacity rather than on a class
+     * or a fixed settle. I wrote this file hours later and did not carry the
+     * lesson across. An instrument that photographs transitions mid-flight
+     * manufactures defects, and a manufactured defect costs more than a missed
+     * one because someone will go and fix the thing that was never broken.
+     */
+    done: `(() => {
+      const p = document.querySelector('.kbm--on');
+      if (!p) return false;
+      const panel = p.querySelector('.kbm-panel') || p;
+      return Number(getComputedStyle(panel).opacity) >= 0.95;
+    })()`,
     wait: 4000,
   },
   {
@@ -308,6 +343,31 @@ async function runPath(page, { label, injectCss = '' }) {
     steps.push(rec);
 
     if (SHOTS) {
+      /*
+       * LET THE SCREEN STOP MOVING BEFORE PHOTOGRAPHING IT.
+       *
+       * Every `done` condition here is a state predicate -- a phase changed, a
+       * class landed, a fighter started a move -- and every one of them becomes
+       * true at the START of the animation that expresses it. Screenshotting on
+       * the next line catches a screen mid-transition on any step whose UI
+       * animates in, which is most of them.
+       *
+       * That is not a cosmetic problem. These PNGs are the only handset evidence
+       * this project has, they are handed to critics as ground truth, and a
+       * mid-fade frame already produced one high-impact bug report against a
+       * panel that was working correctly.
+       *
+       * `getAnimations()` covers CSS transitions and animations both, so this
+       * waits for the actual thing rather than guessing a settle in
+       * milliseconds. The 1200 ms cap is a backstop for a looping decorative
+       * animation that never finishes -- and when it trips the shot is still
+       * taken, because a late frame is worth more than no frame. The pass/fail
+       * verdict never depends on this; it is only about what gets photographed.
+       */
+      await page.waitForFunction(
+        `document.getAnimations().every((a) => a.playState !== 'running')`,
+        null, { timeout: 1200 },
+      ).catch(() => {});
       mkdirSync(OUT, { recursive: true });
       await page.screenshot({ path: resolve(OUT, `${label}-${steps.length}-${step.id}.png`) });
     }

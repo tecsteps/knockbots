@@ -3014,6 +3014,32 @@ Also disproved: the critic described a "rifle-like prop" held in the off-hand ac
 **There is no prop.** Nothing in `RobotBuilder.js` or `roster.js` builds a held weapon; it is reading
 the forearm and gauntlet silhouette as an object.
 
+## RETRACTED — "Uncertified diagnostic sheets are in the scored frame set"
+
+**The section below is wrong and I wrote it. Read the retraction before the claim.**
+
+Frames `20`-`24-anim-*` are **not** `animstrip.mjs` output and carry **no** NOT CERTIFIED stamp. They
+are first-class entries in `capture.mjs`'s own SHOTS list at lines 1352-1440, added deliberately with
+the note *"Four clips the axis has never been able to see, plus a corrected capture of the one it is
+scored on"*, and listed with `axis: 'animation'` in its verification table. `animstrip.mjs` is a
+separate offline tool that does stamp NOT CERTIFIED, and its output is not what is in the scored set.
+
+So the framing — *a file that declared its own inadmissibility was admitted anyway, the same failure
+as `ref/06`* — is false. Nothing declared anything. I matched a filename pattern to the wrong
+producer and reached for a narrative this repo had already trained me to expect.
+
+**That is the error class this very entry is about, committed inside the entry about it.** It is worse
+than the errors it was cataloguing, because those were inherited from earlier rounds and this one was
+manufactured fresh while writing the correction to them, then pushed before it was checked.
+
+What survives is narrower and genuinely open: the critic reported skeleton dot-overlays, per-tick
+speed graphs and printed rig text in those frames. If that is accurate then diagnostic instrumentation
+is present in frames the animation axis is scored on — a real question, but one that is **by design
+rather than by accident**, and it asks whether a strip built to let the axis see twelve poses should
+also carry its own instrumentation.
+
+The original, incorrect section follows unedited, because deleting it would hide the mistake.
+
 ## Uncertified diagnostic sheets are in the scored frame set
 
 The critic's process note, unprompted: *"20/21/22/23/24-anim-*.jpg are NOT clean captures — they're
@@ -3102,3 +3128,92 @@ anchors are the striking limb and both feet, and none of it needs a GPU.
 That matters, because the machine has no disk headroom to capture anything, and this is the shape of
 work that can still be measured honestly while that is true: **the axis's defect, its cause, its fix,
 its target value and its acceptance test, all derived offline on the rig.**
+
+---
+
+# Round 38, complete: every axis falls, and the worst new bug was manufactured by my own instrument
+
+All six axes re-scored blind on the certified frames, each critic given its axis's retired target and
+told not to resurrect it, and **deliberately not told its current score**.
+
+| axis | was | now | delta |
+|---|---:|---:|---:|
+| Interface | 76 | **63** (craft 79 / usability 52) | -13 |
+| Lighting | 72 | **60** | -12 |
+| Character | 64 | **58** | -6 |
+| Impact | 71 | **54** | -17 |
+| Animation | 62 | **52** | -10 |
+| Stage | 66 | **45** | -21 |
+| **average** | **68.5** | **55.3** | **-13.2** |
+
+Every axis fell, and the average is the lowest the project has recorded. This is the second re-score
+on repaired instruments to lower it (round 34 went 72.8 -> 67.5) and the larger correction, because
+four axes were carrying dead targets rather than one.
+
+**None of that is a regression in the game.** Nothing shipped between the old numbers and these except
+fixes. What changed is that the instruments producing the old numbers were retired, and the axes were
+re-judged by eye against the rubric instead of against statistics that could not be computed.
+
+## The interface axis split, and the critic named the fix
+
+Craft 79, usability 52, combined 63 at 40/60 weighting. Its own words: *"the axis is named 'interface
+craft' but an interface's job is to be operated, not photographed."* It proposed a structural gate —
+**`score <= usability + 15`** — so a craft number can never again paper over a control surface a thumb
+cannot work. Adopted; that is a better rule than any number this round produced.
+
+Its concrete usability findings stand on the touchgate evidence: the live fight HUD shows BLOCK, OD
+and four numbered pads and **nothing anywhere hints that the two-finger throw chord or the swipe
+specials exist**, so a first-time player has nothing to notice. The MENU control clears the 44px floor
+but reads as a HUD readout rather than a button — *"precisely the class of defect touchgate's own
+regex-and-bounding-box check cannot catch: it confirms an element exists and is big enough, not that a
+human eye would parse it as interactive."* That is the honest limit of the instrument I built, stated
+better than I stated it.
+
+## The manufactured bug
+
+That same critic filed a high-impact defect: `path-6-movelist.png` showed the pause menu bleeding
+through the move-list panel — PAUSED, RESUME, QUIT TO TITLE and the CPU-difficulty readout all
+legible underneath, the finisher card's body text overlapping OPTIONS. It checked the CSS, found
+scrim at 0.86 and panel at 0.985, and reported plainly that the screen did not match what the code
+claimed.
+
+The code was right. **The gate's `movelist` step read `!!document.querySelector('.kbm--on')`, which is
+true the instant the class lands — which is when the transition STARTS.** The screenshot fired on the
+next line, mid-fade.
+
+`capture.mjs` had this identical defect on `13-announce-fight`, and it was fixed **earlier the same
+day**, by gating on opacity instead of on a class or a fixed settle. I wrote `touchgate.mjs` hours
+later and did not carry the lesson across.
+
+Fixed two ways: the `movelist` step now requires computed opacity >= 0.95, and — because every `done`
+condition in the file is a state predicate that goes true at the *start* of the animation expressing
+it — **every** screenshot now waits on `document.getAnimations()` going quiet, with a 1200 ms backstop
+that still takes the shot if a decorative loop never settles. Re-run with both controls holding
+(null 8/8 twice, positive failing at exactly `menu`): the panel is fully opaque, the pause menu is
+gone, the text is crisp. Before and after on the same instrument, same path.
+
+**A manufactured defect costs more than a missed one**, because someone goes and fixes the thing that
+was never broken. This one consumed a critic's highest-impact slot.
+
+## And the brief pointed a critic at the answer
+
+The interface critic disclosed, unprompted, that `touchgate.mjs`'s header comment stated the axis's
+current score — in a file the brief explicitly instructed it to read, in a brief that explicitly
+instructed it not to look the score up. It scored materially below the leaked figure anyway and
+declared the leak before scoring, which is the right handling of a spoiled input.
+
+The header no longer carries the number. **A file a critic is told to read must not carry the answer**,
+and that is now written where the leak was.
+
+## What the round found that works
+
+Two things, and both are worth protecting rather than improving:
+
+- **The impact weight ladder passes.** `15-impact-light` against `16-impact-heavy` is real categorical
+  escalation — the heavy hit adds a light-beam column and ground debris the light hit does not have,
+  rather than more of the same sprites. The decay ladder passes too: the burst is fully gone by +8
+  ticks with no residual glow, which is the fix from round 5 holding.
+- **Cistern is the arena to pull the other two toward.** It is the one floor in the set that holds
+  distorted coloured reflections rather than a cosmetic sheen. Ranking is cistern > pit > skydeck,
+  and skydeck — one low block against a flat uniform skyline — sits closest to the rubric's literal
+  failure case and is where stage work goes first.
