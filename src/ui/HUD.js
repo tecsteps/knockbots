@@ -557,12 +557,87 @@ export class HUD {
     bus.on('roundEnd', (e) => this.#onRoundEnd(e));
     bus.on('phase', (e) => this.#onPhase(e));
     bus.on('meterFull', (e) => this.#onMeterFull(e.fighter.index));
+    /*
+     * THE FINISHER WINDOW WAS ALREADY ON THE BUS AND NOTHING WAS LISTENING.
+     *
+     * `Fighter#openFinisherWindow` has emitted `finisherWindow` carrying the
+     * move, the tick budget, the input and the human-readable `sequenceText`
+     * since finishers shipped. `HUD.js` contained the word "finisher" zero
+     * times. So the single most dramatic mechanic in the game announced itself
+     * to an empty room, and the interface critic put it exactly right: "nothing
+     * on the live HUD tells a player a finisher window has opened, the way
+     * Tekken's rage-art glow does -- the system exists only for players who
+     * already paused and read a wall of text."
+     *
+     * Third axis this round whose defect turned out to be wiring rather than
+     * authoring. The impact systems existed and did not fire on an ordinary hit;
+     * the material zones existed and were assigned to parts too small to see;
+     * this existed and had no listener. On a codebase this size the recurring
+     * question is not "what is missing" but "what is built and unconnected."
+     *
+     * It shows the SEQUENCE, not just a glow. A glow tells a player something is
+     * available; the window is finite by design ("a finisher that cannot be
+     * missed is a cutscene"), so a player who has to go and look it up has
+     * already lost it. The input is the only thing that makes the window usable
+     * the first time it opens.
+     */
+    bus.on('finisherWindow', (e) => this.#onFinisherWindow(e));
+    bus.on('finisherExpired', (e) => this.#onFinisherEnd(e));
+    bus.on('finisherStart', (e) => this.#onFinisherEnd(e));
   }
 
   #onMeterFull(i) {
     const el = this.meters[i]?.frame;
     if (!el) return;
     this.#restartAnimDeferred(el, 'meter--burst');
+  }
+
+  /**
+   * Raise the finisher call-out for the fighter whose window just opened.
+   *
+   * Built lazily on first use rather than at construction: a match can run its
+   * whole length without a finisher ever becoming available, and this is the
+   * only element in the HUD that is genuinely conditional.
+   *
+   * The countdown is driven by a CSS transition over the window's own duration
+   * rather than a per-frame write, so it costs nothing on the render path and
+   * cannot drift from the sim -- and it is deliberately a WIDTH, not a number:
+   * a player reading an input for the first time has no attention left for a
+   * digit, but they can see a bar getting shorter out of the corner of an eye.
+   *
+   * @param {{fighter:Object, ticks:number, sequenceText:string, move:Object}} e
+   */
+  #onFinisherWindow({ fighter, ticks, sequenceText, move }) {
+    const i = fighter?.index;
+    if (i !== 0 && i !== 1) return;
+    if (!this.finisherEl) {
+      const el = document.createElement('div');
+      el.className = 'hud-fin';
+      el.innerHTML = '<b class="hud-fin-tag">FINISHER READY</b>'
+        + '<span class="hud-fin-name"></span>'
+        + '<span class="hud-fin-seq"></span>'
+        + '<i class="hud-fin-bar"><s></s></i>';
+      this.root.appendChild(el);
+      this.finisherEl = el;
+    }
+    const el = this.finisherEl;
+    el.classList.toggle('hud-fin--p2', i === 1);
+    el.querySelector('.hud-fin-name').textContent = move?.name || '';
+    el.querySelector('.hud-fin-seq').textContent = sequenceText || move?.input || '';
+    const bar = el.querySelector('.hud-fin-bar > s');
+    // Restart the drain from full: reset with the transition suppressed, force a
+    // reflow so the browser cannot coalesce the two writes into one, then run it.
+    bar.style.transition = 'none';
+    bar.style.width = '100%';
+    void bar.offsetWidth;
+    bar.style.transition = `width ${(ticks / 60).toFixed(2)}s linear`;
+    bar.style.width = '0%';
+    el.classList.add('hud-fin--on');
+  }
+
+  /** The window closed, one way or the other. */
+  #onFinisherEnd() {
+    this.finisherEl?.classList.remove('hud-fin--on');
   }
 
   #onPhase({ phase }) {
