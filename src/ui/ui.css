@@ -1300,16 +1300,38 @@
      front of them. It is the ONLY route out of a match on a phone: there is no
      Escape key and no other affordance. A control that is the sole exit cannot
      also be the most discreet thing in the frame. */
-  background: rgba(6, 9, 14, 0.9);
+  /*
+   * AND IT STILL READ AS A READOUT, because opacity was never the whole problem.
+   *
+   * The round after it was made opaque, a critic looking at a fresh handset
+   * capture said it "reads as a HUD readout rather than a button" -- and was
+   * right, for a reason the first fix did not touch: it sits directly under the
+   * timer plate, centred in the same column, in the same dark-plate-with-a-thin-
+   * keyline language as the timer housing and the ROUND 1 label above it. It
+   * GROUPS with the readout stack. Proximity and shared styling are how an eye
+   * decides what is one thing, and by both tests this was part of the clock.
+   *
+   * So it now takes the accent. `--kb-accent` appears nowhere else in the top
+   * HUD -- the bars are their own orange fill, the timer is bone white -- which
+   * makes the keyline and the bar glyph the only accent-coloured marks in that
+   * column and breaks the grouping that the geometry creates. This is the same
+   * signal the menus already use for "this is the thing you act on".
+   *
+   * The lesson generalises past this button: a control that meets its contrast
+   * and size floors can still be invisible if it is dressed as its neighbours.
+   * Reachability and legibility are measurable and were measured; GROUPING is
+   * neither, and it is what actually hid this control from a real player.
+   */
+  background: rgba(6, 9, 14, 0.92);
   border: 0;
   cursor: pointer;
   pointer-events: auto;
-  color: var(--kb-text);
+  color: var(--kb-accent);
   font-family: var(--kb-font-label);
   font-size: 0.72em;
   font-weight: 800;
   letter-spacing: 0.22em;
-  box-shadow: inset 0 0 0 1px var(--kb-line-strong), 0 2px 12px rgba(0,0,0,.5);
+  box-shadow: inset 0 0 0 1px var(--kb-accent), 0 2px 12px rgba(0,0,0,.55);
   clip-path: polygon(0.5em 0, 100% 0, calc(100% - 0.5em) 100%, 0 100%);
 }
 .hud-pause-bars {

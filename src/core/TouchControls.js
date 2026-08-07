@@ -296,6 +296,63 @@ const CSS = `
 }
 .kbt-flash.kbt-show { opacity: 1; transform: translateY(0); }
 
+/*
+ * THE COACH: the two systems that were on screen in name only.
+ *
+ * A blind critic put this first on the interface axis, from the touch captures
+ * rather than from the code: "the live touch HUD shows only BLOCK/OD/4 numbered
+ * buttons -- no affordance anywhere for the two-finger throw chord or swipe
+ * specials described in the design. A first-time player has literally nothing on
+ * screen to notice, let alone try."
+ *
+ * That is right, and it is worse than a missing label. The four limb pads
+ * advertise four moves. The pad actually reaches the whole move list -- every
+ * motion special, every throw -- and a player could hold the phone for an entire
+ * match without discovering that the cluster does anything but tap.
+ *
+ * The pattern here is stolen from the one place in this game that already does
+ * it well, which the same critic singled out as the only in-context plain-
+ * language hinting in the product: the select screen's "TAP TO INSPECT * TAP
+ * AGAIN TO LOCK IN". Two lines, imperative, naming the gesture and its result,
+ * sitting where the gesture is performed.
+ *
+ * IT RETIRES ITSELF PER LINE. Each line disappears the first time its own
+ * gesture lands, so the hint is gone the moment it has been learned, and a
+ * player who already knows both never sees it after their first exchange. It is
+ * also pointer-events:none end to end -- this pad has a documented history of
+ * chrome eating taps (a 9x9 sweep once found 24 of 49 cells dead), and a coach
+ * that swallowed a punch would be a worse defect than the one it fixes.
+ *
+ * (No backticks anywhere in this comment, and that is deliberate: this whole CSS
+ * block lives inside a JS template literal, so one backtick in a comment ends the
+ * string and breaks the module. The repo has now hit that trap eight times. The
+ * rule is simple -- inside CSS here, quote code with nothing at all.)
+ *
+ * Anchored off the same cluster measurements as .kbt-flash rather than a tuned
+ * constant, so it cannot drift into the thumb's travel between the limbs and the
+ * overdrive pad -- the mistake that put the swipe confirmation under the hand
+ * that had just drawn it.
+ */
+.kbt-coach {
+  position: absolute;
+  right: calc(var(--kbt-edge) + var(--kbt-sa-r) + var(--kbt-btn) + var(--kbt-pitch) + 12px);
+  bottom: calc(var(--kbt-floor) + var(--kbt-sa-b) + var(--kbt-btn) + var(--kbt-pitch) + 56px);
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  pointer-events: none;
+}
+.kbt-coach span {
+  padding: 5px 10px; white-space: nowrap;
+  font-size: 10px; font-weight: 800; letter-spacing: .16em;
+  color: #cfe6ff;
+  background: rgba(9, 13, 20, .82);
+  box-shadow: inset 0 0 0 1px rgba(126, 180, 240, .34);
+  border-radius: 3px;
+  transition: opacity .3s ease, transform .3s ease;
+}
+/* Learned. Gone, and it does not come back this session. */
+.kbt-coach span.kbt-done { opacity: 0; transform: translateX(10px); }
+.kbt-root.kbt-portrait .kbt-coach { display: none; }
+
 /* A fighting game needs the pair side by side and the stick and limbs under
    opposite thumbs. In a tall frame the fighters are two slivers and the pad
    overruns the edge, so ask for the rotation instead of pretending. */
@@ -508,6 +565,10 @@ export class TouchControls {
       <div class="kbt-od">OD</div>
       <div class="kbt-blk">BLOCK</div>
       <div class="kbt-flash"></div>
+      <div class="kbt-coach">
+        <span data-coach="swipe">SWIPE ACROSS &rarr; SPECIAL</span>
+        <span data-coach="throw">TWO FINGERS &rarr; THROW</span>
+      </div>
       <div class="kbt-rotate"><div>
         <div class="kbt-phone"></div>
         <b>ROTATE YOUR DEVICE</b>
@@ -523,6 +584,7 @@ export class TouchControls {
     this.odEl = root.querySelector('.kbt-od');
     this.blkEl = root.querySelector('.kbt-blk');
     this.flashEl = root.querySelector('.kbt-flash');
+    this.coachEl = root.querySelector('.kbt-coach');
 
     // Position comes from the grid cell alone; the pitch that separates the
     // cells is the same value the cluster is sized from, so the panel tiles
@@ -588,6 +650,9 @@ export class TouchControls {
         this._drags.set(t.identifier, { x0: t.clientX, y0: t.clientY, limb: id });
         if (id) this.#down(id);
       }
+      // Two fingers down on the cluster IS the throw chord, so this is where
+      // the player has demonstrably learned it and the coach line can retire.
+      if (this._drags.size >= 2) this.learned('throw');
       /*
        * TWO FINGERS ON THE CLUSTER IS A THROW, NOT AN OVERDRIVE.
        *
@@ -799,6 +864,22 @@ export class TouchControls {
     this.flashEl.classList.add('kbt-show');
     clearTimeout(this._flashT);
     this._flashT = setTimeout(() => this.flashEl.classList.remove('kbt-show'), 420);
+    this.learned('swipe');
+  }
+
+  /**
+   * Retire one coach line, permanently for this session.
+   *
+   * Called from the gesture handlers rather than from a timer: a hint that
+   * disappears on a clock vanishes from under a player who was still reading it,
+   * and stays up for one who learned it in two seconds. Tying it to the gesture
+   * means it is on screen for exactly as long as it is unearned.
+   *
+   * @param {'swipe'|'throw'} which
+   */
+  learned(which) {
+    if (!this.coachEl) return;
+    this.coachEl.querySelector(`[data-coach="${which}"]`)?.classList.add('kbt-done');
   }
 
   #down(id) {
