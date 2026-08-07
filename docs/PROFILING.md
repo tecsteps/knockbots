@@ -3730,3 +3730,41 @@ more than the change itself, because either result teaches something.
 the third time this session.** The agent checked the premise instead of executing it — the second
 agent this round to do that, after the character agent refuted the assignment-count brief. Both times
 the correction was worth more than the task.
+
+## The animation envelope target is reached, on the instrument that defined it
+
+The animation agent kept working after its first state was committed, and the finding it was chasing
+is now closed on its own acceptance test.
+
+```
+                        baseline   after steer   final    foot_R
+hand_L median divergence   292 mm      354 mm     465 mm    498 mm
+                            59%         71%        93%     (of foot)
+```
+
+The off-arm now distinguishes move type at **93% of the rate the foot does**, from 59%. The metric
+that mattered — the one that stayed nearly flat while `own%` sextupled, and which is why the first
+pass did not fix what the critic saw — has moved essentially the whole way.
+
+`own%` came along with it:
+
+```
+p.straight    8% ->  51%      k.midKick     7% -> 67%
+p.uppercut   19% ->  47%      k.highKick   19% -> 64%
+k.lowKick    42% ->  66%      k.roundhouse 43% -> 63%
+loco.runFwd  89% (the target, untouched)
+```
+
+Six attack clips, all now carrying the `clavicle` track that only the run had.
+
+**And every anchor is still byte-identical across every round of this work.** p.jab 2370/722,
+p.straight 2782/765, p.uppercut 3880/1909, and foot_R at 5222 / 6094 / 7063 / 469 on the four kicks.
+Six clips re-authored twice over and not one striking hand or foot has moved a millimetre — which is
+the property that had to hold, because a kick's hitbox is on the foot and frame data is the game.
+
+**What this does NOT settle.** The critic's complaint was about the 2D read, and the dominant
+upper-body silhouette element on the character the strips actually render is a pair of static exhaust
+stacks. The rig metric is now where it should be; whether the picture changed is a separate question
+and only the capture answers it. The strips will also render four different robots for the first time
+this round, so the next score on this axis is not comparable to the last one — and that is an
+improvement, not a problem.
