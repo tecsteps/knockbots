@@ -2336,3 +2336,43 @@ in the previous section should be read as provisional and the total as sound.
 causes, establish that the drift between measurements is smaller than the pieces you are splitting
 into. This project has now been caught by the same shape three times — a delta on a contended base,
 a maximum reported as a median, and now a split finer than the drift.
+
+## The mirror, bounded from first principles — and it disagrees with the measurement
+
+Round 32's overdraw agent derived the reflector's cost from the charter's own decomposition rather
+than from a stopwatch, which makes it immune to everything that went wrong with the stopwatches:
+
+```
+frame 17.0 ms, ~11 ms fixed  ->  6.0 ms of fill over 1,498,176 px  =  4.00 ns/px
+mirror re-shades 374,544 px through the SAME 22-light rig
+374,544 x 4.00 ns  =  1.50 ms
+```
+
+**Two independent estimates of the same thing now disagree by 3.6x:**
+
+```
+derived from the charter decomposition        ~1.5 ms
+measured, ABBA, on a 17.4 ms (contended) base  5.4 ms   <- provisional
+```
+
+The derivation is the more trustworthy of the two, because 5.4ms of a 17.0ms frame would be 32% of
+the whole frame spent on a pass that shades 25% of the main pass's pixels at the main pass's price —
+which cannot be true unless the mirror's pixels are four times more expensive than the main pass's,
+and nothing about it suggests they are. The 5.4ms reading sat on a base inflated 0.5-0.6ms, and a
+delta measured on a contended base is not merely noisy, it is biased upward: contention scales with
+work, so the arm that does MORE work absorbs more of it.
+
+**Neither number should be quoted until the arm is re-taken on a quiet machine.** The experiment that
+settles it is six minutes: null / reflector OFF / reflector HALF / reflector QUARTER, interleaved,
+null-bracketed, at a 16.85ms baseline. If half-res returns real milliseconds the docstring's
+"not fill-bound" claim is wrong and `REFLECT_SCALE` is the lever; if OFF returns a lot while HALF
+returns nothing, the docstring is right and the lever is the mirror's object list.
+
+That experiment also settles the 82x contradiction in `PlanarReflector.js`'s own docstring — 51 draws
+at the charter's measured 1.2 microseconds is 0.06 ms, not the 5 ms the docstring attributes to them.
+
+**This is the round's real shape.** Four agents, nine hours, no frame bought — and a per-layer cost
+table, a 5,000x premise retraction, six catalogued instrument failures, 60% of the arena's
+volumetrics found drawing nothing, and the frame's largest single suspect bounded two ways that
+disagree. The measurement infrastructure is now better than the thing it measures, which is an
+uncomfortable sentence and an accurate one.
