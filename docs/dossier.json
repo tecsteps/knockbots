@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.36.0",
-    "commits": "208",
+    "rev": "0.37.0",
+    "commits": "216",
     "modules": 73,
-    "lines": "86k",
+    "lines": "88k",
     "clips": 92,
     "moves": 777,
     "characters": 10
@@ -18,11 +18,11 @@
       "score": 64
     },
     {
-      "axis": "Lighting & atmosphere (median of 4)",
-      "score": 53
+      "axis": "Stage detail",
+      "score": 48
     },
     {
-      "axis": "Stage detail",
+      "axis": "Lighting & atmosphere (median of 3, range 42-58)",
       "score": 48
     },
     {
@@ -1361,11 +1361,57 @@
           "state": "never measured"
         }
       ]
+    },
+    {
+      "phase": "PHASE 42",
+      "when": "Round 41 — the ruler gets measured",
+      "rev": "rev 0.37.0",
+      "title": "The scoring system has a 27-point spread, so most of this project’s history was noise",
+      "paras": [
+        "Four critics were given byte-identical frames, an identical brief and the same model, and asked to score the lighting. They returned thirty-eight, forty-four, sixty-one and sixty-five. A twenty-seven point spread on an axis where nothing had changed between the samples.",
+        "That single measurement retires a great deal. Last round reported lighting down twenty-two, impact down eighteen and animation down fourteen, and all three were treated as regressions worth chasing. Every one of them is smaller than the instrument’s own spread. They are not regressions, not improvements, not information — and the same is true looking backwards through the whole record. Any movement under about twenty-seven points in this dossier is indistinguishable from re-rolling the same critic on the same pixels. The ship bar is an eighty applied to a number carrying a plus-or-minus thirteen.",
+        "Each critic reproduced its own score exactly when asked again, which makes it worse rather than better: a single critic looks perfectly self-consistent, and therefore trustworthy, right up until you run a second one. This project ran exactly one for forty rounds.",
+        "What survives is the better half. All four lost every blind pair, and all four named the same three defects in the same order — no independent coloured rim, no true black anywhere, no background recession. The critics are reliable about what they see and unreliable about how much. The blind comparison the charter actually asked for is the part that works; the nought-to-a-hundred score was an addition and is the part that does not.",
+        "Then a caution on that too. All four also explained the best-looking arena the same way — a complementary colour key per fighter, orange against teal. There is no per-fighter keying anywhere in this game; both fighters take identical light colours in every arena, and that arena is simply the only one of seven with its key and rim temperatures inverted. Four independent observers agreeing produced a confident, specific and entirely false mechanism, which then went into a brief as fact. Unanimity does not protect against a shared wrong explanation.",
+        "Acting on the three real defects: the black point turned out to be arithmetic. Two constants meant the darkest pixel the display transform could produce was a dark blue-grey, by construction, in every frame this game has ever shipped. Depth of field turned out to be a uniform doing two jobs at once — the same number capped the blur radius and set its strength, so raising it to permit real bokeh simultaneously weakened every blur in the frame. And the tonal half of atmospheric recession had never existed at all: value had been ramped and measured across four systems, and chroma was never touched once.",
+        "The rim did not work. The machinery was there and correctly tuned, and it could never have worked, for a reason that is physics rather than parameters: an analytic light in this renderer is multiplied by the surface, and for a metal that multiplier is the metal’s own colour. A cyan rim on a cream-and-amber robot returns that robot’s blue reflectance, which is almost nothing. Replaced with a screen-space term that adds colour instead of multiplying it — and that shipped as a regression, drawing an outline along every interior panel seam rather than the silhouette. Three critics caught it independently, one with a geometric proof: a single light cannot illuminate both opposite edges of a convex limb at once. It is disabled, its analysis kept, with the restoring condition written at the constant.",
+        "The author of that change had predicted the failure in advance and in writing — if the helmet crown is rimmed, the sign is inverted. The crown was rimmed. That is the discipline working exactly as intended, and it is the third time this round an agent checked a premise it was handed instead of executing it. Each time, the correction was worth more than the task."
+      ],
+      "tags": [
+        {
+          "label": "critic spread",
+          "state": "27 points, identical frames"
+        },
+        {
+          "label": "lighting",
+          "state": "median 48, range 42-58"
+        },
+        {
+          "label": "black point",
+          "state": "was arithmetic"
+        },
+        {
+          "label": "DOF",
+          "state": "one uniform, two jobs"
+        },
+        {
+          "label": "analytic rim",
+          "state": "cannot work on metal"
+        },
+        {
+          "label": "unanimity",
+          "state": "not proof of mechanism"
+        },
+        {
+          "label": "shipping tier",
+          "state": "73.5 fps, p95 halved"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.36.0",
-    "note": "Deployed after round 39. Source on github.com/tecsteps/knockbots."
+    "rev": "0.37.0",
+    "note": "Deployed after round 41. Source on github.com/tecsteps/knockbots."
   }
 }
