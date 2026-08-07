@@ -1800,3 +1800,70 @@ stopwatch shows the difference between a shaft that is subtle and a shaft that i
 
 The charter says "fifteen analytic lights". The scene has **22** (17 visible, 3 shadow-casting).
 Every frame-decomposition argument in that section was written against fifteen.
+
+## CORRECTION: amplification does not rescue a contended measurement either
+
+I recorded amplification — draw the surface N extra times with depth test off, divide by N — as "the
+only technique tonight that has cleared the floor". A second agent tested it properly and it does not.
+
+**Contention noise is proportional to frame time.** Raising the frame time to raise the signal raises
+the noise with it, so the ratio does not improve. Measured, 16 depth-test-off copies of the deck:
+
+```
+no-op arm                    spanned [-37.4, +19.5] ms
+base drift ACROSS ARMS       47 -> 182 ms inside one run
+removing the reflection      read +8.3 ms SLOWER
+flat unlit vs real material  read 12.0 ms slower for the FLAT one
+```
+
+Two physically impossible results, both inside the noise. **Four timing instruments have now failed
+on this machine tonight**, each caught by a control arm that had to read zero:
+
+```
+1. rAF wall clock, separate windows   null arm 18.0 / 39.8 / 61.8 ms over 13 takes
+2. rAF wall clock, paired in blocks   no-op +/-3 ms, baseline drifted 37 -> 55 between arms
+3. GPU timer queries                  no-op +12.7 ms over [-26.4, +22.8]
+4. amplification, 16 copies           no-op spanned [-37.4, +19.5]
+```
+
+**No millisecond claim taken on this machine tonight is admissible, in either direction — including a
+claim that something is free.** The three instruments that DID work are all counters: fragment count,
+coverage count, and pixel identity. The rule stands in its stronger form: where a question can be
+answered by counting, count — and where it cannot, wait for a quiet machine rather than reaching for
+a cleverer stopwatch. There isn't one.
+
+## Three instrument bugs that would corrupt any probe in this workspace
+
+1. **HMR reloads the page mid-measurement.** Two agents' runs died with "Execution context was
+   destroyed". Not a GPU crash: this is a shared workspace, other agents save `src/` files, and Vite
+   hot-reloads. `tools/capture.mjs` sets `hmr: false, watch: {ignored: ['**/*']}` for exactly this
+   reason. A probe without it measures across page reloads whenever anyone else hits save.
+2. **Amplifier rigs must be excluded from the mirror.** `PlanarReflector` enables every layer except
+   `LAYER.NO_REFLECT` and hides only the slab, so depth-test-off overdraw copies left on the default
+   layer are drawn into the reflection pass too. The effective multiplier is ~2K, not K, and every
+   per-draw figure derived from it is overstated.
+3. **`KB.paused` is not a freeze.** It stops the sim only. The deck scrolls its ripples on `uTime`,
+   so a "frozen" pixel comparison compares two different frames — one identity run reported a
+   1,232,493-pixel noise floor at 4.98/255 for that reason alone. `KB.clock.getDelta = () => 0` is
+   the real freeze, and it takes the floor to exactly 0.
+
+## The fix that shipped, defended without a clock
+
+`uWetMap` was bound to `maps.normal` — **the same texture object** three binds to `normalMap` — and
+read at `vNormalMapUv`, **the same coordinate** `<normal_fragment_maps>` samples one line earlier.
+Three declares a separate sampler per uniform and no compiler can know two samplers alias one
+texture, so every shaded pixel of the deck paid two full fetches of one texel. The wetness now comes
+out of the alpha of the vec4 that macro already fetched and discards.
+
+```
+pixel identity, A/B/A', native 1080p, gl.readPixels off the drawing buffer, clock frozen
+    pit       0 of 2,073,600 pixels differ      max channel delta 0
+    skydeck   0 of 2,073,600                    mean 0.000000
+    cistern   0 of 2,073,600
+active samplers on the linked arena.floorWet program: 13 -> 12
+```
+
+Defended on two grounds independent of any clock — one fewer dependent texture fetch per shaded pixel
+across ~46% of the frame, and one fewer sampler on a material this file already names as sitting at
+the sixteen-unit limit — and on zero pixels of visual change. **It is not a frame-time claim**, and
+the round's honest position is that no frame-time claim is available.
