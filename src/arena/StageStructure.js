@@ -71,6 +71,53 @@ const TERRACE_Z0 = TERRACE[0].front;         // z of the lowest tread's front ed
 const TERRACE_BACK = PIT_BACK - 5.30;        // z the terrace runs back to
 const TERRACE_TOP = TERRACE[TERRACE_RANKS - 1].y;
 
+/**
+ * Middle of rank `i`'s standing strip. This mirrors the z the crowd placement
+ * deals in `#crowd` -- `front - range(0.22, max(0.3, run - 0.12))` -- so the
+ * two cannot drift apart if the table above is edited again.
+ */
+const treadMid = (r) => r.front - (0.22 + Math.max(0.3, r.run - 0.12)) / 2;
+
+/**
+ * The crowd's contrast ramp, SOLVED from two anchors rather than tuned.
+ *
+ * The term this replaces was `1 - exp(-max(0, -mvPosition.z - 12) * 0.1)`: a
+ * ten-metre e-folding length measured from the CAMERA, applied to a stand that
+ * is 3.9m deep and sits 23m away at the wide framing. Both halves of that are
+ * wrong and they are wrong together, which is why no value of the rate fixes
+ * it. Measured through the live wide camera (1.87, 4.5, 13.82 at 34deg) the
+ * front rank's view depth is 23.4m and the back rank's is 26.6m, so the old
+ * term ran 0.680 -> 0.768 and the mix behind it ran 0.306 -> 0.346. Four points
+ * of separation across six ranks is not recession; it is one card. And raising
+ * the rate cannot repair it, because the baseline is where the error is: at
+ * rate 0.35 the FRONT rank already evaluates to 0.98 and the whole stand
+ * saturates to haze colour uniformly, which is worse than flat.
+ *
+ * So the ramp is measured against the stand's own depth instead. Two anchors
+ * fix the line and nothing else is free:
+ *
+ *   - the middle of the front tread keeps the mix it has today, 0.306, so this
+ *     change cannot brighten the rank that sits closest to the fighters and
+ *     start competing with them for contrast;
+ *   - the middle of the back tread reaches the cap.
+ *
+ * It is linear and clamped rather than exponential. Aerial perspective is
+ * exponential in the real world, but over 3.9m at this optical depth the two
+ * curves differ by under two per cent, and the linear form buys the property
+ * that actually failed here: it is bounded at both ends by construction, so it
+ * can neither saturate at the front nor run out of range at the back no matter
+ * where the camera stands. The scene fog is still doing the physical,
+ * camera-correct part of the job; this is the architectural ramp on top of it.
+ */
+const CROWD_SINK_BASE = 0.425;                        // ramp value at the front rank
+const CROWD_SINK_FRONT = treadMid(TERRACE[0]);        // -9.70
+const CROWD_SINK_BACK = treadMid(TERRACE[TERRACE_RANKS - 1]);  // -13.60
+/** World z at which the ramp reads zero -- forward of the stand, never inside it. */
+const CROWD_SINK_Z0 = CROWD_SINK_FRONT
+  + CROWD_SINK_BASE * (CROWD_SINK_FRONT - CROWD_SINK_BACK) / (1 - CROWD_SINK_BASE);
+/** Ramp per metre of recession past that plane. */
+const CROWD_SINK_RATE = (1 - CROWD_SINK_BASE) / (CROWD_SINK_FRONT - CROWD_SINK_BACK);
+
 const MACHINE_Z = -13.9;    // front face of the machinery bank
 
 /**
@@ -274,7 +321,7 @@ export class StageStructure {
     /** Linear radiance the mid and far layers fade toward; follows the mood. */
     this.midgroundHaze = { value: new THREE.Color(0x131b26) };
     /**
-     * How far the stand is allowed to sink into that haze.
+     * How far the DEEPEST rank of the stand is allowed to sink into that haze.
      *
      * This was a constant 0.62 in the crowd shader. Hiding all 168 figures
      * outright changed the Laplacian variance of screen band y 250-430 -- the
@@ -283,8 +330,20 @@ export class StageStructure {
      * moving a detail statistic is not detail; it is a level. The figures cover
      * a third of that band and shift it by 7.5/255, so what they were
      * contributing was tone and not structure, and this is the term that did it.
+     * Dropping it to 0.45 gave the figures back their structure.
+     *
+     * It is 0.72 now, and that is a smaller number than it looks, because it
+     * stopped being a level when the ramp under it started working. It used to
+     * be very nearly the mix every figure got; it is now the mix only the back
+     * tread gets. With CROWD_SINK_BASE holding the front rank at 0.306 the six
+     * ranks land on 0.306 / 0.402 / 0.497 / 0.579 / 0.648 / 0.720, so the three
+     * ranks nearest the fence -- the ones carrying the detail that measurement
+     * was defending -- all sit at or below the 0.45 it was proven at, and only
+     * the two thin, sparse, mostly-occluded top tiers go past the 0.62 it was
+     * proven against. Those tiers were built to arrive dimmer (see the weighted
+     * rank table in `#crowd`); this is the term that finally lets them.
      */
-    this.crowdSinkAmount = { value: 0.45 };
+    this.crowdSinkAmount = { value: 0.72 };
 
     // Static geometry goes into the arena-wide bins; the Stage merges every
     // producer's contributions into one mesh per material at the end of init.
@@ -1824,9 +1883,9 @@ export class StageStructure {
    *      are custom attributes rather than `instanceColor`: three only folds
    *      `instanceColor` into the fragment when `vertexColors` is on, and one
    *      colour per instance could not carry five bands anyway.
-   *   3. **One depth.** They stand on four terrace treads and the back of the
-   *      stand fades on view depth, so the ranks recede and overlap instead of
-   *      lining up on one shelf at one brightness.
+   *   3. **One depth.** They stand on six terrace treads and each figure fades
+   *      on how far back in the stand it is standing, so the ranks recede and
+   *      overlap instead of lining up on one shelf at one brightness.
    *   4. **Too few of them.** Gaps between figures show the empty tread behind,
    *      and an audience you can see through is a queue. The terrace is packed
    *      to the point where the back ranks are mostly occluded heads.
@@ -1901,9 +1960,24 @@ export class StageStructure {
           // Contrast falloff across the stand itself. The scene fog is solved
           // for a twelve-metre room and moves the value almost nothing over the
           // four metres from the fence to the back tread, so without this the
-          // rear rank is exactly as bright as the front one and four ranks
+          // rear rank is exactly as bright as the front one and six ranks
           // arrive as one card.
-          vSink = 1.0 - exp( -max( 0.0, -mvPosition.z - 12.0 ) * 0.1 );
+          //
+          // Measured against the figure's OWN place in the stand, not against
+          // its distance from the camera -- see CROWD_SINK_Z0 for why the view
+          // depth cannot work here and cannot be tuned into working. The fourth
+          // column of instanceMatrix is exactly the placement \`#crowd\`
+          // composed, and modelMatrix carries it to world z whatever the set
+          // group is doing, so this costs one mat4-by-vec4 and no attribute:
+          // the vertex format, the uniform block and the cache key are all
+          // untouched, and it is cheaper than the exp() it replaces.
+          //
+          // It also runs per instance rather than per rank, so the 0.56m of
+          // depth jitter inside a single tread spreads that rank over six
+          // points of mix on its own -- as much separation WITHIN one rank as
+          // the old term managed across the whole terrace.
+          float standZ = ( modelMatrix * instanceMatrix[ 3 ] ).z;
+          vSink = clamp( ( ${CROWD_SINK_Z0.toFixed(5)} - standZ ) * ${CROWD_SINK_RATE.toFixed(5)}, 0.0, 1.0 );
         `);
       shader.uniforms.uSink = this.midgroundHaze;
       shader.uniforms.uSinkAmt = this.crowdSinkAmount;
