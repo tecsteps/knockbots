@@ -2937,3 +2937,122 @@ same defect wearing a different hat.
 **The deliverable was "maintain a living dossier", and it was silently un-deliverable.** A step that
 is only exercised at the very end of a round is a step that can rot for several rounds before anyone
 finds out.
+
+---
+
+# Round 38 re-score: three axes fall, and a blind critic is right about what it saw and wrong about why
+
+Six blind critics re-scored the certified frames on repaired instruments. Each was given the retired
+target for its axis and told not to resurrect it, and **deliberately not told its axis's current
+score** — the lesson from the external audits being that an internal agent briefed with the number it
+is meant to check inherits it as a fact rather than a claim.
+
+| axis | was | now |
+|---|---:|---:|
+| Character | 64 | **58** |
+| Lighting | 72 | **60** |
+| Animation | 62 | **52** |
+
+They went down. That is the second time a re-score on repaired instruments has lowered the average
+(round 34 went 72.8 -> 67.5), and it is the direction to expect when the previous numbers were
+partly produced by instruments that have since been retired.
+
+## The animation finding, which is the valuable one
+
+The critic ranked this fix first: *"the off-hand stays in essentially the same raised position in
+every panel of every strip, regardless of move type — kick, punch, or run"*, calling it the textbook
+"limbs moving in isolation" failure.
+
+That is a claim about the rig, so it is answerable on the rig, offline, with no GPU — which mattered,
+because the machine has no disk headroom to capture anything. `tools/offhand.mjs` measures world-space
+**path length** of each hand over a clip, summed tick to tick, with a 0.000000 mm null (same tick
+twice) and a positive control that must move (the striking hand).
+
+**The off-hand is not frozen:**
+
+```
+clip              striking(mm)   off-hand(mm)   ratio   foot_R(mm)
+p.jab                  2370           478     5.0        722
+p.straight             2782           804     3.5        765
+p.uppercut             3880          1735     2.2       1909
+k.midKick                 —           866       —       5222
+k.roundhouse              —          2089       —       7063
+loco.runFwd               —          1774       —       1753
+```
+
+A roundhouse throws the off-hand 2.09 metres. "Stays in essentially the same position" is false.
+
+**But the observation behind it is true, and the instrument that finds it is a different one.** A
+critic comparing rendered panels is not reading path length; it is comparing POSITION between panels
+and between strips. An arm that swings out and returns inside one panel interval looks identical in
+both while having moved half a metre. So `tools/offhandspread.mjs` measures what the eye actually
+compares: the off-hand's world position at matched ticks, and the divergence of those positions
+ACROSS move types.
+
+```
+                        hand_L    foot_R
+p.straight vs k.midKick    129       555
+p.straight vs p.uppercut   124        87
+k.roundhouse vs p.straight 236       561
+median across move types   292       498
+```
+
+**A punch and a kick put the off-hand 129 mm apart while putting the foot 555 mm apart.** Across all
+pairs the off-hand distinguishes move type at 59% of the rate the foot does. At fight framing 129 mm
+is roughly 43 px on a 1080p frame — visible, but not distinguishing. From the shoulders up a kick and
+a punch genuinely do look alike, exactly as reported.
+
+**So the fix is the opposite of the one requested.** "Unfreeze the off-hand" would add motion to an
+arm already travelling two metres and would not move the thing the critic saw. What is wrong is the
+off-hand's POSE ENVELOPE: every move class routes it through nearly the same region of space. A kick
+should put the counterbalancing arm somewhere a punch never puts it.
+
+This is the project's recurring shape once more — **a correct observation with a wrong mechanism** —
+and it is the third time acting on the stated cause would have cost a round and changed nothing.
+
+Also disproved: the critic described a "rifle-like prop" held in the off-hand across every strip.
+**There is no prop.** Nothing in `RobotBuilder.js` or `roster.js` builds a held weapon; it is reading
+the forearm and gauntlet silhouette as an object.
+
+## Uncertified diagnostic sheets are in the scored frame set
+
+The critic's process note, unprompted: *"20/21/22/23/24-anim-*.jpg are NOT clean captures — they're
+instrumented debug strips: skeleton dot-overlays, per-tick speed graphs, and printed rig text."*
+
+Correct, and worse than it knew. `tools/animstrip.mjs:390` **stamps every sheet it produces with the
+words "NOT CERTIFIED — offline sheet from tools/animstrip.mjs, no manifest"**, and its header comment
+says the stamp exists precisely so these are never mistaken for captures. Ten of them are sitting in
+`shots/` and `docs/shots/`, they have been scored by the animation axis, and they are embedded in the
+published dossier gallery.
+
+**A file that declares its own inadmissibility, in text, rendered into its own top-left corner, was
+admitted anyway.** That is the same failure as `ref/06` sitting in the stage frame list three lines
+below a discard entry that already rejected it. Twice now, the correction was not merely written down
+somewhere — it was written down *on the artefact itself*, and the pipeline read past it.
+
+## What the character critic got wrong, and what it got right
+
+Wrong: it ranked "localize the chromatic-aberration filter to FX only" as a fix. `look.chroma` is
+`0.0`, the aberration was removed deliberately (0.82 px of corner separation measured before, 0.07-0.11
+after), and `capture.mjs` additionally zeroes chroma at the freeze for `02-closeup-face`. **It was
+never visible on this axis at all.** Acting on it would have meant a round spent removing something
+already gone.
+
+Right, and confirmed three ways: the robots read as one material. The blind critic saw it with no
+access to the source. `Materials.js:4166` had already measured it — *"92.6% of the character's 1.52
+Mpx belonged to five batches, every one of them metalness = 1 brushed plate off two source materials.
+One BRDF, one highlight shape, over the whole subject."* And the assignment sites say it too:
+
+```
+trim 82   armorSecondary 49   armorPrimary 43   darkMetal 38   armorAccent 21    = 233
+gasket 13   bezel 8   rubber 11                                                  =  32
+```
+
+The two zones that differ in highlight SHAPE rather than tint are authored, tuned against measured
+pixel values, landed in round 36 — and used at 32 sites against 233. **The fix is not authoring
+materials. It is assignment**, and the share is countable without a GPU, which is the only kind of
+instrument this machine can currently run.
+
+Also confirmed: the faceting. `addPipeRun` builds hose with `TubeGeometry(..., radial = 6)` — a
+hexagonal cross-section, which is exactly the "4-5 discrete flat bands" the critic saw on the tubes in
+an extreme closeup.
