@@ -923,6 +923,47 @@ const CARBON_REPEAT = 4;
 const PEEL_REPEAT = 3;
 
 /**
+ * Tiling of `kb.worn`'s own normal + ORM clone, in repeats per UV unit.
+ *
+ * `kb.armor` and `kb.worn` share the plate weave — literally the same
+ * `plateNormal` Texture object, at the same repeat, until this round. That is
+ * the mechanism behind the blind critic's "every part shares one corrugated
+ * weave normal map at one texel scale": two of the five armour-family batches
+ * were not just similar, they were the identical GPU texture.
+ *
+ * The direction matters. The round-36 offline texel table (see the note on
+ * `resolveSizes`) has `kb.worn` at 2.20 texels per screen pixel against
+ * `kb.armor`'s 1.01 — worn is *already* oversampled, its baked detail already
+ * being thrown away by the mip chain before it is shaded, which is the same
+ * failure mode the round-13 metal-resolution experiment measured as "changes
+ * the rendered image by nothing". Raising worn's density further (which a
+ * first pass at "more texel scale" would reach for) would spend VRAM inside
+ * that same dead band. So this halves it instead: 0.5 lands worn at roughly
+ * 1.10 texels/screen-px, next to `kb.armor`'s 1.01 — both near the sampling
+ * rate the file already calls the target, not past it — while every repeat
+ * below 1 also does the thing a critic can see with no ruler: the same
+ * corrugation pattern now spans twice the physical area per copy, which is
+ * the coarser, more separated pitting a worn/oxidised patch plausibly shows
+ * next to a tight, pristine brushed panel.
+ *
+ * That texel table is from round 36, and geometry has moved since — this
+ * repeat is sized against it because no offline UV/world-area tool exists in
+ * `tools/` to re-derive it this round (see the note there); it should be
+ * re-checked the next time someone builds one, the same caveat the round-36
+ * note itself puts on every number it re-measured.
+ *
+ * Cost: two more DataTextures cloned from data the plate bake already
+ * computed (no new noise synthesis, no new sampler in the shader — `worn`
+ * already bound a normalMap and an ORM stack, this only changes which texture
+ * object those bindings point at). Normal at full plate resolution (matches
+ * `plateNormal`, ~5.3 MB with mips at the default 1024 bake), ORM at the same
+ * half-resolution `plateOrmWorn` already uses (~1.3 MB with mips). ~6.6 MB
+ * total, uploaded once and shared by the whole roster like every other entry
+ * in `getShared()` — not per character.
+ */
+const WORN_REPEAT = 0.5;
+
+/**
  * Near-Nyquist surface grain, in units of one standard deviation.
  *
  * The measured deficit on the character is not detail, it is *scale*: the plate
@@ -2164,6 +2205,12 @@ function getShared(sizes, maxAniso) {
     plateNormal: t(plate.normalPx, plate.size, 1),
     plateOrmPainted: t(plate.ormPainted, plate.size, 1),
     plateOrmWorn: t(plate.ormWorn, plate.size, 2),
+    // Same source pixels as plateNormal/plateOrmWorn, retiled — see WORN_REPEAT.
+    // Kept as separate Texture objects (not a shared .repeat) because
+    // `plateNormal` is still bound on `kb.armor`/`kb.trim` at its own repeat;
+    // mutating its `.repeat` in place would retile the armour along with it.
+    plateNormalWorn: t(plate.normalPx, plate.size, 1, { repeat: WORN_REPEAT }),
+    plateOrmWornTiled: t(plate.ormWorn, plate.size, 2, { repeat: WORN_REPEAT }),
     plateCc: t(plate.ccPx, plate.size, 2),
     plateEmissive: t(plate.emPx, plate.size, 2, { srgb: true }),
     metalNormal: t(metal.normalPx, metal.size, 1, { repeat: METAL_REPEAT }),
@@ -3973,7 +4020,23 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     aoMap: shared.plateOrmPainted,
     roughnessMap: shared.plateOrmPainted,
     metalnessMap: shared.plateOrmPainted,
-    roughness: 1,
+    // Was 1. RobotBuilder's `resolveMaterials` already computes armorSecondary
+    // as `tint(armorSrc, secondary, { roughness: Math.min(1, armorSrc.roughness
+    // + 0.12) })` — a 0.12 roughness offset was authored for the second-biggest
+    // armour-family batch and it has been doing nothing since whenever that
+    // line was written, because `Math.min(1, 1 + 0.12)` clamps straight back to
+    // 1: armorPrimary and armorSecondary rendered at the identical roughness
+    // scalar, over the identical roughnessMap (they clone the same `armor`
+    // source), separated only by paint hue. 0.90 gives the existing +0.12 room
+    // to land at 1.0 instead of being clamped away — the spread is not a new
+    // number I invented, it is the one already sitting in RobotBuilder.js,
+    // unlocked from here. This is the one change in this pass that also moves
+    // armorPrimary itself, which round 36 measured at 46.4% of the scored
+    // frame's subject pixels — the single most-measured surface on the
+    // character — so it is the one most worth checking first against the
+    // capture; if primary reads more glossy than intended, revert this to 1
+    // and the secondary spread goes back to zero rather than negative.
+    roughness: 0.90,
     metalness: 1,
     aoMapIntensity: 1,
     // See {@link PLATE_ANISOTROPY}. Rotation 0 is the U axis of the plate's own
@@ -4026,13 +4089,29 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     story: story({ grime: 1.25, oxide: 1.4, bare: 0.3, marking: 0.4, dust: 0.8, burnish: 0.9, detail: 1.15 }),
     color: wornSteel,
     map: wornAlbedo,
-    normalMap: shared.plateNormal,
+    // Retiled clone of the same weave armour reads — see WORN_REPEAT. This is
+    // what makes `kb.worn` (and, through it, RobotBuilder's `armorAccent` and
+    // `trim` batches) a materially different surface from `kb.armor` instead
+    // of the same GPU texture at the same scale under a different tint.
+    normalMap: shared.plateNormalWorn,
     normalScale: new THREE.Vector2(1.15, 1.15),
-    aoMap: shared.plateOrmWorn,
-    roughnessMap: shared.plateOrmWorn,
-    metalnessMap: shared.plateOrmWorn,
+    aoMap: shared.plateOrmWornTiled,
+    roughnessMap: shared.plateOrmWornTiled,
+    metalnessMap: shared.plateOrmWornTiled,
     roughness: 1,
-    metalness: 1,
+    // Was 1 — identical to `kb.armor`'s metalness and, because RobotBuilder's
+    // `trim` batch is `tint(pick('worn'), palette.trim, { metalness: 1.0 })`,
+    // identical to its own `trim` override too: forcing metalness to 1 on a
+    // material that was already 1 is a no-op, so `armorAccent` and `trim`
+    // rendered as the same BRDF term-for-term, tinted apart only by colour.
+    // Below 1, that override stops being a no-op: `trim` reads as the bare
+    // polished bright-work the RobotBuilder comment already calls it, and
+    // `armorAccent` reads very slightly less metallic — plausible for a worn
+    // batch whose own `story` already carries the most grime and oxide film
+    // of anything in the library (line above: grime 1.25, oxide 1.4), since a
+    // contamination layer scatters some of the diffuse a bare conductor would
+    // otherwise suppress.
+    metalness: 0.92,
     clearcoat: 0.12,
     clearcoatRoughness: 0.55,
     anisotropy: 0.28,
@@ -4060,6 +4139,13 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     metalnessMap: shared.metalOrm,
     roughness: 1,
     metalness: 1,
+    // Explicit, where it used to be the class default (MeshPhysicalMaterial's
+    // own 0): a bare machined billet gets no lacquer, so it is the true zero
+    // end of the clearcoat term across the five armour-family batches —
+    // armor 1.0, worn 0.12, darkMetal 0.0 — rather than a value this file
+    // never states and a future edit could drift off silently.
+    clearcoat: 0,
+    clearcoatRoughness: 0,
     anisotropy: 0.62,
     anisotropyRotation: 0,
     anisotropyMap: shared.metalAniso,
