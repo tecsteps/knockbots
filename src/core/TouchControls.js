@@ -262,8 +262,17 @@ const CSS = `
   bottom: calc(var(--kbt-floor) + var(--kbt-sa-b) + var(--kbt-btn) + var(--kbt-pitch) + 12px);
   width: 84px; height: 38px; border-radius: 19px; pointer-events: auto;
   display: grid; place-items: center; letter-spacing: .18em; font-size: 10px;
-  color: #cfd8e6; background: rgba(14,20,30,.85); border: 1px solid rgba(150,170,200,.4);
-  opacity: .55; transition: opacity .2s ease, transform .06s ease;
+  /* OPAQUE, AND FULL CONTRAST. It shipped at opacity .55 over a transparent
+     fill, and the arena it lands on has a bright red "KEEP BEHIND THE LINE"
+     hoarding right there — so on a real handset the pad dissolved into the
+     signage and a player asked how to block while looking at the block button.
+     A control the player cannot find does not exist, and dimming an input to be
+     unobtrusive is only free when the background is dark. The OD pad opposite it
+     earns its dimming by being genuinely inert until the meter fills; BLOCK is
+     live every frame of every round. */
+  color: #e8eef7; background: rgba(9,13,20,.92); border: 1px solid rgba(170,190,220,.7);
+  box-shadow: 0 2px 10px rgba(0,0,0,.45);
+  opacity: 1; transition: opacity .2s ease, transform .06s ease;
 }
 .kbt-blk.kbt-down {
   transform: scale(.92); opacity: 1;
@@ -410,19 +419,40 @@ export class TouchControls {
      * own: it is unsupported on iOS and rejects when the device is not already
      * in the requested orientation, and neither case should cost us fullscreen.
      */
+    /*
+     * IT IS NOT THE FIRST TOUCH, IT IS EVERY TOUCH THAT FINDS US WINDOWED.
+     *
+     * The handler used to unbind itself the moment it fired. So fullscreen was
+     * entered once and never re-entered — and the browser drops it for reasons
+     * that have nothing to do with intent: switching tabs, pulling down a
+     * notification, taking a call, the OS back gesture. A player reported
+     * exactly that: leave and return, and the game is back between Brave's URL
+     * bar and its toolbar, with the touch pad crowding a fight squeezed into
+     * half the screen height. Entering fullscreen once is not a feature; staying
+     * in it is.
+     *
+     * Kept permanently armed instead. The guard is cheap — one property read —
+     * and `requestFullscreen` still only runs on a genuine user gesture, which
+     * is the constraint that forced this to be gesture-driven in the first
+     * place. A player who deliberately leaves fullscreen and then taps the game
+     * is a player who wants to play, so re-entering is what they asked for.
+     */
     if (coarse) {
-      this._onFirstGesture = () => {
-        window.removeEventListener('touchend', this._onFirstGesture, true);
-        window.removeEventListener('pointerup', this._onFirstGesture, true);
+      this._goFullscreen = () => {
         const el = document.documentElement;
-        if (!document.fullscreenElement && el.requestFullscreen) {
-          el.requestFullscreen({ navigationUI: 'hide' })
-            .then(() => screen.orientation?.lock?.('landscape'))
-            .catch(() => {});
-        }
+        if (document.fullscreenElement || !el.requestFullscreen) return;
+        el.requestFullscreen({ navigationUI: 'hide' })
+          .then(() => screen.orientation?.lock?.('landscape'))
+          .catch(() => {});
       };
-      window.addEventListener('touchend', this._onFirstGesture, { capture: true, passive: true });
-      window.addEventListener('pointerup', this._onFirstGesture, { capture: true, passive: true });
+      window.addEventListener('touchend', this._goFullscreen, { capture: true, passive: true });
+      window.addEventListener('pointerup', this._goFullscreen, { capture: true, passive: true });
+      // Returning to the tab cannot itself request fullscreen — that is not a
+      // user gesture — but it is the moment the loss usually happens, so the
+      // next touch should find us ready rather than waiting on a stale flag.
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) this._wantsFullscreen = true;
+      });
     }
 
     // The rotate prompt is for real handsets only. A desktop window dragged

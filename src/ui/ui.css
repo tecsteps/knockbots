@@ -1293,16 +1293,23 @@
   padding: 0 0.9em;
   align-items: center;
   gap: 0.5em;
-  background: rgba(9, 12, 18, 0.62);
+  /* OPAQUE AND AT FULL TEXT COLOUR. It shipped at 62% over the arena in
+     --kb-text-dim, which on a handset put dim grey type on a lit background at
+     the exact centre of the screen -- so it read as HUD chrome rather than as a
+     control, and a player asked how to leave training while it was on screen in
+     front of them. It is the ONLY route out of a match on a phone: there is no
+     Escape key and no other affordance. A control that is the sole exit cannot
+     also be the most discreet thing in the frame. */
+  background: rgba(6, 9, 14, 0.9);
   border: 0;
   cursor: pointer;
   pointer-events: auto;
-  color: var(--kb-text-dim);
+  color: var(--kb-text);
   font-family: var(--kb-font-label);
-  font-size: 0.62em;
+  font-size: 0.72em;
   font-weight: 800;
   letter-spacing: 0.22em;
-  box-shadow: inset 0 0 0 1px var(--kb-line-strong);
+  box-shadow: inset 0 0 0 1px var(--kb-line-strong), 0 2px 12px rgba(0,0,0,.5);
   clip-path: polygon(0.5em 0, 100% 0, calc(100% - 0.5em) 100%, 0 100%);
 }
 .hud-pause-bars {
