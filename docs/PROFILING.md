@@ -4357,3 +4357,57 @@ Three of our six shots are wides or a lineup while every usable reference is a p
 scored **three pairs, not six**, and reported the rest as context: *"flagging rather than folding
 in."* Third critic this round to decline a bad pairing. That behaviour has appeared in every critic
 since the protocol started asking for a record instead of a score.
+
+## Animation, admissible: 1-1-2 — the first wins, and my four-robot change did not take
+
+**The first wins recorded on any axis under the win-rate protocol.** Both come from the same place:
+grounded strike mechanics. *"Knee bend, torso rotation, contact-frame leg extension — genuinely
+competitive with the reference."* The roundhouse contact frame is called *"the single most legible
+weight and contact moment in the set."*
+
+It also declined to over-claim one: its win is against `tekken8_04`, *"a held power-pose, not a
+strike"*, and it said so and asked for the pair to be weighted lightly. Fourth critic this round to
+protect its own record.
+
+## And it reports my capture change did nothing
+
+> *"Shots 20, 21, 23 and 24 all show the SAME rust/copper/teal chassis with the same diagonal
+> exhaust-stack silhouette, matching Vulkan exactly. None show Kestrel's white/cream/blue palette or
+> any third or fourth colour scheme. I can't tell you whether that's a Vulkan-only problem or a
+> universal one, because the not-Vulkan strips as delivered don't actually show a different robot."*
+
+I added `chars: [0,1] / [1,0] / [4,1] / [7,1]` to the four strips and committed it as fixing an axis
+that had only ever seen one robot. **An independent observer says all four still render Vulkan.**
+
+**I could not diagnose it before running out of context, and I am recording that rather than
+guessing.** The obvious suspects are eliminated: the three other `startMatch(0, 1)` sites are on the
+`pinTicks` and hit-retry paths, not the strip path. What remains unchecked is whether `enterMatch`'s
+`__kbChars` guard fires at all for strip shots, and whether `subject: 0` selects the fighter I assumed
+under a swapped roster.
+
+**Status of that change: unverified and possibly inert.** It is committed with a message claiming it
+works. That claim is now in doubt and this note is the correction.
+
+## The finding underneath it survives either way
+
+Whatever the cause, the observation stands and is now on its third independent confirmation: **the
+overhead exhaust stack occupies the identical screen position in every strike regardless of move**, so
+kick and punch read as the same pose from the shoulders up. Its top fix is the right one and does not
+depend on the roster question at all:
+
+> *"Give the shoulder exhaust-stack prop its own move-reactive motion — recoil, dip, sway — or dip it
+> out of frame during limb-driven strikes."*
+
+The stack is already on a spring leaf (`sprung: 'pack_R'`). So this is likely a seventh
+wiring-not-authoring case: secondary motion enabled, and too weak to read at three-tick sampling.
+
+## And the off-arm work shows up, at the wrong frame
+
+*"Partially yes. In the punch clips the off-arm visibly changes position between the t0 guard and
+contact — a real sweep near the hip, not a static hold. In the run cycle the lower arm shows a
+bent-elbow pump correlated with leg phase. **But it's not legible at the moment that matters:** in
+the roundhouse contact frame the off-arm is occluded behind the torso and the prop."*
+
+Six clips re-authored, rig divergence from 59% to 93% of the foot's rate, every anchor byte-identical
+— and it lands everywhere except the frame most likely to be screenshotted. **The rig metric was right
+and insufficient**, which is the same lesson as the first off-arm pass, one level further in.
