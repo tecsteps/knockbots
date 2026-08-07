@@ -87,3 +87,53 @@ Impact is re-baselined from round 5 onward.
 The general lesson applies beyond this axis: **a visual score is only as trustworthy as the
 capture that produced it.** Before believing a bad score, confirm the shot actually shows
 the thing being judged.
+
+---
+
+## The reference set, classified per image — use this, not a remembered subset
+
+Every brief for several rounds told critics that "only tekken8_02, 06 and 07 are wide or full-body
+in-match framings" and to treat those three as the comparable subset for stage work. **tekken8_06 has
+no stage in it.** It is a rage-art frame: the entire background is a red full-screen effect wash, no
+floor, no walls, no set geometry of any kind. The stage axis has therefore been benchmarking partly
+against an image containing no stage.
+
+Verified by opening every file. Classification:
+
+```
+image        framing              STAGE usable?   CHARACTER usable?   notes
+tekken8_01   torso closeup        no              yes
+tekken8_02   wide, in-match       YES             partial             city plaza: storefronts,
+                                                                      planters, phone boxes, wet
+                                                                      paving, background crowd.
+                                                                      Centre veiled by smoke.
+tekken8_03   posed closeup        no              yes                 defocused backdrop
+tekken8_04   posed closeup        no              yes                 defocused backdrop
+tekken8_05   posed closeup        no              yes                 defocused backdrop
+tekken8_06   rage art             NO              yes                 NO STAGE AT ALL. Full-screen
+                                                                      red effect. Do not use it for
+                                                                      stage, detail density, dead
+                                                                      tiles or floor statistics.
+tekken8_07   wide, outdoor day    yes, CAUTION    partial             the 2.1x density outlier --
+                                                                      a midday farm exterior, the
+                                                                      densest image in the set. A
+                                                                      round was lost generalising
+                                                                      from it.
+tekken8_08   torso closeup        no              yes
+tekken8_09   posed closeup        no              yes                 bokeh ruin backdrop
+tekken8_10   hub screen           no              no                  not a fight stage
+```
+
+**So the stage axis has TWO usable references, one of which is a known outlier.** Not three. Any
+stage claim resting on a "distribution over the matched subset" is a distribution over n=2, and
+should say so rather than implying a population.
+
+Two rules that follow, and both were bought expensively:
+
+1. **Open the image before putting it in a subset.** The 02/06/07 subset was assembled from framing
+   metadata and propagated by copying between briefs for at least four rounds. Nobody looked.
+2. **A statistic over n=2 is not a distribution.** Report both values, not a min/median/max, and never
+   describe it as "the reference".
+
+The same caution applies to the character axis in reverse: it has six usable closeups, which is a
+real population — so character claims *can* carry a distribution and stage claims mostly cannot.
