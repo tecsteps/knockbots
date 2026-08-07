@@ -4253,3 +4253,55 @@ naming where NOT to spend a round is worth as much as its fixes.
 **Note the crowd ramp is not the fix for this axis.** It did what it was built to do and the axis
 still lost 4 of 4, because a contrast gradient on a flat card is not a midground. The critic said so
 directly: *"the ramp helps but doesn't fix the underlying flat-card geometry."*
+
+## Impact, admissible: 0-0-3 — and the ring is neither colour nor shape. It is behaviour.
+
+Three critics have now given three different mechanisms for why the shockwave ring reads wrong. **The
+third is the best and it refutes both earlier ones**, including the one I relayed as likely.
+
+- Round 38: *"the '1 JUGGLE' combo marker"* — misidentified the element.
+- Round 40: *"a ground shadow circle, hit-reaction indicator"*, and on challenge proposed the residual
+  might be that *"a small chest-height screen-facing disc is gestalt-similar to a badge regardless of
+  colour."* I passed that on as the leading hypothesis.
+- **Round 42 refutes it from the frame:** *"the ring is a thin unfilled outline ellipse, correctly
+  foreshortened to the floor plane — NOT a screen-facing disc. That perspective correctness argues
+  against a HUD read."*
+
+So it is not colour, which was already fixed, and it is not shape or position, which were never wrong.
+
+**It is that the ring does not move.** *"Comparing the +1 and +8 tick shots, the ring is essentially
+the same size and opacity in both — it doesn't visibly expand or fade in sync with the spark burst it
+is supposed to belong to. **A static, persistent ring is what a HUD decal looks like; an energy
+shockwave is born, expands, and dies with the hit.**"*
+
+That is checkable against two frames this project has had all along, and it explains every previous
+misreading: three critics called it a marker because it behaves like one.
+
+`ShockwaveSystem` does animate — `easeOutQuint` radius with a `pow(1-vT,2.2)` fade, `ringLife`
+0.13-0.21 s. So either the ring in these frames is not that system, or its life is long relative to
+the +1/+8 window and both shots catch it near-static. **Either answer is a finding, and neither was
+reachable without asking about behaviour rather than appearance.**
+
+## The clearest loss is the biggest moment in the game
+
+*"`07-super` is a flat colour-grade LUT over normally-shaded geometry — no falloff, no halo gradient,
+corners as saturated as centre, environment pipes and catwalks fully legible in normal shading through
+the tint."* Against the reference's wash that *"has real depth — brighter near a core, falling off
+toward the edges, dust with parallax, character rim-lit distinctly from the background."*
+
+The overdrive cinematic is the flattest effect in the set, and it is the shot the game builds to.
+
+## What it protected, and what it excluded
+
+**Ladder 2 passes cleanly and is named do-not-touch:** *"by +8 ticks the bright core is gone, only
+thin residual streaks remain. Fast, percussive falloff — reads as an impact, not a lingering glow.
+This is working correctly."*
+
+**Ladder 1 is a partial pass, honestly graded:** heavy adds a ground light-pool the light hit lacks —
+one genuinely new element — but otherwise *"the same shape grammar scaled up, same white-shard
+material in both."* Not the categorical escalation an earlier critic credited it with.
+
+And it **excluded a mismatched pair from its own tally** rather than folding it in: `10-ko` against
+`tekken8_01` is a post-hit wordmark freeze against an active punch-connect, so it reported it for
+context and scored 3 pairs, not 4. That is the second critic this round to protect its own record from
+a bad pairing.
