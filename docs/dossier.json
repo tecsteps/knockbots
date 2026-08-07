@@ -1,7 +1,7 @@
 {
  "status": {
-  "rev": "0.30.0",
-  "commits": "170",
+  "rev": "0.31.0",
+  "commits": "173",
   "modules": 69,
   "lines": "63k",
   "clips": 92,
@@ -11,27 +11,27 @@
  "verdicts": [
   {
    "axis": "Stage detail",
-   "score": 74
+   "score": 67
   },
   {
    "axis": "Interface craft",
-   "score": 74
+   "score": 71
   },
   {
    "axis": "Lighting & atmosphere",
-   "score": 78
-  },
-  {
-   "axis": "Character rendering",
-   "score": 69
-  },
-  {
-   "axis": "Impact & effects",
    "score": 72
   },
   {
-   "axis": "Animation quality",
+   "axis": "Character rendering",
    "score": 66
+  },
+  {
+   "axis": "Impact & effects",
+   "score": 71
+  },
+  {
+   "axis": "Animation quality",
+   "score": 58
   }
  ],
  "log": [
@@ -1090,11 +1090,52 @@
      "state": "unresolved"
     }
    ]
+  },
+  {
+   "phase": "PHASE 36",
+   "when": "Round 34",
+   "rev": "rev 0.31.0",
+   "title": "Re-scored on repaired instruments, and every axis went down",
+   "paras": [
+    "Lighting 72, impact 71, interface 71, stage 67, character 66, animation 58. Average 72.8 to 67.5. Six axes, six declines, and not one of them is a regression in the game.",
+    "Every score this project had was produced by tooling that has since been shown defective. Twenty of twenty-five frames were rendering below native and being compared against native press captures, at a scale set by machine load and not reproducible between runs. The animation metric awarded its maximum to the exact failure it existed to catch, because its ordering test counted a tie as correct — so a body whose every joint fires on one tick scored perfect. The effects gate was landing on a white robot's armour plates at between two and thirty-seven per cent precision, and was blind to five of the eight systems it claimed to measure. The frame archive was untracked, then stale, then at the wrong resolution. Two certified frames contained no three-dimensional scene at all and passed every gate. All of that is now repaired, and this round is the first score taken through instruments that hold up.",
+    "Each of the six critics was asked, as a required field, whether its number is comparable to its predecessor. All six answered no, unprompted and for six different reasons. That is the round's real result: the old numbers were not slightly generous, they were measuring something else.",
+    "The animation drop is the largest and the least alarming. That axis was judged for thirty rounds on a single clip out of ninety-two — every evidence frame in the project photographed the same uppercut, and that clip is one of the better ones in the library. This round was the first with a roundhouse, a straight, a launch reaction and a locomotion cycle on screen. The score fell because the sample widened, not because the work got worse. The sharpest line in the round is the critic's own blind description of a crop it did not yet know was ours: standing, both feet flat and parallel, knees near-straight, torso vertical. That is the contact frame of the straight punch.",
+    "Character rendering should have gone up and did not. Both of the old biases — sub-native rendering and a smaller archive — push the same way, toward softer and worse, so a like-for-like re-score at full resolution ought to have beaten the old number. It came in lower for a reason the old instrument could not see at all. Lighting is stranger still: it won its blind comparison against the reference, and still scored down six points, on the axis the capture defect distorted least. Its critic could not credit the repair and instead found that the measurements the previous grade decisions rested on do not re-derive.",
+    "Two findings arrived that no amount of tuning would have produced. The comparable-reference subset handed to critics for several rounds includes a frame whose stage is entirely hidden behind a full-screen effect — the stage axis has been partly benchmarking against an image with no visible stage in it. And the interface's typeface does not exist: the stylesheet names three faces, none of which ship on this platform, with no font registered anywhere in the codebase, so the entire interface renders in a fallback on every machine and in the intended face on none. That also breaks the charter's own rule that everything ships generated in code.",
+    "None of this says the previous thirty-three rounds were wasted. The game demonstrably improved and many of those rounds fixed real defects with real evidence. It says something narrower and more uncomfortable: a scoring loop is only as good as its instruments, and this one spent thirty-three rounds tuning against numbers that were systematically kind to it. Sixty-seven and a half is the first average worth building on."
+   ],
+   "tags": [
+    {
+     "label": "all six axes",
+     "state": "re-scored"
+    },
+    {
+     "label": "old scores",
+     "state": "not comparable"
+    },
+    {
+     "label": "instruments",
+     "state": "repaired"
+    },
+    {
+     "label": "ui typeface",
+     "state": "missing"
+    },
+    {
+     "label": "reference subset",
+     "state": "wrong"
+    },
+    {
+     "label": "honest baseline",
+     "state": "67.5"
+    }
+   ]
   }
  ],
  "deploy": {
   "url": "https://knockbots.vercel.app",
-  "rev": "0.30.0",
-  "note": "Deployed after round 33. Source on github.com/tecsteps/knockbots."
+  "rev": "0.31.0",
+  "note": "Deployed after round 34. Source on github.com/tecsteps/knockbots."
  }
 }
