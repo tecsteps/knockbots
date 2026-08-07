@@ -491,13 +491,84 @@ const HIT_FX = {
    * Nothing above MEDIUM is touched — the top of the ladder was never the
    * complaint.
    */
+  /**
+   * ROUND 40: THE ORDINARY HIT FIRED EXACTLY ONE PARTICLE ARCHETYPE, AND THAT
+   * IS THE WHOLE OF THIS AXIS' STANDING COMPLAINT.
+   *
+   * A blind critic lost both matched pairs against real Tekken 8 frames for one
+   * stated reason: Tekken's contact frames stack multiple effect archetypes at
+   * multiple scales — fine sparks, long motion streaks, material-distinct
+   * debris, mist — while ours showed "one particle archetype, a uniform
+   * warm-white/gold spark burst, fired once per hit". Against `tekken8_06.jpg`
+   * specifically: dark shattered chunks, teal glass-like shards, red mist AND a
+   * background field of embers, four co-present types against our one.
+   *
+   * THE CAUSE WAS IN THIS TABLE AND NOWHERE ELSE. Every system needed to answer
+   * that already exists, is constructed in `init`, is in the scene graph, and
+   * has a live `case` in `#fire`. Every shape's timeline in `MoveSchema.js`
+   * already schedules `DEBRIS` and `DUST`. The three fields below were simply
+   * zero on the two weights that account for nearly every hit in a match:
+   *
+   *              debris   dust   fluid
+   *     LIGHT         0      0       0     <- sparks and nothing else. Ever.
+   *     MEDIUM        0      2       5
+   *
+   * So `#fire` ran its `DEBRIS` case, read `r.debris === 0`, and broke. A jab
+   * and a mid punch could physically only ever produce the spark burst plus the
+   * flare, the core and the ring — one archetype of *particle*, which is
+   * precisely what was seen. This was an assignment problem, not an authoring
+   * problem, and the fix is three columns wide.
+   *
+   * THE LADDER IS THE CONSTRAINT, AND IT IS WHY THIS IS NOT SIMPLY "TURN THEM
+   * ON". `15-impact-light` against `16-impact-heavy` is the best result on this
+   * axis: it is *categorical* escalation, the heavy adding a light-beam column
+   * and ground debris that the light does not have at all, rather than more of
+   * the same sprites. Handing a jab the heavy's debris call would delete that.
+   * So the new rungs are a different *kind* of debris rather than less of it:
+   *
+   *  - `debrisLife` splits ejecta from set dressing, and it is the categorical
+   *    line. Below HEAVY a shard lives about a third of a second: it is thrown,
+   *    it visibly arcs over under gravity, and it is gone before it can reach
+   *    the floor. At HEAVY and above it lives 4.5s, bounces, settles and stays
+   *    on the ground. GROUND DEBRIS REMAINS EXCLUSIVE TO THE TOP THREE WEIGHTS,
+   *    which is the specific thing the passing ladder was praised for.
+   *  - `debrisHeat` keeps the bottom rungs cold. A glowing chip on a jab is the
+   *    residual-glow defect that invalidated every impact score before round 5.
+   *    See `DebrisSystem.burst`.
+   *  - `mist` is the second archetype, and it is emitted at CONTACT rather than
+   *    on the late `DUST` beat — see the `FAN` case in `#fire` for why the two
+   *    are different events and not one turned up.
+   *
+   * Every field stays strictly monotonic across the five weights:
+   *
+   *     debris        3    5    8   10   18
+   *     debrisLife  .26  .34  4.5  4.5  4.5   <- the categorical step
+   *     mist          4    5    7    9   13
+   *     mistAlpha   .16  .20  .26  .30  .34
+   *
+   * THE DECAY SCHEDULE IS HELD STRUCTURALLY RATHER THAN BY MEASUREMENT, which
+   * matters because nothing here can be captured. Both new elements are sized
+   * so that the heat CORE — untouched, and already the longest-lived element a
+   * hit produces — still outlives them on every tier. `mist` is spawned at
+   * `coreLife * 0.7` against a spawn-time jitter that tops out at 1.4x, so its
+   * longest sprite reaches 0.98 of the core's life; `debrisLife` at 0.26/0.34
+   * against a 1.3x jitter reaches 0.34/0.44 against a core of 0.42/0.55. So on
+   * the two tiers that gained anything, THE LAST THING ALIVE IS THE SAME OBJECT
+   * IT WAS BEFORE. Nothing added here can be what lingers.
+   *
+   * Nothing at HEAVY and above changes. `fluid` stays 0 on LIGHT deliberately:
+   * a coolant spray is a wound, and a jab does not open one — that is a third
+   * categorical rung and it is worth keeping.
+   */
   [WEIGHT.LIGHT]: {
     sparks: 260, jet: 92, speed: 8.4, size: 0.032, heat: 2.9, sparkLife: 0.18,
     sparkWindow: 0.040,
     ring: 0.33, ringLife: 0.13, thick: 0.095, ringHeat: 2.6,
     flash: 0.35, flashHeat: 3.9, flashLife: 0.075,
     core: 0.13, coreHeat: 3.1, coreLife: 0.42, ember: 14,
-    debris: 0, fluid: 0, light: 3.4, impact: 0, dust: 0,
+    debris: 3, debrisLife: 0.26, debrisHeat: 0,
+    mist: 4, mistAlpha: 0.16,
+    fluid: 0, light: 3.4, impact: 0, dust: 0,
   },
   [WEIGHT.MEDIUM]: {
     sparks: 400, jet: 130, speed: 9.3, size: 0.035, heat: 3.2, sparkLife: 0.20,
@@ -505,7 +576,9 @@ const HIT_FX = {
     ring: 0.44, ringLife: 0.15, thick: 0.10, ringHeat: 3.0,
     flash: 0.44, flashHeat: 4.3, flashLife: 0.09,
     core: 0.16, coreHeat: 3.7, coreLife: 0.55, ember: 20,
-    debris: 0, fluid: 5, light: 4.0, impact: 0, dust: 2,
+    debris: 5, debrisLife: 0.34, debrisHeat: 0.18,
+    mist: 5, mistAlpha: 0.20,
+    fluid: 5, light: 4.0, impact: 0, dust: 2,
   },
   [WEIGHT.HEAVY]: {
     sparks: 680, jet: 200, speed: 10.4, size: 0.038, heat: 3.4, sparkLife: 0.24,
@@ -513,7 +586,8 @@ const HIT_FX = {
     ring: 0.62, ringLife: 0.19, thick: 0.11, ringHeat: 3.4,
     flash: 0.56, flashHeat: 4.6, flashLife: 0.11,
     core: 0.19, coreHeat: 4.4, coreLife: 0.72, ember: 26,
-    debris: 8, fluid: 12, light: 4.7, impact: 0.15, dust: 6,
+    debris: 8, mist: 7, mistAlpha: 0.26,
+    fluid: 12, light: 4.7, impact: 0.15, dust: 6,
   },
   [WEIGHT.LAUNCHER]: {
     sparks: 780, jet: 225, speed: 11.4, size: 0.04, heat: 3.5, sparkLife: 0.26,
@@ -521,7 +595,8 @@ const HIT_FX = {
     ring: 0.72, ringLife: 0.21, thick: 0.115, ringHeat: 3.6,
     flash: 0.62, flashHeat: 5.0, flashLife: 0.12,
     core: 0.21, coreHeat: 4.8, coreLife: 0.8, ember: 30,
-    debris: 10, fluid: 14, light: 5.1, impact: 0.17, dust: 8,
+    debris: 10, mist: 9, mistAlpha: 0.30,
+    fluid: 14, light: 5.1, impact: 0.17, dust: 8,
     lightLift: -0.20, lightHex: 0xff9d4a, lightHexCounter: 0xffb877,
   },
   [WEIGHT.ULTRA]: {
@@ -530,10 +605,16 @@ const HIT_FX = {
     ring: 1.20, ringLife: 0.28, thick: 0.135, ringHeat: 4.2,
     flash: 0.7, flashHeat: 6.0, flashLife: 0.16,
     core: 0.28, coreHeat: 5.6, coreLife: 0.9, ember: 42,
-    debris: 18, fluid: 26, light: 6.8, impact: 0.30, dust: 14,
+    debris: 18, mist: 13, mistAlpha: 0.34,
+    fluid: 26, light: 6.8, impact: 0.30, dust: 14,
     lightHex: 0xff9d4a, lightHexCounter: 0xffb877,
   },
 };
+
+/** Ejecta debris defaults for the weights that do not name their own. */
+const DEBRIS_GROUND_LIFE = 4.5;
+/** Cap on shard size, so the new bottom rungs come in smaller and the top three are bit-identical. */
+const DEBRIS_SIZE_CAP = 0.055;
 
 /** Where the impact light sits, and what colour it is, when a tier says nothing. */
 const LIGHT_HEX = 0xffd0a0;
@@ -979,6 +1060,8 @@ export class EffectsDirector {
       // (0.641) and the two frames in the set that are themselves supers,
       // tekken8_04 (0.796) and tekken8_06 (0.806).
       shadeSat: 0.84, shadeLight: 0.30, tintSat: 0.60, tintLight: 0.62,
+      // Emission clocks for the layer that runs UNDER the wash. See `#overdriveBed`.
+      bedSpark: 0, bedMist: 0, bedChip: 0,
     };
     this.overlayCenter = new THREE.Vector2();
     this._speedSeed = 0;
@@ -1527,6 +1610,45 @@ export class EffectsDirector {
           tint: c.counter ? _c.setRGB(1.0, 0.86, 0.72) : null,
           window: r.sparkWindow,
         });
+        // THE CONTACT MIST, and it rides the fan beat because it is the same
+        // event: the fan is the material coming off the plate, and the mist is
+        // the part of that material too fine to have a trajectory of its own.
+        //
+        // It is NOT the `DUST` beat turned up, and the two must not be merged.
+        // `DUST` fires at tick 8 on a thrust and is the cloud that rolls out and
+        // settles AFTER the blow, which is the right read for a slam and the
+        // wrong one for a jab — a second archetype that only appears once the
+        // burst it is meant to be layered with has already gone is not layering.
+        // This one is born at tick 1, inside the hitstop, on the frames the hit
+        // is actually looked at.
+        //
+        // Three things make it read as mist rather than as smoke, and they are
+        // the three the critic asked for by name — larger radius, slower fade,
+        // low opacity:
+        //
+        //  - Larger radius. A 0.14 m sprite growing 2.3x against sparks of
+        //    0.032 m. It is the coarse scale in a frame whose only scale was
+        //    the spark grain.
+        //  - Slower fade. Tied to `coreLife` rather than to a constant, so it
+        //    cannot outlive the heat core on any tier however the table moves
+        //    later. 0.7 covers the 1.4x spawn jitter inside `SmokeSystem.puff`.
+        //  - Low opacity. See `mistAlpha` and the note on `opts.opacity`. At
+        //    full coverage this sprite is a grey blanket in front of the burst;
+        //    at 0.16 it is a haze the sparks are still read through, which is
+        //    the only way it is affordable on the bottom of the ladder at all.
+        //
+        // Thrown clear along the blow for the same reason `DUST` is: centred on
+        // the contact it would sit on top of the heat core and swallow the one
+        // bright thing in the frame.
+        if (r.mist) {
+          _v3.copy(c.point).addScaledVector(c.dir, 0.14);
+          this.smoke.puff(_v3, {
+            count: Math.max(1, Math.round(r.mist * s.dust * k)), dir: c.dir,
+            speed: 2.1, spread: 1.2, radius: 0.16, size: 0.14, growth: 2.3,
+            life: r.coreLife * 0.7, buoyancy: 0.22, curl: 1.3,
+            opacity: r.mistAlpha, tint: DUST,
+          });
+        }
         break;
 
       // Slow motes lofted out of the contact, so the burst has a near field that
@@ -1554,11 +1676,29 @@ export class EffectsDirector {
         });
         break;
 
+      // Torn plate. The third archetype, and until round 40 the bottom two
+      // weights spawned none of it — see the note above `HIT_FX`.
+      //
+      // Gravity was never the missing piece and the code says so plainly:
+      // `DebrisSystem` integrates at -26 m/s^2 with per-shard angular velocity
+      // of +/-34 rad/s, floor bounce at 0.34 restitution, tangential friction
+      // and a settle test. A read of two static frames concluding "the chips
+      // sit at contact height with no visible fall" was reading frames from a
+      // tier where `r.debris` was 0, so there were no chips at all and what was
+      // being described was the spark burst. Nothing about the integrator
+      // needed fixing; it needed something to integrate.
+      //
+      // Size is capped rather than tabled so the top three tiers keep the exact
+      // 0.055 they were tuned at while the two new rungs come in smaller off
+      // their own spark size, which already rides the ladder.
       case FX_PART.DEBRIS:
         if (!r.debris) break;
         this.debris.burst(c.point, c.dir, {
           count: r.debris * s.debris * k, speed: 4.6, spread: 0.9,
-          size: 0.055, life: 4.5, color: c.shard,
+          size: Math.min(DEBRIS_SIZE_CAP, r.size * 1.55),
+          life: r.debrisLife ?? DEBRIS_GROUND_LIFE,
+          heat: r.debrisHeat,
+          color: c.shard,
         });
         break;
 
@@ -2117,6 +2257,9 @@ export class EffectsDirector {
     // Scheduled impact beats first: anything that comes due this frame must be
     // in the buffers before the systems flush them.
     this.#runBeats();
+    // Same ordering requirement, same reason: this emits into the spark, smoke
+    // and debris buffers, so it has to run ahead of their flush below.
+    this.#overdriveBed(step);
 
     this.#updateTrails(step);
     this.debris.update(step);
@@ -2134,6 +2277,109 @@ export class EffectsDirector {
     this.#updateLights(step);
     this.#updateLighting();
     this.#updateOverlay(step);
+  }
+
+  /**
+   * The layer that runs UNDER the overdrive wash.
+   *
+   * The takeover itself was the flattest thing on this axis: `OverlayPass` pulls
+   * the whole frame into a duotone and holds it there for 3.5 seconds, and for
+   * all but the first quarter-second of that there was nothing moving inside it.
+   * `#onSuperStart` fires a genuinely dense one-shot — ground ring, 560 sparks,
+   * a plume, a scorch decal, a 16-candela flash — and then the frame is a flat
+   * coloured multiply over a fighter and an arena until the connect. A critic
+   * comparing it to a reference that layers slashes, embers, mist and debris
+   * *under* its wash is comparing four moving layers against a colour filter.
+   *
+   * So the wash gets a bed. Three archetypes, all of them already built, none of
+   * them new, emitted as a thin continuous trickle rather than as another burst:
+   *
+   *  - EMBERS across the width of the frame, not in a column at the fighter.
+   *    This is the "background starfield of embers across the full frame" the
+   *    reference was praised for and the single cheapest thing to answer.
+   *  - MIST, low-opacity and tinted into the super's own hue, so the takeover
+   *    has volume in it rather than being a flat plane of colour.
+   *  - CHIPS off the floor, on the ground lifetime, so the far field keeps
+   *    accumulating something solid for the whole hold.
+   *
+   * TWO CONSTRAINTS SHAPE EVERY RATE HERE, and both are on the record above.
+   * The charge-up whiteout is the documented failure mode of this exact moment
+   * — the plume was cut from 20 sprites to 9 for it — so the mist is two sprites
+   * twice a second at a fifth of coverage, which is an order of magnitude under
+   * what was measured as too much. And the embers are thrown at a fraction of a
+   * contact burst's radiance (1.5 against 2.9-4.0), because they are meant to be
+   * read as a field of moving points at the edge of the frame and not to compete
+   * with the fighter the camera has spent eighty ticks composing.
+   *
+   * The embers are ballistic and that is deliberate rather than a limitation:
+   * `SparkSystem` integrates every spark at -26 m/s^2 off one shared uniform, so
+   * a floating mote is not available from it at any price. Thrown up off the
+   * floor at 5.5 m/s they arc over inside their own life, which is what a cinder
+   * actually does and reads as motion in a way a static point field does not.
+   *
+   * Total cost over a full 3.5s hold: about 41 spark batches (~164 core sparks,
+   * ~254 particles once the spall tier is counted), 12 smoke sprites and 7
+   * shards. Against pools of 8192, 720 and 176 that is well inside headroom, and
+   * it adds NO draw calls at all — every one of these meshes is already in the
+   * scene and already drawn every frame whether it holds anything or not.
+   */
+  #overdriveBed(dt) {
+    const od = this.overdrive;
+    if (!od.on || !od.fighter || dt <= 0) return;
+    const f = od.fighter;
+    const p = f.position;
+    if (!p) return;
+    // Ramps in with the takeover rather than starting at full rate, so the bed
+    // arrives with the colour instead of ahead of it.
+    const g = Math.min(1, od.level);
+    if (g <= 0) return;
+
+    od.bedSpark -= dt;
+    if (od.bedSpark <= 0) {
+      od.bedSpark = 0.085;
+      // Spread across the width of the shot, not around the fighter: the point
+      // is a field that reaches the edges of the frame. Biased to start low,
+      // because a cinder that begins its arc near the floor spends its whole
+      // life in shot.
+      _v3.set(
+        p.x + (Math.random() - 0.5) * 5.4,
+        this.floorY + Math.random() * 0.5,
+        p.z + (Math.random() - 0.5) * 3.2,
+      );
+      this.sparks.burst(_v3, _v2.set(0, 1, 0), {
+        count: Math.max(1, Math.round(4 * g)), speed: 5.5, spread: 1.0,
+        life: 0.85, size: 0.018, heat: 1.5, tint: od.color, window: 0.05,
+      });
+    }
+
+    od.bedMist -= dt;
+    if (od.bedMist <= 0) {
+      od.bedMist = 0.55;
+      _v3.set(
+        p.x + (Math.random() - 0.5) * 4.0,
+        this.floorY + 0.3 + Math.random() * 1.4,
+        p.z + (Math.random() - 0.5) * 2.4,
+      );
+      this.smoke.puff(_v3, {
+        count: 2, dir: _v2.set(0, 1, 0), speed: 0.8, spread: 0.7, radius: 0.4,
+        size: 0.5, growth: 1.6, life: 1.1, buoyancy: 0.5, curl: 1.0,
+        opacity: 0.22 * g, tint: od.color, emissive: 0.05,
+      });
+    }
+
+    od.bedChip -= dt;
+    if (od.bedChip <= 0) {
+      od.bedChip = 0.5;
+      _v3.set(
+        p.x + (Math.random() - 0.5) * 4.4,
+        this.floorY + 0.06,
+        p.z + (Math.random() - 0.5) * 2.6,
+      );
+      this.debris.burst(_v3, _v2.set(0, 1, 0), {
+        count: 1, speed: 3.6, spread: 1.0, size: 0.042,
+        life: 2.2, heat: 0.3, color: od.color,
+      });
+    }
   }
 
   /**
@@ -2466,6 +2712,9 @@ export class EffectsDirector {
     this.overdrive.flash = 0;
     this.overdrive.bar = 0;
     this.overdrive.hold = 0;
+    this.overdrive.bedSpark = 0;
+    this.overdrive.bedMist = 0;
+    this.overdrive.bedChip = 0;
 
     if (this._pass) {
       const u = this._pass.uniforms;

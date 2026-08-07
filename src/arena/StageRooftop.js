@@ -946,9 +946,20 @@ export const ROOF_SURFACE = {
 
   /**
    * `uReflStrength` base. `StageFloor.update` overwrites this every frame with
-   * `(0.34 + envParams.floorRefl * 1.45) * reflectionScale`, so this is only the
-   * value before the first mood resolves; it is listed so the Stage can seed it
-   * and so the intent is on the record.
+   * `(0.34 + envParams.floorRefl * 1.45) * reflectionScale * surface.reflGain`,
+   * so this is only the value before the first mood resolves; it is listed so
+   * the Stage can seed it and so the intent is on the record.
+   *
+   * NOT RAISED IN ROUND 4, and this is a documented gap rather than an
+   * oversight. `surface.reflGain` — the multiplier this arena's own comment
+   * above omitted — is set to 0.70 in `Arenas.js`'s `skydeck` entry, against
+   * the cistern's 1.15: the two arenas' puddles differ by 1.64x in raw
+   * reflected radiance before any of the legibility work below even runs, and
+   * that number lives outside this file's pinned contract. Round 4 closes the
+   * DISTORTION half of "no legible reflected geometry" — see `rippleAmp`,
+   * `reflDistort`, `reflRough` and `reflKnee` — but the STRENGTH half is a
+   * one-line change in `Arenas.js` (`reflGain: 0.70` toward something nearer
+   * the cistern's 1.15) that this contract cannot make.
    */
   reflStrength: 0.54,
   /**
@@ -974,7 +985,24 @@ export const ROOF_SURFACE = {
    * The near edge drops to 0.30 to compensate: the ponds are flat standing water
    * rather than damp concrete, so what is left in the window should mirror hard.
    */
-  reflRough: new THREE.Vector2(0.30, 0.70),
+  /**
+   * ROUND 4: 0.70 -> 0.60 on the far edge, and the reasoning is the same shape
+   * as round 3's but one step further.
+   *
+   * The critic's finding, against `StageVault`'s floor as the in-project proof
+   * the engine can do this: "wet/reflective by its sheen but holds no legible
+   * reflected geometry — effectively dead matte despite the visual cue". 0.70
+   * still let a broad damp band around every pond partially mirror — roughness
+   * 0.55-0.70 is real bitumen between the flat cores, not water, and a partial
+   * mirror over a wide area reads as a HAZE over the deck rather than as a
+   * reflection anywhere in particular. Closing to 0.60 shrinks the window so
+   * the hard mirror is confined closer to the genuinely flat pond cores (which
+   * bake to ~0.05, nowhere near either edge), which is what makes a reflection
+   * a discrete, legible thing rather than an ambient sheen. See `rippleAmp` and
+   * `reflKnee` below for the other two levers on the same complaint, and the
+   * note on `reflStrength` for the one lever this file does NOT have.
+   */
+  reflRough: new THREE.Vector2(0.30, 0.60),
   /**
    * `uReflKnee` — the Reinhard shoulder on the reflected radiance.
    *
@@ -991,7 +1019,24 @@ export const ROOF_SURFACE = {
    * is close enough to the pit's value to catch the core while still passing the
    * dome, and the core's own gain has come down alongside it.
    */
-  reflKnee: 1.15,
+  /**
+   * ROUND 4: 1.15 -> 0.85, toward the vault's 0.7 rather than all the way to it.
+   *
+   * `VAULT_SURFACE`'s own comment records the mechanism directly: a lower knee
+   * compresses the BRIGHT source in the reflection (there, a light strip; here,
+   * the sun core and the sky's warm quadrant) harder than it compresses the
+   * dimmer content sitting next to it, which is exactly what makes that dimmer
+   * content — a fighter there, a mast or a tower silhouette here — survive next
+   * to something the mirror was over-reporting. `refl / (1 + refl/k)` leaves any
+   * `refl` well under `k` almost untouched, so the masts, the tank and the
+   * towers (all far dimmer than the sky glow) are not what this number is
+   * compressing; the glow is. Kept above the vault's 0.7 rather than matched to
+   * it: unlike the vault's LED strip this deck's brightest reflected object is a
+   * SKY, and a sky legitimately outshines the objects standing in front of it by
+   * more than a light strip should outshine a fighter, so it earns a slightly
+   * longer leash before the knee bends it.
+   */
+  reflKnee: 0.85,
 
   /**
    * The tiling detail normal and the ripples. `uDetailAmp` is halved against the
@@ -1003,7 +1048,45 @@ export const ROOF_SURFACE = {
   detailAmp: 0.28,
   detailScale: 3.1,
   rippleScale: 0.26,
-  rippleAmp: 0.11,
+  /**
+   * ROUND 4: `rippleAmp` 0.11 -> 0.06, and `reflDistort` added at 0.016 where
+   * the roof previously took the pit's inherited 0.028. Both numbers feed the
+   * same term and both were fighting the critic's "no legible reflected
+   * geometry" finding without either being named for it.
+   *
+   * `perturb` (built from this value on a fully wet texel — see the shader hook
+   * in `StageFloor` — is a WORLD-NORMAL perturbation, and it is used twice: once
+   * to bend the Fresnel term, and once as `coord.xy += wn.xz * uReflDistort *
+   * coord.w`, which is a direct offset into the reflection texture's sample
+   * coordinate. That second use is the one this arena's authored value never
+   * accounted for. 0.11 was sized for the wind-blown-puddle LOOK under direct
+   * light — a legitimate physical read for open water — with no thought given
+   * to what it does to a MIRRORED image sampled through it.
+   *
+   * And what it reflects here is thin, small-in-frame, and far away: a lattice
+   * mast's legs are 70mm wide, the towers are silhouettes forty to ninety
+   * metres out, subtending a few pixels each. `StageVault`'s ponds, by
+   * contrast, mirror a light strip and pipework a few metres off the surface,
+   * at real screen scale — the same absolute UV wobble that merely softens a
+   * large nearby shape erases a thin distant one outright. The fix is not to
+   * flatten the water (a dead-flat pond is its own tell) but to cut the
+   * fraction of that ripple that reaches the SAMPLE COORDINATE specifically:
+   * `rippleAmp` still drives the visible surface disturbance, down from 0.11 to
+   * 0.06 — below even the pit's un-windy 0.09, deliberately, because the pit
+   * reflects nothing worth keeping legible and never had to make this trade —
+   * and `reflDistort`, inherited by every other arena at the pit's 0.028, is
+   * given its own smaller value here so the same surface disturbance still
+   * reads as moving water without scrambling what is reflected in it.
+   */
+  rippleAmp: 0.06,
+  /**
+   * `uReflDistort`. See the note on `rippleAmp` immediately above — this is the
+   * other half of the same fix, and it exists as its own field here rather than
+   * only in the shared defaults precisely because this arena's reflected content
+   * (thin, distant silhouettes) needed a different answer from every other
+   * arena's.
+   */
+  reflDistort: 0.016,
 
   /**
    * The practical-colour term in the diffuse. `uFloorTint*`.
@@ -1394,6 +1477,7 @@ export class StageRooftop {
 
     // --- (d) and (e): unlit, own haze ------------------------------------
     this.#towers(quality);
+    this.#landmarks();
     this.#skyline();
     this.#sky();
 
@@ -2416,24 +2500,68 @@ export class StageRooftop {
     // separates the back edge from the towers behind it. Its face goes in the
     // shared banner bin — it is printed vinyl and it wants the printed-vinyl
     // material — while its frame stays here.
+    //
+    // This is the clearance signboard the critic named directly: its vinyl
+    // carries `signage.banners[2]`, "helipad 12  clearance 4m" (`Arenas.js`),
+    // so it is the one object in the set that IS the finding. The complaint —
+    // "a flat rectangle with no housing/bracket shadow — reads as a UI
+    // overlay pasted onto the scene" — held even with the two support legs
+    // and the diagonal back braces already here, because none of them ever
+    // touched the READING of the face itself: the vinyl sat proud of its own
+    // top/bottom rails with no side members, so from anywhere off dead-on it
+    // showed a bare plane edge with nothing framing it, and the legs met the
+    // frame in mid-air with no visible connection between "the post" and
+    // "the sign". Three fixes, matched one-for-one to the finding's three
+    // clauses:
     const HX = 3.4, HZ = -10.6, hw = 7.2, hh = 2.5, hy = 3.5;
     for (const s of [-1, 1]) {
       parts.push(place(bevelBox(0.16, hy + hh / 2, 0.16, 0.02), { pos: [HX + s * (hw / 2 - 0.3), (hy + hh / 2) / 2, HZ] }));
       const br = spanX([HX + s * (hw / 2 - 0.3), hy - 0.4, HZ], [HX + s * (hw / 2 - 0.3), 0.3, HZ - 1.5]);
       parts.push(place(bevelBox(br.length, 0.09, 0.09, 0.016), { pos: br.pos, rot: br.rot }));
     }
+    // Housing: the rails now close on all four sides instead of two, and the
+    // vinyl sits RECESSED 0.06m behind their front face rather than proud of
+    // it, with a shallow backing box behind that. A poster in a frame reads
+    // as a sign; a poster with nothing round two of its four edges reads as a
+    // texture floating in front of the geometry, which is the "UI overlay"
+    // read verbatim.
     for (const dy of [-hh / 2, hh / 2]) {
       parts.push(place(bevelBox(hw + 0.2, 0.11, 0.16, 0.018), { pos: [HX, hy + dy, HZ] }));
     }
+    for (const s of [-1, 1]) {
+      parts.push(place(bevelBox(0.11, hh + 0.2, 0.16, 0.018), { pos: [HX + s * hw / 2, hy, HZ] }));
+    }
+    parts.push(place(bevelBox(hw - 0.06, hh - 0.06, 0.05, 0.01), { pos: [HX, hy, HZ - 0.03] }));
     parts.push(place(bevelBox(hw, 0.06, 0.08, 0.012), { pos: [HX, hy, HZ - 0.06] }));
     {
       const geo = new THREE.PlaneGeometry(hw - 0.12, (hw - 0.12) / 8);
       const uv = geo.attributes.uv;
       for (let k = 0; k < uv.count; k++) uv.setXY(k, uv.getX(k), (2 + 0.02 + uv.getY(k) * 0.96) / BANNER_ROWS);
-      b.banner.push(place(geo, { pos: [HX, hy, HZ + 0.09] }));
+      b.banner.push(place(geo, { pos: [HX, hy, HZ + 0.02] }));
+    }
+    // Mounting brackets: the frame and the two legs are 0.3m apart in x —
+    // there was never a piece of geometry that actually spanned that gap, so
+    // the sign read as balanced on top of its posts rather than fixed to
+    // them. Two gussets a side, top and bottom, close it. This mesh does not
+    // cast shadow-mapped shadows at all (see the note on `mesh.castShadow`
+    // below this method) — the "shadow" this buys is the same one every
+    // other silhouette read in this file gets: the direct term's own
+    // `n . uSunDir`, which shades a gusset's top face bright and its
+    // underside dark, plus the bracket's own silhouette now overlapping the
+    // face and the post where before there was daylight between them.
+    for (const s of [-1, 1]) {
+      const top = spanX([HX + s * (hw / 2 - 0.3), hy + hh / 2 - 0.12, HZ - 0.06], [HX + s * hw / 2, hy + hh / 2 - 0.12, HZ]);
+      parts.push(place(bevelBox(top.length, 0.07, 0.06, 0.012), { pos: top.pos, rot: top.rot }));
+      const bot = spanX([HX + s * (hw / 2 - 0.3), hy - hh / 2 + 0.12, HZ - 0.06], [HX + s * hw / 2, hy - hh / 2 + 0.12, HZ]);
+      parts.push(place(bevelBox(bot.length, 0.07, 0.06, 0.012), { pos: bot.pos, rot: bot.rot }));
     }
     // Two floodlight cans on a bracket over the hoarding: a shape that says the
-    // sign is meant to be seen at night without being a light.
+    // sign is meant to be seen at night without being a light. The +2.0 can's
+    // spill onto the leg directly under it is the wash card `#washes` adds at
+    // slot 3; it is a deposit, not a light, for the same reason every other
+    // emitter in this set is — one leg rather than both, because a lit sign at
+    // night is not symmetrically lit and a matched pair of glows either side
+    // is the giveaway that they came from a script rather than a fitting.
     for (const dx of [-2.0, 2.0]) {
       parts.push(place(bevelBox(0.08, 0.44, 0.08, 0.014), { pos: [HX + dx, hy + hh / 2 + 0.24, HZ - 0.1] }));
       parts.push(place(new THREE.CylinderGeometry(0.13, 0.16, 0.26, 10, 1), {
@@ -2451,6 +2579,64 @@ export class StageRooftop {
       const yaw = rng.range(-0.12, 0.12);
       parts.push(place(bevelBox(w, h, d, 0.03), { pos: [x, h / 2 + 0.12, -10.4], rot: [0, yaw, 0] }));
       parts.push(place(bevelBox(w + 0.08, 0.07, d + 0.08, 0.014), { pos: [x, h + 0.15, -10.4], rot: [0, yaw, 0] }));
+    }
+
+    // --- a neighbouring rooftop, the second midground structure -----------
+    //
+    // The standing complaint: "midground is one low brick structure" — the
+    // stair bulkhead on +x (`#bulkhead`) — "and the entire skyline behind it
+    // is flat rectangular slabs... no parallax separation". One block wall
+    // was carrying the whole transition from roof furniture to the unlit
+    // tower field. This is the second one, and three things about it are
+    // deliberately unlike the bulkhead rather than a repeat of it:
+    //
+    //   - **-x, not +x.** It sits opposite the bulkhead so the frame's two
+    //     depth anchors are on opposite sides rather than stacked on one
+    //     axis — see the file header on why -x is already the silhouette
+    //     side of this set's warm/cool split.
+    //   - **Further back than anything else this method builds** — z = -17
+    //     against the plant room's -11.3 and the lift overrun's -11.7 — so it
+    //     reads as a DIFFERENT building glimpsed behind this roof's own kit,
+    //     which is the parallax cue the critic asked for, not just more
+    //     detail at the one depth already in use.
+    //   - **Round, and open underneath**, on four legs with sky visible
+    //     through the frame — the opposite silhouette language from the
+    //     bulkhead's solid brick box. A water tank on a steel frame is the
+    //     single most common thing that actually stands on a neighbouring
+    //     roof at this height, and it costs one cylinder.
+    //
+    // It rides in this method's own `parts` array rather than the shared
+    // bins on purpose: it is behind the SAME parapet edge as the rest of the
+    // back-edge band, so it wants the identical skylight-only graft below —
+    // the deck cannot see past that edge, which is also why it stays off
+    // `noReflect`'s exemption list; it is already covered by `this.backEdge`
+    // being excluded wholesale.
+    const WX = -9.0, WZ = -17.0, WLEG = 1.9, WR = 1.1, WH = 1.7;
+    // The kerb the tank's own roofline stands on. Kept low — at this depth
+    // the camera's line of sight grazes the coping at barely half a metre of
+    // height (worked through in the constructor's framing note for `#sky`),
+    // so anything taller just hides the legs the tank is meant to be read
+    // standing on.
+    parts.push(place(bevelBox(3.6, 0.9, 3.0, 0.03), { pos: [WX, 0.45, WZ] }));
+    parts.push(place(bevelBox(3.76, 0.1, 3.16, 0.015), { pos: [WX, 0.95, WZ] }));
+    for (const [dx, dz] of [[-1.0, -0.9], [1.0, -0.9], [-1.0, 0.9], [1.0, 0.9]]) {
+      parts.push(place(new THREE.CylinderGeometry(0.05, 0.06, WLEG, 6, 1), { pos: [WX + dx, 0.9 + WLEG / 2, WZ + dz] }));
+    }
+    // Two X-braces so the four legs read as a frame rather than four
+    // disconnected sticks — the same reason the deck's own water tank gets
+    // them (see `#waterTank`).
+    for (const s of [-1, 1]) {
+      const br = spanX([WX - s * 1.0, 0.9 + WLEG * 0.25, WZ - 0.9], [WX + s * 1.0, 0.9 + WLEG * 0.75, WZ + 0.9]);
+      parts.push(place(bevelBox(br.length, 0.045, 0.045, 0.01), { pos: br.pos, rot: br.rot }));
+    }
+    parts.push(place(new THREE.CylinderGeometry(WR, WR, WH, 12, 1), { pos: [WX, 0.9 + WLEG + WH / 2, WZ] }));
+    parts.push(place(new THREE.CylinderGeometry(WR + 0.05, WR + 0.05, 0.06, 12, 1), { pos: [WX, 0.9 + WLEG + WH + 0.03, WZ] }));
+    // A ladder up one flank: a thin rectilinear accent against the tank's
+    // curve, which is the other half of "not another brick box".
+    for (const s of [-0.18, 0.18]) {
+      parts.push(place(new THREE.CylinderGeometry(0.018, 0.018, WLEG + WH, 5), {
+        pos: [WX + WR + 0.14 + s, 0.9 + (WLEG + WH) / 2, WZ],
+      }));
     }
 
     // --- the graft --------------------------------------------------------
@@ -2961,6 +3147,232 @@ export class StageRooftop {
     this.group.add(mesh);
   }
 
+  /**
+   * Three hero towers, individually authored, in the same 26-90m band as
+   * `#towers`.
+   *
+   * `#towers` is honest about what it is in its own doc comment: one shape
+   * (box, crown, mast) repeated across forty-odd instances, because that is
+   * correct for a FIELD. The standing complaint is that a field is all this
+   * skyline has — "flat rectangular slabs at near-uniform blue-grey tone...
+   * no parallax separation" — and the reference frame the critic measured
+   * against (`tekken8_02.jpg`) carries individually modelled objects behind
+   * its defocus, not one shape copied. A field has no landmarks in it by
+   * construction; this method is the landmarks.
+   *
+   * Deliberately NOT instanced, for the reason instancing exists in the
+   * first place: it amortises one shape across many draws, and there are
+   * three buildings here, each a different shape. Instancing three unique
+   * meshes would mean either three draw calls anyway or forcing them back
+   * into one shared shape — the exact defect this method exists to answer.
+   * Merged into a single draw call instead, the same call `#skyline` already
+   * makes for its own one-off silhouettes below.
+   *
+   * Placed on -x, the shadow side of this roof's warm/cool split (see the
+   * file header), so they read as backlit masses rather than competing with
+   * the brick bulkhead's sunlit read on +x — which also means the two depth
+   * anchors this arena now has (the bulkhead's brick midground and the
+   * neighbouring water tank `#backEdge` adds on -x, plus these three towers
+   * further out on the same side) sit progressively further from camera
+   * along ONE sightline rather than scattered, which is what parallax
+   * actually looks like when the camera pans.
+   *
+   * Each building takes its haze gain, window density and sun-shadow height
+   * from the matching entry in `#towers`'s own `spec` table, so the hero
+   * shapes blend into the instanced field's lighting instead of reading as a
+   * fourth, disconnected layer glued on top of it.
+   */
+  #landmarks() {
+    const GROUND = -1.5; // same convention `#towers` uses: instance bottom at -1.5
+
+    // --- hero 0: stepped, wedding-cake massing. Near band (z ~ -28). -------
+    // The one shape here that a repeated box-plus-crown instance cannot
+    // produce: a setback partway up, which is what actually breaks a tower's
+    // outline rather than just its window pattern.
+    const h0 = mergeAll([
+      place(new THREE.BoxGeometry(10, 18, 8), { pos: [-40, GROUND + 9, -30] }),
+      place(new THREE.BoxGeometry(6, 10, 5), { pos: [-40, GROUND + 23, -30] }),
+      place(new THREE.BoxGeometry(2.4, 2, 2), { pos: [-40, GROUND + 29, -30] }),
+    ]);
+
+    // --- hero 1: slender shaft, tapered crown, antenna mast. Mid band ------
+    // (z ~ -50). Deliberately the tallest thing in the set — a skyline reads
+    // as a real city when one building is a landmark and everything else is
+    // scaled against it, not when every silhouette tops out together.
+    const h1 = mergeAll([
+      place(new THREE.BoxGeometry(6, 40, 6), { pos: [-58, GROUND + 20, -52] }),
+      place(new THREE.BoxGeometry(3.2, 7, 3.2), { pos: [-58, GROUND + 43.5, -52] }),
+      place(new THREE.CylinderGeometry(0.12, 0.16, 9, 6), { pos: [-58, GROUND + 51.5, -52] }),
+    ]);
+
+    // --- hero 2: squat industrial block, rooftop crane. Far band (z ~ -84).
+    // The jib is the one shape in the whole set that is not a box or an
+    // upright cylinder, which is what makes it read as a PROP rather than as
+    // more massing — the same argument the brief makes for the foreground's
+    // individually modelled clutter, applied to the background instead.
+    const cx = -75 - 6, cz = -84 - 4;
+    const h2 = mergeAll([
+      place(new THREE.BoxGeometry(14, 22, 11), { pos: [-75, GROUND + 11, -84] }),
+      place(new THREE.CylinderGeometry(0.22, 0.28, 10, 6), { pos: [cx, GROUND + 27, cz] }),
+      place(new THREE.BoxGeometry(8, 0.55, 0.55), { pos: [cx + 4, GROUND + 30.6, cz], rot: [0, 0.08, 0] }),
+      place(new THREE.BoxGeometry(1.3, 0.9, 0.9), { pos: [cx - 1.4, GROUND + 30.4, cz] }),
+    ]);
+
+    // Band constants lifted straight from `#towers`'s own `spec` table —
+    // kind (which tint), the world height the sun-shadow line sits at, the
+    // haze gain and the window density — so these three agree with the
+    // instanced field about what each depth looks like rather than
+    // authoring a second, driftable copy of the same four numbers.
+    const geo = mergeTagged(
+      [h0, h1, h2],
+      [
+        [0, 10, 1.25, 0.55],
+        [1, 18, 1.90, 0.38],
+        [2, 30, 2.70, 0.24],
+      ],
+      ['aKind', 'aSunY', 'aHaze', 'aWin'],
+    );
+
+    // The lighting model is `#towers`'s own — sky/horizon split by facing,
+    // a sun term above each building's own shadow line, world-pitched
+    // windows, exponential haze — copied rather than re-derived because it
+    // is already solved for this exact band. The colour uniforms are the
+    // SAME objects `this.towerMaterial` holds (not copies): `update()`
+    // mutates those in place every time the mood changes, and sharing the
+    // reference is what keeps a hero tower's sun and sky terms welded to the
+    // instanced field's instead of freezing at whatever the mood was on
+    // construction.
+    const tm = this.towerMaterial.uniforms;
+    const mat = new THREE.ShaderMaterial({
+      name: 'arena.rooftop.landmarks',
+      uniforms: {
+        uSunDir: this.sunUniform,
+        uHaze: this.haze,
+        uSunCol: tm.uSunCol,
+        uSkyCol: tm.uSkyCol,
+        uHorizonCol: tm.uHorizonCol,
+        uWindow: tm.uWindow,
+        uWindowCool: tm.uWindowCool,
+        uTint: {
+          value: [
+            new THREE.Color(0x2b2f3a),
+            new THREE.Color(0x252a35),
+            new THREE.Color(0x1f242f),
+          ],
+        },
+      },
+      vertexShader: /* glsl */ `
+        attribute float aKind;
+        attribute float aSunY;
+        attribute float aHaze;
+        attribute float aWin;
+        varying vec3 vWorld;
+        varying vec3 vNrm;
+        varying float vDepth;
+        varying float vKind;
+        varying float vSunY;
+        varying float vHaze;
+        varying float vWin;
+        void main() {
+          vKind = aKind;
+          vSunY = aSunY;
+          vHaze = aHaze;
+          vWin = aWin;
+          vNrm = normalize( mat3( modelMatrix ) * normal );
+          vec4 w = modelMatrix * vec4( position, 1.0 );
+          vWorld = w.xyz;
+          vec4 mv = modelViewMatrix * vec4( position, 1.0 );
+          vDepth = -mv.z;
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uSunDir;
+        uniform vec3 uHaze;
+        uniform vec3 uSunCol;
+        uniform vec3 uSkyCol;
+        uniform vec3 uHorizonCol;
+        uniform vec3 uWindow;
+        uniform vec3 uWindowCool;
+        uniform vec3 uTint[ 3 ];
+        varying vec3 vWorld;
+        varying vec3 vNrm;
+        varying float vDepth;
+        varying float vKind;
+        varying float vSunY;
+        varying float vHaze;
+        varying float vWin;
+
+        float hash21( vec2 p ) {
+          p = fract( p * vec2( 231.34, 451.77 ) );
+          p += dot( p, p + 34.21 );
+          return fract( p.x * p.y );
+        }
+
+        void main() {
+          vec3 n = normalize( vNrm );
+          int k = int( vKind + 0.5 );
+          vec3 col = uTint[ 0 ];
+          if ( k == 1 ) col = uTint[ 1 ];
+          else if ( k == 2 ) col = uTint[ 2 ];
+
+          // Same split #towers uses: a facade sees the horizon band, a
+          // roof sees the zenith, and the warm term only lands on faces
+          // actually turned toward the sun's bearing.
+          float up = clamp( n.y * 0.5 + 0.5, 0.0, 1.0 );
+          float facade = 1.0 - abs( n.y );
+          vec2 nf = normalize( vec2( n.x, n.z ) + 1e-5 );
+          vec2 sf = normalize( vec2( uSunDir.x, uSunDir.z ) + 1e-5 );
+          float faceSun = clamp( dot( nf, sf ) * 0.5 + 0.5, 0.0, 1.0 );
+          vec3 amb = uSkyCol * ( 0.5 + 0.5 * up );
+          amb += uHorizonCol * facade * faceSun * faceSun * 0.6;
+          col += amb;
+
+          // Sun above this building's own shadow line, tagged per building
+          // rather than randomised per instance the way #towers does it —
+          // there is one of each of these, so the height is authored, not
+          // drawn.
+          float s = max( 0.0, dot( n, uSunDir ) );
+          float above = smoothstep( vSunY, vSunY + 3.0, vWorld.y );
+          col += uSunCol * pow( s, 1.6 ) * above;
+
+          if ( abs( n.y ) < 0.5 ) {
+            // World-space window grid at the same pitch #towers uses, so a
+            // hero tower's storeys line up with the instanced field's at the
+            // same world height instead of drifting against it.
+            vec2 uvw = vec2( ( abs( n.x ) > 0.5 ? vWorld.z : vWorld.x ), vWorld.y );
+            vec2 pitch = vec2( 1.15, 2.1 );
+            vec2 cellId = floor( uvw / pitch );
+            vec2 f = fract( uvw / pitch );
+            float pane = step( 0.18, f.x ) * step( f.x, 0.82 ) * step( 0.24, f.y ) * step( f.y, 0.78 );
+            float r = hash21( cellId + vKind * 97.0 );
+            float on = step( 1.0 - vWin * 0.45, r );
+            vec3 lamp = mix( uWindow, uWindowCool, step( 0.84, fract( r * 7.3 ) ) );
+            col = mix( col, lamp * ( 0.3 + r * 0.7 ), pane * on );
+          }
+
+          // Its own haze, at the tagged band's own gain, fading toward the
+          // ground exactly as #towers does.
+          float haze = 1.0 - exp( -max( 0.0, vDepth - 18.0 ) * 0.0135 * vHaze );
+          haze *= mix( 1.2, 0.62, clamp( vWorld.y / 46.0, 0.0, 1.0 ) );
+          col = mix( col, uHaze, clamp( haze, 0.0, 0.95 ) );
+          gl_FragColor = vec4( col, 1.0 );
+        }
+      `,
+      fog: false,
+    });
+    this.landmarkMaterial = mat;
+    this._mats.push(mat);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = 'arena.rooftop.landmarks';
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.frustumCulled = false;
+    mesh.matrixAutoUpdate = false;
+    this.landmarks = mesh;
+    this.group.add(mesh);
+  }
+
   // -------------------------------------------------------------------------
   // (e) THE FAR SKYLINE AND THE SKY — unlit, own haze
   // -------------------------------------------------------------------------
@@ -3361,12 +3773,19 @@ export class StageRooftop {
    * emissive quad cannot pay for, which is the shallow grazing scatter the
    * source leaves on the surface around it.
    *
-   * Three of them, and the third is the one that matters. A card standing at the
-   * -x end of the deck, facing +x, carrying the sun's own colour: it is the
-   * *aerial* term — sixty metres of dusty air between the sun and the roof,
-   * which real low sun always has and which no analytic light can produce. It is
-   * additive and it is strongest at the deck, so it lifts the far end of every
-   * long shadow and makes the raking read as distance rather than as paint.
+   * Four of them, and the third is the one the file was originally written
+   * for. A card standing at the -x end of the deck, facing +x, carrying the
+   * sun's own colour: it is the *aerial* term — sixty metres of dusty air
+   * between the sun and the roof, which real low sun always has and which no
+   * analytic light can produce. It is additive and it is strongest at the
+   * deck, so it lifts the far end of every long shadow and makes the raking
+   * read as distance rather than as paint.
+   *
+   * The fourth answers the critic's clearance-signboard finding: "give it...
+   * light bleed onto the pole behind it". A floodlight can with no visible
+   * effect is a prop; this is the shallow scatter that same can leaves on
+   * the support leg standing directly under it, and it is what tells the eye
+   * the can is switched on without spending a `THREE.Light`.
    *
    * One draw call. The colour slot rides in a vertex attribute.
    */
@@ -3381,6 +3800,11 @@ export class StageRooftop {
       // The aerial term: warm haze standing across the -x end of the deck. Gain
       // 0.42 -> 0.24, same argument as the sodium pool above.
       { pos: [-14.6, 2.2, -1.0], rot: [0, Math.PI / 2, 0], w: 17.0, h: 4.4, slot: 2, gain: 0.24, edge: [0.28, 0.0] },
+      // Floodlight bleed on the hoarding's +x leg (world x = 6.7, under the
+      // can at dx = +2.0). Narrow and tall rather than a pool, because it is
+      // dressing a vertical post, not the deck; a soft x edge so it reads as
+      // wrapping the pole's curve rather than as a card glued to one face.
+      { pos: [6.7, 3.6, -10.48], rot: [0, 0, 0], w: 0.6, h: 2.6, slot: 3, gain: 0.4, edge: [0.1, 0.35] },
     ];
     const geo = mergeTagged(
       cards.map((c) => place(new THREE.PlaneGeometry(c.w, c.h), { pos: c.pos, rot: c.rot })),
@@ -3396,6 +3820,7 @@ export class StageRooftop {
             radiance(0xff8a3c, 0.30),
             radiance(0x3cff8a, 0.16),
             radiance(0xff9a52, 0.22),
+            radiance(0xfff0dc, 0.20),  // floodlight: near-white, barely warm
           ],
         },
       },
@@ -3420,7 +3845,7 @@ export class StageRooftop {
         }
       `,
       fragmentShader: /* glsl */ `
-        uniform vec3 uPool[ 3 ];
+        uniform vec3 uPool[ 4 ];
         varying vec2 vUv;
         varying vec2 vEdge;
         varying float vGain;
@@ -3431,6 +3856,7 @@ export class StageRooftop {
           vec3 c = uPool[ 0 ];
           if ( k == 1 ) c = uPool[ 1 ];
           else if ( k == 2 ) c = uPool[ 2 ];
+          else if ( k == 3 ) c = uPool[ 3 ];
 
           // Separable plateau plus a quadratic skirt, squared once more so the
           // deposit has a core rather than being a uniform lift.

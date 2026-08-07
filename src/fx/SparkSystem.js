@@ -328,6 +328,51 @@ void main() {
   // contact frame is unchanged and only its variance goes up.
   float mass = 0.68 + hash11( seed * 2.7 ) * 0.64;
   float tt = t * ( 1.0 + 0.30 * fine ) * mass + ( 1.0 - along ) * 0.28 * fine;
+
+  // A FOURTH OFFSET, AND IT IS A BIRTH POSITION RATHER THAN A RATE.
+  //
+  // The three above are all rates: they decide how fast a particle runs the
+  // cooling ramp, and every one of them still starts the particle at the top of
+  // it. So on the contact frame — the frame this axis is scored on, and the only
+  // frame most hits are seen on — the whole population is bunched near u = 0
+  // however different their rates are. Measured out of the live pool on a frozen
+  // launcher contact, ramp position came out 0.172 with an SD of 0.038: a band
+  // running white to pale-yellow and nothing else. That is the "uniform
+  // warm-white/gold spark burst" a blind critic lost both matched pairs on, and
+  // it is the reason a burst that genuinely does carry four size tiers still
+  // reads as one archetype. Size and shape were already wide here — log-uniform
+  // sizes over a 1.67-2.6x band, log-uniform speeds over 3x, explicit fliers,
+  // per-particle streak and chip jitter. Colour was the one axis with no spread
+  // in it at all, and aTint is per-BURST, so the shader is the only place the
+  // spread can come from.
+  //
+  // It is deliberately a MINORITY OFFSET and not a widened band, because the
+  // ramp is not symmetric: sparkEmission loses luminance as pow(1-u, 10),
+  // an order of magnitude faster than it loses hue. Pushing the whole
+  // population's mean down the ramp to buy colour variance would dim the burst
+  // by most of itself, which is the trade this file has already refused once
+  // over the spall tier. Instead the bulk is left exactly where it was and two
+  // small slices are thrown to the ends:
+  //
+  //   ~20%  thrown 0.16-0.46 down the ramp: these are the deep orange and
+  //         cherry streaks, the long hot-red element the reference frames carry
+  //         and ours had none of.
+  //   ~12%  held 0.10 back toward white: the cool bright flecks at the other
+  //         end, so the frame has both ends of the ramp and not just a longer
+  //         tail on one side.
+  //
+  // 68% of the burst is bit-identical to before, so the punch, the clipped-white
+  // figure and the weight ladder all sit where they were measured.
+  //
+  // Both slices key off the SAME seed the other three offsets use, through a
+  // different multiplier. That is the whole cost of this change: no new
+  // attribute, no new buffer, no extra bytes per particle, two hashes in a
+  // vertex shader that already runs four.
+  float ox = hash11( seed * 9.1 );
+  float toRed  = step( 0.80, ox ) * ( 0.16 + hash11( seed * 13.7 ) * 0.30 );
+  float toCool = step( ox, 0.12 ) * 0.10;
+  tt = tt + toRed - toCool;
+
   vColor = sparkEmission( clamp( tt, 0.0, 1.0 ), heat ) * aTint;
 }`;
 

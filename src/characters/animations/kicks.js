@@ -129,15 +129,34 @@ export const KICK_CLIPS = {
       head: [{ t: 0, r: [2.5, 8, 0], ease: 'quad' }, { t: 10, r: [2.5, 5.8, 0], ease: 'quart' },
         { t: 16, r: [2.3, 3, 0], ease: 'sine' }, { t: 19, r: [2.28, 2.69, 0], ease: 'quad' },
         { t: 24, r: [2.4, 6.9, 0], ease: 'sine' }, { t: 33, r: [2.5, 8, 0], ease: 'linear' }],
-      clavicle_L: [{ t: 0, r: [0, -10, -4] }],
-      shoulder_L: [{ t: 0, r: [-35, 0, -36], ease: 'quad' }, { t: 10, r: [-30.4, 14, -15.8], ease: 'quart' },
-        { t: 16, r: [-26.2, -40.7, -53.4], ease: 'sine' }, { t: 19, r: [-25.74, -44.2, -56.9], ease: 'quad' },
-        { t: 24, r: [-37.2, 2.6, -38.2], ease: 'sine' }, { t: 33, r: [-35, 0, -36], ease: 'linear' }],
-      elbow_L: [{ t: 0, r: [-124, 0, 17], ease: 'quad' }, { t: 10, r: [-109.9, 0, 17], ease: 'quart' },
-        { t: 16, r: [-152, 0, 17], ease: 'sine' }, { t: 19, r: [-155.5, 0, 17], ease: 'quad' },
-        { t: 24, r: [-123.8, 0, 17], ease: 'sine' }, { t: 33, r: [-124, 0, 17], ease: 'linear' }],
-      wrist_L: [{ t: 0, r: [-8, 0, 0] }],
-      hand_L: [{ t: 0, r: [-14, 0, 0] }],
+      // THE SAME COUNTERWEIGHT, SCALED TO THE MOVE. A lead-leg snap kick is not a
+      // committal turn -- the pelvis rotates 10 degrees here against the mid
+      // kick's 58 -- so the arm that pays for it moves proportionally less. It
+      // bottoms out at chest-local y -202 where k.midKick reaches -341 and
+      // k.highKick -380, and it never leaves the front half of the reach.
+      // Deliberately the smallest of the four: a low kick that threw the arm as
+      // hard as a high round kick would read as the same move at a different
+      // height, which is the defect one level up from the one being fixed.
+      clavicle_L: [{ t: 0, r: [0, -10, -4], ease: 'quad' }, { t: 4, r: [-2, -12, 1], ease: 'sine' },
+        { t: 10, r: [-6, -14, 4], ease: 'expo' }, { t: 16, r: [8, 4, -8], ease: 'snap' },
+        { t: 19, r: [10, 6, -10], ease: 'sine' }, { t: 24, r: [2, -4, -5], ease: 'sine' },
+        { t: 28, r: [0, -8, -4], ease: 'sine' }, { t: 33, r: [0, -10, -4], ease: 'linear' }],
+      shoulder_L: [{ t: 0, r: [-35, 0, -36], ease: 'quad' }, { t: 4, r: [-38, -8, -34], ease: 'sine' },
+        { t: 10, r: [-42, -18, -32], ease: 'expo' }, { t: 16, r: [-28, 24, -14], ease: 'snap' },
+        { t: 19, r: [-26, 32, -8], ease: 'sine' }, { t: 24, r: [-34, 6, -30], ease: 'sine' },
+        { t: 28, r: [-35, 1, -34], ease: 'sine' }, { t: 33, r: [-35, 0, -36], ease: 'linear' }],
+      elbow_L: [{ t: 0, r: [-124, 0, 17], ease: 'quad' }, { t: 4, r: [-130, 0, 17], ease: 'sine' },
+        { t: 10, r: [-136, 0, 17], ease: 'expo' }, { t: 16, r: [-108, 0, 17], ease: 'snap' },
+        { t: 19, r: [-100, 0, 17], ease: 'sine' }, { t: 24, r: [-118, 0, 17], ease: 'sine' },
+        { t: 28, r: [-122, 0, 17], ease: 'sine' }, { t: 33, r: [-124, 0, 17], ease: 'linear' }],
+      wrist_L: [{ t: 0, r: [-8, 0, 0], ease: 'quad' }, { t: 4, r: [-8, 3, 0], ease: 'sine' },
+        { t: 10, r: [-8, 6, 0], ease: 'expo' }, { t: 16, r: [-8, -8, 0], ease: 'snap' },
+        { t: 19, r: [-8, -11, 0], ease: 'sine' }, { t: 24, r: [-8, -2, 0], ease: 'sine' },
+        { t: 33, r: [-8, 0, 0], ease: 'linear' }],
+      hand_L: [{ t: 0, r: [-14, 0, 0], ease: 'quad' }, { t: 4, r: [-17, 0, 0], ease: 'sine' },
+        { t: 10, r: [-20, 0, 0], ease: 'expo' }, { t: 16, r: [-8, 0, -2], ease: 'snap' },
+        { t: 19, r: [-5, 0, -3], ease: 'sine' }, { t: 24, r: [-12, 0, 0], ease: 'sine' },
+        { t: 33, r: [-14, 0, 0], ease: 'linear' }],
       clavicle_R: [{ t: 0, r: [0, 8, 4] }],
       shoulder_R: [{ t: 0, r: [-22, 0, 36], ease: 'quad' }, { t: 10, r: [-18.5, 0.3, 30.8], ease: 'quart' },
         { t: 16, r: [-18.2, -3, 25.1], ease: 'sine' }, { t: 19, r: [-18.17, -3.36, 24.47], ease: 'quad' },
@@ -233,16 +252,44 @@ export const KICK_CLIPS = {
         { t: 12, r: [2.6, 1.9, 0], ease: 'sine' }, { t: 15, r: [2.8, -12.2, 0], ease: 'sine' },
         { t: 19, r: [2.82, -13.75, 0], ease: 'quad' }, { t: 26, r: [2.4, -1.3, 0], ease: 'sine' },
         { t: 36, r: [2.5, 8, 0], ease: 'linear' }],
-      clavicle_L: [{ t: 0, r: [0, -10, -4] }],
-      shoulder_L: [{ t: 0, r: [-35, 0, -36], ease: 'sine' }, { t: 7, r: [-33.2, 2.1, -30.3], ease: 'sine' },
-        { t: 12, r: [4, -36.8, -32.7], ease: 'sine' }, { t: 15, r: [14.7, -28.2, -27.1], ease: 'sine' },
-        { t: 19, r: [15.88, -27.25, -26.48], ease: 'quad' }, { t: 26, r: [-32, 0.8, -26.3], ease: 'sine' },
-        { t: 36, r: [-35, 0, -36], ease: 'linear' }],
-      elbow_L: [{ t: 0, r: [-124, 0, 17], ease: 'sine' }, { t: 7, r: [-123.8, 0, 17], ease: 'sine' },
-        { t: 12, r: [-152, 0, 17], ease: 'sine' }, { t: 19, r: [-155.1, 0, 17], ease: 'quad' },
-        { t: 26, r: [-123.8, 0, 17], ease: 'sine' }, { t: 36, r: [-124, 0, 17], ease: 'linear' }],
-      wrist_L: [{ t: 0, r: [-8, 0, 0] }],
-      hand_L: [{ t: 0, r: [-14, 0, 0] }],
+      // THE OFF-ARM PAYS FOR THE HIP. See the note at the foot of this file. The
+      // old track had the whole left arm inside a 103x69x155mm chest-local box
+      // for the entire kick — the smallest envelope of any attack in the library
+      // — so its 866mm of world travel was 93% the chest swinging it, and a
+      // straight punch parked it within 129mm of the same place. A round kick
+      // that squares 58 degrees of root yaw off one planted foot has to throw
+      // something the other way, and the only mass available is this arm.
+      //
+      // It winds UP and across on the chamber (t7, chest-local y +341), whips
+      // DOWN and wide as the shin arrives (t15, y -282) and trails past the
+      // contact before it gathers. That is a 620mm arc through the opposite half
+      // of the body's reach from where p.straight's guard retraction lives, which
+      // is the point: the two moves must not route the hand through one region.
+      clavicle_L: [{ t: 0, r: [0, -10, -4], ease: 'sine' }, { t: 3, r: [-4, -8, 2], ease: 'sine' },
+        { t: 7, r: [-14, -22, 8], ease: 'quart' }, { t: 12, r: [-2, -4, 0], ease: 'expo' },
+        { t: 15, r: [12, 8, -10], ease: 'snap' }, { t: 19, r: [16, 12, -13], ease: 'sine' },
+        { t: 22, r: [10, 6, -8], ease: 'sine' }, { t: 26, r: [2, -2, -4], ease: 'sine' },
+        { t: 30, r: [0, -8, -4], ease: 'sine' }, { t: 36, r: [0, -10, -4], ease: 'linear' }],
+      shoulder_L: [{ t: 0, r: [-35, 0, -36], ease: 'sine' }, { t: 3, r: [-40, -10, -34], ease: 'sine' },
+        { t: 7, r: [-48, -42, -26], ease: 'quart' }, { t: 12, r: [-34, 4, -24], ease: 'expo' },
+        { t: 15, r: [-24, 42, -6], ease: 'snap' }, { t: 19, r: [-20, 54, 2], ease: 'sine' },
+        { t: 22, r: [-26, 34, -12], ease: 'sine' }, { t: 26, r: [-34, 8, -30], ease: 'sine' },
+        { t: 30, r: [-36, 0, -34], ease: 'sine' }, { t: 36, r: [-35, 0, -36], ease: 'linear' }],
+      elbow_L: [{ t: 0, r: [-124, 0, 17], ease: 'sine' }, { t: 3, r: [-132, 0, 17], ease: 'sine' },
+        { t: 7, r: [-150, 0, 17], ease: 'quart' }, { t: 12, r: [-120, 0, 17], ease: 'expo' },
+        { t: 15, r: [-92, 0, 17], ease: 'snap' }, { t: 19, r: [-78, 0, 17], ease: 'sine' },
+        { t: 22, r: [-96, 0, 17], ease: 'sine' }, { t: 26, r: [-116, 0, 17], ease: 'sine' },
+        { t: 30, r: [-122, 0, 17], ease: 'sine' }, { t: 36, r: [-124, 0, 17], ease: 'linear' }],
+      wrist_L: [{ t: 0, r: [-8, 0, 0], ease: 'sine' }, { t: 3, r: [-8, 4, 0], ease: 'sine' },
+        { t: 7, r: [-8, 14, 0], ease: 'quart' }, { t: 12, r: [-8, 0, 0], ease: 'expo' },
+        { t: 15, r: [-8, -14, 0], ease: 'snap' }, { t: 19, r: [-8, -18, 0], ease: 'sine' },
+        { t: 22, r: [-8, -10, 0], ease: 'sine' }, { t: 26, r: [-8, -2, 0], ease: 'sine' },
+        { t: 36, r: [-8, 0, 0], ease: 'linear' }],
+      hand_L: [{ t: 0, r: [-14, 0, 0], ease: 'sine' }, { t: 3, r: [-18, 0, 0], ease: 'sine' },
+        { t: 7, r: [-28, 0, 0], ease: 'quart' }, { t: 12, r: [-14, 0, 0], ease: 'expo' },
+        { t: 15, r: [-2, 0, -4], ease: 'snap' }, { t: 19, r: [2, 0, -6], ease: 'sine' },
+        { t: 22, r: [-6, 0, -2], ease: 'sine' }, { t: 26, r: [-12, 0, 0], ease: 'sine' },
+        { t: 36, r: [-14, 0, 0], ease: 'linear' }],
       clavicle_R: [{ t: 0, r: [0, 8, 4] }],
       shoulder_R: [{ t: 0, r: [-22, 0, 36], ease: 'sine' }, { t: 7, r: [-40.6, -15.2, 24.4], ease: 'sine' },
         { t: 12, r: [-45.6, -16.2, 36.3], ease: 'sine' }, { t: 15, r: [7.2, -125.2, -17.5], ease: 'sine' },
@@ -351,16 +398,53 @@ export const KICK_CLIPS = {
         { t: 12, r: [2.9, 1.4, 0], ease: 'sine' }, { t: 15, r: [3.7, -14.4, 0], ease: 'sine' },
         { t: 19, r: [3.79, -16.14, 0], ease: 'quad' }, { t: 27, r: [2.3, -2.4, 0], ease: 'sine' },
         { t: 39, r: [2.5, 8, 0], ease: 'linear' }],
-      clavicle_L: [{ t: 0, r: [0, -10, -4] }],
-      shoulder_L: [{ t: 0, r: [-35, 0, -36], ease: 'sine' }, { t: 7, r: [-31.2, 0.7, -29], ease: 'sine' },
-        { t: 12, r: [11.6, -34.7, -29.2], ease: 'sine' }, { t: 15, r: [69.2, 15.5, -17.1], ease: 'sine' },
-        { t: 19, r: [72.7, 19, -15.77], ease: 'quad' }, { t: 27, r: [-32.2, 2.5, -23.3], ease: 'sine' },
-        { t: 39, r: [-35, 0, -36], ease: 'linear' }],
-      elbow_L: [{ t: 0, r: [-124, 0, 17], ease: 'sine' }, { t: 7, r: [-123.7, 0, 17], ease: 'sine' },
-        { t: 12, r: [-152, 0, 17], ease: 'sine' }, { t: 19, r: [-155.11, 0, 17], ease: 'quad' },
-        { t: 27, r: [-123.8, 0, 17], ease: 'sine' }, { t: 39, r: [-124, 0, 17], ease: 'linear' }],
-      wrist_L: [{ t: 0, r: [-8, 0, 0] }],
-      hand_L: [{ t: 0, r: [-14, 0, 0] }],
+      // THE SAME COUNTERWEIGHT AS k.midKick, WOUND FURTHER. See the note there
+      // and at the foot of this file. The old arm reached chest-local
+      // (209, -56, 91) at contact -- 10mm from where k.roundhouse put it, which
+      // is how a mid, a high and a spinning kick all came to share one upper-body
+      // silhouette. This one goes higher on the wind (y +345, the top of the
+      // library) and lower and further BEHIND the chest on the release
+      // (z -279 at t19, where the mid kick's follow-through stops at -24),
+      // because the torso lays away 18 degrees here and the arm is what pays for
+      // the lay-away. Same family as the mid kick, twice the arc.
+      // t13 and t14 EXIST TO OBEY THE 60cm RULE, not to add a pose. Authored as
+      // one t12 -> t15 span on `expo` this arm crossed 680mm in the single tick
+      // the support foot also spins the body 20 degrees of yaw, which is over the
+      // limit the header of punches.js sets and reads as a teleport rather than
+      // as speed. Flattening the ease to `quart` alone left it at 605. The two
+      // keys are the t12->t15 line sampled at 40% and 72% and run `linear`, which
+      // is how the striking limbs in this file are keyed through their own drive;
+      // the t15 pose is untouched and the worst tick is now 270mm.
+      clavicle_L: [{ t: 0, r: [0, -10, -4], ease: 'sine' }, { t: 4, r: [-6, -12, 4], ease: 'sine' },
+        { t: 7, r: [-18, -26, 10], ease: 'quart' }, { t: 12, r: [-2, -2, -2], ease: 'linear' },
+        { t: 13, r: [6.8, 4.4, -7.6], ease: 'linear' }, { t: 14, r: [13.8, 9.5, -12.1], ease: 'linear' },
+        { t: 15, r: [20, 14, -16], ease: 'snap' }, { t: 19, r: [20, 16, -16], ease: 'sine' },
+        { t: 23, r: [12, 8, -9], ease: 'sine' }, { t: 28, r: [2, -2, -4], ease: 'sine' },
+        { t: 33, r: [0, -8, -4], ease: 'sine' }, { t: 39, r: [0, -10, -4], ease: 'linear' }],
+      shoulder_L: [{ t: 0, r: [-35, 0, -36], ease: 'sine' }, { t: 4, r: [-42, -16, -32], ease: 'sine' },
+        { t: 7, r: [-54, -50, -24], ease: 'quart' }, { t: 12, r: [-32, 8, -26], ease: 'linear' },
+        { t: 13, r: [-26.4, 31.2, -5.2], ease: 'linear' }, { t: 14, r: [-21.9, 49.8, 11.4], ease: 'linear' },
+        { t: 15, r: [-18, 66, 26], ease: 'snap' }, { t: 19, r: [-14, 70, 32], ease: 'sine' },
+        { t: 23, r: [-22, 40, 4], ease: 'sine' }, { t: 28, r: [-32, 8, -30], ease: 'sine' },
+        { t: 33, r: [-35, 2, -35], ease: 'sine' }, { t: 39, r: [-35, 0, -36], ease: 'linear' }],
+      elbow_L: [{ t: 0, r: [-124, 0, 17], ease: 'sine' }, { t: 4, r: [-136, 0, 17], ease: 'sine' },
+        { t: 7, r: [-158, 0, 17], ease: 'quart' }, { t: 12, r: [-118, 0, 17], ease: 'linear' },
+        { t: 13, r: [-101.2, 0, 17], ease: 'linear' }, { t: 14, r: [-87.8, 0, 17], ease: 'linear' },
+        { t: 15, r: [-76, 0, 17], ease: 'snap' }, { t: 19, r: [-70, 0, 17], ease: 'sine' },
+        { t: 23, r: [-92, 0, 17], ease: 'sine' }, { t: 28, r: [-114, 0, 17], ease: 'sine' },
+        { t: 33, r: [-122, 0, 17], ease: 'sine' }, { t: 39, r: [-124, 0, 17], ease: 'linear' }],
+      wrist_L: [{ t: 0, r: [-8, 0, 0], ease: 'sine' }, { t: 4, r: [-8, 6, 0], ease: 'sine' },
+        { t: 7, r: [-8, 18, 0], ease: 'quart' }, { t: 12, r: [-8, -2, 0], ease: 'linear' },
+        { t: 13, r: [-8, -10, 0], ease: 'linear' }, { t: 14, r: [-8, -16.4, 0], ease: 'linear' },
+        { t: 15, r: [-8, -22, 0], ease: 'snap' }, { t: 19, r: [-8, -24, 0], ease: 'sine' },
+        { t: 23, r: [-8, -12, 0], ease: 'sine' }, { t: 28, r: [-8, -2, 0], ease: 'sine' },
+        { t: 39, r: [-8, 0, 0], ease: 'linear' }],
+      hand_L: [{ t: 0, r: [-14, 0, 0], ease: 'sine' }, { t: 4, r: [-20, 0, 0], ease: 'sine' },
+        { t: 7, r: [-32, 0, 0], ease: 'quart' }, { t: 12, r: [-12, 0, 0], ease: 'linear' },
+        { t: 13, r: [-4.8, 0, -3.2], ease: 'linear' }, { t: 14, r: [1, 0, -5.8], ease: 'linear' },
+        { t: 15, r: [6, 0, -8], ease: 'snap' }, { t: 19, r: [8, 0, -9], ease: 'sine' },
+        { t: 23, r: [-4, 0, -2], ease: 'sine' }, { t: 28, r: [-12, 0, 0], ease: 'sine' },
+        { t: 39, r: [-14, 0, 0], ease: 'linear' }],
       clavicle_R: [{ t: 0, r: [0, 8, 4] }],
       shoulder_R: [{ t: 0, r: [-22, 0, 36], ease: 'sine' }, { t: 7, r: [-39.8, -15.5, 27.3], ease: 'sine' },
         { t: 12, r: [-47, -16, 42.9], ease: 'sine' }, { t: 15, r: [-5.3, -109.6, -28.3], ease: 'sine' },
@@ -474,7 +558,20 @@ export const KICK_CLIPS = {
         { t: 15, r: [3, 6.8, 0], ease: 'sine' }, { t: 20, r: [3.4, -13.9, 0], ease: 'sine' },
         { t: 24, r: [3.44, -16.18, 0], ease: 'quad' }, { t: 32, r: [2.5, -11.7, 0], ease: 'sine' },
         { t: 40, r: [2.2, 3, 0], ease: 'sine' }, { t: 48, r: [2.5, 8, 0], ease: 'linear' }],
-      clavicle_L: [{ t: 0, r: [0, -10, -4] }],
+      // THE ONE CLIP WHOSE OFF-ARM WAS ALREADY DOING SOMETHING. Its shoulder
+      // wraps the arm 152 degrees around the body through the spin recovery,
+      // which is why it measured 43% of its own travel where a straight punch
+      // measured 8. So this is an amplification, not a rewrite: the shoulder and
+      // elbow arc are left exactly as authored and the three tracks that were
+      // dead single keys -- clavicle, wrist, hand -- are given the same arc. The
+      // clavicle is the lever that matters, because it is the root of the chain
+      // and moves the whole arm relative to the chest rather than about the
+      // shoulder; `loco.runFwd` is the only other clip in the library that keys
+      // it, and it is the only other one that reads as having an arm of its own.
+      clavicle_L: [{ t: 0, r: [0, -10, -4], ease: 'sine' }, { t: 9, r: [-10, -18, 6], ease: 'sine' },
+        { t: 15, r: [-4, -6, 0], ease: 'expo' }, { t: 20, r: [14, 10, -12], ease: 'snap' },
+        { t: 24, r: [17, 13, -14], ease: 'quad' }, { t: 32, r: [8, 16, -6], ease: 'sine' },
+        { t: 40, r: [2, 10, -2], ease: 'sine' }, { t: 48, r: [0, -10, -4], ease: 'linear' }],
       shoulder_L: [{ t: 0, r: [-35, 0, -36], ease: 'sine' }, { t: 9, r: [-37.6, -10.7, -32.7], ease: 'sine' },
         { t: 15, r: [16.1, -29.2, -29.6], ease: 'sine' }, { t: 20, r: [67.4, 16.9, -45.1], ease: 'sine' },
         { t: 24, r: [70.9, 20.4, -46.8], ease: 'quad' }, { t: 32, r: [-13.1, 111.7, 25], ease: 'sine' },
@@ -483,8 +580,14 @@ export const KICK_CLIPS = {
         { t: 15, r: [-152, 0, 17], ease: 'sine' }, { t: 24, r: [-155.12, 0, 17], ease: 'quad' },
         { t: 32, r: [-122.1, 0, 17], ease: 'sine' }, { t: 40, r: [-129.5, 0, 17], ease: 'sine' },
         { t: 48, r: [-124, 0, 17], ease: 'linear' }],
-      wrist_L: [{ t: 0, r: [-8, 0, 0] }],
-      hand_L: [{ t: 0, r: [-14, 0, 0] }],
+      wrist_L: [{ t: 0, r: [-8, 0, 0], ease: 'sine' }, { t: 9, r: [-8, 10, 0], ease: 'sine' },
+        { t: 15, r: [-8, 4, 0], ease: 'expo' }, { t: 20, r: [-8, -16, 0], ease: 'snap' },
+        { t: 24, r: [-8, -20, 0], ease: 'quad' }, { t: 32, r: [-8, -8, 0], ease: 'sine' },
+        { t: 40, r: [-8, 4, 0], ease: 'sine' }, { t: 48, r: [-8, 0, 0], ease: 'linear' }],
+      hand_L: [{ t: 0, r: [-14, 0, 0], ease: 'sine' }, { t: 9, r: [-26, 0, 0], ease: 'sine' },
+        { t: 15, r: [-18, 0, 0], ease: 'expo' }, { t: 20, r: [-2, 0, -5], ease: 'snap' },
+        { t: 24, r: [2, 0, -7], ease: 'quad' }, { t: 32, r: [-10, 0, -2], ease: 'sine' },
+        { t: 40, r: [-16, 0, 0], ease: 'sine' }, { t: 48, r: [-14, 0, 0], ease: 'linear' }],
       clavicle_R: [{ t: 0, r: [0, 8, 4] }],
       shoulder_R: [{ t: 0, r: [-22, 0, 36], ease: 'sine' }, { t: 9, r: [-28.8, -23.4, 27.2], ease: 'sine' },
         { t: 15, r: [-52.5, -14.5, 47.6], ease: 'sine' }, { t: 20, r: [46.6, -88.4, 44.1], ease: 'sine' },
@@ -1967,3 +2070,53 @@ for (const id in SAGITTAL_TABLE) sagittal(KICK_CLIPS[id], SAGITTAL_TABLE[id]);
 for (const id in KICK_CLIPS) validateClip(KICK_CLIPS[id], BONE_NAMES);
 
 export default KICK_CLIPS;
+
+// ---------------------------------------------------------------------------
+// THE OFF-ARM. The measurement, the instruments and the full before/after table
+// are written up at the foot of punches.js; this is the half that lives here.
+//
+// Four kicks were re-authored. What they had in common was the defect: measured
+// in the CHEST's own frame -- which removes the torso carry and is the only
+// honest read of what an arm is doing -- k.midKick's whole left arm lived inside
+// a 103 x 69 x 155mm box for the entire kick, the smallest envelope of any
+// attack in the library, and k.highKick and k.roundhouse both parked the hand at
+// chest-local (~205, -53, 86) at their contact tick, ten millimetres apart. A
+// mid, a high and a spinning kick shared one upper-body silhouette.
+//
+// WHAT A KICK'S OFF-ARM IS FOR. A round kick squares the pelvis off one planted
+// foot and carries the turn in the root's `ry` track: 10 degrees on k.lowKick, 58
+// on k.midKick, 70 on k.highKick, 96 on k.roundhouse. Something has to pay for
+// that angular momentum and the only mass available is this arm. So all four
+// wind UP and across on the chamber and are thrown DOWN and wide as the shin
+// arrives -- one family, four amplitudes, deliberately proportional to the yaw
+// each clip actually commits:
+//
+//   clip           chest-local y at the throw   own% before -> after
+//   k.lowKick               -202                    42% -> 66%
+//   k.midKick               -341                     7% -> 63%
+//   k.highKick              -389, and z -279          19% -> 64%
+//   k.roundhouse            amplified in place       43% -> 50%
+//
+// k.lowKick is the smallest on purpose. A lead-leg snap that threw the arm as
+// hard as a high round kick would read as the same move at a different height,
+// which is the defect one level up from the one being fixed.
+//
+// k.roundhouse is an AMPLIFICATION, not a rewrite. It was the one clip whose
+// off-arm was already doing something -- its shoulder wraps the arm 152 degrees
+// around the body through the spin recovery, which is why it measured 43% where
+// a straight punch measured 8. Its shoulder and elbow arc is left exactly as
+// authored and only the three tracks that were dead single keys -- clavicle,
+// wrist, hand -- are given the same arc.
+//
+// EVERY FOOT IS BIT-IDENTICAL. Only left-arm-chain bones are touched and no
+// anchor descends from any of them: foot_R measures 469.2 / 5221.6 / 6093.6 /
+// 7063.1mm on the four clips before and after, and the foot_R half of
+// `offhandspread.mjs` is unchanged digit for digit against a pristine checkout.
+//
+// ONE CONSTRAINT BOUND AND IS RECORDED WHERE IT BINDS. k.highKick's off-hand
+// crossed 680mm in the single tick that also spins the body 20 degrees of yaw,
+// over the 60cm-per-tick limit the header of punches.js sets. See the note above
+// its `clavicle_L` track: flattening the ease was not enough and it took two
+// interpolated linear keys, which is how the striking limbs in this file are
+// keyed through their own drive anyway.
+// ---------------------------------------------------------------------------

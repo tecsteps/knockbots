@@ -3214,7 +3214,18 @@ function addPipeRun(rig, bone, points, o = {}) {
   const pts = points.map((q) => new THREE.Vector3(q[0], q[1], q[2]));
   if (pts.length < 2) return;
   const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.4);
-  const tube = new THREE.TubeGeometry(curve, o.segments ?? 14, radius, 6, false);
+  // Radial count was 6 — a hexagonal cross-section — which is fine for a
+  // silhouette-distance greeble but not for a hero closeup: on a rounded
+  // dielectric surface (this defaults to ZONE 2 below) the specular highlight
+  // is the whole read, and six facets break a highlight that should travel
+  // smoothly around the tube into four or five flat bands, each catching the
+  // key light at its own angle. 10 is enough to keep that highlight
+  // continuous at the closeup framing (each facet subtends 36 degrees instead
+  // of 60) while staying well short of the 20-32 used for barrels and collars
+  // that actually get read end-on. Cost is +112 triangles per pipe run
+  // instance (14 tubular segments unchanged * (10-6) radial * 2) — five call
+  // sites, each TIER.GREEBLE so it culls at distance and drops at LOD1.
+  const tube = new THREE.TubeGeometry(curve, o.segments ?? 14, radius, 10, false);
   // ZONE 2 by default: a pipe run is hose, and hose is the textbook case for the
   // matte composite. Callers that mean rigid conduit still pass `mat`.
   rig.add(bone, tube, o.mat ?? 'gasket', { mirror: o.mirror, tier: o.tier ?? TIER.GREEBLE });
@@ -4517,8 +4528,11 @@ function markScabbards(rig, spec) {
       r: [8 * DEG, 0, sign * -58 * DEG], mirror, sprung: `cable_${s}`,
     });
   }
-  // belt frog the two sheaths pass through
-  rig.add('hips', bevelBox(t.pelvisW * 0.86, 0.046, 0.058, 0.008), 'trim',
+  // belt frog the two sheaths pass through — a real one is thick moulded
+  // leather, not polished steel like the tsuba and lacquered sheath either
+  // side of it; ZONE 2 (matte composite) is what keeps it from taking the
+  // same mirror highlight as the hardware it is holding.
+  rig.add('hips', bevelBox(t.pelvisW * 0.86, 0.046, 0.058, 0.008), 'gasket',
     { p: [0, 0.010, -FRONT * (t.waistD * 0.50)], tier: TIER.PRIMARY });
 }
 

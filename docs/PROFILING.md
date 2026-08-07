@@ -3282,3 +3282,83 @@ the person who wrote it.**
 What it did ship: `addPipeRun`'s `TubeGeometry` radial 6 -> 10, closing the hexagonal cross-section
 the critic saw as *"4-5 discrete flat bands"* on hero-distance tubes. +112 triangles per instance,
 six call sites, all `TIER.GREEBLE` so they cull at distance and drop at LOD1.
+
+---
+
+# Round 39: four defects, and all four were wiring rather than authoring
+
+Four agents worked against pinned module contracts. The pattern across every one of them is the
+finding of the round, and it is not a coincidence:
+
+| axis | what the critic saw | what was actually wrong |
+|---|---|---|
+| Impact | "one particle archetype, fired once per hit" | every FX system existed and three columns of `HIT_FX` were zero |
+| Character | "one tiling material across every part" | zones existed, assigned correctly, to parts too small to see |
+| Interface | "nothing tells a player a finisher window opened" | `finisherWindow` was on the bus with no listener |
+| Animation | "the upper body looks the same across move types" | the off-arm was carried by the chest, not animated |
+
+**Not one of the four was a missing capability.** On a codebase this size the recurring question is
+not "what is missing" but **"what is built and unconnected."**
+
+## Impact: three columns of zeros
+
+Verified against `git show HEAD:src/fx/EffectsDirector.js`:
+
+```
+            debris   fluid   dust
+LIGHT            0       0      0     <- sparks and nothing else. Ever.
+MEDIUM           0       5      2
+```
+
+`ShockwaveSystem`, `DebrisSystem`, `SmokeSystem`, `FlashSystem`, `DecalSystem` and `FluidSystem` were
+all constructed in `init()`, all in the scene graph, all with live `case` arms in `#fire`, and every
+shape's timeline in `MoveSchema.js` already scheduled `DEBRIS` and `DUST`. `#fire` ran its `DEBRIS`
+case, read `r.debris === 0`, and broke. **A jab or a mid punch could physically only produce the spark
+burst** — which is verbatim the critic's "one particle archetype, a uniform warm-white/gold spark
+burst". The blind loss was never about capability.
+
+Two of the critic's five ranked fixes turned out to be describing things that already worked:
+
+- **The shockwave exists and is already what was asked for.** `ShockwaveSystem.js:63` is
+  `easeOutQuint` radius growth with `pow(1-vT,2.2)` emission fade — literally "ease-out radius over
+  ~100-150 ms, fading opacity". Two fire per hit. If it reads as absent, that is scale or additive
+  blending against a bright scene, not absence.
+- **Debris gravity was never missing.** `DebrisSystem.js:136` is `gravity = -26`, integrated, with
+  angular velocity, restitution and a settle test. The frames showing "chips at contact height with no
+  visible fall" were tiers where `r.debris` was 0 — **there were no chips**, and what was being
+  described was the spark burst. The integrator needed something to integrate.
+
+And the critic's own note that the ring geometry "reads as the 1 JUGGLE HUD marker rather than a
+contact FX element" was right about the confusion and points at the interface, not the effects.
+
+## Stage: the recommendation was right about the gap and wrong about the lever
+
+The stage agent closed the skylineitself and the signboard, partially closed the floor, and then did
+the most valuable thing available to it: it named a number it could not reach — `reflGain`, cistern
+1.15 against skydeck 0.70 — left a comment pointing at it, and **did not reach outside its contract.**
+
+Reading why those numbers are what they are says its recommended fix would have been wrong:
+
+| arena | reflGain | deckGain | reflected / deck |
+|---|---:|---:|---:|
+| cistern | 1.15 | 0.80 | **1.44** |
+| skydeck | 0.70 | 1.55 | **0.45** |
+| pit | — | 1.22 | — |
+
+**The gap is not the 1.64x in `reflGain`. It is the 3.2x in the ratio**, and most of it is skydeck
+owning the brightest deck in the project. Its floor cannot show a reflection because the deck
+outshines its own mirror by more than two to one.
+
+`StageVault.js:762` already named this lever and nobody carried it across: *"the reflected radiance
+relative to the deck's own"*, with its own falsification test — *"put `deckGain` back to 1.14 and the
+effect should mostly disappear."* The cistern's floor works because of a **ratio**, not a gain.
+
+And raising skydeck's `reflGain` to 1.15 alone would take the ratio to 0.74 — still under one — while
+turning a matte mineral-cap roof into a wet slab. `Arenas.js:263` is explicit that 0.70 is chosen
+because *"a built-up roof with a mineral cap is a matte surface with ponds in it, not a wet slab —
+the ponds should mirror the sky hard and the 90% of the deck between them should not mirror at all."*
+That is a correct material description and the fix must not break it.
+
+**So the follow-up is skydeck's `deckGain`, not its `reflGain`**, and it is a tuning change that needs
+a measured A/B rather than a guess. Deferred to after this round's capture, deliberately: the order
+is measure, then tune.

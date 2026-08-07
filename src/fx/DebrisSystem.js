@@ -152,6 +152,14 @@ export class DebrisSystem {
    * @param {number} [opts.size]
    * @param {number} [opts.life]
    * @param {THREE.Color} [opts.color]
+   * @param {number} [opts.heat] residual temperature at birth, 0..1, default
+   *   0.75-1.0. THIS IS WHAT DECIDES WHETHER A SHARD IS SAFE ON A LIGHT HIT.
+   *   A shard at full heat is an emissive object with a 1.8s cooling ramp, and
+   *   on the bottom of the weight ladder that is a glowing chip still burning
+   *   long after the burst that threw it has gone — the residual-glow defect
+   *   this axis has been corrected for before. A jab does not melt armour; it
+   *   knocks paint and swarf off it. At 0 the shard is lit purely by the stage
+   *   rig like any other metal in the scene, which is exactly what it should be.
    */
   burst(point, normal, opts = {}) {
     const count = Math.max(1, Math.round(opts.count ?? 10));
@@ -159,6 +167,7 @@ export class DebrisSystem {
     const spread = opts.spread ?? 0.8;
     const size = opts.size ?? 0.07;
     const life = opts.life ?? 5.0;
+    const heat = opts.heat ?? null;
     const col = opts.color || _color.setRGB(0.62, 0.65, 0.7);
 
     _axis.copy(normal);
@@ -202,7 +211,7 @@ export class DebrisSystem {
 
       this.maxLife[i] = life * (0.7 + Math.random() * 0.6);
       this.life[i] = this.maxLife[i];
-      this.heat[i] = 0.75 + Math.random() * 0.25;
+      this.heat[i] = heat === null ? 0.75 + Math.random() * 0.25 : heat * (0.7 + Math.random() * 0.6);
       // A shard is torn off a painted, scuffed, unevenly weathered plate, so no
       // two come off the same colour. One flat tint across the whole burst is
       // the same defect the spark fragments had — a population that reads as one
@@ -272,8 +281,13 @@ export class DebrisSystem {
       const damp = Math.exp(-step * 1.4);
       this.spin[o] *= damp; this.spin[o + 1] *= damp; this.spin[o + 2] *= damp;
 
-      // The last half second shrinks the shard away rather than popping it.
-      const fade = Math.min(1, l / 0.5);
+      // The last half second shrinks the shard away rather than popping it —
+      // but never more than the last 40% of the shard's own life. A hit-ejecta
+      // shard lives a third of a second, and against a fixed 0.5s window it is
+      // born at 0.6 scale and shrinking, so the burst reads as chips already
+      // dissolving instead of chips being thrown. Floor debris is unaffected:
+      // its life is measured in seconds, so 0.5 is still the smaller of the two.
+      const fade = Math.min(1, l / Math.min(0.5, this.maxLife[i] * 0.4));
       _p.set(this.pos[o], this.pos[o + 1], this.pos[o + 2]);
       _s.set(this.scale[o] * fade, this.scale[o + 1] * fade, this.scale[o + 2] * fade);
       _m.compose(_p, _q, _s);

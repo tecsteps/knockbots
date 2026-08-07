@@ -31,6 +31,7 @@ attribute vec3 aVel;
 attribute vec4 aLife;    // birth, life, seed, size
 attribute vec4 aStyle;   // growth, curlStrength, buoyancy, spinRate
 attribute vec4 aTint;    // rgb tint, a = emissive weight
+attribute float aOpacity;// per-puff coverage scale; see the puff() docstring
 
 uniform float uTime;
 uniform float uSizeScale;
@@ -77,7 +78,12 @@ void main() {
   vTint = aTint.rgb;
   vEmissive = aTint.a;
   // Fade in fast, out slow: dust appears the instant a boot lands.
-  vFade = smoothstep( 0.0, 0.09, t ) * ( 1.0 - easeInCubic( smoothstep( 0.25, 1.0, t ) ) );
+  //
+  // The per-puff scale rides HERE rather than in a second varying, because
+  // coverage is the only thing it is allowed to touch. Folding it into the tint
+  // instead would darken the mist rather than thin it, and a dark opaque puff is
+  // the opposite of the thing being asked for.
+  vFade = smoothstep( 0.0, 0.09, t ) * ( 1.0 - easeInCubic( smoothstep( 0.25, 1.0, t ) ) ) * aOpacity;
   vViewZ = -mv.z;
   vSize = sz;
 }`;
@@ -144,7 +150,7 @@ export class SmokeSystem {
       capacity,
       lifeAttribute: 'aLife',
       lifeComponent: 1,
-      attributes: { aOrigin: 3, aVel: 3, aLife: 4, aStyle: 4, aTint: 4 },
+      attributes: { aOrigin: 3, aVel: 3, aLife: 4, aStyle: 4, aTint: 4, aOpacity: 1 },
     });
 
     this.material = new THREE.ShaderMaterial({
@@ -197,6 +203,13 @@ export class SmokeSystem {
    * @param {number} [opts.curl]
    * @param {THREE.Color} [opts.tint]
    * @param {number} [opts.emissive]       self-illumination weight, for plumes
+   * @param {number} [opts.opacity]        coverage scale, 0..1, default 1. This
+   *   is what makes a puff read as *mist* rather than as smoke. A contact hit
+   *   throws a haze of pulverised paint and oxide that is genuinely close to
+   *   transparent: at full coverage the same sprite is a grey blanket that sits
+   *   in front of the spark burst and swallows the one bright thing in the
+   *   frame, which is why impact dust was previously only affordable on the top
+   *   three weights. Thinned, it can go on every hit.
    */
   puff(point, opts = {}) {
     const count = Math.max(1, Math.round(opts.count ?? 8));
@@ -211,8 +224,9 @@ export class SmokeSystem {
     const curl = opts.curl ?? 0.5;
     const tint = opts.tint;
     const emissive = opts.emissive ?? 0;
+    const opacity = opts.opacity ?? 1;
 
-    const { aOrigin, aVel, aLife, aStyle, aTint } = this.pool.arrays;
+    const { aOrigin, aVel, aLife, aStyle, aTint, aOpacity } = this.pool.arrays;
     const cap = this.pool.capacity;
     const first = this.pool.allocRun(count);
     const time = this.material.uniforms.uTime.value;
@@ -248,6 +262,19 @@ export class SmokeSystem {
       aTint[l + 1] = tg * shade;
       aTint[l + 2] = tb * shade;
       aTint[l + 3] = emissive;
+      // Jittered on the same reasoning as `shade`: a cloud whose sprites all
+      // carry identical coverage reads as one stamped decal however well the
+      // individual sprite is shaded.
+      //
+      // The band is centred on EXACTLY 1.0 rather than on anything convenient,
+      // and that is not cosmetic. Every existing caller — footsteps, dash puffs,
+      // ground dust, the wall splat, and in particular the super plume that was
+      // cut from 20 sprites to 9 against a measured charge-up whiteout — passes
+      // no `opacity` at all and so lands here at 1. A band with any other mean
+      // would silently re-tune all of them. At 0.75 + U(0, 0.5) the expected
+      // coverage of every one of those effects is unchanged and only the
+      // variance moves.
+      aOpacity[i] = opacity * (0.75 + Math.random() * 0.5);
     }
   }
 
