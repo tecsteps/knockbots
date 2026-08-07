@@ -233,8 +233,27 @@ const SHAFT_FRAG = /* glsl */ `
  * at 4 cm to resolve detail the beam does not contain, take fewer.
  *
  * Set to 0 to restore the unconditional twelve.
+ *
+ * IT IS 0, AND THAT IS DELIBERATE. The A/B was driven through the `uStepLen`
+ * uniform at runtime, so the *measurement* left the tree untouched — but the
+ * default was shipped at 0.19 while round 32's own record stated the change had
+ * been "reverted per the charter rule, the tree is untouched". That statement
+ * was false: the constant was live at HEAD in the same commit that claimed its
+ * removal.
+ *
+ * Restored to 0 rather than correcting the record to match the tree, because the
+ * measurement that would justify keeping it does not exist. It was measured at
+ * 0.1 +/- 1.9 ms — indistinguishable from zero, on a contended machine, against a
+ * baseline since shown to be inflated. What IS established is that it takes 24%
+ * fewer samples (mean 9.12 vs 12.0 over 418,721 fragments) for a whole-frame
+ * visual diff at the instrument's own noise floor (0.75% of pixels against a
+ * 0.55% floor), which makes it a plausible change rather than a justified one.
+ *
+ * Re-land it with a real measurement against a quiet 16.85 ms baseline. An
+ * unmeasured change sitting in the tree under a commit that says it was removed
+ * is how the NEXT round's baseline goes wrong.
  */
-const SHAFT_STEP_LEN = 0.19;
+const SHAFT_STEP_LEN = 0;
 
 /** Hexahedron bounding a shaft: emitter rectangle at y=0, swept to y=-length. */
 function shaftGeometry(halfX, halfZ, spreadX, spreadZ, length) {

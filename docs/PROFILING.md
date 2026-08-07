@@ -2119,3 +2119,34 @@ briefed against**. So the pre-round A/B arm — the tree at `aef0aa0`, before th
 measured on the same instrument — is required before any of the round's gain can be attributed to the
 work rather than to the instrument. Without it, "58.5 -> 59.3" conflates a real change with a
 measurement change, which is precisely the confound this project has been caught by five times.
+
+## Two errors in round 32's own record, both found by reading the diff
+
+**1. The shaft change was NOT reverted.** Round 32's commit and this document both state that the
+constant-sample-spacing change measured 0.1 +/- 1.9 ms, was removed under the charter rule, and that
+"the tree is untouched". `SHAFT_STEP_LEN = 0.19` was live at HEAD, shipped in that same commit
+(`1222038`) and never put back.
+
+The mechanism of the mistake is worth naming, because it will recur: the A/B was driven through the
+`uStepLen` **uniform at runtime**, so the *measurement* genuinely left the tree untouched — and that
+was mistaken for the *change* having been reverted. Toggling a value at runtime and restoring a
+default are different acts, and a probe that only ever writes uniforms gives no signal about what the
+source says.
+
+Now restored to 0. Restored rather than re-documented, because the measurement that would justify
+keeping it does not exist: 0.1 +/- 1.9 ms on a contended machine against a baseline since shown to be
+inflated by 0.5-0.6ms. What is established — 24% fewer samples for a visual diff at the noise floor —
+makes it plausible, not justified. **An unmeasured change living in the tree under a commit that says
+it was removed is how the next round's baseline goes wrong.**
+
+**2. The `Environment.js` change is comment-only.** Every added and removed line in
+`git diff aef0aa0..HEAD -- src/engine/Environment.js` is inside a doc comment; the non-comment diff is
+empty. So the round's functional work is `StageFloor.js`, `StageMaterials.js`, `StageVolumetrics.js`
+and `RenderPipeline.js` — four files, not five. Whatever the lighting agent's shadow analysis
+concluded, no light and no post pass changed, and the round's attribution should say so.
+
+**3. A probe that launches its browser before waiting for quiet cannot yield.** Two copies of
+`r33-frametime.mjs` deadlocked for several minutes: each held a headless Chromium open while waiting
+for the other's to disappear, so each counted the other as contention and neither ever took a rep.
+The wait must happen **above** `chromium.launch`, or via a file lock taken before the launch. A
+politeness check that runs after you have already taken the resource is not a politeness check.
