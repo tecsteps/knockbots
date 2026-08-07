@@ -2438,6 +2438,40 @@
 .mbtn:active { transform: translateX(0.2em) scale(0.98); }
 .mbtn[disabled] { opacity: 0.35; pointer-events: none; }
 
+/*
+ * THE 27-PIXEL BUTTON.
+ *
+ * `.mbtn` is 2.6em tall at 0.85em, so its height is 2.21 x whatever the screen
+ * root resolves to. On a desktop that is comfortable. On a landscape phone,
+ * `.kbs-screen` sets `font-size: clamp(12px, 3.6vh, 16px)` and 3.6vh of a
+ * 390px-tall viewport is 12px -- the clamp floor -- which lands every nav
+ * button at 27 CSS px. At the 0.166mm/px this project measured on an iPhone 13,
+ * 27px is 4.5mm: HALF the ~9mm contact patch of an adult thumb. ARCADE, MOVE
+ * LIST and QUIT TO TITLE were all sitting at 4.5mm.
+ *
+ * Found by `tools/touchgate.mjs`, not by eye and not by the interface axis.
+ * That axis has scored 76 or better -- the highest of the six -- through a
+ * missing typeface, a touch pad that ate select taps, no way to leave a match
+ * on a phone, and a real player who could not find either of the two controls
+ * they needed. It grades the craft of chrome in a still image, and a still
+ * image does not have a thumb. The gate walks the path and measures every
+ * target it taps, which is why it saw this on its first run.
+ *
+ * 44px is the floor `TouchControls.js` derives from the same measurements, so
+ * it is the repo's own number rather than a borrowed platform guideline. It is
+ * a `min-height` rather than a `height` so the three later, more specific
+ * `.mbtn` rules -- select footer, imprint, results -- keep their own heights
+ * wherever those already clear the floor.
+ *
+ * Gated on `(hover: none)`, matching `isTouchPointer()` in `MenuSystem.js`: a
+ * mouse is precise to a pixel and does not need the extra 17px, and a pointer
+ * device paired mid-session re-evaluates this query the same way that function
+ * re-evaluates on every event.
+ */
+@media (hover: none) {
+  .mbtn { min-height: 44px; }
+}
+
 .title-hint {
   position: absolute; bottom: 2em; left: 0; right: 0;
   text-align: center;

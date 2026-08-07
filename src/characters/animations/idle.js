@@ -410,14 +410,29 @@ export function carry(clip, opts = {}) {
 //
 // Across the 92, at rest:
 //
-//   |twist|        median 18.18 deg      <- NOT the defect. Already in band.
+//   |twist|        median 18.18 deg      <- NOT the defect. See the note below.
 //   |frontal|      median  1.23 deg      <- the defect
 //   |pelvicTilt|   median  0.47 deg      <- the defect, p25 is 0.00
 //   |spineBow|     median  3.46 mm       <- a column, over a 0.9 m spine
 //
 // The brief predicted all of these were near zero. Twist is not: `STANCE`
-// blades the pelvis -28 deg and counter-rotates the spine +19, which lands
-// inside the 15-20 deg the reference sits at. What is at zero is every axis in
+// blades the pelvis -28 deg and counter-rotates the spine +19.
+//
+// AN EARLIER VERSION OF THIS COMMENT ADDED "which lands inside the 15-20 deg
+// the reference sits at". That band does not exist. It appears in no
+// measurement of any reference in this repo, and it cannot: the references are
+// single 2D press stills with no rig, and absolute hip-to-shoulder yaw is not
+// recoverable from one uncalibrated view. It is the same error as the character
+// axis's "8.22 against a reference median 18.57", which turned out to be our
+// mean against their p75 -- a target nobody ever measured on the thing it
+// claimed to compare against. The four numbers above are rig-internal and
+// sound; treat them as OUR pose description, never as a score against Tekken.
+// What a 2D still legitimately supports is screen-space silhouette, foot plant,
+// knee bend, image-plane lean and contact readability -- which is also what the
+// camera resolves: sagittal pitch converts ~1:1 on screen, roll ~0 at contact,
+// twist ~6px against lean's ~22px.
+//
+// What is at zero is every axis in
 // the FRONTAL plane -- the plane the fight camera looks along. The pelvis is
 // level to half a degree and the shoulder line is parallel to it to 1.2, in
 // seventy-four of the ninety-two clips to the same three decimal places,

@@ -2834,3 +2834,88 @@ score that cannot see whether the game is operable.
 **Not one of these was a bug in the game.** Every one was a bug in what the project believed it was
 measuring — and in five of six cases the correction already existed in writing somewhere in the repo
 while the code, the briefs, or both carried on using the old number.
+
+---
+
+# The touch path gate: a 27-pixel button, and a brief that cited evidence which did not exist
+
+## Why the interface axis needed an instrument at all
+
+Interface scores 76, the highest of the six, and it has missed every interface
+defect this project has actually shipped. It grades the **craft of chrome already on screen** —
+type hierarchy, bar design, motion — from static captures. Things that scored 76 or better while
+broken: the generated typeface was missing for several rounds and the axis scored Arial Narrow; the
+touch pad's hit region ate character-select taps; there was no way to leave a match on a phone; and a
+real player on a real handset could not find EITHER of the two controls they needed, **while both
+were on screen in front of them.**
+
+A blind critic looking at a screenshot cannot see any of that. So `tools/touchgate.mjs` asks the one
+question the craft score cannot: *can a player who has been told nothing get from the title screen to
+a fight and back out again, using nothing but their thumbs?*
+
+**Input is touch only** — every action is a `touchscreen.tap` at real viewport coordinates, with no
+keyboard fallback and no call into `window.KB` to advance state. **Targets are found by what is
+visible** — a regex over rendered text, then an occlusion check at the element's own centre before
+the tap. **Observation is read-only.** The path is start → inspect → lock → fight → menu → move list
+→ close → leave, at 844x390 and 667x375, plus a portrait check that only requires the rotate notice
+to exist and be legible.
+
+## What it found on its first run
+
+**The path passes, 8 of 8, at both sizes.** The game is operable by thumb end to end. That is worth
+saying plainly, because the framing going in was pessimistic and the measurement disagreed.
+
+**Three nav buttons were 27 CSS px tall.** `.mbtn` is `2.6em` at `0.85em`, so its height is 2.21x
+whatever the screen root resolves to; `.kbs-screen` sets `clamp(12px, 3.6vh, 16px)`, and 3.6vh of a
+390px-tall viewport is 12px — the clamp floor. At the 0.166mm/px this project measured on an iPhone
+13, **27px is 4.5mm: half the ~9mm contact patch of an adult thumb.** ARCADE, MOVE LIST and QUIT TO
+TITLE were all at 4.5mm. Two of those three are the controls the real player could not operate.
+
+Fixed with `@media (hover: none) { .mbtn { min-height: 44px } }` — 44 being the floor
+`TouchControls.js` derives from those same measurements, so it is the repo's own number and not a
+borrowed platform guideline. `min-height` rather than `height` so the three later, more specific
+`.mbtn` rules keep their own heights. After the fix every target on the path clears the floor at both
+sizes.
+
+## The controls, which are the reason the result is admissible
+
+**Null:** the path run twice, unchanged, must give the same verdict. 8/8 then 8/8, with byte-identical
+target boxes. **Positive:** inject `.hud-pause { display: none }` and nothing else — the MENU step
+must fail and every step before it must still pass. It fails at exactly `menu`, 4/8, with
+`hitTargetMissing`. If hiding the pause button did not fail this gate, the gate would not have caught
+the defect that motivated it. When a control is violated the tool reports **NO VERDICT**, which is
+stricter than reporting a failure.
+
+## Two self-contradictions in the instrument's own output
+
+The first version rounded the target box and printed `hitTargetSmall: 68x44 < 44`. The real height was
+43.99 after a fractional layout, so the message contradicted its own verdict and a reader had to
+choose between believing the number or the conclusion. One decimal did not fix it either — a
+`min-height: 44px` box lays out at 43.99997 and prints `44.0 < 44`, the same contradiction one digit
+further down. The comparison now takes a half-pixel tolerance: **sub-pixel layout residue is not a
+usability finding, and an instrument that flags it is crying wolf about the exact rule it exists to
+enforce.**
+
+## And the finding I did not want: the brief cited evidence that was not on disk
+
+The Kimi k3 mobile audit opened with *"The two handset screenshots referenced in the brief are not on
+disk — that's a finding in itself"*, and it was right. `scratchpad/handset/01-training-fullscreen.jpg`
+and `02-fullscreen-lost.jpg` do not exist and never did. The player pasted those images into the
+conversation; **they were never written out.** My brief called them *"the ground truth"* and *"worth
+more than anything you can derive from the stylesheet."*
+
+That is the same failure as `ref/06` in the stage frame list and the 15-20 degree animation band:
+**an authority cited without being checked.** The difference is only that this one was cited to
+another agent rather than to the code, and that the agent checked it in its first thirty seconds when
+I had not checked it at all before sending. Kimi then died mid-investigation — its last complete
+observation, that the `.kbg-*` training classes have no rules in `ui.css`, is true but not the defect
+it was heading toward: those 188 rules live in a `<style>` block inside `MenuSystem.js`.
+
+**Rule going forward: a brief may not name a file as evidence without the author having listed it.**
+An external model cannot audit an image that does not exist, and the twenty minutes it spends
+discovering that are twenty minutes it is not auditing the game.
+
+## Still open
+
+The gate does not enter training mode, so `.kbg-step-btn` and the frame-data panel are unmeasured by
+it — the same blind spot for the same reason, one screen further in.
