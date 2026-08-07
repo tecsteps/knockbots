@@ -2150,3 +2150,57 @@ concluded, no light and no post pass changed, and the round's attribution should
 for the other's to disappear, so each counted the other as contention and neither ever took a rep.
 The wait must happen **above** `chromium.launch`, or via a file lock taken before the launch. A
 politeness check that runs after you have already taken the resource is not a politeness check.
+
+## Sixth instrument failure: the quiet-gate matched its own wrapper and deadlocked for 15 minutes
+
+A capture wrapper waited for `pgrep -f "chrome-headless-shell --disable-field-trial-config"` to reach
+zero before starting. **The wrapper's own shell had that string in its command line**, so `pgrep`
+matched the wrapper itself, the count never reached zero, and the capture sat in a wait loop for
+about fifteen minutes reporting a busy machine while the machine was free.
+
+This is the same false positive already recorded here — and it was recorded, and an agent walked into
+it anyway — but in the opposite direction and with a worse consequence. As a **tag** it invents
+contention that is not there and discards good data. As a **gate** it deadlocks and produces nothing
+at all.
+
+Reproduction depends on the shell form, which is why it is easy to miss:
+
+```
+plain  sh -c '... pgrep ...'          no self-match; the shell does not persist in the match set
+harness multi-line wrapper            SELF-MATCHES -- observed directly: pgrep -fl "r33-frametime"
+                                      returned the zsh wrapper alongside the real node process
+```
+
+The node probe was never affected, because `execSync('sh -c "pgrep ..."')` exec's straight into
+`pgrep` and leaves no shell behind — which is why its clean reps were genuinely clean and the 16.85ms
+baseline stands.
+
+**Anchor the pattern on the binary path, not on a flag:**
+
+```
+pgrep -f 'chromium_headless_shell-[0-9]+/chrome-headless-shell-mac-arm64/chrome-headless-shell --disable-field-trial-config'
+```
+
+Six instrument failures in three rounds, and the taxonomy is now complete enough to be useful:
+
+```
+1. rAF wall clock, separate windows   null 18.0 / 39.8 / 61.8 ms          obvious nonsense
+2. rAF wall clock, paired in blocks   no-op +/-3 ms, baseline drifting    obvious nonsense
+3. GPU timer queries                  no-op +12.7 over [-26.4, +22.8]     obvious nonsense
+4. amplification, 16 copies           no-op spanning [-37.4, +19.5]       obvious nonsense
+5. repeated reps off one startMatch   a clean, monotone, fictional 5.1ms  FLATTERS
+6. quiet-gate matching its own shell  fifteen minutes of nothing          DEADLOCKS
+```
+
+The first four announce themselves. **Five and six do not** — one manufactures a result, the other
+manufactures an obstacle, and both look like the system working correctly while you watch.
+
+## Two copies of a probe deadlock each other, and the fix is ordering
+
+`r33-frametime.mjs` launches its browser and *then* enters its wait-for-quiet loop. Two copies
+therefore hold a Chromium open each while waiting for the other's to disappear, so each counts the
+other as contention and neither ever takes a rep — observed for several minutes across two arms.
+
+**The wait must sit above `chromium.launch`**, or the script should take a lockfile before launching,
+the way `tools/capture.mjs` already does with `.capture-lock`. A politeness check that runs after you
+have already taken the resource is not a politeness check.
