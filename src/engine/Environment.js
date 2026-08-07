@@ -417,8 +417,105 @@ const RIM = {
    * the edge than the rim's own 15% is. It is not cut further because hue is the
    * channel this light exists for and the reference leans on it: at 0.5 the cyan
    * on a warm robot stops reading as a second source.
+   *
+   * **1.20, and the sentence immediately above is the reason it can be.** That
+   * sentence is the only thing that was holding this number up: the pass is 15.6%
+   * of the light on a fighter, the difference image shows most of it landing
+   * *inside* the silhouette as a cyan-and-magenta wash over arm, thigh and
+   * torso, and the single argument against cutting the wash was that the hue
+   * would go with it. {@link SCREEN_RIM} now carries the hue on a term that is
+   * added rather than multiplied, so the analytic spots no longer have to be the
+   * thing that makes the rim coloured, and what is left of their job — a real
+   * three-dimensional falloff round the shoulder and the hip that no screen-space
+   * term can fake — does not need 1.66 to do it.
+   *
+   * A 28% cut takes the pass from about 15.6% of a fighter's light to about
+   * 11%, so the fighter loses roughly 5% of its total. That is affordable and
+   * the surplus is already measured: {@link KEY_SPOT}.share records the subject
+   * sitting at 0.21-0.22 linear against a Tekken 8 reference band of
+   * 0.097-0.248, so 5% lands near 0.20 and stays inside it. What the 5% buys is
+   * the second defect the lighting critics named — panel gaps and recesses that
+   * "read as muddy dark orange, not black" — because a shadowless source that
+   * wraps a 1 m robot from 3.2 m is precisely a light that fills creases, and
+   * this is the second-largest of them after the softbox.
+   *
+   * Predicted, and worth checking against a capture rather than believed: form
+   * contrast up (the 1.95 -> 1.66 cut was worth 0.05, so this should be worth
+   * rather more), silhouette-over-body up again from 0.94, subject mean down
+   * about 5%, and the cyan/magenta cast over the flat of the thigh plates
+   * visibly reduced. If subject mean falls out of the 0.097-0.248 band, this is
+   * the number to put back first.
    */
-  gain: 1.66,
+  gain: 1.20,
+};
+
+/**
+ * The screen-space rim: a coloured edge added to the beauty buffer at depth
+ * discontinuities, inside the fullscreen blit `ScenePass` already runs.
+ *
+ * ## Why this exists when the rig already has four rim lights
+ *
+ * It exists because of one word in the brief that no analytic light in this file
+ * can satisfy: a rim that works **regardless of that character's own palette**.
+ * A rim light in a forward PBR renderer is multiplied by the surface it lands
+ * on. Diffuse is albedo-multiplied by definition; specular is F0-multiplied, and
+ * for a metal F0 *is* the albedo. So a 0x38ccff rim on a fighter whose armour is
+ * authored in cream and amber returns the fighter's blue reflectance, which on
+ * this cast is a small number, and the edge that arrives is dim and neutral.
+ * This is exactly the critic finding that "our rim is currently material colour,
+ * not a light", and it is not a tuning failure — it is what the BRDF does.
+ *
+ * {@link RIM} records the other half of the same wall, measured rather than
+ * argued: four placements swept from the shipped ±34° round to ±8° off directly
+ * behind, and *every grazing arm was worse on every metric*, because a robot's
+ * outline is made of flat plate edges facing arbitrary directions rather than
+ * the near-tangent surface an organic silhouette presents. Its conclusion is
+ * blunt — "on a faceted hard-surface robot no analytic light draws an outline"
+ * — and it is right. An additive screen-space term is the way past both walls at
+ * once: it is not multiplied by anything, and it finds the outline from the
+ * depth buffer instead of hoping a cosine lands on it.
+ *
+ * ## What it costs
+ *
+ * Nothing that the budget counts. No light is added, so `NUM_SPOT_LIGHTS`,
+ * `NUM_DIR_LIGHTS` and `NUM_RECT_AREA_LIGHTS` are unchanged and no material in
+ * the scene recompiles — which is the trap `docs/PROFILING.md` documents and the
+ * reason `DIRECTIONAL_RIM_SHARE` had to wait a whole round to be reclaimed. No
+ * draw call is added either: `ScenePass` already blits its target into the
+ * composer's write buffer every frame with a trivial copy shader, and this is
+ * four extra depth taps and a dot product inside that shader, on the ~20-30% of
+ * the frame that survives the depth gate. Against a scene pass that measures
+ * 60-72 ms of which 34 ms is eight `RectAreaLight`s, it is not a term the frame
+ * budget can see.
+ *
+ * ## The two knobs that are here rather than in the pipeline
+ *
+ * Colour and level, because they are the mood's and this file owns moods. The
+ * geometry — band width, gate depth, edge threshold — is the pass's and lives
+ * in `RenderPipeline`.
+ */
+const SCREEN_RIM = {
+  /**
+   * The mood rim irradiance that maps to a level of 1. The table runs 8.4 to
+   * 10.4 across the seven moods, so a reference of 9.0 puts every mood inside
+   * 0.93-1.16 and no mood is a special case — the point of normalising here is
+   * that the pass keeps its authored strength when a mood pushes its rim budget
+   * for the analytic rig, instead of the screen-space edge tracking it linearly
+   * and blowing out on `neonCity`.
+   */
+  reference: 9.0,
+  /**
+   * Cool arm and warm arm, as fractions of the pass's own gain. The 2:1 split
+   * follows the mood tables rather than being chosen here — every mood authors
+   * its `rimB` kicker at 2.5-4.0 against a `rim` of 8.4-10.4, and the standard
+   * warm-key / cool-rim / warm-kicker rig wants the kicker under the rim. What
+   * this file must NOT do is let the two arms sum to an outline: they are on
+   * opposing azimuths and each is gated to the edges facing it, so a pixel that
+   * takes both is a pixel where the depth gradient points at both sources at
+   * once, which the `max(dot, 0)` on each arm makes impossible.
+   */
+  cool: 1.0,
+  warm: 0.45,
 };
 
 /**
@@ -2031,6 +2128,53 @@ export class Environment {
      */
     this.fighterRims = [];
     /**
+     * The rim cue: what the analytic rim rig is doing this frame, in the terms
+     * a screen-space pass needs, published on `scene.userData.rimCue` so
+     * `RenderPipeline` can read it without either module importing the other.
+     *
+     * See {@link SCREEN_RIM} for why a screen-space rim exists at all next to
+     * four analytic rim lights. The short version is that every analytic rim in
+     * this file is multiplied by the robot it lands on — diffuse by albedo,
+     * specular by F0, which for a metal *is* the albedo — so a cyan rim on a
+     * warm-painted fighter delivers whatever the fighter's blue reflectance
+     * happens to be, and on this cast that is nearly nothing. The screen-space
+     * pass adds its colour rather than multiplying it, which is the only way a
+     * rim gets to be the same colour on every character.
+     *
+     * `coolDir` / `warmDir` are unit vectors in **world** space pointing from
+     * the fighter toward the source, already carrying `_rimYaw`'s correction, so
+     * the pipeline only has to rotate them into view space. `level` is the
+     * mood's own rim irradiance normalised by {@link SCREEN_RIM}.reference, so a
+     * mood that pushes its rim budget gets a brighter edge and a mood that pulls
+     * it back gets a dimmer one without anything here being retuned.
+     *
+     * `center` and `spread` are the depth gate: the world midpoint of the two
+     * fighters and half their separation. The pass has no fighter mask — the
+     * beauty target has no spare channel and stencil is not portably samplable —
+     * so the gate is what keeps the effect off the set. See the note on
+     * `RIM_SLAB` in `RenderPipeline`.
+     */
+    this.rimCue = {
+      active: false,
+      coolColor: new THREE.Color(1, 1, 1),
+      warmColor: new THREE.Color(1, 1, 1),
+      coolDir: new THREE.Vector3(0, 0, -1),
+      warmDir: new THREE.Vector3(0, 0, -1),
+      coolLevel: 0,
+      warmLevel: 0,
+      center: new THREE.Vector3(0, 1.2, 0),
+      spread: 0,
+    };
+    // Published once. `RenderPipeline` holds no reference to this class and this
+    // class holds none to it — the pass reads the object off the scene it is
+    // already drawing, and a scene with no `Environment` on it (the roster
+    // turntable, the menu preview) simply has no cue and gets the plain blit.
+    scene.userData.rimCue = this.rimCue;
+    /** Scratch for {@link _publishRimCue}; separate from `_tmpVec` so the two
+     * cannot be aliased by a later edit to the rig loop that runs before it. */
+    this._cueVec = new THREE.Vector3();
+    this._cueVecB = new THREE.Vector3();
+    /**
      * Multiplier on the shadowed per-fighter key, and the A/B arm for it.
      *
      * It is a live field rather than a compile-time constant on purpose: the
@@ -3080,6 +3224,83 @@ export class Environment {
         .copy(this._tmpVecB.normalize().multiplyScalar(KEY_SPOT.radius))
         .add(this._tmpVec);
     }
+
+    this._publishRimCue(coolPower, warmPower);
+  }
+
+  /**
+   * Fill {@link rimCue} from the rig that was just placed, for the screen-space
+   * rim in `RenderPipeline`. See {@link SCREEN_RIM}.
+   *
+   * The directions are taken off the first live rig rather than averaged over
+   * both. `_rimYaw` has already rotated each rig's azimuth into the camera's
+   * frame, which is the whole point of that correction — so in *view* space the
+   * two rigs' rim directions agree by construction, and they differ only by the
+   * few degrees of parallax between two fighters a couple of metres apart. One
+   * pair of vectors is the honest description of a rig that is deliberately
+   * camera-relative, and it is also what lets the pass hold a single uniform
+   * instead of a per-fighter one it has no mask to select with.
+   *
+   * @param {number} coolPower mood-space irradiance for the cool rim
+   * @param {number} warmPower mood-space irradiance for the warm rim
+   */
+  _publishRimCue(coolPower, warmPower) {
+    const cue = this.rimCue;
+    let lead = null;
+    let n = 0;
+    cue.center.set(0, 0, 0);
+    for (const rig of this.fighterRims) {
+      if (!rig.root) continue;
+      if (!lead) lead = rig;
+      cue.center.add(rig.aim);
+      n++;
+    }
+    // No fighters placed yet, or the arm is ablated. The pass reads `active` and
+    // zeroes its gain, which is a uniform write and not a recompile, so this can
+    // flip on any frame — including the frame a character finishes loading.
+    if (!lead || this.ablate.has('screenRim')) {
+      cue.active = false;
+      return;
+    }
+    cue.center.multiplyScalar(1 / n);
+
+    // Half the pair's separation **along the view axis**, which is what the
+    // depth gate is sized off.
+    //
+    // Two things it is deliberately not. It is not `FightCamera`'s focus radius,
+    // because that is a framing hint carrying camera padding and every metre of
+    // padding is a metre of set the gate stops rejecting. And it is not the 3D
+    // separation: two fighters squared up side-on to the camera are three metres
+    // apart on screen and a few centimetres apart in depth, and a gate sized off
+    // the 3D figure would open to three metres of arena behind them for a spread
+    // that does not exist. Measured along the eye, the common case collapses to
+    // the {@link SCREEN_RIM}-adjacent floor in `RIM_SS.minSlab` and only a pair
+    // genuinely stacked front-to-back widens it.
+    let spread = 0;
+    const eye = this.camera ? this._cueVec.set(0, 0, -1).transformDirection(this.camera.matrixWorld) : null;
+    for (const rig of this.fighterRims) {
+      if (!rig.root) continue;
+      this._cueVecB.copy(rig.aim).sub(cue.center);
+      spread = Math.max(spread, eye ? Math.abs(this._cueVecB.dot(eye)) : this._cueVecB.length());
+    }
+    cue.spread = spread;
+
+    cue.coolDir.copy(lead.cool.position).sub(lead.aim);
+    if (cue.coolDir.lengthSq() < 1e-8) cue.coolDir.set(0, 0, -1);
+    cue.coolDir.normalize();
+    cue.warmDir.copy(lead.warm.position).sub(lead.aim);
+    if (cue.warmDir.lengthSq() < 1e-8) cue.warmDir.set(0, 0, 1);
+    cue.warmDir.normalize();
+
+    // The same two drifted colours the analytic spots were just given, so the
+    // added edge and the multiplied one are never two different hues — the
+    // screen-space term is meant to be the part of that light that survives the
+    // fighter's albedo, not a second source.
+    cue.coolColor.copy(this._tmpColor);
+    cue.warmColor.copy(this._tmpColorB);
+    cue.coolLevel = SCREEN_RIM.cool * coolPower / SCREEN_RIM.reference;
+    cue.warmLevel = SCREEN_RIM.warm * warmPower / SCREEN_RIM.reference;
+    cue.active = true;
   }
 
   /**

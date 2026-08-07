@@ -200,6 +200,183 @@ const GLOBAL_LIGHT_BIT = 1 << GLOBAL_LIGHT_LAYER;
 const ARENA_LIGHT_BIT = 1 << ARENA_LIGHT_LAYER;
 
 /**
+ * Geometry of the screen-space rim that `ScenePass`'s blit adds at depth
+ * discontinuities. The colour, the two source directions and the depth of the
+ * fighter pair arrive on `scene.userData.rimCue`; `SCREEN_RIM` in
+ * `Environment.js` carries the argument for why an additive screen-space term
+ * is the only kind of rim that can be the same colour on every character, and
+ * `RIM` there carries the measured sweep showing that no analytic placement
+ * draws an outline on a faceted robot. This block is only the shape of it.
+ *
+ * ## What this pass does not have, and what stands in for it
+ *
+ * It does not have a fighter mask. The beauty target is a single half-float
+ * RGBA with no spare channel, alpha is written to 1 by every opaque material in
+ * the scene, a second colour attachment would change the target for every pass
+ * downstream, and stencil is not portably samplable from a fragment shader in
+ * WebGL2 (`WEBGL_stencil_texturing` is an extension three does not expose). So
+ * the discriminator is depth, in three gates, and each one is doing a specific
+ * job that the other two cannot:
+ *
+ *   1. `slab` — the fighter pair's own depth band. This is what keeps the rim
+ *      off the set. It is sized from the fighters' world positions rather than
+ *      from `FightCamera`'s focus radius because the focus radius carries
+ *      framing padding, and every metre of padding is a metre of arena the gate
+ *      stops rejecting.
+ *   2. `edge` — the depth step to the furthest neighbour, as a fraction of the
+ *      pixel's own distance so it is framing-invariant.
+ *   3. the dot product against the source's screen direction, which is what
+ *      separates a rim light from a cartoon outline.
+ *
+ * **The honest limitation:** set dressing that stands at exactly the fighters'
+ * depth and has a real silhouette against something further back will take a
+ * rim too. In the pit the barrier posts are the candidates. That reads as the
+ * rim source being a real lamp in the room rather than as an error, and it is
+ * the price of not having a mask; if a capture shows it landing somewhere it
+ * should not, `slabPad` is the number to pull in first, then `gain` to zero.
+ */
+const RIM_SS = {
+  /**
+   * Peak added radiance per unit of rim level, in the linear scene-referred
+   * units the beauty buffer is in.
+   *
+   * Sized against two numbers this file already records rather than by eye.
+   * `look.exposure` is 0.95, which lands display white somewhere near 1.1 of
+   * scene radiance, and a fighter's median sits at 0.21-0.22 linear (see
+   * `KEY_SPOT.share` in `Environment.js`). At 0.9 a fully-facing edge on a cyan
+   * rim adds about (0.04, 0.54, 0.90) on top of that median, so the edge lands
+   * bright and still saturated instead of clipping to white — which matters,
+   * because AgX desaturates into the highlight and a rim driven to white throws
+   * away the one channel the critics said was missing.
+   *
+   * It is deliberately at the bright end of what is defensible. Four blind
+   * critics said there is no rim at all, so the failure mode to avoid is another
+   * round of "it is there if you look for it".
+   *
+   * Below the bloom threshold (5.5) on purpose: this edge is meant to be a hard
+   * line, and a bloomed rim is a soft one.
+   */
+  gain: 0.9,
+  /**
+   * Tap radius in render pixels, which is also very nearly the width of the
+   * band: a pixel further inside the silhouette than this taps a neighbour that
+   * is still on the fighter and sees no gap. Expressed in *render* pixels, so
+   * adaptive resolution keeps the rim the same apparent width on screen instead
+   * of thinning it exactly when the frame is already struggling.
+   *
+   * 2.5 against a reference that runs 2-4 px at 1080p. Widening it is one
+   * constant and four more texels of reach; it is not free of a second effect,
+   * because a wider tap also finds shallower internal steps and starts drawing
+   * panel seams as well as outlines.
+   */
+  band: 2.5,
+  /** Fraction of the band inside which the depth gate is at full strength. */
+  slabSoft: 0.7,
+  /**
+   * Depth step that starts and finishes the edge ramp, as a fraction of the
+   * pixel's own view distance. At a typical 8 m fight framing that is 8 cm to
+   * 44 cm: an arm crossing a torso (15-25 cm) takes a partial rim, which is
+   * correct and is where a rim reads as form; the outer silhouette against a
+   * barrier metres behind takes the full one.
+   */
+  minGap: 0.010,
+  fullGap: 0.055,
+  /** Floor on the half-depth of the gate, metres, and the pad added to the pair's spread. */
+  minSlab: 2.2,
+  slabPad: 1.6,
+
+  /**
+   * Aerial perspective, in the same shader and off the same depth tap.
+   *
+   * Three critics scored this independently and said the same thing: the crowd
+   * *"is the same sharpness AND contrast as the fighters — a flat cardboard
+   * cutout"*. The optical half of that is `BokehDofPass`; this is the tonal
+   * half, and it exists because a survey of the project turned up **no
+   * distance-varying saturation term anywhere in it**. Every recession cue
+   * shipped here is a value ramp: `FogExp2`, the crowd's own sink toward
+   * 0.85x the fog colour, the backdrop and city shaders converging toward 1.7x
+   * and 2.4x of it. Value was ramped and measured; chroma was never touched.
+   *
+   * Chroma is the cue that was missing. A background at the same saturation as
+   * the foreground reads as a painted flat however carefully its value is
+   * graded, which is what the critics were describing.
+   *
+   * ## Why this cannot regress the other two defects
+   *
+   * Because it provably does not move luminance. Both mix targets are built at
+   * the pixel's own luminance — neutral grey is `vec3(lum)`, and the haze tint
+   * is a colour normalised to unit luminance and then scaled by `lum` — so the
+   * result has luminance `lum` at every mix weight. It cannot lift the black
+   * point, cannot touch figure/ground, and cannot interact with the grade's toe.
+   * That property is the reason this is a saturation term and not the obvious
+   * "blend the far field toward the haze colour", which would have been a third
+   * value ramp on a frame the same file already records as receding by
+   * darkening.
+   *
+   * ## The one interaction to watch
+   *
+   * `StageVolumetrics` records a hard-won rule: *"on a horizontal plane,
+   * distance from the eye IS the screen row, so any gradient hung on it is a
+   * band painted across the frame"* — a previous round shipped a haze slab that
+   * turned into a flat-topped bright strip for exactly that reason. This term is
+   * keyed to the depth buffer rather than to a plane, so it follows real
+   * geometry, and it is a desaturation at fixed luminance rather than an
+   * additive emission, so it has no brightness to form an edge out of. The deck
+   * will carry a chroma gradient with distance, which is what a receding floor
+   * does. If a capture shows a horizontal seam anywhere, this is the term to
+   * zero first.
+   */
+  /**
+   * How much chroma is gone at the far end of the ramp. 0.6 leaves the far
+   * field 40% of its saturation — short of the reference, which is more
+   * aggressive still, and deliberately short because this is the first
+   * saturation term the project has ever had and there is no measured band for
+   * it here yet.
+   */
+  aerial: 0.6,
+  /**
+   * Length of the ramp beyond its start, as a multiple of the subject distance
+   * and with a floor in metres. The start is always the far edge of the rim's
+   * depth slab, so the fighters are at exactly zero by construction.
+   *
+   * **The multiple alone was the obvious answer and it is wrong, because the
+   * pit is a closed box.** `BokehDofPass` argues at length that recession
+   * belongs in multiples of the subject distance rather than in metres, and that
+   * is correct for a lens because a lens sees to infinity. This term does not:
+   * `sublevel09` is about 26 m deep, so at the wide framing (subject at 13.8 m)
+   * the *entire set* — fence at 19, crowd at 23, back wall at 26 — lives between
+   * 1.2x and 1.9x the subject distance. A pure multiple ramp finishing at 2.2x
+   * puts its full effect at 30 m, past the back wall, and delivers 0.47 to the
+   * crowd on the one framing the critics scored while saturating at 1.00 across
+   * the whole of a hero shot. Wrong at both ends.
+   *
+   * The floor is what fixes it: `max(10 m, 0.8 x subject)` gives a ramp that is
+   * still ramping across the depth the set actually occupies at every framing,
+   * so the crowd's near and far ranks are not handed the same number. That
+   * matters here more than the absolute level does — the critics' word was
+   * "cardboard cutout", and a cutout is a thing with no internal depth gradient.
+   *
+   * Worked through against the pit's real layout, taking the fence 5.2 m behind
+   * the fight plane, the crowd tier 9.2 m, the back wall 12.2 m and the parallax
+   * city 46 m, at the three shipped framings:
+   *
+   *     framing       start  full     fence     crowd      wall      city
+   *     wide  S=13.8   16.0  27.0   19m 0.18  23m 0.70  26m 0.98  60m 1.00
+   *     hero  S=6.5     8.7  18.7   12m 0.22  16m 0.78  19m 1.00  53m 1.00
+   *     port  S=4.2     6.4  16.4    9m 0.22  13m 0.78  16m 1.00  50m 1.00
+   *
+   * Read down the columns rather than across the rows. The same piece of
+   * architecture receives the same treatment on every framing — the fence lands
+   * at 0.18-0.22 and the crowd at 0.70-0.78 whether the camera is at 4 m or
+   * 14 m — which is the property being bought, and it falls out of the floor and
+   * the multiple together rather than from either alone. A shot cut is not
+   * supposed to change how far away the crowd is.
+   */
+  aerialSpan: 0.8,
+  aerialSpanMin: 10.0,
+};
+
+/**
  * Name prefixes of the top-level groups whose whole subtree belongs in the
  * full-rig pass: `Fighter` names its root `fighter<index>`, `EffectsDirector`
  * names its root `fx`, and `TestHarness.rosterLineup` names each of its ten
@@ -860,15 +1037,179 @@ class ScenePass extends Pass {
 
     this.material = new THREE.ShaderMaterial({
       name: 'SceneBlit',
-      uniforms: { tDiffuse: { value: this.target.texture } },
+      uniforms: {
+        tDiffuse: { value: this.target.texture },
+        tDepth: { value: depth },
+        uTexel: { value: new THREE.Vector2(1 / 1920, 1 / 1080) },
+        uCamera: { value: new THREE.Vector2(0.1, 100) },
+        uSlab: { value: new THREE.Vector2(8, 3) },
+        uRimA: { value: new THREE.Color(0, 0, 0) },
+        uRimB: { value: new THREE.Color(0, 0, 0) },
+        uDirA: { value: new THREE.Vector2(0, 0) },
+        uDirB: { value: new THREE.Vector2(0, 0) },
+        uRimGain: { value: 0 },
+        uAerial: { value: new THREE.Vector2(1e9, 1e9 + 1) },
+        uAerialAmt: { value: 0 },
+      },
       vertexShader: FULLSCREEN_VERT,
       fragmentShader: /* glsl */ `
         varying vec2 vUv;
         uniform sampler2D tDiffuse;
-        void main() { gl_FragColor = texture2D( tDiffuse, vUv ); }`,
+        uniform highp sampler2D tDepth;
+        uniform vec2 uTexel;
+        uniform vec2 uCamera;
+        uniform vec2 uSlab;
+        uniform vec3 uRimA;
+        uniform vec3 uRimB;
+        uniform vec2 uDirA;
+        uniform vec2 uDirB;
+        uniform float uRimGain;
+        uniform vec2 uAerial;
+        uniform float uAerialAmt;
+
+        // View-space distance along the eye axis. Standard perspective
+        // linearisation; three's own 'perspectiveDepthToViewZ' negated, written
+        // out rather than '#include <packing>'d to keep this shader readable
+        // next to the copy shader it grew out of.
+        float viewDist( vec2 uv ) {
+          float d = texture2D( tDepth, uv ).x;
+          return -( uCamera.x * uCamera.y ) / ( ( uCamera.y - uCamera.x ) * d - uCamera.y );
+        }
+
+        void main() {
+          vec4 col = texture2D( tDiffuse, vUv );
+
+          // Uniform branch: both terms are off when there is no rim cue and no
+          // fog on the scene, so a menu preview or the roster turntable pays for
+          // exactly the copy this shader used to be. When either is on, the one
+          // depth tap below is shared between them.
+          if ( uRimGain > 0.0 || uAerialAmt > 0.0 ) {
+            float dc = viewDist( vUv );
+
+            // --- aerial perspective -------------------------------------
+            // Chroma falls with distance; luminance does not move at all.
+            //
+            // The project had no distance-varying saturation term anywhere —
+            // every recession cue in it is a value ramp, and the critics'
+            // reading of the result was "a flat cardboard cutout". Chroma is the
+            // cue that was missing: real distance desaturates hard, and a
+            // background carrying the same chroma as the foreground reads as a
+            // painted flat however correctly its value is ramped.
+            //
+            // The target is the pixel's OWN LUMINANCE, so the luminance of the
+            // result is that luminance at any mix weight. That is a guarantee
+            // and not an aspiration: this term cannot darken or brighten a
+            // single pixel, so it cannot reach the black point, the
+            // figure/ground ratio or anything the display transform is measured
+            // on. The frame's existing value ramp — mood fog, the crowd's sink
+            // toward 0.85x the fog colour, the backdrop and city shaders
+            // converging on 1.7x and 2.4x of it — is left to do the value half
+            // on its own, which it was already measured doing.
+            //
+            // No haze tint, and it was tried first. Mixing toward the mood's fog
+            // hue at unit luminance is the picturesque version of this and it is
+            // wrong here for an arithmetic reason: 'industrial' fog normalised
+            // to unit luminance is (0.659, 1.021, 1.799), so the target carries
+            // 1.8x as much blue as luminance and a NEUTRAL background pixel
+            // would come out of this bluer than it went in. A term whose job is
+            // to remove chroma must not be able to add any. The hue convergence
+            // that a tint would have bought is already authored and measured
+            // three times over in the value ramp above; saturation was the only
+            // channel nothing in this project touched with distance.
+            float aerial = smoothstep( uAerial.x, uAerial.y, dc ) * uAerialAmt;
+            if ( aerial > 0.0 ) {
+              float lum = dot( col.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
+              col.rgb = mix( col.rgb, vec3( lum ), aerial );
+            }
+
+            // --- rim ----------------------------------------------------
+            // Gate 1, and the one that does most of the work: only inside the
+            // depth slab the fighter pair occupies. Everything behind them —
+            // barrier, crowd, pillars, skyline — fails here before a single
+            // extra tap is issued, which is both why the effect stays off the
+            // set and why it is affordable. It is also exactly the band the
+            // aerial term above starts at the far edge of, so the two are
+            // disjoint by construction: nothing is both rimmed and hazed.
+            float slab = uRimGain > 0.0
+              ? 1.0 - smoothstep( uSlab.y * ${RIM_SS.slabSoft.toFixed(2)}, uSlab.y, abs( dc - uSlab.x ) )
+              : 0.0;
+            if ( slab > 0.0 ) {
+              vec2 e = uTexel * ${RIM_SS.band.toFixed(2)};
+              float dl = viewDist( vUv - vec2( e.x, 0.0 ) );
+              float dr = viewDist( vUv + vec2( e.x, 0.0 ) );
+              float dd = viewDist( vUv - vec2( 0.0, e.y ) );
+              float du = viewDist( vUv + vec2( 0.0, e.y ) );
+
+              // Gate 2: a depth STEP, not a depth slope.
+              //
+              // The first term is how much further away the furthest neighbour
+              // is. Taking the max rather than a symmetric gradient magnitude is
+              // what puts the band inside the silhouette instead of straddling
+              // it — a background pixel one texel outside the outline has a
+              // neighbour that is nearer, never further, so its gap is negative
+              // and it gets nothing.
+              //
+              // The second term is what stops a receding plane counting as an
+              // edge, and without it the deck does. A continuous surface seen at
+              // a grazing angle carries a large per-pixel depth change, and at
+              // the hero framing the floor's is within a factor of one of the
+              // threshold below — near enough that a run at a slightly lower
+              // camera would have laid a cool wash across the deck. A ramp is
+              // symmetric about the centre pixel, so subtracting how much NEARER
+              // the nearest neighbour is cancels it exactly: a plane scores zero
+              // at any angle, while a silhouette keeps the whole jump, because
+              // the pixels on its own side are all at the centre's own depth.
+              // Curvature on the fighter is suppressed by the same term, which
+              // is wanted — a rim belongs on the outline, not on every rounded
+              // plate that happens to turn away.
+              //
+              // Scaled by the pixel's own distance so the thresholds are
+              // framing-invariant.
+              float hi = max( max( dl, dr ), max( dd, du ) );
+              float lo = min( min( dl, dr ), min( dd, du ) );
+              float gap = ( hi - dc ) - max( dc - lo, 0.0 );
+              float edge = smoothstep(
+                ${RIM_SS.minGap.toFixed(4)} * dc, ${RIM_SS.fullGap.toFixed(4)} * dc, gap );
+              if ( edge > 0.0 ) {
+                // Gate 3, and the one that makes this a rim light rather than an
+                // outline filter. The screen-space depth gradient points away
+                // from the silhouette, so dotting it with the source's own
+                // screen direction lights the edges facing that source and
+                // leaves the rest alone. Squared to tighten the falloff; with a
+                // linear term the two arms meet round the top of the shoulder
+                // and close the outline, which is the failure this pass has to
+                // avoid above all others.
+                vec2 g = vec2( dr - dl, du - dd );
+                vec2 gn = g / max( length( g ), 1.0e-4 );
+                float fa = max( dot( gn, uDirA ), 0.0 );
+                float fb = max( dot( gn, uDirB ), 0.0 );
+                // Added, not multiplied. This is the entire reason the pass
+                // exists — see SCREEN_RIM in Environment.js. An analytic rim is
+                // scaled by the fighter's albedo and returns whatever blue
+                // reflectance a cream-and-amber robot has; this term is the same
+                // colour on every character in the roster.
+                col.rgb += edge * slab * uRimGain * ( uRimA * fa * fa + uRimB * fb * fb );
+              }
+            }
+          }
+
+          gl_FragColor = col;
+        }`,
       depthTest: false,
       depthWrite: false,
     });
+    /**
+     * Strength of the screen-space rim. Zero disables it without a recompile.
+     * See {@link RIM_SS} for the geometry and `SCREEN_RIM` in `Environment` for
+     * the colour and level.
+     */
+    this.rimGain = RIM_SS.gain;
+    /**
+     * Strength of the distance desaturation. Zero disables it without a
+     * recompile. See {@link RIM_SS}.aerial.
+     */
+    this.aerialAmount = RIM_SS.aerial;
+    this._rimVec = new THREE.Vector3();
     this.copyMaterial = new THREE.ShaderMaterial({
       name: 'SceneDepthCopy',
       uniforms: { tDepth: { value: depth } },
@@ -1301,6 +1642,95 @@ class ScenePass extends Pass {
     const h = Math.max(1, Math.floor(height));
     this.target.setSize(w, h);
     this.depthCopy.setSize(Math.max(1, w >> 1), Math.max(1, h >> 1));
+    this.material.uniforms.uTexel.value.set(1 / w, 1 / h);
+  }
+
+  /**
+   * Point the screen-space rim at whatever the scene says its fighters are
+   * doing. See {@link RIM_SS}.
+   *
+   * Every failure to find a cue lands on `uRimGain = 0`, which is a uniform
+   * write and not a recompile, so this can flip on any frame — the frame a
+   * character finishes loading, a mood change, a drop to a tier that rebuilds
+   * the pass. There is no state to get out of sync.
+   */
+  #syncRim() {
+    const u = this.material.uniforms;
+    const cue = this.scene?.userData?.rimCue;
+    const cam = this.camera;
+    if (!cue?.active || !cam?.isPerspectiveCamera) {
+      u.uRimGain.value = 0;
+      u.uAerialAmt.value = 0;
+      return;
+    }
+
+    // View-space depth of the pair. `-z` rather than the distance to the eye,
+    // because that is what the shader's linearised depth is measured in and an
+    // off-axis fighter would otherwise read as further away than it is.
+    this._rimVec.copy(cue.center).applyMatrix4(cam.matrixWorldInverse);
+    const dist = -this._rimVec.z;
+    if (!(dist > cam.near)) {
+      u.uRimGain.value = 0;
+      u.uAerialAmt.value = 0;
+      return;
+    }
+
+    u.uCamera.value.set(cam.near, cam.far);
+    const half = Math.max(RIM_SS.minSlab, cue.spread + RIM_SS.slabPad);
+    u.uSlab.value.set(dist, half);
+
+    // Aerial perspective runs only where the arena authored atmosphere. A scene
+    // with no fog is a scene whose set has not said it has any air in it — the
+    // roster turntable, the menu preview — and this file inventing some would be
+    // it overruling the stage.
+    if (this.scene.fog && this.aerialAmount > 0) {
+      // The ramp begins at the far edge of the rim's own depth slab, so the two
+      // terms are disjoint and a fighter is at exactly zero on every framing,
+      // however tight.
+      const start = dist + half;
+      u.uAerial.value.set(start, start + Math.max(RIM_SS.aerialSpanMin, dist * RIM_SS.aerialSpan));
+      u.uAerialAmt.value = this.aerialAmount;
+    } else {
+      u.uAerialAmt.value = 0;
+    }
+
+    if (!(this.rimGain > 0)) {
+      u.uRimGain.value = 0;
+      return;
+    }
+
+    // A view-space direction's x and y ARE its screen-space direction, up to a
+    // perspective scale that a normalise throws away — which is all this needs,
+    // because the term it feeds is an orientation test and not a projection.
+    // `transformDirection` applies the rotation of the view matrix and
+    // renormalises, so the translation is correctly ignored.
+    this.#screenDir(u.uDirA.value, cue.coolDir, cam);
+    this.#screenDir(u.uDirB.value, cue.warmDir, cam);
+
+    u.uRimA.value.copy(cue.coolColor).multiplyScalar(cue.coolLevel);
+    u.uRimB.value.copy(cue.warmColor).multiplyScalar(cue.warmLevel);
+    u.uRimGain.value = this.rimGain;
+  }
+
+  /**
+   * Project a world-space source direction onto the screen and normalise it.
+   *
+   * A source that ends up pointing straight down the view axis — which the KO
+   * orbit can produce, since `Environment._rimYaw` keeps the rims behind the
+   * subject relative to the eye and "behind" degenerates when the eye is on the
+   * rim azimuth — yields a zero vector, and a zero vector dots to zero, so that
+   * arm simply contributes nothing on those frames rather than snapping to some
+   * arbitrary direction as it passes through.
+   *
+   * @param {THREE.Vector2} out
+   * @param {THREE.Vector3} worldDir unit vector from the fighter toward the source
+   * @param {THREE.Camera} cam
+   */
+  #screenDir(out, worldDir, cam) {
+    this._rimVec.copy(worldDir).transformDirection(cam.matrixWorldInverse);
+    const m = Math.hypot(this._rimVec.x, this._rimVec.y);
+    if (m < 1e-3) out.set(0, 0);
+    else out.set(this._rimVec.x / m, this._rimVec.y / m);
   }
 
   render(renderer, writeBuffer) {
@@ -1345,6 +1775,10 @@ class ScenePass extends Pass {
     renderer.setRenderTarget(this.depthCopy);
     this._fsQuad.render(renderer);
 
+    // The rim rides on the blit that was already here. Nothing is added to the
+    // pass list and nothing is added to the draw count — this is the same
+    // fullscreen triangle, with four depth taps behind three gates in it.
+    this.#syncRim();
     this._fsQuad.material = this.material;
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this._fsQuad.render(renderer);
@@ -1447,6 +1881,7 @@ class BokehDofPass extends Pass {
       uCocScale: { value: 9.3 },
       uSharpPx: { value: 1.4 },
       uMaxRadius: { value: 8.0 },
+      uBlendPx: { value: 4.3 },
       uStrength: { value: 0.85 },
     };
     this.material = new THREE.ShaderMaterial({
@@ -1464,10 +1899,23 @@ class BokehDofPass extends Pass {
         uniform float uCocScale;
         uniform float uSharpPx;
         uniform float uMaxRadius;
+        uniform float uBlendPx;
         uniform float uStrength;
         ${DEPTH_HELPERS}
 
-        /** Signed circle of confusion, normalised to the bokeh disc radius. */
+        /**
+         * Signed circle of confusion, IN PIXELS, clamped to the disc radius.
+         *
+         * It used to be normalised to 'uMaxRadius', which quietly tied two
+         * independent quantities together: 'uMaxRadius' was both the cap on how
+         * wide the gather may spread AND the divisor deciding how strongly the
+         * blur is mixed in, so raising the cap to allow real bokeh
+         * simultaneously weakened every blur in the frame. Returning pixels
+         * separates them — 'uMaxRadius' caps the radius, 'uBlendPx' says at what
+         * circle of confusion the blur is fully applied — and the tap-weight
+         * rule below reads more directly for it, since 'tapRadius' is now the
+         * tap's own circle rather than a renormalised fraction of one.
+         */
         float cocAt( vec2 uv ) {
           float d = texture2D( tDepth, uv ).x;
           float z = max( ( d >= 1.0 ) ? uFar : linearDepth( d ), 0.05 );
@@ -1476,20 +1924,20 @@ class BokehDofPass extends Pass {
             float edge = max( uFocus - uNearRange, 0.1 );
             if ( z >= edge ) return 0.0;
             float c = uCocScale * ( edge / z - 1.0 ) - uSharpPx;
-            return -min( max( c, 0.0 ) / uMaxRadius, 1.0 );
+            return -min( max( c, 0.0 ), uMaxRadius );
           }
 
           float c = uCocScale * ( 1.0 - uFocus / z ) - uSharpPx;
-          return min( max( c, 0.0 ) / uMaxRadius, 1.0 );
+          return min( max( c, 0.0 ), uMaxRadius );
         }
 
         void main() {
           vec3 centre = texture2D( tDiffuse, vUv ).rgb;
           float coc = cocAt( vUv );
-          float blend = abs( coc ) * uStrength;
+          float blend = min( abs( coc ) / uBlendPx, 1.0 ) * uStrength;
           if ( blend <= 0.004 ) { gl_FragColor = vec4( centre, 1.0 ); return; }
 
-          float radiusPx = uMaxRadius * abs( coc );
+          float radiusPx = abs( coc );
           vec2 texel = 1.0 / uResolution;
           float phi = ign( gl_FragCoord.xy ) * 6.28318530718;
 
@@ -1500,7 +1948,7 @@ class BokehDofPass extends Pass {
             vec2 offset = disc * radiusPx;
             vec2 uv = vUv + offset * texel;
             float tapCoc = cocAt( uv );
-            float tapRadius = uMaxRadius * abs( tapCoc );
+            float tapRadius = abs( tapCoc );
             float dist = length( offset );
             // A tap only lights this pixel if its own bokeh circle reaches it.
             // That single rule gives both correct near-field scatter (a blurred
@@ -1521,14 +1969,66 @@ class BokehDofPass extends Pass {
    * Every length in the CoC is a fraction of the frame height, so the lens
    * behaves identically at any render scale. The acceptable circle of confusion
    * sits at ~1.3 thousandths of frame height, which is about where a viewer
-   * stops calling an edge sharp; the asymptote is a touch above the disc radius
-   * so only genuine infinity ever reaches maximum blur.
+   * stops calling an edge sharp.
+   *
+   * ## `uCocScale` 0.0086 -> 0.015, and the lens was stopped down past the point
+   * ## where anything in the arena could defocus
+   *
+   * Three blind critics independently reported no background bokeh at all —
+   * *"every single tekken8 reference uses background bokeh regardless of
+   * lighting mood; none of the six Knockbots shots do"*. The pass was present
+   * and running the whole time, which made this look like an authoring gap. It
+   * is not; it is arithmetic, and the arithmetic is short enough to write out.
+   *
+   * The far-field circle of confusion is `c = uCocScale * (1 - S/z) - uSharpPx`
+   * pixels. At the old 0.0086 of frame height that is 9.29 px at 1080p, so `c`
+   * asymptotes to 7.88 px at genuine infinity and everything nearer is a
+   * fraction of it. Worked through at the three shipped framings, with the
+   * subject distance `S` the fight camera actually publishes:
+   *
+   *     framing            S      surface        z       old            new
+   *     wide  (14 m)      13.8   crowd tier     23 m   2.31 px @ 26%  5.08 px @ 90%
+   *                              far wall       26 m   2.91 px @ 32%  6.36 px @ 90%
+   *                              city           60 m   5.75 px @ 64%  11.88 px @ 90%
+   *     hero               6.5   chain-link     12 m   3.63 px @ 40%  7.78 px @ 90%
+   *                              crowd tier     15 m   3.86 px @ 43%  8.35 px @ 90%
+   *     portrait (4.2 m)   4.2   crowd tier     15 m   5.28 px @ 59%  10.26 px @ 90%
+   *
+   * A 2.3 px gather mixed in at a quarter strength is not a defocused
+   * background; it is a very slightly soft one, which is exactly what the
+   * critics described. The percentage column is the second half of the story and
+   * is why the blend law was split off `uMaxRadius` above — the old law reached
+   * full strength only at the disc radius, so the frame was paying for a gather
+   * and then mixing three quarters of the sharp original back over it.
+   *
+   * `uMaxRadius` 0.0075 -> 0.011 keeps the cap clear of the working range
+   * instead of sitting inside it, and `uBlendPx` at 0.004 puts full blend at a
+   * circle of confusion of about 4 px, which is roughly three times the
+   * acceptable circle — the point past which an edge is not merely unsharp but
+   * visibly out of focus.
+   *
+   * ## What is deliberately NOT changed
+   *
+   * The far side still has no protected volume; the comment in `#syncPasses`
+   * that says so ("the far side is left to the thin-lens curve, which is what
+   * gives the stage its separation") is a decision, not an oversight, and the
+   * `farRange` the camera publishes is `distance * 2.4` — a ramp extent, not a
+   * subject depth, so it cannot serve as a guard. The cost of that decision is
+   * now larger and is stated rather than hidden: at the hero framing the far
+   * fighter, about 1.2 m behind the focus plane, picks up **1.1 px at 23%
+   * blend** where it previously took 0.5 px at 6%. That is below the acceptable
+   * circle and should be invisible; if a capture says otherwise, the fix is a
+   * far guard sized off the pair radius, not a retreat on `uCocScale`.
+   *
+   * `uStrength` is also untouched, because it scales near and far together and
+   * the near field was never the complaint.
    */
   setSize(width, height) {
     this.uniforms.uResolution.value.set(width, height);
-    this.uniforms.uCocScale.value = Math.max(5, height * 0.0086);
+    this.uniforms.uCocScale.value = Math.max(5, height * 0.015);
     this.uniforms.uSharpPx.value = Math.max(1.0, height * 0.0013);
-    this.uniforms.uMaxRadius.value = Math.max(4, height * 0.0075);
+    this.uniforms.uMaxRadius.value = Math.max(4, height * 0.011);
+    this.uniforms.uBlendPx.value = Math.max(1.5, height * 0.004);
   }
 
   render(renderer, writeBuffer, readBuffer) {
@@ -2036,7 +2536,41 @@ function buildGradeLut(opts = {}) {
   const SHOULDER = opts.shoulder ?? 0.68;   // where contrast hands over to the roll-off
   const END_SLOPE = opts.endSlope ?? 0.30;  // slope arriving at white; > 0 keeps it monotone
   const TOE = opts.toe ?? 0.30;             // where the contrast line hands over to the toe
-  const BLACK = opts.black ?? 0.044;        // display value at input zero
+  // Display value at input zero. See "Why 0.30 / 0.044" above for the sweep;
+  // this is 0.022 and the reason is in the `grad` column of that same table.
+  //
+  // The argument for 0.044 was built on `darkMed` — the darkest-quartile median,
+  // where 0.00958 sits closer to the reference median of 0.01347 than 0.014's
+  // 0.00830 does. That is a statement about the *level* of the darks. The defect
+  // four blind critics named unanimously is a statement about their *range*:
+  // "everything sits in a compressed midtone-to-highlight band", "no true black
+  // point for bloom to read against". The statistic for that is `grad`, p10/p02
+  // of frame luminance, and on it the shipped curve reads **1.94 against a
+  // reference median of 3.38 and a reference minimum of 1.69** — we are at the
+  // bottom of the reference range on the one column that measures the
+  // complaint, and `BLACK` is the term that owns it (1.94 at 0.044, ~2.6 at
+  // 0.014, 68.7 with no toe at all).
+  //
+  // So this is a partial retreat toward the 0.014 arm rather than a return to
+  // it, and both halves of the trade are stated. It costs `darkMed`, moving it
+  // roughly 0.0096 -> 0.0089 and further from the reference median. It costs
+  // about 0.35% of figure/ground, pro-rata on the sweep's own "0.014 to 0.044
+  // costs 0.7%". It should gain `satSd` toward the reference median — 0.160 is
+  // *below* the reference 0.191 and 0.207 is above it, so the midpoint is the
+  // closest of the three arms. And the toe is still a toe: k = contrast * TOE /
+  // (toeY - BLACK) = 1.94 at this value against 2.15 at 0.044, comfortably above
+  // 1, so the floor stays flat and does not pick up quantisation noise at code
+  // 0-2. The knob's documented ceiling ("past 0.044 the floor becomes a
+  // plateau") is an argument about going up and does not bear on going down.
+  //
+  // One column contradicts this and is recorded rather than hidden: `rim` reads
+  // 2.752 at 0.044 and 1.920 at 0.014, so the sweep says lifting the floor
+  // *helps* the rim ratio, which is backwards for a metric whose denominator is
+  // the background just outside the silhouette. The same file warns that this
+  // family of ratio carries real session-to-session variance (1.39 and 1.61 on
+  // two boots of one build). It is not leaned on either way here, and the round
+  // that changed this also added a rim term worth far more than the difference.
+  const BLACK = opts.black ?? 0.022;
 
   // Hermite endpoint: the contrast line evaluated at the hand-over point.
   const shoulderY = pivot + (SHOULDER - pivot) * contrast;
@@ -2067,7 +2601,23 @@ function buildGradeLut(opts = {}) {
         let db = linearToSrgb(Math.max(lb, 0));
 
         const dLum = 0.2126 * dr + 0.7152 * dg + 0.0722 * db;
-        const shadowW = 1 - smoothstep01(0.02, 0.42, dLum);
+        // Cold teal through the shadows, but released before the floor.
+        //
+        // The tint is added after the toe, so at `dLum` 0 it used to arrive at
+        // full strength on top of `BLACK` and the darkest pixel this transform
+        // can produce was (0.040, 0.048, 0.058) — a dark blue-grey, by
+        // construction, everywhere in every frame. That is not an inference: it
+        // is four independent blind critics writing "nothing in frame goes below
+        // a dark blue-grey" as the second of two defects, and it is the literal
+        // sum of these two constants.
+        //
+        // The second factor takes the tint off over the bottom 5% of display
+        // range and leaves everything above it exactly where it was — at dLum
+        // 0.10 the weight is 0.896 before and after, so the teal in the
+        // mid-shadows that the split tone exists for is untouched. What changes
+        // is that the frame now has a neutral black point instead of a coloured
+        // pedestal, which is the thing a rim and a bloom get to read against.
+        const shadowW = (1 - smoothstep01(0.02, 0.42, dLum)) * smoothstep01(0.0, 0.05, dLum);
         // The warm high tint is a band, not a ramp to white. Carrying it to the
         // top of the range adds 0.019 to red where red is already at 1.0, which
         // clips one channel and snaps the brightest specular to a flat wash.

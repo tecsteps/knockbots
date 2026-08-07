@@ -3768,3 +3768,93 @@ stacks. The rig metric is now where it should be; whether the picture changed is
 and only the capture answers it. The strips will also render four different robots for the first time
 this round, so the next score on this axis is not comparable to the last one — and that is an
 improvement, not a problem.
+
+---
+
+# Four critics unanimously agreed on a mechanism that does not exist
+
+Every one of the four lighting critics named `19-cistern-wide` as the best lighting in the game, and
+every one of them explained it the same way: *"a genuine complementary color-split key per fighter,
+orange fighter vs teal fighter"*, *"the only shot with a real per-character complementary color key"*,
+*"orange/cyan color-zoning"*, *"two colored spot cones, warm on one fighter, cool-green on the
+other"*. I wrote it into a brief as an established fact and told an agent to generalise it.
+
+**There is no per-fighter keying anywhere in this project.** `Environment.js:3184` reads
+`rig.cool.color.copy(this._tmpColor)` inside the per-fighter loop, and `_tmpColor` is computed once
+*outside* it. Both fighters receive identical light colours in every arena. Verified by reading it.
+
+What cistern actually is: **the only mood of seven with inverted key/rim polarity.** Its key is cool
+mercury `0xcfe2ff` and its rim is warm sodium `0xff9636`. Every other mood is a warm key
+(`0xffdcae`, `0xffc98e`, `0xff9c52`, `0xffe4bc`, `0xffb478`) against a cool rim (`0x38ccff`,
+`0x18dcff`, `0x3f9dff`, `0x1fb0ff`, `0x6aa8ff`). One polarity flip, not two keys.
+
+## Why this matters more than the fix
+
+Two rounds ago I concluded, from a 27-point spread on identical frames, that **"the critics are
+reliable about what is wrong and unreliable about how much."** That is too generous and I am
+correcting it.
+
+They are reliable about **what they see**. They are unreliable about **why** — and *unanimity does not
+protect against that*, because four instances of the same model share the same priors and will reach
+for the same wrong explanation. Four independent observers agreeing is normally strong evidence. Here
+it produced a confident, specific, actionable, and false mechanism, which I then put in a brief.
+
+**So the rule that survives is narrower than the one I wrote:** take the critics' *observations* as
+data and their *explanations* as hypotheses to check. Every time this session that an agent checked a
+mechanism I handed it — the character agent on the assignment count, the impact agent on the ring
+lifetime, this one on the per-fighter key — the check was worth more than the task.
+
+## The rim was not mistuned. It was structurally incapable.
+
+The seventh wiring finding, and not the shape I predicted. The machinery is extensive and correctly
+tuned: a directional rim pair at `DIRECTIONAL_RIM_SHARE 0.85` plus two spots per fighter at
+`RIM.gain 1.66`, measuring a 6 px silhouette band at 2.25x the background. The 7-chroma/9-luma figure
+I quoted at the agent is real.
+
+But `RenderPipeline` already recorded what that light *looks* like when differenced out: *"a cyan-and-
+magenta wash over the whole arm, the whole thigh and half the torso."* It moves the frame as **fill,
+not as an edge** — and no tuning can change that, for a reason that is physics rather than parameters:
+
+**An analytic rim in a forward PBR renderer is multiplied by the surface. Diffuse by albedo, specular
+by F0 — and for a metal, F0 *is* the albedo.** A `0x38ccff` rim on a cream-and-amber robot returns
+that robot's blue reflectance, which on this cast is nearly nothing. The critics' own requirement —
+*"it must work regardless of that character's own palette"* — is precisely the thing an analytic
+light cannot do. `RIM` records the second wall too: four placements swept from ±34 degrees round to
+±8 off directly-behind, **every grazing arm worse on every metric**, concluding *"on a faceted
+hard-surface robot no analytic light draws an outline."*
+
+The fix is a screen-space rim on the existing fullscreen blit, which **adds** colour instead of
+multiplying it and finds the outline from the depth buffer. Gated on a depth *step* rather than a
+slope, and on a dot against the source direction — the last is what makes it a rim rather than a
+cartoon outline.
+
+## The black point was arithmetic, and always had been
+
+`BLACK = 0.044` is the display value at input zero; `shadowTint = [-0.004, 0.004, 0.014]` arrives at
+full strength at luminance zero. Sum: **the darkest pixel this transform could produce was
+(0.040, 0.048, 0.058) — a dark blue-grey, by construction, in every frame this project has ever
+shipped.** That is the critics' sentence read back as arithmetic. Now 0.022, with the tint released
+over the bottom 5% so the mid-shadow split tone is untouched.
+
+## And two instruments were fighting themselves
+
+`uMaxRadius` was doing two jobs at once — the cap on DOF gather radius *and* the divisor setting blend
+strength. **Raising the cap to permit real bokeh simultaneously weakened every blur in the frame.**
+The pass was paying for a full 20-tap gather and then mixing three quarters of the sharp original back
+over it. Split into a radius cap and a separate full-blend CoC.
+
+And the tonal half of recession **had never existed at all**: there is no saturation-versus-distance
+term anywhere in the project. Value was ramped and measured repeatedly across fog, crowd sink and two
+shaders; chroma was never touched once.
+
+## Predictions, checked
+
+- draw calls **256 predicted, 256 measured** — zero lights, zero passes, zero shadow casters added
+- frame time **13.5-13.7 ms predicted, 13.3 ms measured** — better than predicted
+- p95 **30.4 -> 15.9 ms**, a larger stability win than the 1.7 fps the median gave up
+
+Four changes were reverted with measurements before shipping, the sharpest being an edge gate that
+fired on the deck itself: at the hero framing's grazing angle the floor's per-2.5px depth change is
+**0.061 m against a 0.060 m threshold** — inside a factor of one, so a slightly lower camera would
+have laid a cool wash across the whole floor. Replaced with a term that cancels a ramp exactly at any
+angle: deck 0.000, silhouette 0.794 unchanged.
