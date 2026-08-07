@@ -331,7 +331,37 @@ const RIM_SS = {
    * the same magnitude. The rim is now strictly an outline against the set, plus
    * fighter over fighter.
    */
-  gain: 0.9,
+  /*
+   * BACK TO 0. THE MAGNITUDE TERM FIXED FOUR FRAMINGS AND NOT THE FIFTH.
+   *
+   * minStep/fullStep in metres fixed the wides and 03-full-body -- verified,
+   * both clean. It did not fix 02-closeup-face, where a critic found the fringe
+   * still tracing the grille bars, the diagonal head-plate seam and the tusk
+   * ring bands. Checked against the frame: much fainter than the reverted
+   * version, and there.
+   *
+   * I verified 03-full-body after the fix and skipped the extreme closeup. The
+   * one framing not re-checked is the one that still fires. Verify the frame the
+   * defect was reported on, not a frame that resembles it.
+   *
+   * The author predicted this residual and wrote the rule before the evidence
+   * existed: "if anything stands more than 40 cm proud it will still fire... if
+   * the next capture still shows interior lines, DO NOT SPEND ANOTHER ROUND ON
+   * IT." Honoured rather than re-argued. A clean silhouette on four framings does
+   * not pay for an artifact on the closest one, after two rounds.
+   *
+   * Everything else is kept: the analytic-rim impossibility proof, the
+   * proud-plate mechanism, the step-vs-slope threshold error, the twelve-case
+   * regression. What is not kept is the pixel.
+   *
+   * WHAT WOULD CLOSE IT: the residual is almost certainly parts genuinely more
+   * than 40 cm apart in depth at a framing where the whole subject spans little
+   * more than that -- head in front of stack in front of torso. A threshold in
+   * metres cannot separate those from a silhouette, because at that framing they
+   * ARE the same magnitude. It needs the fighter's own depth EXTENT in the
+   * denominator: not a constant, and not the view distance.
+   */
+  gain: 0,
   /**
    * Tap radius in render pixels, which is also very nearly the width of the
    * band: a pixel further inside the silhouette than this taps a neighbour that
