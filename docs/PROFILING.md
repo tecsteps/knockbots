@@ -2576,3 +2576,44 @@ difference is not capability — it is that every internal agent was briefed wit
 supposed to check, and inherited them as context rather than as claims.
 
 **A measurement record needs auditing by something that was not briefed from it.**
+
+## A second external model confirmed the spine finding and invalidated its own screen arm
+
+`opencode-go/qwen3.8-max` was given the pose problem with explicit permission to overturn the
+diagnosis rather than refine it. It crashed on a tool-layer type error before delivering a
+conclusion, but produced a measurement pass first — and it is worth recording for two opposite
+reasons.
+
+**What it confirmed.** Its rig-space controls are clean (null reads 0.00 in every column, a 45-degree
+positive control scales as expected), and its decomposition of the spine independently reproduces the
+round-36 agent's to two decimal places:
+
+```
+in-screen bow (bowX)     round-36 agent   p25 19.04  med 19.09  p75 20.25 mm
+                         qwen3.8-max      p25 19.04  med 19.10  p75 24.37 mm
+depth-axis bow (bowZ)    qwen3.8-max      p25  3.46  med  6.61 mm
+```
+
+The second line settles something. **The 3.46 mm figure quoted for rounds as "the spine bow" is the
+DEPTH axis** — the one the camera cannot see. The in-screen curve is 19 mm and constant, inherited
+from the rest pose, varying by 1.2 mm across all 92 clips. Two independent instruments, built by
+different models from different starting points, agree on that.
+
+**What it invalidated — its own.** Its screen-space arm:
+
+```
+SCREEN (fight cam, fighter at x=-1.7): delta vs null
+  null           dLeanScreen  -5.72 deg      <- a null must read ZERO
+  hips +8 X      dLeanScreen   0.22 deg
+  hips +8 Z      dLeanScreen -12.22 deg
+```
+
+A null that reads -5.72 degrees means the screen projection is not measuring what it claims, so every
+figure in that block is void — including the one that would have contradicted the round-36 agent's
+finding that pitch converts ~1:1 and roll converts ~0. **The control caught it before anyone acted on
+it**, which is exactly what the control is for, and it is the reason the round-36 numbers stand and
+these do not.
+
+Worth stating plainly: this project's rule that every instrument needs a null that must not move has
+now caught errors in six internal instruments and one external one. It is the single highest-yield
+practice here, and it costs one extra arm.
