@@ -2735,3 +2735,102 @@ dropped frames; a smooth ramp means real work.
 `ps -ax -o command | grep chrome-headless-shell | grep -v -- --type= | grep -vc grep` **exits 1 on a
 zero count**, so `gate && node ...` silently skips the work it was guarding. It cost the verify agent
 a dead run. Use `N=$(...); [ "$N" -ne 0 ] && exit 1`.
+
+---
+
+# Grok 4.5 audit: four of five axes carry targets that are not like-for-like
+
+The second external pass, run on `opencode-go/grok-4.5`. Its brief started from the previous
+auditor's best finding — that the character deficit was our MEAN against the reference's p75 — and
+asked whether the other five axes carry the same class of error. **Four of them do.**
+
+## 1. Animation — the "15-20 degree reference band" was never measured
+
+Ours is a 3D rig quantity: pelvis blade ~28 degrees plus spine counter ~19, giving ~18 of separation,
+median over 92 clips from the offline sampler. **The reference side is critic prose and a source
+comment. No measurement exists**, and none can: they are single 2D press stills with no rig, and
+absolute hip-shoulder yaw is not recoverable from one uncalibrated view.
+
+This is the character error exactly — a target that was never measured on the thing it claims to
+compare against.
+
+**What a 2D still CAN support:** screen-space silhouette, foot plant, knee bend, torso lean in the
+image plane, contact readability. Which matches what the camera actually resolves: sagittal pitch
+converts ~1:1 on screen, roll ~0 at contact, twist ~6px against lean's ~22px.
+
+**Honest target:** drop the degree band entirely. Carry rig-internal chain metrics with strict
+ordering and null controls, on-screen lean at the judged ticks, multi-clip strips rather than one
+uppercut, and a blind critic on stance readability.
+
+## 2. Impact — the gate is a ghost, and no pixel statistic can be quoted against Tekken at all
+
+The 11-29 -> 35-152 / 1.81x ladder is from the era when the gate thresholded `luma > 0.90` and landed
+on a white robot's armour at 0.019-0.375 precision. Its own baseline never reproduced: the same
+frames measure 106-206.
+
+The rebuilt instrument — same frozen frame, FX on and off, all eight systems, null on/on reading 0 —
+is sound **for our own A/B**. But the reference side is not merely mismatched, it is unavailable:
+**the best image-only proxy reaches F1 <= 0.25 on the flagship and 0.02-0.06 elsewhere.** There is no
+way to identify which reference pixels are "effect" without the FX toggle we only have on our own
+renderer.
+
+**So closing a particle-count gap to Tekken cannot move the score, because the comparison cannot be
+made.** Honest target: an internal weight ladder (15 against 16 only, camera-matched) plus shape
+statistics, with the ship bar being a blind critic on punctuated contact.
+
+## 3. Stage — and a leak I have now fixed in the code
+
+Absolute tile contrast is proportional to mean luma; a reference with the same peakedness scored 70%
+higher purely from being 2.6x brighter, and the p90 >= 12 gate exceeded every matched reference in
+linear light, so it was unreachable by construction. `stagegate.py`'s current P and D metrics are
+designed exposure-relative and are sound.
+
+**But `FRAMES` still listed `ref/06` for whole-frame U and FARNEAR** — three lines below a `DISCARDED`
+dict that already read *"super cinematic, background dissolved to a vortex -- no floor"*, and after
+`docs/CRITIC.md` classified it NO STAGE AT ALL by opening the file. The stage axis was computing
+whole-frame statistics against an image with no stage in it, **after the correction had been written
+down twice.**
+
+Removed. This is not a measurement error — the finding was correct, recorded, and never carried into
+the code. **A discard list the frame list does not honour is decoration.**
+
+Also recorded at the point of use: the stage reference population is n=1-2 in-match floors and
+`ref/07` is the known 2.1x outlier. Report both values; never min/median/max as "the reference".
+
+**Not changed: `fxgate.py` keeps `tekken8_06`.** It is a rage-art frame *full of effects* — useless
+for stage, legitimate for impact — and the file already marks its reference numbers non-quotable with
+the precision attached. Removing it there would be over-correcting a real distinction.
+
+## 4. Interface — 76 is not evidence the UI is usable
+
+The highest axis, and the audit names exactly what it misses: it scores the **craft of chrome already
+on screen** — type hierarchy, bars, motion design, on static shots. It does not measure
+discoverability, hit targets, or whether a path through the game exists at all.
+
+The evidence is a list of things that scored 76-plus while broken: the typeface was missing for
+rounds and the axis scored Arial Narrow; the touch pad ate select-screen hits; there was no way to
+leave a match on a phone; and a real player, this session, could not find either of the two controls
+they needed **while both were on screen in front of them**.
+
+**Honest target:** keep the craft blind test, and add a hard playtest gate — touch path from start to
+inspect to lock to fight to menu to leave to move list, at 390px. **Craft score must not be
+ship-complete without it.**
+
+## 5. Lighting — sound, leave it alone
+
+The old 8.3%-below-3e-4 headline was 1,494 pixels of HUD rule and is retired. What judges it now is
+the CRITIC rubric plus a blind test this axis WON, and its separation metrics are at or above
+reference. There is no numeric deficit left to chase; the remaining gap is atmosphere and contact
+modulation, and the shadow-share change that would address it was measured and reverted for costing
+another axis more than it bought.
+
+## The pattern across both external audits
+
+Two models, two passes, and between them: a character target comparing incomparable statistics, a
+performance number at the wrong resolution, an animation band that was never measured, an impact
+ladder whose reference cannot be computed, a stage metric measuring brightness, and an interface
+score that cannot see whether the game is operable.
+
+**Not one of these was a bug in the game.** Every one was a bug in what the project believed it was
+measuring — and in five of six cases the correction already existed in writing somewhere in the repo
+while the code, the briefs, or both carried on using the old number.

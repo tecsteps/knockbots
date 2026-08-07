@@ -94,9 +94,23 @@ FRAMES = {
     "ours/skydeck": ("shots/18-skydeck-wide.png", 0.84),
     "ours/cistern": ("shots/19-cistern-wide.png", 0.72),
     "ref/02":       ("ref/tekken8/tekken8_02.jpg", 1.0),
-    "ref/06":       ("ref/tekken8/tekken8_06.jpg", 1.0),
+    # ref/06 IS NOT HERE, AND THE DISCARDED DICT ABOVE ALREADY SAID SO.
+    #
+    # It was listed here for whole-frame U and FARNEAR while sitting three lines
+    # above in DISCARDED as "super cinematic, background dissolved to a vortex --
+    # no floor", and while docs/CRITIC.md's per-image classification -- written by
+    # opening every file -- marks it NO STAGE AT ALL. So the stage axis was
+    # computing whole-frame statistics against an image with no stage in it,
+    # after the correction had been written down twice.
+    #
+    # That is this project's most repeated failure and it is not a measurement
+    # error: the finding was correct, recorded, and never carried into the code.
+    # A discard list that the frame list does not honour is decoration.
     "ref/07":       ("ref/tekken8/tekken8_07.jpg", 1.0),
 }
+# Stated here because every consumer of FRAMES needs it: the stage reference
+# population is n=1-2 in-match floors, and ref/07 is the known 2.1x density
+# outlier. Report both values. Never min/median/max as "the reference".
 HUD_SAFE_TOP = 260      # the protocol's 175 does NOT clear the round banner or
 HUD_SAFE_BOT = 960      # the combo counter; both are still inside 175..960.
 
