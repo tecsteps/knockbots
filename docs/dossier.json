@@ -1,37 +1,37 @@
 {
   "status": {
-    "rev": "0.37.0",
-    "commits": "216",
+    "rev": "0.38.0",
+    "commits": "224",
     "modules": 73,
-    "lines": "88k",
+    "lines": "89k",
     "clips": 92,
     "moves": 777,
     "characters": 10
   },
   "verdicts": [
     {
-      "axis": "Interface",
+      "axis": "Interface — last scored 81, not yet re-run on win rate",
       "score": 81
     },
     {
-      "axis": "Character rendering",
-      "score": 64
+      "axis": "Stage — 0W 0D 4L",
+      "score": 0
     },
     {
-      "axis": "Stage detail",
-      "score": 48
+      "axis": "Impact — 0W 0D 3L",
+      "score": 0
     },
     {
-      "axis": "Lighting & atmosphere (median of 3, range 42-58)",
-      "score": 48
+      "axis": "Character — 0W 0D 3L",
+      "score": 0
     },
     {
-      "axis": "Animation quality",
-      "score": 38
+      "axis": "Animation — pending",
+      "score": 0
     },
     {
-      "axis": "Impact & effects",
-      "score": 36
+      "axis": "Lighting — VOID, capture ran mid-scoring",
+      "score": 0
     }
   ],
   "log": [
@@ -1407,11 +1407,56 @@
           "state": "73.5 fps, p95 halved"
         }
       ]
+    },
+    {
+      "phase": "PHASE 43",
+      "when": "Round 42 — the first honest scoreboard",
+      "rev": "rev 0.38.0",
+      "title": "The score is retired, the record replaces it, and three of four axes lose every pair",
+      "paras": [
+        "The nought-to-a-hundred score is gone. Four critics given byte-identical frames and an identical brief returned thirty-eight, forty-four, sixty-one and sixty-five — a twenty-seven point spread on an axis where nothing had changed, with each critic reproducing its own number exactly on a resend. A ship bar of eighty applied to a figure carrying plus or minus thirteen cannot be cleared by improving the game, only by a favourable draw. Most movement recorded in this dossier before now is not information.",
+        "What replaces it is the thing the charter actually asked for and that this project had been discarding: compare blind, side by side, and say which you would believe came from a shipped title. That half converged unanimously in every run where the number did not. A subsystem now ships when it stops losing — no losses across at least nine pooled pairs, with at least one outright win.",
+        "On that measure: stage lost four of four, impact three of three, character three of three. Lighting produced two wins across seventeen pairs and has to be thrown away, because the operator ran a capture while three critics were reading the frames — overwriting the build underneath them mid-judgement. The rule forbidding exactly that was written into this project earlier the same day, by the same hand that broke it. It is provable rather than suspected: two critics reported a rim tracing interior panel seams and a third reported no rim at all, which cannot both describe one image.",
+        "The critics changed character as soon as they were asked for a record instead of a number. Three of four declined to count a pair they judged unfair — a wide shot against an all-closeup reference set, a post-knockout freeze against an active punch — and reported them as context rather than folding them silently into a total. One flagged its own sample as below the pooled minimum and told the reader not to treat it as final. Another said plainly where not to spend a round: the wet-floor reflection work is the one element competitive with the references, leave it alone.",
+        "Three findings came out of it that no score would have produced. The stage axis has one structural gap repeated across all three arenas — there is nothing between the ring and the back wall, where the references carry storefronts, planters, phone booths, cabins and animals at two depth planes. The impact axis has had three different explanations for why its shockwave reads as interface, and the third refutes the other two: it is not the colour and not the shape, it is that the ring is the same size and opacity eight ticks after the hit as one tick after it. A static ring is what a decal looks like; a shockwave is born, expands and dies.",
+        "And the character axis found an edge-doubling artifact on every hard edge in four separate shots — not chromatic aberration, which is off and was confirmed off, and not the rim light, which is disabled. It smears exactly the bevel detail that axis is scored on, which means every round spent widening material differentiation has been partly cancelled by something nobody had isolated. Two critics, rounds apart, have now independently described one pipe surface as reading like wood grain. Two independent reports of a material reading the same wrong way is a defect, not an opinion.",
+        "The frame rate held throughout: seventy-five at the shipping tier, two hundred and fifty-six draw calls, and a ninety-fifth percentile frame time cut roughly in half over the round."
+      ],
+      "tags": [
+        {
+          "label": "score",
+          "state": "retired, +/-13"
+        },
+        {
+          "label": "stage",
+          "state": "0-0-4"
+        },
+        {
+          "label": "impact",
+          "state": "0-0-3"
+        },
+        {
+          "label": "character",
+          "state": "0-0-3"
+        },
+        {
+          "label": "lighting",
+          "state": "VOID — my contamination"
+        },
+        {
+          "label": "edge doubling",
+          "state": "not chroma, not the rim"
+        },
+        {
+          "label": "shipping tier",
+          "state": "75.2 fps"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.37.0",
-    "note": "Deployed after round 41. Source on github.com/tecsteps/knockbots."
+    "rev": "0.38.0",
+    "note": "Deployed after round 42. Source on github.com/tecsteps/knockbots."
   }
 }
