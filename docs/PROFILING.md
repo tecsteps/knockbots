@@ -3362,3 +3362,20 @@ That is a correct material description and the fix must not break it.
 **So the follow-up is skydeck's `deckGain`, not its `reflGain`**, and it is a tuning change that needs
 a measured A/B rather than a guess. Deferred to after this round's capture, deliberately: the order
 is measure, then tune.
+
+## Round 39's capture, and one operational rule that was nearly broken
+
+25 shots, every one verified, 256 draw calls and 997,258 triangles. **13 ms median, 30.4 ms p95 over
+480 frames — 76.9 fps at the shipping tier**, up from 70.9. The impact work cost nothing measurable,
+which is what "zero added draw calls; occupancy only" predicted: every FX mesh was already drawn every
+frame whether it held anything or not, and `InstancedPool.instanceCount` is a high-water mark.
+
+**And a rule that is now written down because it was nearly broken.** With six critics reading
+`shots/` to score the round, the deferred skydeck `deckGain` A/B would have needed a capture — which
+writes `shots/` in place. That would have changed the frames underneath six agents mid-judgement, and
+every score in the round would have been against an unknown mixture of two builds. The failure would
+have been silent and unattributable: no error, no lock violation, just numbers that could never be
+reproduced.
+
+**Do not capture while anything is scoring.** The capture lock protects two captures from each other;
+it does not know that a critic is reading. The deferred A/B waits.
