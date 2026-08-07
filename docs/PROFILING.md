@@ -3379,3 +3379,62 @@ reproduced.
 
 **Do not capture while anything is scoring.** The capture lock protects two captures from each other;
 it does not know that a critic is reading. The deferred A/B waits.
+
+---
+
+# RETRACTION: "there is no prop" — and the finding that was hiding behind it
+
+Round 38's animation critic reported *"the off-hand carrying a rifle-like prop stays in essentially
+the same raised position in every panel of every strip."* I searched `RobotBuilder.js` and
+`roster.js` for `rifle|weapon|cannon|gun|blaster|prop`, found nothing, and recorded:
+
+> **There is no prop.** Nothing builds a held weapon; it is reading the forearm and gauntlet
+> silhouette as an object.
+
+**That was wrong.** Round 40's animation critic, working independently on a fresh capture, described
+the same thing: *"the same long rigid rod-like prop held vertically overhead in the same position, at
+contact and through recovery, in every clip."* Two critics agreeing on an observable beat a grep, so
+I opened `21-anim-straight.jpg` and looked.
+
+**It is right there in all eleven panels.** `markStacks` (`RobotBuilder.js:4330`) builds a pair of
+0.66 m exhaust stacks on `clavicle_R` at `TIER.PRIMARY` — the tallest thing on the character, rising
+well above the head. I searched for the words I expected instead of looking at the picture. A grep
+that returns nothing is evidence about the search terms, not about the world.
+
+## The finding that error was concealing
+
+The stacks carry `sprung: 'pack_R'`, so they ARE routed through a spring leaf and secondary motion is
+enabled. Whether they sway a few degrees is beside the point: **across eleven panels spanning a whole
+move, they do not visibly change.** The most dominant silhouette element in the upper body is
+effectively static.
+
+So the off-arm work — real, measured, own% from 7-8% to 44-66% across six clips with every anchor
+byte-identical — **could never have fixed what the critic was seeing.** The arm is not what dominates
+that silhouette. The stack is. This is why divergence moved only 292 -> 354 mm against the foot's 498
+while own% sextupled: the instrument was measuring the arm, and the arm was not the problem.
+
+## And a compounding instrument defect
+
+`capture.mjs`'s clip strips use `subject: 0` on four of the five — roundhouse, straight, run and
+uppercut. `animstrip.mjs` defaults to `CHAR = 0`. **The animation axis has been judged, for multiple
+rounds, on one character** — and that character is the one whose silhouette is dominated by two
+static shoulder stacks.
+
+"Does the upper body differentiate between move types" has therefore been asked exclusively of a
+robot wearing a pair of chimneys. The answer may be very different on Kestrel or Ronin, and nobody
+has ever looked, because the shot list never varied the subject.
+
+**Two fixes, and the second is cheaper and larger:**
+1. Give the stacks secondary motion that reads at 3-tick sampling, or accept them and differentiate
+   elsewhere.
+2. **Vary the subject across the strips.** One line per shot. An axis scored on a single character
+   is not measuring the animation system; it is measuring that character.
+
+## The pattern, again
+
+Round 38: a correct observation with a wrong mechanism (the off-hand was carried, not frozen).
+Round 40: the same observation, and the mechanism is a third thing again — a static attachment that
+neither critic could name and that I disproved out of existence with a bad search.
+
+Three passes at one finding, and the thing every pass got right was the *observation*. Every wrong
+answer was a *mechanism*, and two of the three wrong mechanisms were mine.
