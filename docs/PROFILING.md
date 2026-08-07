@@ -2919,3 +2919,21 @@ discovering that are twenty minutes it is not auditing the game.
 
 The gate does not enter training mode, so `.kbg-step-btn` and the frame-data panel are unmeasured by
 it — the same blind spot for the same reason, one screen further in.
+
+## Footnote: the dossier had stopped being publishable and nobody noticed
+
+Publishing phase 39 failed outright: 22.9 MB against the host's 16 MB ceiling. **Refused, not
+degraded.** The captures are 1920x1080 at capture quality, 17 MB across 28 files, and base64 adds 37%
+on top. That crossed the line at some point between the shot list growing and anyone attempting a
+publish, and there was no signal in between — the generator reported its size happily every round.
+
+Every image is shown in a card a few hundred pixels wide, so 1440px is already more than the page can
+display. Resampling to that at quality 62 takes the payload to 9.25 MB, invisible at the sizes the
+page uses. `docs/shots/` is untouched — that is the certified archive the critics score, and a
+presentation tool has no business rewriting it. If `sips` is missing the originals go in unchanged and
+the size is still reported, because a silent fallback that puts the page back over the ceiling is the
+same defect wearing a different hat.
+
+**The deliverable was "maintain a living dossier", and it was silently un-deliverable.** A step that
+is only exercised at the very end of a round is a step that can rot for several rounds before anyone
+finds out.

@@ -17,9 +17,10 @@
  *   node tools/dossier.mjs
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PAGE = resolve(ROOT, 'docs/buildlog.html');
@@ -41,9 +42,59 @@ const CAPTIONS = {
   'diag-nopost': ['Diagnostic — post disabled', 'Bloom, DOF, SSR and motion blur off, isolating the atmosphere wash.'],
 };
 
+/*
+ * WHY THE GALLERY IS RE-ENCODED AND NOT EMBEDDED AS CAPTURED.
+ *
+ * The captures are 1920x1080 JPEGs at capture quality, 17 MB across 28 files.
+ * Base64 costs another 37%, which put the page at 22.9 MB and over the 16 MB
+ * ceiling the Artifact host enforces. The publish failed outright -- not
+ * degraded, refused -- so the dossier silently stopped being publishable at
+ * some point between the shot list growing and anyone trying.
+ *
+ * Every image here is displayed in a card a few hundred pixels wide and opened
+ * at most to the viewport width, so 1440px is already more than the page can
+ * show. Resampling to that and re-encoding at quality 62 is invisible at the
+ * sizes the page uses and takes the payload to roughly a quarter.
+ *
+ * `sips` ships with macOS, which is where this runs. If it is missing, or if it
+ * fails on a file, the original bytes go in unchanged: a dossier with a big
+ * gallery is a better failure than a dossier with holes in it. The size is
+ * reported either way, because a silent fallback that puts the page back over
+ * the ceiling would be the same defect wearing a different hat.
+ *
+ * The re-encode never touches `docs/shots/`. Those are the certified archive
+ * the critics score, and nothing in a presentation tool has any business
+ * rewriting them.
+ */
+const EMBED_W = 1440;
+const EMBED_Q = 62;
+const CACHE = resolve(ROOT, 'scratchpad/dossier-embed');
+let sipsOk = true;
+const shrunk = [];
+
 function dataUri(file) {
-  const buf = readFileSync(file);
   const ext = file.endsWith('.png') ? 'png' : 'jpeg';
+  let buf = readFileSync(file);
+
+  if (sipsOk && ext === 'jpeg') {
+    try {
+      mkdirSync(CACHE, { recursive: true });
+      const out = resolve(CACHE, basename(file));
+      execFileSync('sips', [
+        '-Z', String(EMBED_W),
+        '-s', 'format', 'jpeg',
+        '-s', 'formatOptions', String(EMBED_Q),
+        file, '--out', out,
+      ], { stdio: 'ignore' });
+      const small = readFileSync(out);
+      // Only take it if it actually helped. A capture that is already smaller
+      // than the re-encode has nothing to gain and would only lose detail.
+      if (small.length < buf.length) { shrunk.push([basename(file), buf.length, small.length]); buf = small; }
+    } catch (e) {
+      if (sipsOk) console.warn(`[dossier] sips unavailable (${e.code || e.message}); embedding originals`);
+      sipsOk = false;
+    }
+  }
   return `data:image/${ext};base64,${buf.toString('base64')}`;
 }
 
