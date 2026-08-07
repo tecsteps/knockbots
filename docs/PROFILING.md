@@ -3639,3 +3639,39 @@ it was produced by something that looked like an instrument.
 **The axis scores were the biggest one, and they were the instrument doing the trusting.** Forty
 rounds of work were steered by a ruler nobody had ever held against a known length — and the first
 time anyone did, it read 38, 44, 61 and 65 for the same object.
+
+## The spread is BETWEEN critics, not within one — and there is a third unanimous defect
+
+All three repeatability critics resent their verdicts unprompted, and every score came back
+**identical**: 44, 61, 65, unchanged to the point. Each instance reproduces itself exactly.
+
+That localises the error. It is not that a critic is noisy — a critic asked twice gives the same
+answer. **It is that different instances anchor the 0-100 scale in different places** and then hold
+their anchor firmly. Which is worse for the dossier than random noise would be, because a single
+critic looks perfectly self-consistent and therefore trustworthy right up until you run a second one.
+
+## And re-reading the four together surfaces a third unanimous finding
+
+The brief I issued named two defects. There are three, and the one I under-weighted was called *"the
+single most consistent, most fixable gap"* by the critic who named it:
+
+**No background defocus and no atmospheric recession.** *"Every single tekken8 reference — 01, 02, 03,
+04, 05, 07, 08, 09 — uses background bokeh regardless of lighting mood. None of the six Knockbots
+shots do."* The others said the same thing from the tonal side: the crowd is not merely sharp, it sits
+within about one stop of the character's midtone, so it reads as a painted backdrop rather than
+distance.
+
+Two halves, two different fixes: **optical** (defocus) and **tonal** (desaturate and dim with
+distance). The tonal half is cheaper and may buy more.
+
+So the unanimous list, in the order the critics themselves ranked it:
+
+1. no independent coloured rim — the "cool side" is ambient fill, a 2-point rig where the references
+   run 3-point
+2. no true black anywhere — bloom has nothing to punch against
+3. no background recession — optical or tonal
+
+**Three findings, four critics, complete agreement, and a 27-point spread on the number.** That is the
+clearest possible statement of what these agents are for: they see accurately and they measure badly.
+The charter asked for a blind comparison and got one that works. The score was the part nobody asked
+for.
