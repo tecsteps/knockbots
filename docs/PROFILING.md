@@ -4135,3 +4135,77 @@ Whether to keep optimising against Tekken 8 press stills, or to turn toward the 
 charter — a real, playable game, self-consistent and fast. The game currently runs end-to-end on a
 phone with a coach, a finisher call-out, 777 moves and ten robots at 75.8 fps. **Those two goals point
 in different directions from here**, and the second is much closer than the first.
+
+---
+
+# I ran a capture while three critics were reading the frames. The lighting record is void.
+
+Pooled result, which I am recording and then discarding:
+
+```
+wr-lit-C   0-0-5
+wr-lit-B   1-1-3
+wr-lit-A   1-1-5
+pooled     2 wins, 2 draws, 13 losses  (n=17)
+```
+
+Seventeen pairs, comfortably past the nine-pair minimum, and it does not clear the bar. **It is also
+not admissible, because I invalidated it myself.**
+
+## What I did
+
+I spawned `wr-lit-A/B/C` against `shots/`. Then, while they were reading, **I ran
+`node tools/capture.mjs`, which overwrites `shots/` in place** — with a build in which the rim had
+been disabled. The three critics were judging an unknown mixture of two builds: some frames with
+`RIM_SS.gain` at 0.9, some at 0.
+
+**I wrote the rule that forbids this, in this file, earlier in the same session:**
+
+> *"Do not capture while anything is scoring. The capture lock protects two captures from each other;
+> it does not know that a critic is reading."*
+
+I then did the thing the rule exists to prevent, and did not notice until the results disagreed with
+each other in a way only that could explain.
+
+## The evidence that proves the contamination
+
+The three critics contradict each other on a **binary, checkable** property:
+
+- `wr-lit-C`: *"interior tracing is present... grille bars, the diagonal head-plate seam, tusk ring
+  bands"* on `02-closeup-face`
+- `wr-lit-B`: *"thin cyan/white lines trace individual panel-edge facets across the chest, shoulder
+  and thigh plates"* on `01`, `03` and `06`, on **both** fighters
+- `wr-lit-A`: *"silhouette only... in the one shot with enough resolution to check, **I see no rim
+  shader at all**"*
+
+Two saw a rim tracing interior seams. One saw no rim whatsoever. **Both are correct reports of
+different builds.** `RIM_SS.gain` is 0 in the shipped code, so `wr-lit-A` read post-capture frames and
+the other two read pre-capture frames.
+
+This is not critic variance. It is my error, and it is distinguishable from variance precisely because
+the disagreement is binary rather than a matter of degree — a 27-point spread on a score is noise, but
+"there is a cyan line on this plate" and "there is no rim at all" cannot both describe one image.
+
+## What survives, and what does not
+
+**Void:** the 2-2-13 record and all three scores. They cannot be attributed to a build.
+
+**Survives, because it is build-independent:** every critic, on either build, said the same thing
+about **tonal recession** — *"backgrounds blur but do not desaturate with distance"*, called by one
+*"the single most consistent gap versus every Tekken reference."* The term was added this round, so it
+is either too weak to read or not reaching the surfaces that matter. Three critics on two different
+builds agreeing on an absence is worth more than the record I threw away.
+
+**Also survives:** `19-cistern-wide` produced this axis's **first two recorded wins** — genuine
+near-black plus deliberate two-colour gobo lighting. Both critics who awarded them flagged that one
+was against the flat outlier and therefore cheap. The other was not.
+
+## The rule, restated with teeth
+
+The capture lock is a directory lock. **It cannot see a reader.** Until an instrument enforces it, the
+discipline is procedural and I have now demonstrated that procedural is not enough at the end of a
+long session.
+
+**Concrete fix for whoever picks this up: `capture.mjs` should refuse to run while any scoring agent
+is live**, or scoring agents should read from an immutable snapshot directory rather than from
+`shots/` directly. The second is better — it removes the dependency on anyone remembering.
