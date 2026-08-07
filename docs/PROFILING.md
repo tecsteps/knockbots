@@ -2032,3 +2032,46 @@ carry a positive control that is required to move pixels.** Without one, "nothin
 instrument is blind" are the same reading. A second trap in the same family: freezing the sim before
 requesting a camera mode means the mode never arrives, because `FightCamera` is a spring on the sim
 clock — two "different framings" came back with identical SHAs.
+
+## Fifth instrument failure: a repeated-rep probe measures the phase machine, and it flatters
+
+A round-33 probe measured eight consecutive 480-frame blocks off one `startMatch` and watched the
+median fall **16.9 -> 11.8 ms** across the run. That looks exactly like a 1.5ms optimisation landing.
+
+It is not the renderer. `Game.js` runs a phase machine — fight, ko, round-end, ready — a 480-frame rep
+is about 8.5 seconds, and by rep 7 the probe was timing a **KO cinematic** rather than a fight frame.
+
+`tools/capture.mjs` never hit this because it measures exactly one block immediately after
+`startMatch`. **Any probe taking repeated blocks must re-arm the match every rep and assert
+`phase === 'fight'` at the end of each**, or it is measuring the phase machine.
+
+That is the fifth timing instrument to fail in two rounds, and the most dangerous of them, because
+**it fails in the flattering direction**: it manufactures an improvement out of nothing, gets more
+convincing the longer you run it, and every individual reading is internally consistent. The four
+before it produced obvious nonsense — negative costs, impossible magnitudes — which is why they were
+caught.
+
+```
+1. rAF wall clock, separate windows    null 18.0 / 39.8 / 61.8 ms
+2. rAF wall clock, paired in blocks    no-op +/-3 ms, baseline drifting 37 -> 55
+3. GPU timer queries                   no-op +12.7 ms over [-26.4, +22.8]
+4. amplification, 16 copies            no-op spanning [-37.4, +19.5]
+5. repeated reps off one startMatch    a clean, monotone, entirely fictional 5.1 ms gain
+```
+
+Also: tag with `pgrep -f "chrome-headless-shell --disable-field-trial-config"`, not a looser pattern.
+The loose one matches the probe's own shell and produces false positives — which is how one agent
+came to believe a colleague was contending with it when the extra root was its own.
+
+## Do not SendMessage a workflow agent, restated because I did it again
+
+An agent reported a foreign probe running its own script. Traced: only one such process existed, and
+it was writing into this session's own scratchpad. It was its own fork — created when I resumed the
+verification agent by message, **one hour after committing a note that says resuming a workflow agent
+forks it**.
+
+The rule is not a preference. `SendMessage` to a workflow agent reports "had no active task; resumed
+from transcript in the background" and produces a second concurrent worker with the same brief and
+the same exclusive file list. For a perf round, that duplicate is not merely wasteful — it is the
+contention that makes the round unmeasurable. Put the information in a file the agents read, or wait
+for the round to end.
