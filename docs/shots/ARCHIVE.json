@@ -1,156 +1,156 @@
 {
- "head": "cf414ffbaa78a47f42b2b96c95407c8504fed33b",
+ "head": "0bbe9ebb35e0690ed696373fdc01a4f69d05eb8a",
  "dirty": true,
- "writtenBy": "coordinator from the round-33 certified set",
- "source": "shots-r33v (complete:true, defects:[], errors:[], 25 shots, all renderScale 1, maxDead 0.039)",
- "note": "Re-archived from the verification agent's certified run after two contended captures -- one of them mine -- overwrote docs/shots. The end-of-run fps in that manifest (35.8) was taken under contention and must not be quoted; the authoritative figure is 16.80ms / 59.5 fps from 12 re-armed reps at zero foreign browser roots. The FRAMES are clean; only that one number is not.",
+ "writtenBy": "coordinator, from the round-33 clean set (runB)",
+ "source": "runB: complete true, defects [], errors [], 25 shots, fps 60.6 at zero foreign browser roots",
+ "note": "RE-ARCHIVED. The previous archive came from a run whose manifest read defects:[] but whose end-of-run fps was 35.8 -- i.e. taken under contention. That is the documented failure mode: the sim is tick-pinned so poses survive, the UI fades run on the wall clock and do not, so a contended capture yields correct fighters inside wrong interface states and passes every pose check. A clean manifest is NOT sufficient; check the run fps too.",
  "shots": {
   "01-hero-idle": {
-   "bytes": 627201,
+   "bytes": 628729,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "02-closeup-face": {
-   "bytes": 634732,
+   "bytes": 649404,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "03-full-body": {
-   "bytes": 674246,
+   "bytes": 678133,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "04-impact": {
-   "bytes": 575535,
+   "bytes": 559823,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "04b-impact-decay": {
-   "bytes": 591779,
+   "bytes": 652740,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "05-juggle": {
-   "bytes": 624487,
+   "bytes": 623370,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "06-stage-wide": {
-   "bytes": 598071,
+   "bytes": 595697,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "07-super": {
-   "bytes": 536730,
+   "bytes": 499894,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "08-hud": {
-   "bytes": 476677,
+   "bytes": 582241,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "08b-hud-motion": {
-   "bytes": 792986,
+   "bytes": 820161,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "09-roster": {
-   "bytes": 709552,
+   "bytes": 709051,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "10-ko": {
-   "bytes": 516416,
+   "bytes": 525364,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "12-select-screen": {
-   "bytes": 432374,
+   "bytes": 443371,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "18-skydeck-wide": {
-   "bytes": 535480,
+   "bytes": 534974,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "19-cistern-wide": {
-   "bytes": 552279,
+   "bytes": 552312,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "13-announce-fight": {
-   "bytes": 597855,
+   "bytes": 594968,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "14-victory": {
-   "bytes": 391675,
+   "bytes": 392372,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "17-anim-strip": {
-   "bytes": 3073444,
+   "bytes": 3091360,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "15-impact-light": {
-   "bytes": 602076,
+   "bytes": 600148,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "16-impact-heavy": {
-   "bytes": 605484,
+   "bytes": 605297,
    "rendered": "1920x1080",
    "renderScale": 1,
    "strip": false
   },
   "20-anim-roundhouse": {
-   "bytes": 667357,
+   "bytes": 667289,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "21-anim-straight": {
-   "bytes": 632020,
+   "bytes": 631839,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "22-anim-reaction-launch": {
-   "bytes": 410733,
+   "bytes": 414721,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "23-anim-run": {
-   "bytes": 558928,
+   "bytes": 561880,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "24-anim-uppercut": {
-   "bytes": 738701,
+   "bytes": 733794,
    "rendered": null,
    "renderScale": null,
    "strip": true
