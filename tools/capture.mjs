@@ -1360,7 +1360,7 @@ const SHOTS = [
     preRoll: true,
     settle: 0,
     clipStrip: {
-      subject: 0, drive: 'move', move: 'roundhouse', clip: 'k.roundhouse',
+      subject: 0, chars: [0, 1], drive: 'move', move: 'roundhouse', clip: 'k.roundhouse',
       step: 5, spacing: 3.4, dist: 7.4, aimY: 0.95, tip: 'foot_R',
       // Crop derived from a measured run's `bboxUnion`, not guessed: the bones
       // spanned 779..1257 x 195..839 across the twelve panels. Padded upward
@@ -1376,7 +1376,7 @@ const SHOTS = [
     preRoll: true,
     settle: 0,
     clipStrip: {
-      subject: 0, drive: 'move', move: 'straight', clip: 'p.straight',
+      subject: 0, chars: [1, 0], drive: 'move', move: 'straight', clip: 'p.straight',
       step: 3, spacing: 3.4, dist: 6.4, aimY: 0.95, tip: 'hand_R',
       rect: { x: 660, y: 0, w: 800, h: 1040 },
     },
@@ -1424,7 +1424,7 @@ const SHOTS = [
       // appears at all from a keyboard. The first version of this shot declared
       // walkFwd, waited 900 frames for a clip that cannot happen, and said so —
       // which is the readiness gate doing its job.
-      subject: 0, drive: 'hold', hold: 'KeyD', clip: 'loco.runFwd',
+      subject: 0, chars: [4, 1], drive: 'hold', hold: 'KeyD', clip: 'loco.runFwd',
       clock: 'tick', span: 32, step: 3, spacing: 8.0, dist: 8.2, aimY: 0.95, aimFwd: 0.62,
       ready: "window.KB.fighters[0].animator.current === 'loco.runFwd'",
       tip: 'foot_R',
@@ -1443,7 +1443,7 @@ const SHOTS = [
     preRoll: true,
     settle: 0,
     clipStrip: {
-      subject: 0, drive: 'move', move: 'straight3', clip: 'p.uppercut',
+      subject: 0, chars: [7, 1], drive: 'move', move: 'straight3', clip: 'p.uppercut',
       step: 4, spacing: 3.4, dist: 7.0, aimY: 0.95, tip: 'hand_R',
       rect: { x: 640, y: 0, w: 800, h: 1040 },
     },
@@ -1758,7 +1758,7 @@ async function main() {
 
   // Every shot is taken from inside a live round with the menus dismissed.
   // Without this the camera framings composite over the title screen.
-  const ENTER_MATCH = `
+  const enterMatch = (shot) => `
     window.KB.menus.show(null);
     window.KB.paused = false;
     // Clear the per-shot audit slot. Only 17-anim-strip writes it, but the
@@ -1767,7 +1767,40 @@ async function main() {
     // a different shot's manifest entry. Stale window state surviving into the
     // next shot is a mistake this file has already made twice.
     window.__kbAnim17 = null;
-    if (window.KB.phase !== 'fight') { window.KB.startMatch(0, 1); window.KB.setPhase('fight'); }
+    /*
+     * THE ANIMATION AXIS HAS ONLY EVER SEEN ONE ROBOT.
+     *
+     * Every path in this file called startMatch(0, 1) and every clip strip
+     * used subject: 0, so four of the five strips rendered roster index 0 --
+     * VULKAN -- and nothing else, for every round this axis has been scored.
+     *
+     * That is not a neutral choice. Vulkan carries a pair of 0.66 m exhaust
+     * stacks on clavicle_R at TIER.PRIMARY (markStacks), taller than its
+     * own head and the single most dominant element of its upper silhouette.
+     * Two independent critics, rounds apart, described the same thing as "a
+     * rifle-like prop held overhead" and "a long rigid rod-like prop held
+     * vertically overhead in the same position", and both concluded that the
+     * upper body does not differentiate between move types.
+     *
+     * They were describing Vulkan's chimneys, and the question "does the upper
+     * body differentiate" has therefore been asked exclusively of the one robot
+     * least able to answer yes. Nobody has looked at the other nine.
+     *
+     * chars lets a shot say who is in the match. Default stays [0, 1] so
+     * every existing shot is bit-identical; only the clip strips vary, and they
+     * vary deliberately across silhouette classes rather than at random.
+     *
+     * An axis scored on a single subject is not measuring the system. It is
+     * measuring that subject, and reporting the result as if it were the system.
+     *
+     * (No backticks in this comment. It lives inside a JS template literal, so one
+     * would end the string. Ninth time this repo has hit that trap.)
+     */
+    if (window.KB.phase !== 'fight' || window.__kbChars !== '${(shot.chars || [0, 1]).join(',')}') {
+      window.KB.startMatch(${(shot.chars || [0, 1])[0]}, ${(shot.chars || [0, 1])[1]});
+      window.KB.setPhase('fight');
+      window.__kbChars = '${(shot.chars || [0, 1]).join(',')}';
+    }
   `;
 
   // Arms a one-shot bus listener that records the tick a hit lands on and
@@ -1947,7 +1980,7 @@ async function main() {
 
   for (const shot of list) {
     try {
-      await page.evaluate(`(() => { try { ${ENTER_MATCH} } catch (e) { console.error('enter', e); } })()`);
+      await page.evaluate(`(() => { try { ${enterMatch(shot)} } catch (e) { console.error('enter', e); } })()`);
       await page.waitForTimeout(500);
       if (shot.freezeOnHit || shot.preRoll) {
         // A frozen shot has no settle window by construction, so the framing
