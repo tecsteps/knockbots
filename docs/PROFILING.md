@@ -3507,3 +3507,60 @@ either direction:
 I looked at one frame and pattern-matched. It looked at two and isolated a variable. The debris
 question remains open and is a job for an FX-on/FX-off render, which is the only instrument that
 settles it.
+
+---
+
+# The training panel is unreachable by thumb, and the gate that found it was lying about its own verdict
+
+The interface critic that cleared the ship bar named one gap as its highest-impact remaining item, and
+named it precisely:
+
+> *"Source shows the `.kbg-toggle` / `.kbg-step-btn` controls do carry a declared `min-height:44px`
+> under `@media (hover: none)` — but that's a code inspection, not an instrument result, and this
+> project has specifically been burned before by declared-but-unexercised assumptions."*
+
+It is right, and `MenuSystem.js:3806` is the declaration. **A rule in a stylesheet is a claim about
+what the browser will do, not a measurement of what it did.** `.mbtn` also declared a height and
+resolved to 27 px because the value it was relative to collapsed.
+
+So `tools/touchgate.mjs` now walks the training path too: title -> TRAINING -> inspect -> lock ->
+panel -> toggle -> stepper -> leave, touch only, same rules.
+
+## Result: 4 of 8
+
+```
+  ok   train-start    [312x44] "TRAINING STANDING DUMMY · NO CLOCK"
+  ok   train-inspect  [125x46] "KESTREL ..."
+  ok   train-lock     [82x44]  "LOCK IN"
+  ok   train-panel             (.kbg-root--on present)
+  FAIL train-toggle           hitTargetMissing: nothing visible matches the selector
+```
+
+**The panel is on and not one of its controls is findable by a thumb at 844x390.** The 44 px floor at
+`MenuSystem.js:3806` is applied to controls a phone player cannot reach in the first place.
+
+**The cause is NOT established.** A follow-up probe that set `KB.training = true` directly found the
+panel at `visibility: hidden` with every control at 0x0 — but that is a different state from the one
+the gate reached, because the gate got `.kbg-root--on` to be true and the probe did not. The probe
+failed to reproduce the condition, so it says nothing about the cause, and it is recorded here as a
+failed diagnostic rather than as evidence. The finding stands on the gate; the explanation is open.
+
+## And the gate was lying about its own verdict
+
+The run above printed **PASS**.
+
+`verdict` read `path.ok && portrait.ok` — the training path was added to the runs, printed to stdout,
+and never counted. So the tool reported a green light while holding the evidence of a red one four
+lines above it.
+
+**That is the same defect this project already fixed once**, in `capture.mjs`, where `complete` was
+asserted rather than derived and certified 1 of 20 shots as a full set. I fixed that one, wrote it
+down, and then wrote the identical bug into a different tool five rounds later — while adding the
+very path that exposed it.
+
+The verdict is now derived from the runs, so a path added without touching that line still counts.
+Re-run reports **FAIL**, which is the truth.
+
+**The general rule, now twice-bought: a summary field must be computed from the evidence, never
+maintained alongside it.** Anything asserted will eventually disagree with what it summarises, and it
+will disagree silently, in the direction of good news.

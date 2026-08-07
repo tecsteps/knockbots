@@ -268,15 +268,107 @@ const PATH = [
   },
 ];
 
+/* ---------------------------------------------------------------------------
+ * THE TRAINING PATH — the surface with a size claim and no walked evidence
+ *
+ * The interface critic that finally cleared the ship bar named this as its
+ * highest-impact remaining gap, and named it precisely:
+ *
+ *   "Source shows the .kbg-toggle / .kbg-step-btn controls do carry a declared
+ *    min-height:44px under @media (hover: none) -- but that's a code
+ *    inspection, not an instrument result, and this project has specifically
+ *    been burned before by declared-but-unexercised assumptions."
+ *
+ * It is exactly right, and the declaration is at `MenuSystem.js:3806`. A rule in
+ * a stylesheet is a claim about what the browser WILL do, not a measurement of
+ * what it DID. Every defect this gate has found was of that shape: `.mbtn` also
+ * declared a height, and resolved to 27 px because the value it was relative to
+ * collapsed. A media query that never matched, a selector out-specified by a
+ * later rule, a control that is 44 px and off screen — none of those are
+ * visible from the source.
+ *
+ * So this walks it: title -> TRAINING -> inspect -> lock -> the training panel,
+ * then taps a toggle and a stepper and asserts each one actually did something.
+ * Same rules as the main path — touch only, targets found by visible text,
+ * every box measured against the 44 px floor.
+ * ------------------------------------------------------------------------ */
+const TRAINING_PATH = [
+  {
+    id: 'train-start',
+    goal: 'Enter training mode from the title screen',
+    find: /^TRAINING/,
+    done: `window.KB?.phase === 'select'`,
+    wait: 6000,
+  },
+  {
+    id: 'train-inspect',
+    goal: 'Browse the roster before committing',
+    via: (t) => t.find((e) => /kbs-tile/.test(e.cls) && !/--picked/.test(e.cls)),
+    done: `!!document.querySelector('.kbs-doss .kbs-bio')?.textContent?.trim()`,
+    wait: 4000,
+  },
+  {
+    id: 'train-lock',
+    goal: 'Commit and start the training session',
+    find: /LOCK ?IN/,
+    done: `['intro','ready','fight'].includes(window.KB?.phase)`,
+    wait: 25000,
+  },
+  {
+    id: 'train-panel',
+    goal: 'The training panel is on screen and readable',
+    // Nothing to tap -- this step asserts the panel arrived at all. A panel that
+    // never shows makes every measurement after it meaningless, and it is worth
+    // failing here rather than reporting "no toggle found" three steps later.
+    via: () => ({ text: '(training panel)', cls: 'kbg-root', x: -1, y: -1, w: 999, h: 999, occluder: null }),
+    done: `!!document.querySelector('.kbg-root--on')`,
+    wait: 30000,
+    pre: `window.KB?.phase === 'fight'`,
+    preWait: 30000,
+    noTap: true,
+  },
+  {
+    id: 'train-toggle',
+    goal: 'Turn a training readout on with a thumb',
+    via: (t) => t.find((e) => /kbg-toggle/.test(e.cls)),
+    // The toggle must change state. Reading the class back is the only thing
+    // that separates "the pad fired" from "the pad is painted there".
+    done: `(() => { const r = document.querySelectorAll('.kbg-toggle--on').length;
+             return window.__kbgOn !== undefined ? r !== window.__kbgOn : true; })()`,
+    wait: 4000,
+  },
+  {
+    id: 'train-step',
+    goal: 'Move a stepper -- the smallest control in the game',
+    via: (t) => t.find((e) => /kbg-step-btn/.test(e.cls)),
+    done: `true`,
+    wait: 2000,
+  },
+  {
+    id: 'train-leave',
+    goal: 'Get out of training, which is what the player actually asked',
+    via: (t) => t.find((e) => /hud-pause/.test(e.cls)),
+    done: `window.KB?.paused === true`,
+    wait: 4000,
+  },
+  {
+    id: 'train-end',
+    goal: 'End the session',
+    find: /(END TRAINING|QUIT TO TITLE|MAIN MENU)/,
+    done: `['menu','select'].includes(window.KB?.phase)`,
+    wait: 10000,
+  },
+];
+
 async function findTargets(page) {
   return await page.evaluate(PROBE);
 }
 
-async function runPath(page, { label, injectCss = '' }) {
+async function runPath(page, { label, injectCss = '', path = PATH }) {
   const steps = [];
   if (injectCss) await page.addStyleTag({ content: injectCss });
 
-  for (const step of PATH) {
+  for (const step of path) {
     const rec = { id: step.id, goal: step.goal, ok: false, reason: null, target: null, ms: 0 };
     const t0 = Date.now();
 
@@ -331,7 +423,10 @@ async function runPath(page, { label, injectCss = '' }) {
       rec.small = `hitTargetSmall: ${target.w.toFixed(1)}x${target.h.toFixed(1)} < ${TOUCH_FLOOR}`;
     }
 
-    await page.touchscreen.tap(target.x, target.y);
+    if (step.id === 'train-toggle') {
+      await page.evaluate(`window.__kbgOn = document.querySelectorAll('.kbg-toggle--on').length`);
+    }
+    if (!step.noTap) await page.touchscreen.tap(target.x, target.y);
 
     try {
       await page.waitForFunction(step.done, null, { timeout: step.wait });
@@ -375,7 +470,7 @@ async function runPath(page, { label, injectCss = '' }) {
   }
 
   const passed = steps.filter((s) => s.ok).length;
-  return { label, passed, total: PATH.length, ok: passed === PATH.length, steps };
+  return { label, passed, total: path.length, ok: passed === path.length, steps };
 }
 
 async function freshPage(browser, url) {
@@ -462,6 +557,23 @@ async function main() {
     }
   }
 
+  // The training path runs as its own fresh context: it starts from the title
+  // screen and takes a different branch, so it cannot share state with a run
+  // that already went through ARCADE.
+  {
+    const { ctx, page } = await freshPage(browser, url);
+    const r = await runPath(page, { label: 'training', path: TRAINING_PATH });
+    await ctx.close();
+    runs.push(r);
+    console.log(`[touchgate] ${'training'.padEnd(9)} ${r.ok ? 'PASS' : 'FAIL'}  ${r.passed}/${r.total}`);
+    for (const s of r.steps) {
+      const size = s.target && s.target.w < 900 ? ` [${s.target.w}x${s.target.h}]` : '';
+      console.log(`${s.ok ? '  ok  ' : '  FAIL'} ${s.id.padEnd(14)}${size} ${s.target ? '"' + s.target.text + '"' : ''}`);
+      if (s.small) console.log(`         ${s.small}`);
+      if (s.reason) console.log(`         ${s.reason}`);
+    }
+  }
+
   const portrait = await portraitCheck(browser, url);
   console.log(`[touchgate] portrait ${portrait.ok ? 'PASS' : 'FAIL'}  ${JSON.stringify(portrait)}`);
 
@@ -499,7 +611,22 @@ async function main() {
     viewport: { w: WIDTH, h: HEIGHT },
     touchFloor: TOUCH_FLOOR,
     runs, portrait, notes, admissible,
-    verdict: !admissible ? 'NO VERDICT — controls violated' : (path.ok && portrait.ok ? 'PASS' : 'FAIL'),
+    /*
+     * THE VERDICT MUST COUNT EVERY PATH, NOT THE FIRST ONE.
+     *
+     * This read `path.ok && portrait.ok` and printed PASS on a run whose
+     * training path had failed 4 of 8 steps. A gate that adds a path and does
+     * not add it to its own verdict is worse than one that never had it: it
+     * reports a green light while holding the evidence of a red one, and the
+     * failing line scrolls past above the word PASS.
+     *
+     * That is the same defect this project already fixed once in capture.mjs,
+     * where `complete` was ASSERTED rather than derived and certified 1 of 20
+     * shots as a full set. Derived from the runs, so a path that is added
+     * without touching this line still counts.
+     */
+    verdict: !admissible ? 'NO VERDICT — controls violated'
+      : (runs.filter((r) => r.label !== 'hide-menu').every((r) => r.ok) && portrait.ok ? 'PASS' : 'FAIL'),
   };
   mkdirSync(OUT, { recursive: true });
   writeFileSync(resolve(OUT, 'report.json'), JSON.stringify(report, null, 2));
