@@ -2075,3 +2075,47 @@ from transcript in the background" and produces a second concurrent worker with 
 the same exclusive file list. For a perf round, that duplicate is not merely wasteful — it is the
 contention that makes the round unmeasurable. Put the information in a file the agents read, or wait
 for the round to end.
+
+## The definitive baseline: 16.85ms, and the constraint is missed by 0.18ms
+
+The strongest frame-time reading this project has taken. HEAD, shipping tier, 1920x1080 viewport,
+renderScale 0.85 / 1632x918, adaptive off, live fight, 480 rAF frames per rep, **match re-armed every
+rep**, and **zero foreign browser roots**:
+
+```
+16.8 / 16.8 / 16.8 / 16.9 / 16.9 / 16.9 ms     ->   59.17 - 59.52 fps
+min 16.80   median 16.85   max 16.90                spread 0.10 ms
+```
+
+Eight clean reps across two runs, all inside 0.1ms — against instruments that spent two rounds
+spanning tens of milliseconds. The same probe reproduced the contention signature exactly, same page,
+same build, minutes apart: **2 foreign roots gave 30.3-32.3ms, 0 foreign roots gave 16.8-16.9ms.**
+
+```
+60 fps  = 16.667 ms
+measured  16.850 ms
+miss      0.183 ms   (1.10%)
+```
+
+**The constraint is missed by 0.18ms — about 0.7 fps.** That is the whole of it, and it is a tenth of
+the 1.5ms the round was chartered to find.
+
+## Caveat on the reflector's 5.4ms, which I recorded as the round's answer
+
+The reflector figure was taken against a **17.4ms baseline. Quiet is 16.8-16.9ms.** A 0.5-0.6ms
+inflation in the base is *the size of the entire constraint gap*, so that arm was measured on a
+machine that was already contended, and the 5.4ms should be treated as provisional until it is
+retaken against a 16.85ms base. I committed it as the answer; it is a lead, not a result.
+
+This is the same error one level up: a number can carry a passing A/A control and still sit on a base
+that proves the window was not quiet. **Report the baseline alongside every delta.** A delta measured
+against 17.4 and a delta measured against 16.85 are not comparable, and on this project the
+difference between those two baselines is larger than the thing being measured.
+
+## What the instrument change means for the round's before/after
+
+The per-rep match re-arm is new this round, and **it is not what produced the 58.5 fps the round was
+briefed against**. So the pre-round A/B arm — the tree at `aef0aa0`, before the three agents' changes,
+measured on the same instrument — is required before any of the round's gain can be attributed to the
+work rather than to the instrument. Without it, "58.5 -> 59.3" conflates a real change with a
+measurement change, which is precisely the confound this project has been caught by five times.
