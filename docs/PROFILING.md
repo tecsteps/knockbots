@@ -1712,3 +1712,39 @@ pass's pixel count, at the main pass's per-pixel price.
 Also flagged and unowned: `arena.floor.contacts` is 0.355 full-screen passes at peak depth 3 — the
 second-largest transparent layer in the arena. Six contact-shadow cards should not cost a third of a
 full-screen pass.
+
+## Correction: the timer query ranks, it does not calibrate
+
+I recorded above that `EXT_disjoint_timer_query_webgl2` "ends the contention problem rather than
+working around it". That overstates it, and two agents established the limit independently:
+
+```
+timer query reports 223 ms of GPU time per render, inside an 84 ms wall-clock frame
+quartering the pixels: 223 -> 61        (monotone in fill -- it does track the right thing)
+a NO-OP arm: +12.7 ms over a [-26.4, +22.8] range
+```
+
+223ms of GPU work inside an 84ms frame cannot be an absolute. The extension is **monotone in fill but
+not calibrated**: good for ranking A against B, useless for quoting a millisecond, and its noise floor
+under contention is tens of milliseconds against a 0.2-0.3ms target. Nobody should ship a change on a
+raw timer-query delta.
+
+**What works is amplification.** Draw the surface under test N extra times with depth test off, run
+the real material against a flat one on the same N copies, and divide by N. The effect scales with N
+and the noise does not, so the floor divides by N as well.
+
+**Three instruments were built independently in one round, and the two that work share a property.**
+Fragment counting (bit-reproducible, two runs agreeing to 0.5% under six foreign browsers at 90-138%
+CPU) and amplification (noise divided by N) both **convert a timing question into a counting or a
+scaling question**. Raw wall clock, paired alternation and raw timer queries all failed, and each was
+caught by a control arm that had to read zero and did not:
+
+```
+paired alternation, sham-noop     -0.90 ms over [-10.30, +5.70]
+raw timer query,  no-op arm      +12.70 ms over [-26.40, +22.80]
+```
+
+**Where a question can be answered by counting or by scaling, do not time it.** That is the durable
+result of this round, and it is worth more than the frame it was chartered to find. Every control arm
+that caught one of these cost about thirty seconds; the failures they prevented would have been
+confident, well-formatted numbers with noise floors twenty to a hundred times the effect.
