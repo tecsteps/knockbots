@@ -1634,3 +1634,81 @@ line, not a wholesale rebuild of the frame.
 The design error was mine: I fanned three GPU probes out in parallel in a round whose entire premise
 is careful measurement, then told each of them to interleave their arms. Interleaving defends against
 drift; it does nothing against three browsers competing for one GPU.
+
+---
+
+# The mote sheet never existed, and the fragment counter is contention-proof
+
+Round 32. This retracts a finding that has been quoted in three briefs, including one I wrote.
+
+## The claim, and what it actually measures
+
+Round 27 concluded that `arena.motes` is "a volumetric sheet ~2m in front of the wall", from
+raycasting: every pixel of a wall band 14-42px below a strip light was found to hit the motes rather
+than the wall, which is why two RectAreaLights at thirty times strength could not move a falloff
+reading. I repeated it into the round-32 brief as "a mote sheet that covers 40% of the screen at 4
+layers deep is 160% of a full-screen pass on its own."
+
+**`THREE.Raycaster.params.Points.threshold` defaults to 1.** Verified on a live instance: a ONE METRE
+radius sphere around every point centre. The motes fill a 28 x 8.5 x 22 m box, so a ray crossing the
+hall passes within a metre of many mote centres and registers a hit **regardless of whether those
+motes render a single pixel there**. There is also no sheet: the box spans z -14 to +8 — the whole
+hall — not a plane two metres off a wall.
+
+## What the layer actually costs
+
+Measured by a fragment counter: render the scene to an offscreen target for a true depth buffer,
+clear colour only, swap each layer onto a clone of its own material whose sole change is a constant
+final write with additive blending, render that layer alone, read back and sum. Point sprites keep
+`gl_PointSize`, the shafts keep their raymarch and every early-out, discards stay uncounted.
+Self-test: the opaque floor slab reads 0.460 full-screen passes against 46.03% coverage at peak depth
+1 — exactly what one opaque layer must read.
+
+```
+layer                    full-screen passes   coverage   peak depth   fragments
+prac.pools                     0.565x           51.25%       3         846,889
+floor.contacts                 0.355x           24.91%       3         531,773
+prac.washes                    0.304x           30.37%       1         455,050
+shafts (all 5)                 0.225x           22.53%       1         337,573
+arena.lightPools               0.041x            4.09%       1          61,323
+arena.deckHaze                 0.037x            3.72%       1          55,798
+arena.motes                    0.000x            0.02%       1             357
+---
+whole transparent stack        1.173x           62.73%       5       1,757,041
+```
+
+**The mote sheet is 357 fragments — 0.024% of one pass. The claim was wrong by about 5,000x.** And it
+was impossible before anyone rendered anything: the shader caps `gl_PointSize` at `maxPixels: 11`, so
+420 motes cannot exceed 420 x 11 x 11 = 50,820 px = 3.4% of one pass even if every mote sat at the cap
+and none overlapped. The premise was off by ~47x against its own ceiling.
+
+## Two lessons, and the second is the more useful one
+
+**A raycast is not a render.** Hit-testing answers "is there an object near this ray", and with a
+one-metre point threshold that question is nearly unrelated to "does this object put pixels here".
+Round 27 used a raycast to explain a shading result and got a confident, reproducible, meaningless
+answer — the same shape as the unlabelled-resolution and software-renderer errors: internally
+consistent, stable across repeats, describing something other than what it claims.
+
+**A fragment count is immune to the thing that has wrecked this project's timing for 31 rounds.** It
+is a COUNT, not a stopwatch: bit-reproducible, unaffected by six foreign browsers at 90-138% CPU, and
+two independent runs at two framings agreed to 0.5%. Where a question can be answered by counting
+rather than timing, count. Almost every overdraw and fill question in this project can be.
+
+## Where the frame actually goes, which redirects the round
+
+The whole transparent stack is 1.17 full-screen passes of CHEAP shading. On a HalfFloat RGBA target a
+blended fragment reads 8 bytes and writes 8: 1,757,041 x 16 B is 28 MB of blend traffic per frame,
+order 0.07-0.14 ms at M-series bandwidth. The only non-trivial per-fragment shader in it is the shaft
+raymarch at 24 texture fetches, order 0.05 ms. So the entire transparent stack is plausibly 0.2-0.4 ms
+— not the 1.5 ms the round was briefed to find in it.
+
+The 18ms proportional to shaded pixels is being spent shading **opaque geometry through fifteen-plus
+analytic lights, eight of them RectAreaLights running three's LTC integral**. One full-screen pass of
+that material is worth roughly fifty of a transparent layer. The single suspect that re-shades pixels
+through the whole light rig is the **planar reflector**: 816x459 = 374,544 px, a quarter of the main
+pass's pixel count, at the main pass's per-pixel price.
+
+Also flagged and unowned: `arena.floor.contacts` is 0.355 full-screen passes at peak depth 3 — the
+second-largest transparent layer in the arena. Six contact-shadow cards should not cost a third of a
+full-screen pass.
