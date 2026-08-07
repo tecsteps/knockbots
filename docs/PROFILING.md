@@ -1594,3 +1594,43 @@ come from, and it is the next round's only job.
 The impact axis moved 67 -> 72 on the instrument rebuilt in round 30 — the one that renders each
 frame twice, with effects visible and hidden, so the difference IS the effect. That is the first
 axis gain in this project measured by an instrument nobody has since found a hole in.
+
+## The 2.4x frame-time spread was never the renderer — it was other agents' browsers
+
+Found in round 32 by tagging every timing row with the number of OTHER headless-Chromium roots
+alive on the machine at the moment it was taken. The tag is decisive:
+
+```
+quiet machine, frozen frame, tier pinned 0.85 / 1632x918, 3 reps
+    16.90 / 17.00 / 16.90 ms   ->   59.2 / 58.8 / 59.2 fps
+
+same probe, same build, one or two foreign browsers alive
+    17.2 -> 28.0 -> 29.7 -> 42.5 -> 46.5 ms   ->   58 fps down to 21 fps
+```
+
+Same tree, same build, a 2.7x spread. This is the explanation for a long list of readings that have
+confused this project and cost real work: the 58.8 / 49.3 / 29.2 sequence on an unchanged tree, the
+"48.1 fps" that turned out to be an unlabelled resolution and was investigated twice before that was
+found, and every round where an agent reported a cost it could not reproduce.
+
+**Any fps figure taken during a fan-out round without a concurrency tag is uninterpretable in either
+direction** — it can hide a real regression as easily as invent one. Two defences, and they compose:
+
+1. **Tag the reading.** `pgrep -f "chrome-headless-shell --disable-field-trial-config"` and record
+   how many roots were alive. Throw away rows taken with foreign browsers up. This identifies the
+   cause rather than merely detecting instability, which is why it is the stronger of the two.
+2. **Gate on null-arm stability** (`scratchpad/gpulock.mjs`, `stableBlock`): bracket every armed
+   reading with a null on each side and discard the block if the two nulls disagree by more than 5%.
+   A contaminated window then yields NO result rather than a wrong one. This one requires no
+   cooperation from anybody, which matters because workflow agents cannot be addressed by label and
+   therefore cannot be asked to hold off.
+
+**And the quiet number matters on its own.** 16.90–17.00ms reproduces the 58.5–58.8 fps figure to
+within a tenth, which means the frozen probe is a valid stand-in for the shipping number AND that the
+constraint miss is real but small: roughly **0.2–0.3ms**, not the 1.5ms the round was briefed to find.
+The budget was set from a contaminated baseline. The target is a tenth of a millisecond over the
+line, not a wholesale rebuild of the frame.
+
+The design error was mine: I fanned three GPU probes out in parallel in a round whose entire premise
+is careful measurement, then told each of them to interleave their arms. Interleaving defends against
+drift; it does nothing against three browsers competing for one GPU.
