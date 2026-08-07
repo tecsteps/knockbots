@@ -1968,3 +1968,67 @@ shafts cost nothing to begin with**. Reverted per the charter rule. The tree is 
 
 This is the round's discipline working: a clean, well-measured, visually neutral optimisation of
 something that turned out not to be a cost.
+
+## The 2.60ms was not a discovery — it was a Round 8 decision, and the terms have changed
+
+Round 32 measured `zero-pointlights-off` at **+2.60ms** against a 0.05ms control, from three lights
+sitting at intensity exactly 0 and permanently visible on the GLOBAL layer, integrated per-fragment
+across the arena half of the split pass — 85% of the frame:
+
+```
+arm                       min     med     max    n     baselines 16.80-17.00 ms
+zero-pointlights-off    +2.60   +2.60   +2.70   3
+hemi+bounce-off         +1.15   +1.15   +1.30   3
+sham-noop  (CONTROL)    +0.00   +0.05   +0.10   3      <- the noise floor
+splitShadowCasters-off  -0.10   -0.10   +0.05   3
+```
+
+**But `EffectsDirector.js` has said so since Round 8**, in `git log -S`:
+
+> "Silenced, not hidden, on the lower tiers: the light stays in the scene so that changing tier
+> mid-session cannot recompile the world either. **It costs its 2.6ms on every tier, which is the
+> price of the tier switch being free.**"
+
+The number is right to two decimal places, twenty-four rounds early. This is a rediscovery of a
+deliberate, documented trade — not a defect — and the honest framing is not "2.6ms was being wasted"
+but "**a trade made when we had headroom is still being paid now that we do not**".
+
+**What changed is the other side of the ledger.** Round 8 spent 2.6ms to keep a mid-session tier
+switch from recompiling every material. That was affordable then. We are now 0.2-0.3ms UNDER a hard
+charter constraint, so the same 2.6ms buys nine times the deficit.
+
+**Do not simply flip `visible = false`.** The hazard the Round 8 note names is real: toggling
+visibility moves `NUM_POINT_LIGHTS` and recompiles every material, and the light that ramps is
+`impactLight` — so the stall lands on the impact frame, which is the single worst frame in a fighting
+game to stutter. Trading a constant 2.6ms for a hitch at the moment of contact is a bad trade even
+when the average improves.
+
+**The resolution that gets both is untested and cheap**: pre-compile the point-light-count variants in
+`RenderPipeline.warmup`, so the transition is a program-cache hit rather than a compile. Then the
+lights can be hidden when dark AND the tier switch stays free. That is one arm on a quiet machine and
+it is the highest-value unanswered question in this project's frame budget, alongside the reflector's
+every-other-frame update.
+
+Two further notes from the same measurement, both worth keeping:
+
+- **`hemi+bounce-off` is 1.15ms and was deliberately left unspent.** The point lights alone clear the
+  gap nine times over, and it is not as free as previously recorded: 14.4% of pixels move at a mean
+  of 0.07/255. Recorded as headroom, not taken.
+- **The split shadow-caster change removes 22 draws and 330,360 triangles per frame — 22% of the
+  frame's geometry — and buys -0.10ms, inside a +0.05ms control.** The charter's claim that frames
+  are not bought by fewer triangles, confirmed the hard way. It is also not visually free (1.32% and
+  0.70% of pixels at two ticks), so it is a correctness change, not a performance one.
+
+## The instrument that reported everything was perfect
+
+An agent's first visual-regression instrument used `gl.readPixels` on the default framebuffer. The
+renderer is created without `preserveDrawingBuffer`, so those contents are **undefined after
+compositing** — it returned identical bytes for every configuration and reported "bit-identical, zero
+subpixels changed" for three different arms. It was believed until a positive control — switching off
+the main key directional — **also reported zero**.
+
+**Anything photographing this canvas must use `page.screenshot()`, and any no-regression claim must
+carry a positive control that is required to move pixels.** Without one, "nothing changed" and "the
+instrument is blind" are the same reading. A second trap in the same family: freezing the sim before
+requesting a camera mode means the mode never arrives, because `FightCamera` is a spring on the sim
+clock — two "different framings" came back with identical SHAs.
