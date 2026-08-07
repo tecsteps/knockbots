@@ -10,8 +10,12 @@
   },
   "verdicts": [
     {
-      "axis": "Interface — last scored 81, not yet re-run on win rate",
-      "score": 81
+      "axis": "Animation — 1W 1D 2L (first wins)",
+      "score": 1
+    },
+    {
+      "axis": "Interface — 81 under the retired scale, not re-run",
+      "score": 0
     },
     {
       "axis": "Stage — 0W 0D 4L",
@@ -23,10 +27,6 @@
     },
     {
       "axis": "Character — 0W 0D 3L",
-      "score": 0
-    },
-    {
-      "axis": "Animation — pending",
       "score": 0
     },
     {
