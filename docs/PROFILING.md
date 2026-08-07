@@ -3564,3 +3564,78 @@ Re-run reports **FAIL**, which is the truth.
 **The general rule, now twice-bought: a summary field must be computed from the evidence, never
 maintained alongside it.** Anything asserted will eventually disagree with what it summarises, and it
 will disagree silently, in the direction of good news.
+
+---
+
+# THE SCORING SYSTEM HAS A 27-POINT SPREAD, AND THE SCORES HAVE NEVER MEANT WHAT THEY WERE READ AS
+
+Four critics. **Byte-identical frames. Identical brief. Same model.** The only difference between
+them was which instance ran.
+
+```
+  s40-lighting   38
+  rep-A          44
+  rep-B          61
+  rep-C          65
+
+  range 38-65     spread 27     mean 52     median 52.5     sd 13.0
+```
+
+**The spread is 27 points, on an axis where nothing changed between the samples.**
+
+## What this retires immediately
+
+Round 40 reported lighting down 22, impact down 18, animation down 14, and I treated all three as
+possible regressions worth investigating. **Every one of them is smaller than this instrument's own
+spread.** They are not regressions. They are not improvements. They are not information.
+
+The same applies backwards through the entire record. `docs/dossier.json` carries forty rounds of
+axis deltas, and **any of them under about 27 points is indistinguishable from re-rolling the same
+critic on the same pixels.** Round 39's "character 58 -> 64" and "stage 45 -> 48" are noise. So are
+most of the movements this project has spent rounds chasing.
+
+And the ship bar is an 80 applied to a number carrying a **+/-13** error bar. Interface's 81 is a pass
+whose confidence interval reaches well below the bar in one direction and past 94 in the other. It
+may well be the best axis — three other signals say so — but "81" was never the evidence.
+
+## What survives, and it is the more interesting half
+
+**All four critics agreed completely on the substance.** Every one of them, independently:
+
+- lost every blind pair, 4 of 4, unanimous;
+- named the *same* primary defect — no independent coloured rim separating the fighter from the
+  background, only ambient fill;
+- named the *same* secondary defect — no true black anywhere, so bloom has nothing to punch against
+  and the frame sits in a compressed midtone band;
+- named the *same* strength — `19-cistern-wide`'s complementary orange/teal per-fighter key is the
+  best lighting idea in the game and is used nowhere else.
+
+**The critics are reliable about what is wrong and unreliable about how much.** The qualitative
+finding converged four times out of four; the scalar bolted on top of it varied by 27 points.
+
+That is not a small distinction. It says the original method the charter asked for — *compare blind,
+side by side, and say which looks better* — **is the part that works.** The 0-100 score was an
+addition, and it is the part that does not.
+
+## What changes
+
+1. **Report a median of at least three critics, with the range, or do not report a number.** A single
+   critic's score is one sample from a distribution 27 wide and must never again be written into the
+   dossier as if it were a measurement.
+2. **Steer on the ranked findings, not on the delta.** Four critics naming "no rim light" is far
+   stronger evidence than any of their four numbers, and it is directly actionable.
+3. **A round's success is a blind-pick result, not a score movement.** 4/4 losses is a fact. "38"
+   is a sample.
+4. **Re-read the dossier.** Its scores stay in the record — deleting them would hide the mistake —
+   but every one of them now needs reading as a single draw, not a measurement.
+
+## And the shape of the error
+
+This is the same failure as every entry above it, one level up. `ref/06` was in a frame list nobody
+had opened. The animation band was never measured on any reference. The character deficit compared a
+mean to a p75. The particle gate landed on a robot's armour. Each time, a number was trusted because
+it was produced by something that looked like an instrument.
+
+**The axis scores were the biggest one, and they were the instrument doing the trusting.** Forty
+rounds of work were steered by a ruler nobody had ever held against a known length — and the first
+time anyone did, it read 38, 44, 61 and 65 for the same object.
