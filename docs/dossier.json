@@ -1,7 +1,7 @@
 {
  "status": {
-  "rev": "0.28.0",
-  "commits": "156",
+  "rev": "0.29.0",
+  "commits": "158",
   "modules": 69,
   "lines": "63k",
   "clips": 92,
@@ -11,7 +11,7 @@
  "verdicts": [
   {
    "axis": "Stage detail",
-   "score": 73
+   "score": 74
   },
   {
    "axis": "Interface craft",
@@ -27,7 +27,7 @@
   },
   {
    "axis": "Impact & effects",
-   "score": 67
+   "score": 72
   },
   {
    "axis": "Animation quality",
@@ -1006,11 +1006,52 @@
      "state": "rebuilt"
     }
    ]
+  },
+  {
+   "phase": "PHASE 34",
+   "when": "Round 31",
+   "rev": "rev 0.29.0",
+   "title": "Six rounds of advice measured brightness and called it detail",
+   "paras": [
+    "Impact 72, lighting 78, interface 74, stage 74, character 69, animation 66. The impact move is five points, the largest single-axis gain this project has recorded, and it is the first one measured by an instrument nobody has since found a hole in — the effects gate rebuilt in round 30, which renders each frozen contact frame twice, once with the effect meshes visible and once hidden, so the difference is the effect itself rather than a guess about which pixels are bright enough to count.",
+    "The round existed because I found my own blocker. For six rounds every brief I wrote forbade new geometry on the grounds that the triangle budget was forty-six per cent over its ceiling. The charter says the opposite in bold, in the same section that number lives in: frames are bought by shading fewer pixels or fewer lights, not by fewer draws and not by fewer triangles. The nine hundred thousand figure is a compliance metric sitting beside the draw-call budget, which the same paragraph measures at 1.2 microseconds per call and explicitly calls a compliance metric rather than a performance one. I had treated it as a hard ceiling without checking what it measured, and in doing so blocked the single most repeated recommendation in the project.",
+    "So the round unblocked it and spent geometry on authored hero clusters — and then disproved the reason for doing so. The agent built the instrument the gate named and swept forty-eight definition variants looking for one that reproduced the brief. None did. Our dead-tile fraction is thirty-one, forty-six and forty per cent under the definition that reproduces the reference's forty-one point seven exactly; the briefed figure was five to nineteen. The skydeck is emptier than the reference it was being unfavourably compared to. The claim that a reference had lower median tile contrast than any of our shots is backwards. The two halves of the headline comparison had been computed under different definitions, which is how a comparable number came to look like a fivefold deficit.",
+    "And the metric was not a detail metric at all. Absolute tile contrast is linear in image brightness. One reference has exactly the same peakedness as our frames and a seventy per cent higher peak purely from being two and a half times brighter; another is less peaked than every one of our frames while carrying the highest peak in the set. On the exposure-invariant statistic we were already inside the reference band on concentration. The gap is level, not distribution — and the target I set exceeded all three matched references in linear light, so it was unreachable by construction. Six rounds of critic advice, one round of work, and the finding is that the advice measured brightness and called it detail.",
+    "The hero clusters are therefore out. They cost about a millisecond and four frames a second at the full pass, for a gate that was not met and a theory that was disproved. That is the charter's own rule — an agent that measures its own change made things worse ships the measurement instead of the feature — applied to a round I designed and argued for. The geometry unblock was still correct; what I unblocked it for was not the real gap.",
+    "The harder finding is that the game is not at sixty frames a second and I had been reporting that it was. Three repeated measurements of an unchanged tree land at 58.5, 58.5 and 58.8. The 60.2 I had been quoting was real but it was the lucky end of a noisy distribution, and I read single figures instead of repeating them — which is the exact discipline I have spent this project imposing on everyone else. The charter constraint has been missed for some time.",
+    "The next round has one job, and the charter names it in the same bold sentence I misread six rounds ago. Frames are bought by shading fewer pixels or fewer lights. The frame is roughly eighteen milliseconds proportional to shaded pixels and eleven fixed, with an arena covering eighty-five per cent of the screen through several overdraw layers and fifteen analytic lights. That is where the missing millisecond and a half has to come from."
+   ],
+   "tags": [
+    {
+     "label": "impact +5",
+     "state": "done"
+    },
+    {
+     "label": "geometry unblocked",
+     "state": "done"
+    },
+    {
+     "label": "density theory",
+     "state": "disproved"
+    },
+    {
+     "label": "hero clusters",
+     "state": "reverted"
+    },
+    {
+     "label": "60fps",
+     "state": "failing"
+    },
+    {
+     "label": "fill-rate recovery",
+     "state": "next"
+    }
+   ]
   }
  ],
  "deploy": {
   "url": "https://knockbots.vercel.app",
-  "rev": "0.28.0",
-  "note": "Deployed after round 30. Source on github.com/tecsteps/knockbots."
+  "rev": "0.29.0",
+  "note": "Deployed after round 31. Source on github.com/tecsteps/knockbots."
  }
 }
