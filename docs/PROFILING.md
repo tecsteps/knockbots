@@ -4056,3 +4056,82 @@ here."* That one is closed.
 distance."* The term was added this round, so either it is too weak to read or it is not reaching the
 surfaces that matter. Unresolved, and the crowd ramp shipped after this capture, so it is not in these
 frames.
+
+---
+
+# HANDOFF — the queued work, with the specifics that took a round each to learn
+
+Written into the repo rather than left in a transcript, because every item below cost a round to
+establish and the next session should not have to rediscover any of it.
+
+## Measurement state
+
+- **Lighting** has one win-rate report: **0-0-5**, below the 3-pooled minimum the protocol requires.
+  Two more were commissioned. Do not treat 0-0-5 as final; the critic that produced it said so itself.
+- **Character, Stage, Animation, Impact have never been scored under the win-rate protocol.** Their
+  last numbers (64, 48, 38, 36) came from an instrument since measured at a 27-point spread and are
+  not comparable to anything.
+- **The crowd ramp and the disabled rim are both un-captured.** They are measured in code and
+  unmeasured in pixels.
+
+## Queued, in the order I would take them
+
+**1. Capture, then score all six on the win-rate protocol.** Nothing else is worth doing first,
+because four axes currently have no admissible measurement at all. Three critics per axis, pooled
+W/D/L, plus the pointed question about that round's changes — the pointed question caught two
+regressions this session that the blind pairs alone would have passed.
+
+**2. The crowd ramp's falsification test.** `06-stage-wide`. If the terrace shows **six discrete
+bands** rather than a soft gradient, the within-rank jitter is not doing what its author claims.
+Phones are a separate unlit bank, deliberately untouched, and are the most likely thing a critic
+calls next.
+
+**3. Character: differentiation INSIDE the armour.** The zones are correctly assigned to parts that
+are simply small; the armour plate is 92.6% of subject pixels and was three batches masquerading as
+five. Round 41 widened roughness 0 -> 0.10, metalness 0 -> 0.08, texel ratio 4:1 -> 8:1. Whether that
+reads has never been scored. **Two things are struck: anisotropy** (round 28 measured that raising it
+reproduces the plastic-toy critique) **and envMapIntensity** (round 36 measured doubling it moved the
+axis under 1%).
+
+**4. Stage: skydeck's `deckGain`, not its `reflGain`.** Cistern reflects at 1.44x its own deck;
+skydeck at 0.45x, because skydeck owns the brightest deck in the project at 1.55 against the vault's
+0.80. **The gap is the 3.2x ratio, not the 1.64x gain**, and `StageVault.js:762` already named that
+lever with its own falsification test. Raising `reflGain` alone reaches 0.74 and turns a matte
+mineral-cap roof into a wet slab, which `Arenas.js:263` explicitly authored against.
+
+**5. Impact: shape and position, not palette.** The ring was moved off neutral this round. Its author
+predicted that if a critic still files it as HUD chrome, *"the next lever isn't more saturation — it's
+that a small, chest-height, screen-facing disc is gestalt-similar to a badge regardless of colour."*
+That prediction is untested.
+
+**6. Animation, re-scored on four robots.** The strips render vulkan/kestrel/ronin/bastion for the
+first time. **The last score is not comparable** — the axis had only ever seen Vulkan, whose
+silhouette is dominated by two static 0.66 m exhaust stacks that two critics described as a held prop.
+
+**7. The rim, only with the right denominator.** Analytic cannot work: forward PBR multiplies the rim
+by the surface, and for a metal F0 IS the albedo. Screen-space is right; the threshold is not. A
+constant in metres fixed four framings and not the extreme closeup, because at that framing a head in
+front of a stack in front of a torso **is** the same depth magnitude as a silhouette. It needs the
+fighter's own depth EXTENT in the denominator — not a constant, and not the view distance.
+
+## The five rules this session bought
+
+1. **An instrument with no known error bar is not an instrument.** Score three, report median and
+   range, or report a record instead.
+2. **Unanimity does not protect against a shared wrong mechanism.** Four critics described a
+   per-fighter colour key that does not exist. Take what a critic sees as data and what it says caused
+   it as a hypothesis.
+3. **Hand agents hypotheses, never conclusions, and say which it is.** Five checked a premise instead
+   of executing it; three of those premises were mine and wrong.
+4. **A summary field must be computed from the evidence, never maintained alongside it.** Twice this
+   session a tool reported success while holding its own failure — `complete` in `capture.mjs`,
+   `verdict` in `touchgate.mjs` — always in the direction of good news.
+5. **A failed guard that is not read is the same as no guard.** I announced a rim change that an
+   assertion had already blocked, because I read the last line of the output instead of the first.
+
+## The open question that is not mine to answer
+
+Whether to keep optimising against Tekken 8 press stills, or to turn toward the other half of the
+charter — a real, playable game, self-consistent and fast. The game currently runs end-to-end on a
+phone with a coach, a finisher call-out, 777 moves and ten robots at 75.8 fps. **Those two goals point
+in different directions from here**, and the second is much closer than the first.
