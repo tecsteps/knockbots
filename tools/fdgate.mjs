@@ -142,6 +142,16 @@ const CONTROLS = {
     red: ['FD-2b'],
     green: ['FD-2a'],
   },
+  'fd2-whiff': {
+    why: "one blockable move's hitbox radii are shrunk to nothing; it must be REPORTED as a whiff, not vanish",
+    runtime: 'shrink-hitbox',
+    // FD-2w is the new assertion and must go red. FD-2a stays green because it
+    // only ever looks at rows that DID connect, and the shrunk move now
+    // contributes none — which is precisely the blindness FD-2w exists to
+    // close, so the control proves both halves at once.
+    red: ['FD-2w'],
+    green: ['FD-2a'],
+  },
   'fd3-counterstun': {
     why: 'COUNTER_STUN = 0; every counter row must lose exactly 7 ticks of hitstun',
     file: 'combat/CombatSystem.js',
@@ -505,6 +515,7 @@ function probe({ key, mv, dist, plan = 'none', settle = null, start = null, onTi
     event: null,             // the bus event that made the first connection
     events: [],
     aFree: -1, dFree: -1, adv: null,
+    leftGround: false,       // MEASURED, not read off props.requireAir — see FD-2w
     damage: 0, hits: 0, otherMove: null,
     defState: null, defStateAtContact: null,
   };
@@ -557,6 +568,7 @@ function probe({ key, mv, dist, plan = 'none', settle = null, start = null, onTi
       for (let i = 1; i < limit; i++) {
         rec.at(tick);
         const before = rec.ev.length;
+        if (f0.airborne) row.leftGround = true;
         f0.simulate(onTick ? onTick(i, row, 0) : null);
         f1.simulate(onTick ? (onTick(i, row, 1) ?? dcmd) : dcmd);
         combat.simulate(tick);
@@ -1035,6 +1047,66 @@ function testFD2(cells) {
   const okC = record('FD-2c', 'at point blank, contact lands on the move\'s first active frame',
     reachBad.length === 0, `${reachRows} grounded blockable moves blocked at ${DISTANCES[0]}m`, cap(reachBad));
 
+  // --- FD-2w: a move that never connects must FAIL, not go quiet -------------
+  //
+  // FD-2c above iterates `nearest`, which is built from `blockRows`, which is
+  // `cells.filter(r => usable(r) && r.event === 'block')`. **A move that whiffed
+  // produces no row, so it is filtered out before any assertion sees it.** The
+  // gate then reports "0 disagree" — silence, indistinguishable from a pass —
+  // for the worst outcome a move can have.
+  //
+  // That is not hypothetical. `backfist` on the agile sets connected at point
+  // blank against a guard on NEITHER of its two active frames: it missed by
+  // 9 mm and produced nothing at all, while the technical and standard sets
+  // missed by 1-3 mm, connected one frame late, and were correctly flagged.
+  // The gate reported the near miss and stayed silent about the total one.
+  //
+  // So: every blockable grounded move that STARTED must produce an explicit
+  // outcome at point blank, and "no connection" is one of them. Split two ways,
+  // because they are different defects:
+  //
+  //   near   connects at a longer range but not at point blank. It can reach;
+  //          it cannot reach up close. Always a defect.
+  //   never  connects at no range in the sweep. Either the geometry is broken
+  //          or the move is not really blockable, and both want looking at.
+  //
+  // EXCLUDED, and measured rather than assumed: moves that leave the ground.
+  // The first version of this test went red on 21 moves, and 20 of them were
+  // `launcherKick [uf+3]` and `axeKick [uf+4]` across all ten sets — an input
+  // beginning `uf` makes the fighter jump, and the strike then travels over a
+  // grounded guard. That is a jump arc, not a whiff, and none of them carries
+  // `props.requireAir`, so the flag cannot be used to spot them. `probe` now
+  // records `leftGround` from `f0.airborne` on the actual ticks, which is the
+  // only honest way to tell a move that missed from a move that flew.
+  const started = new Set();
+  const flew = new Set();
+  for (const r of cells) {
+    if (!r.started || r.air) continue;
+    if (r.leftGround) flew.add(`${r.key}/${r.id}`);
+    else started.add(`${r.key}/${r.id}`);
+  }
+  for (const k of flew) started.delete(k);
+  const connectsAt = (k, d) => cells.some((r) => `${r.key}/${r.id}` === k && r.dist === d
+    && usable(r) && (r.event === 'block' || r.event === 'hit'));
+  const whiffNear = [];
+  const whiffEver = [];
+  for (const { key, mv } of POP) {
+    if (!isBlockable(mv) || mv.props.requireAir) continue;
+    const k = `${key}/${mv.id}`;
+    if (!started.has(k)) continue;               // FD-2s owns "did not start"
+    if (connectsAt(k, DISTANCES[0])) continue;
+    const anywhere = DISTANCES.some((d) => connectsAt(k, d));
+    (anywhere ? whiffNear : whiffEver).push(
+      `${k} [${mv.input}] startup=${mv.startup} produced NO connection at ${DISTANCES[0]}m`
+      + (anywhere ? ` (it does connect further out, so it can reach — it cannot reach up close)`
+        : ' — and none at any range in the sweep'));
+  }
+  const okW = record('FD-2w', 'every blockable grounded move connects at point blank — a whiff is a FAILURE, not a silence',
+    whiffNear.length + whiffEver.length === 0,
+    `${started.size} started grounded moves (${flew.size} more left the ground and are excluded); `
+    + `${whiffNear.length} whiff only at ${DISTANCES[0]}m, ${whiffEver.length} whiff at every range`,
+    cap([...whiffEver, ...whiffNear]));
+
   // --- FD-2n2: contact can only move later with distance ---------------------
   //
   // The plan proposes this as a NULL CONTROL — an identity the instrument must
@@ -1093,7 +1165,7 @@ function testFD2(cells) {
     `${l3Ran} of ${l3.length} sampled moves started from real key events, `
     + 'each against an mkCmd run with the identical direction hold', l3Bad);
 
-  return { okA, okB, okC, okN1, okN2, okL3, cells, nearest };
+  return { okA, okB, okC, okW, okN1, okN2, okL3, cells, nearest };
 }
 
 /** Spread a sample across a population instead of taking a prefix of it. */
@@ -1609,8 +1681,17 @@ function testFD4(slowFactor = 0) {
   record('FD-4L', 'ledger — punishability against the PRINTED onBlock',
     printedBad.length === 0,
     `${reachedRows.length} punishes reached; ${printedBad.length} disagree with what the move list prints. `
-    + 'Every one is a move printing exactly -10: an i10 punisher needs -11 to beat a guard put up on '
-    + 'the first tick the attacker can, because #updateGuard runs before #updateState.',
+    + 'Every one prints exactly -10, and the cause is NOT the guard ordering this message used to '
+    + 'name. `#updateGuard` does run before `#updateState`, but it reads `this.state` before the '
+    + 'transition, so on the tick the attacker leaves the move it still sees ATTACK and REFUSES the '
+    + 'guard — measured with the attacker holding guard from the block onward. That costs the '
+    + 'attacker a tick, not the defender, and the defender loses one symmetrically leaving blockstun, '
+    + 'so the two cancel. The real cause is that `startup` is used as a 0-BASED `moveTick` index: an '
+    + 'i10 move starts at moveTick 0 and puts its box out at moveTick 10, i.e. on the 11th frame, so '
+    + 'ten ticks elapse where the convention the printed number implies expects nine. -N is therefore '
+    + 'exactly SAFE against an i(N) punisher rather than exactly punishable, which is what FD-4a\'s '
+    + 'own passing rule `adv <= -(startup+1)` says in the other direction. Frozen timeline in '
+    + 'scratchpad/r45-punish.mjs. Fixing it is a balance or presentation decision, not a code one.',
     cap(printedBad));
 
   // Not an assertion. Pushback is a real mechanic and nobody has claimed that
@@ -2327,6 +2408,39 @@ function testFD7(asymmetry = 0) {
 
 let RUNTIME_RESTORE = null;
 function applyRuntimeControl(name) {
+  if (name === 'shrink-hitbox') {
+    /*
+     * A move that is GROUNDED and connects at point blank today, so the control
+     * can only go red by making it stop connecting.
+     *
+     * The first version picked `__ordered`'s first blockable single-window move
+     * and got `vulkan/risingFang`, which leaves the ground — so FD-2w excluded
+     * it, the injected whiff was never reported, and the control passed on the
+     * pre-existing `seraph/chorale` failure instead. That is the "a control that
+     * silently became a no-op" hazard this file's own header warns about,
+     * arriving through the exclusion I had just added. The target is now named,
+     * and asserted to be one FD-2w actually inspects.
+     */
+    const prefer = ['jab', 'straight', 'midPunch', 'elbow'];
+    const target = prefer.map((id) => MOVES[SET_KEYS[0]][id])
+      .find((m) => m && isBlockable(m) && m.active.length === 1 && !m.props.requireAir);
+    if (!target) throw new Error('shrink-hitbox: no grounded blockable target found');
+    /*
+     * The injection is the box's FORWARD LEAD, not its radius. Shrinking the
+     * radii to 0.001 did not work: at point blank the fist is already inside
+     * the defender's guard capsule, so a zero-radius point at the same place
+     * still overlaps a 0.2 m hurtbox and the move kept connecting. `fwd` is
+     * applied in fighter space as `v.x += lead * b.fwd`, so -3 puts every
+     * capsule three metres BEHIND the attacker, which cannot reach at any range
+     * in the sweep.
+     */
+    const was = target.active.map((w) => w.boxes.map((b) => b.fwd ?? 0));
+    RUNTIME_RESTORE = () => {
+      target.active.forEach((w, i) => w.boxes.forEach((b, j) => { b.fwd = was[i][j]; }));
+    };
+    for (const w of target.active) for (const b of w.boxes) b.fwd = -3;
+    return { target: `${SET_KEYS[0]}/${target.id}`, was: was[0], now: -3 };
+  }
   if (name === 'blockStun+3') {
     const target = MOVES[SET_KEYS[0]].__ordered.find((m) => isBlockable(m) && m.active.length === 1);
     const was = target.blockStun;

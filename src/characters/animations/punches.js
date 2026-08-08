@@ -343,7 +343,7 @@ export const PUNCH_CLIPS = {
   'p.jab': {
     name: 'Jab',
     duration: 24, blendIn: 3, blendOut: 6,
-    impact: { tick: 10, bone: 'hand_L' },
+    impact: { tick: 16, bone: 'hand_L' },
     root: [
       { t: 0, p: [0, -0.075, 0], ease: 'quad' },
       { t: 6, p: [0, -0.103, 0], ease: 'linear' },
@@ -2079,7 +2079,50 @@ export const PUNCH_CLIPS = {
   'p.backfist': {
     name: 'Spinning Backfist',
     duration: 33, blendIn: 4, blendOut: 8,
-    impact: { tick: 13, bone: 'hand_L' },
+    /*
+     * WAS 13, AND 13 IS THREE FRAMES BEFORE THE FIST ARRIVES.
+     *
+     * `retimeFor` PINS this pose onto the move's first active frame, and
+     * Fighter.js says why that matters: "a wrong `impact.tick` cannot be worked
+     * around by re-authoring the window: whatever tick the window starts on,
+     * the clip will be at its declared contact pose on it." `sp.risingFang` is
+     * the documented precedent — it declared 14 and its fist was 1.2 m above
+     * the defender's head there, so every window it could ever be given
+     * whiffed. This is the same defect, one order of magnitude smaller.
+     *
+     * The arm is not out at 13. This clip's own `elbow_L` track reads -8.8 deg
+     * at t=13 and -0.8 at t=16 — straightest, i.e. furthest extended — before
+     * folding again to -37.2 by t=19. `shoulder_L` agrees: 270 -> 278 -> 298.
+     *
+     * Measured rather than read off the track. Gap between the move's hitbox
+     * capsules and a standing guard's hurtboxes ON EACH SET'S OWN FIRST ACTIVE
+     * FRAME, at 0.9 m, negative being a connection (scratchpad/r45-impact.mjs):
+     *
+     *     impact  standard  technical  agile   heavy
+     *       13     +0.027     +0.029   +0.040  -0.390
+     *       14     -0.001     +0.001   +0.011  -0.390
+     *       15     -0.009     -0.007   +0.003  -0.390
+     *       16     -0.067     -0.065   -0.056  -0.390
+     *
+     * At the shipped 13 the first active frame missed by 27-40 mm on every
+     * archetype that plays this clip. Agile (kestrel, mantis) missed on BOTH
+     * active frames and connected at point blank not at all. 16 is the first
+     * value that lands every archetype with margin rather than by millimetres,
+     * and it is the frame the clip's own tracks call full extension, so two
+     * independent readings agree.
+     *
+     * The heavy column does not move at any value because heavy substitutes
+     * `p.overhand` for this move (see ARCHETYPES.heavy.clips) — it is the null
+     * arm, and it staying at -0.390 throughout is what says the sweep is
+     * measuring this clip and not the staging.
+     *
+     * THIS IS NOT A BALANCE CHANGE. No frame datum moves: `startup`, `active`,
+     * `total`, `recovery`, `onBlock` and `onHit` are all untouched, and fdgate
+     * FD-1/FD-2a/FD-2b/FD-3a/FD-3b confirm it. What changes is which POSE the
+     * retime shows on those frames, so the hitbox rides an extended arm instead
+     * of a folded one — which is what the move data always said it was doing.
+     */
+    impact: { tick: 16, bone: 'hand_L' },
     root: [
       { t: 0, p: [0, -0.075, 0], ease: 'quad' },
       { t: 4.88, p: [0, -0.114, 0], ease: 'sine' },
