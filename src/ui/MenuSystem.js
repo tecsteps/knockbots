@@ -3610,6 +3610,34 @@ const KBG_CSS = `
 }
 .kbg-root--on { opacity: 1; visibility: visible; }
 
+/*
+ * THE TRAINING PANEL DOES NOT BELONG ON A PHONE.
+ *
+ * It is a six-cell frame-data readout plus a move name and a legend line, and on
+ * a handset it lands at roughly a fifth of the screen in the corner the left
+ * thumb reaches over. The owner, playing on one: "it's too crowded, don't show
+ * the hud on left side, it's too small anyway."
+ *
+ * Both halves of that are right. The numbers are genuinely unreadable at
+ * 8-9px -- an interface critic measured exactly that and called it below
+ * readable-caption size at arm's length -- and a readout nobody can read is
+ * pure occlusion of the arena it sits on.
+ *
+ * Gated on (hover: none) rather than on width, matching isTouchPointer() in
+ * this file: a narrow desktop window is still a machine with a mouse and a
+ * player who can lean in, and the panel is the whole point of training mode
+ * there. What is removed is the case where it cannot be used.
+ *
+ * (No backticks: this block lives inside a JS template literal, and one would
+ * end the string. Tenth time this repo has hit that, third of them mine.)
+ *
+ * The controls it reports on are unaffected -- they live in pause -> options and
+ * were always reachable from the phone.
+ */
+@media (hover: none) {
+  .kbg-root { display: none; }
+}
+
 .kbg-boxes { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
 .kbg-boxes--on { display: block; }
 .kbg-box { stroke-linecap: round; fill: none; }

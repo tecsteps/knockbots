@@ -683,6 +683,21 @@ export class TouchControls {
     this.blkEl = root.querySelector('.kbt-blk');
     this.flashEl = root.querySelector('.kbt-flash');
     this.coachEl = root.querySelector('.kbt-coach');
+    /*
+     * A THREE-SECOND CEILING ON TOP OF THE PER-LINE RETIREMENT.
+     *
+     * Each line already disappears the moment its own gesture lands, which is
+     * the right rule for a player who tries them. It is the wrong rule for a
+     * player who does not: they were left with labels sitting over the arena for
+     * the whole round. The owner, on a real handset: "it is too crowded, don't
+     * show instructions -- maybe just the first 3s."
+     *
+     * 3000 ms is theirs, not a guess. Long enough to read eleven words at a
+     * glance, short enough to be gone before the first exchange. The timer runs
+     * from when the pad is built rather than from round start, so it does not
+     * re-arm every round and cannot reappear mid-match.
+     */
+    setTimeout(() => { this.learned('swipe'); this.learned('throw'); }, 3000);
 
     // Position comes from the grid cell alone; the pitch that separates the
     // cells is the same value the cluster is sized from, so the panel tiles
