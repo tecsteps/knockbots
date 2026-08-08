@@ -4865,3 +4865,69 @@ instead of a repair pass.
   and **did not reproduce** on the other frame. What did hold, monotonically across a 6-point sweep,
   is bloom driving edge-chroma *ringing* on closeups: overshoot 0.34 → 5.26 from strength 0 to
   shipped. Real, dose-dependent, second-order, and not the reported artifact.
+
+---
+
+# Character re-scored on the corrected protocol: 0W 4D 8L, and the first draws this axis has ever recorded
+
+Three critics, fresh capture, with the three false findings struck and the evidence attached.
+
+```
+ch-A   0-0-3   (3 matched closeup pairs)
+ch-B   0-3-3   (all six usable closeup references — the full population)
+ch-C   0-1-2
+pooled 0 wins, 4 draws, 8 losses over 12 pairs
+```
+
+**Not one critic reported chromatic aberration or edge doubling.** The strikes held, and one of them
+used the new discriminator to actively separate the real defect from the cleared one:
+
+> *"The banding runs ALONG the surface over its full visible length, not confined to a 1-2 px zone
+> ACROSS a silhouette edge, so this is a texture call, **not** the warm/cool bevel-shading effect that
+> was cleared in the corrections."*
+
+That is the protocol doing exactly the work it was rewritten for.
+
+## The pattern in the losses is worth more than the record
+
+`ch-B` ran the full six-reference population and noticed the split is not random:
+
+> *"The mechanical-plate material does not lose to mechanical-adjacent materials — King's mic mesh and
+> chain, Jin's knuckle plate. **It loses specifically against organic strand-level rendering** — hair,
+> fur, feather — which the robot cast structurally cannot present."*
+
+All three of its losses had prominent hair or fur in the reference. All three draws were against metal,
+leather and chain. **Against the materials a robot can actually have, this axis is currently drawing
+with Tekken 8.**
+
+It flagged this correctly as a hypothesis rather than an excuse: *"the losses are real observations
+regardless of cause."* Which is the right handling — but it also means the reference subset for this
+axis has a structural bias nobody had noticed, in the same family as `ref/06` being in the stage list.
+
+## Two critics agree the strut reads as wood and disagree about why
+
+- `ch-A`: *"the texture **does not attenuate with the cylinder at all** — that is the tell."*
+- `ch-B`: *"linear striations that **curve with the surface (correct UV, so not a mapping bug)**... the
+  banding is more regular than real wood grain. What is missing is any cue that says metal: no
+  anisotropic sweep across the width, no environment reflection."*
+
+**I had already briefed a fixing agent toward the UV explanation before `ch-B` reported.** That brief
+is now flagged as possibly wrong, with instructions to measure rather than choose — read what
+`latheProfile` emits, or render a UV checker onto the mesh — and to report which critic was right.
+
+Three independent critics have now called this surface wood grain across three rounds. It is the one
+non-hypothetical defect on the axis.
+
+## What both confirmed as genuinely fixed
+
+Material differentiation is real and measurable now, not paint: *"the dark ribbed hose and joint
+sections read matte and soft-shaded, no hard specular, against the plate's sharp brushed-highlight
+streaks"*, plus a translucent lens and self-illuminated vents — **materials a single-metalness model
+could not have produced.** `ch-B`'s verdict on the pointed question: *"this is no longer one metalness
+with different paint."*
+
+## And the ceiling both named independently
+
+**Hero plate still covers 60%+ of surface area**, and material gains visible at closeup scale do not
+survive to in-match camera distance — *"01/03/09's distance vs 02's closeup scale"* — which is the
+framing a player actually sees. A closeup-only win is not a win.
