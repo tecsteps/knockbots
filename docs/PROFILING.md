@@ -5226,3 +5226,57 @@ because the code that requested it ran.
 It was caught only because a *new* instrument was given a positive control that could
 fail: a floor-depth check returned 1.74 m against an analytic 4.50 m, and that gap was
 the vignette and AgX curve that were supposedly switched off.
+
+### Corrected: the supersample figure was wrong-signed. It is −13.3%, not +23.6%.
+
+Re-measured with the armed pass list printed per arm (`bare-1x` and `bare-4x` both
+`render, output`; null control on `bare-1x` max **0.00/255**):
+
+```
+01-hero-idle, per-material micro-contrast   bare-1x   SMAA-1x   bare-4x
+between-material spread                       3.587     3.563     3.109
+vs bare-1x                                      ---     -0.7%    -13.3%
+```
+
+Supersampling **lowers** measured micro-contrast, and on reflection it must: 4× cannot
+add high-frequency content that 1080p is able to represent. It can only remove
+**aliasing** — and aliasing *is* spurious high-frequency energy. So **most of the 1×
+frame's apparent micro-contrast at fight framing is aliasing, not surface.** The old
++23.6% was DOF: with the chain armed, DOF at 4× is a much smaller blur relative to the
+image, so the "supersampled" arm was simply less defocused. The crop circulated last
+round (`r43-fig-super.png`) is misleading for the same reason and is discarded.
+
+SMAA, measured properly against the 4×-integrated frame as ground truth:
+
+```
+arm        RMSE all   RMSE on subject   subject px off by >8/255
+bare-1x      10.57         14.18                126,337
+SMAA-1x      11.51         15.39                129,943
+```
+
+It does not help; it slightly hurts. A post-resolve edge filter cannot invent missing
+samples, so it trades aliasing for blur and lands further from truth. Cheap edge-AA is
+closed — but closed by a measurement, not by the assumption that was there before.
+
+**The recommendation survives; its justification does not.** The shipped frame sits
+**14.18 RMSE from the correctly integrated image over subject pixels**, 126,337 of them
+wrong by more than 8/255, and that error is aliasing bought with samples. Temporal
+accumulation is still right. But it buys a *cleaner, more correct frame*, not "more
+material differentiation" — gate it on RMSE-to-ground-truth, and expect no legibility
+metric to move.
+
+### The trap this nearly set, which is the reason to write it down
+
+The in-flight workflow was building a gate that scored **high-frequency energy**. Under
+that metric, **correct anti-aliasing scores as a regression** — so the implementer would
+have measured its own good change as a loss and, obeying the standing rule to revert on
+a bad measurement, thrown it away. The rule and the metric would have combined to
+destroy the right answer while every individual step looked disciplined.
+
+It was stopped and re-briefed with the metric *named* rather than left open, plus a
+mandatory sign check on the positive control: **verify the direction, not just the
+magnitude.** A wrong-signed instrument is worse than no instrument, because it survives
+every check that only asks whether the number moved.
+
+**Sharpness rewards aliasing.** Any future axis scored on acutance, micro-contrast,
+Laplacian energy or "material legibility" is measuring, in part, a defect.
