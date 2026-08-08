@@ -4532,3 +4532,81 @@ mirrors it onto the button's tooltip, and counts attempts, because *"never fired
 refused"* are different bugs that were previously indistinguishable.
 
 **Eighth wiring-not-authoring finding of the session, and the cheapest.**
+
+---
+
+# The gameplay pass: two real bugs, and a gate whose red was its own fault
+
+Four headless gates, ~25 s combined, no browser. Two product bugs found and fixed; one design decision
+raised and left alone; one gate red on the half that needs authoring.
+
+## The bug in the word "deterministic"
+
+`Fighter.reset()` restored position, velocity, health and state and **left `this.rng` wherever the
+previous round had advanced it.** So round 2 depended on how round 1 went. `dtgate` DT-3 drove two
+real 1400-tick scripts through actual key events and diffed round 2 after two different round 1s,
+with **four independent trials**:
+
+```
+TRIAL none   DIVERGES at round-2 tick 0   rng.s0 1130603015 vs 2498565824
+             OBSERVABLE at tick 223       pos.x -3.5442645 vs -3.5358588
+TRIAL rng    CLEAN
+TRIAL anim   DIVERGES (identical to none)
+TRIAL both   CLEAN
+```
+
+**It is the rng and it is not the animator clock**, which refutes half of the original hypothesis —
+and that was only knowable because the first researcher ran its candidates *in sequence* and said so
+rather than claiming a cause. 8.4 mm by tick 223 is not cosmetic: wake-up picks between `r.getUp` and
+`r.getUpRoll` on `rng.next() < 0.35`.
+
+## The bug that reached collision
+
+`retimeClip` met its own two segments at the pivot **only when `inScale === pivot/pivotAt`** — exactly
+the value the clamp is allowed to overrule — and `pivotAt` **is** `move.startup`. So every clamped move
+was discontinuous **on the tick the hitbox appears.**
+
+`#buildHitboxes` sweeps the capsule back to last tick's anchor, correctly, so capsule length **is** limb
+travel: **`airSideKick` handed `CombatSystem` a 104 cm swept capsule against a 5 cm median for the same
+move**, on one tick, invisible in the pose the player saw. Nine broken-pin moves; zero intact-pin moves.
+
+Fixed by anchoring the wind-up at its **end**, which is continuous at the pivot by construction. RT-2
+10/27 -> **0/27**, RT-3 9 -> **0**, both nulls unchanged. RT-1 stays red because 19 clips still want a
+scale the clamp will not give — the descriptor half, and authorial work.
+
+## And the lesson worth keeping: a gate red on its own controls
+
+`smgate` first landed **RED on two of its own controls rather than on the product**, and reported 233
+cells as *harness* failures rather than as results. Its `SM-3n` said outright: *"NO throw ever landed —
+the sweep proves nothing"*, refusing to credit its own 1087-cell pass.
+
+All three causes were **its author's own bugs, every one producing stable, reproducible, wrong
+numbers**:
+
+- the backdash setup pressed `ArrowLeft` for a fighter facing -1 — that is **forward**;
+- `invulnerable` was set by assignment and erased by `#updateFlags` on the next tick, so 132 cells
+  scored against a defender who was never invulnerable;
+- the defender's state was sampled **after** the tick that resolves, so **every successful throw scored
+  as "the state decayed"** — which is exactly why zero landed.
+
+Now GREEN, all ten states covered, `SM-3n` asserting per-state rather than "some throw landed".
+
+And `SM-1n` turned out to be **DT-3 from another angle**, proven with a control that patches the reseed
+back out: the census reverts to the exact `3167 / 81 distinct` from before the fix. `reset()` carried
+the rng, the second run entered its first knockdown with the generator elsewhere and picked
+`r.getUpRoll` where the first picked `r.getUp` — same length, different sequence.
+
+**Two instruments, built independently, reading one defect through different apertures.** That is what
+a controls discipline buys: neither was tuned until it agreed with the other.
+
+## One discarded rather than tuned
+
+RT-2's first design compared first-step to median-step against the clean population's p95 — and **the
+clean population's own worst case sat 52x above that ceiling.** Stable, reproducible, and measuring
+"some limbs accelerate hard". Thrown away rather than adjusted until it passed.
+
+## Ledger correction
+
+`TESTPLAN`'s "33 throws" is **33 slots** across 14 sets = **11 distinct objects, 4 distinct ids**. The
+612 move slots are **190 distinct objects, 73 distinct ids**. The "66 moves clamped" console warning is
+likewise a slot count: **19 distinct move objects.**
