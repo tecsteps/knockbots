@@ -5280,3 +5280,53 @@ every check that only asks whether the number moved.
 
 **Sharpness rewards aliasing.** Any future axis scored on acutance, micro-contrast,
 Laplacian energy or "material legibility" is measuring, in part, a defect.
+
+---
+
+## A critic panel judged a frame that predated the change it was scoring
+
+Four blind critics scored the stage axis after the midground landed. Tally 1–3 against
+the Tekken 8 reference. **The verdict is void.**
+
+```
+what the critics read     shots/01-hero-idle.png              12:02:19   md5 cea7d45…
+what the capture produced shots/stage-axis-fresh/01-hero…png  14:38:02   md5 9dd1de3…
+midground committed       eabcacc                             14:35:46
+```
+
+The capture agent redirected its output to a subdirectory so it would not overwrite
+another agent's frames in the shared `shots/`, said so plainly in its caveats, and my
+critic prompts had the old path **baked in as a static string** — composed before the
+capture ran and never derived from its result. So the panel scored a frame from two
+and a half hours earlier, and the one structural flaw was mine, not the agents'.
+
+The tell was in the critique itself: *"no object anywhere in the band between the
+fighters' feet and the barrier base, so the distance to the back wall is
+unmeasurable."* That is a precise description of the pre-midground stage.
+
+Re-run now derives the path from the fresh capture, and every critic must **stat both
+files and report byte size and mtime in a required `provenance` field before reading
+them**, flagging loudly if either predates HEAD. A blind verdict is only as good as
+its provenance, and blindness is exactly what stops a critic from noticing it was
+handed the wrong file.
+
+### What the void panel is still good for
+
+It is a clean, independent verdict on the **pre-midground** stage, and it corroborates
+`midframe`'s raycast instrument from a completely different direction. The raycast
+found 37.96% of the frame from the lens out to nine metres carrying **zero** occlusion
+boundaries. A blind critic with no access to that measurement, no knowledge that a
+midground was under test, and only the image, wrote:
+
+> *"A resolves into essentially two planes… every element is laid side by side in one
+> band rather than in front of or behind its neighbour… no foreground element
+> whatsoever."*
+
+Two instruments of totally different kinds — a depth raycast and a human-style
+judgement — converging on the same defect is the strongest evidence either has had.
+The measurement was not an artefact, and the critic was not guessing.
+
+It also means the accidental control was a *useful* one: the panel establishes the
+before-state at 1–3 on this exact pair, so the re-run is a genuine before/after on the
+same critics, same lenses, same reference. **That is a better experiment than the one
+originally designed**, which had no before-arm at all.
