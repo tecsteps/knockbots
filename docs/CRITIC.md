@@ -329,3 +329,62 @@ light, and as `ref/06` sitting in a stage list for four rounds.
    the axis currently draws — it does not win. Three draws is not three wins, and the remaining gap
    there is real: hero plate still covers 60%+ of surface area, and closeup-scale material gains do not
    survive to in-match camera distance.
+
+---
+
+# FOURTH CORRECTION: the character axis is scored 5.5x tighter than the game is played
+
+Measured, on a pinned camera and pose with a 0.00/255 within-session floor:
+
+```
+framing            distance   fov    screen px/m   mm per screen px
+02-closeup-face      1.27 m    24        2003            0.50
+03-full-body         3.98 m    30         507            1.97
+01-hero-idle         4.59 m   35.5        367            2.72
+```
+
+`02-closeup-face` is the only true closeup we own, all six usable character references are closeups,
+and so **every material verdict this axis has produced has been reached at 5.5x the resolution the
+game is actually played at.** Nothing finer than about 5.5 mm on a robot survives a fight frame.
+
+Two critics reported this independently before it was measured — *"material legibility drops sharply
+at hero-idle distance versus closeup scale; the in-match framing is wide, so that is the framing that
+actually matters"* — and both were right.
+
+## Why this is not a small bookkeeping point
+
+Distance does not cost every material the same. Fraction of tangent-slope variance surviving the mip
+level each framing selects:
+
+```
+material        closeup   fight     surface m2
+kb.gasket         100%    88.5%        5.77
+kb.armor          100%    52.4%       14.18
+kb.darkMetal     27.2%     1.3%       20.60
+kb.piston        26.1%     1.3%       12.08
+```
+
+**The two largest surfaces — 32.7 of 58 m² — arrive at fight framing having lost 98.7% of their
+structure, while the gasket keeps 88.5%.** The roster's *order* by apparent micro-structure **inverts
+between the two framings.** A ranking produced at closeup does not merely weaken at distance; it can
+reverse.
+
+So an axis scored only at closeup will keep recommending work on surfaces that are already invisible
+where it counts, and keep crediting improvements a player will never see. Four rounds of material
+work were validated this way.
+
+## The rule
+
+1. **Score character at in-match framing, and let that gate shipping.** `01-hero-idle` at 367 px/m is
+   what a player looks at. A material win visible only at 2003 px/m is not a win.
+2. **Closeup stays, as diagnosis rather than verdict.** It is where a defect is *identifiable* — the
+   strut's wood grain was only nameable there. Use it to find causes; do not use it to decide whether
+   the axis has improved.
+3. **And the honest problem with (1): the wide reference population is n=2** — `tekken8_02` and
+   `tekken8_07`, one of which is the documented 2.1x density outlier. That is thin, and it is the same
+   thinness the stage axis has. **Report both values, never a distribution, and say n=2 every time.**
+   A verdict at the right framing against two references is still better than a confident verdict at a
+   framing nobody plays at, but it is not strong evidence and must not be written up as though it were.
+4. **A crop offered as proof must be at the framing the claim is about.** An improvement demonstrated
+   at closeup, for an axis gated at fight distance, is not evidence — it is the flattering framing,
+   which is how this axis spent four rounds.
