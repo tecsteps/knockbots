@@ -2231,6 +2231,23 @@ export class Animator {
     this._prevBodyVelocity.set(0, 0, 0);
     this.breathing._energy = 0;
     this.breathing.idleness = 1;
+    /*
+     * AND THE PHASE, which this function cleared its two neighbours and not.
+     *
+     * `#applyBreathing` does `b.phase += b.rate` every tick unconditionally, so
+     * it is a free-running accumulator over the whole match. `_energy` and
+     * `idleness` were reset and `phase` was not, so a round entered after a long
+     * previous round started its breathing sine somewhere else — a pose-only,
+     * absolute-time divergence, invisible to anything tracing position and
+     * state.
+     *
+     * dtgate DT-4 is what found it: it makes two round 1s of DIFFERENT LENGTHS
+     * and compares round 2, and it reads a `poseSig` column over the rebuilt
+     * hurtbox capsules. With `Fighter.reset` fixed to zero `simTick` (which is
+     * the other half of the phase, through `n = this.tick * 0.006`) this was the
+     * entire residual: 296.417214 against 296.422430 at round-2 tick 263.
+     */
+    this.breathing.phase = 0;
     this.current = null;
     this.time = 0;
     this.finished = true;

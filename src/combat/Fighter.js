@@ -1179,6 +1179,22 @@ export class Fighter {
       this.animator.reset?.();
       this.animator.tick = 0;
       this.animator.clearImpacts?.();
+      /*
+       * CLEAR `currentClip` OR THE REWIND BELOW IS A NO-OP.
+       *
+       * `#play` early-returns on `loop && this.currentClip === clipId`, and
+       * `reset()` never cleared `currentClip` — so a fighter that ended round 1
+       * standing in `idle.fight` was asked to rewind to `idle.fight` and simply
+       * did not. dtgate's own 'anim' trial documented this line years ago and
+       * worked around it by calling `Animator.play` directly, past the guard.
+       *
+       * It was survivable before only because the animator kept its round-1
+       * entries: the fighter stayed posed by a stale clip. With `Animator.reset`
+       * above now emptying `layer.entries`, the same early return would leave
+       * the fighter posed by NOTHING, which is worse than the bug it replaced.
+       * The two changes have to land together.
+       */
+      this.currentClip = '';
       this.#play('idle.fight', 0, true);
     }
     this.#drivePose();

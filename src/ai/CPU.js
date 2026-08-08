@@ -224,6 +224,29 @@ export class CPU {
     this._techGrab = null;
     this._wakeupDecided = false;
     this._cancelAttempted = -1;
+    /*
+     * THE NOTATION RING, and it is not cosmetic.
+     *
+     * `#think` pushes every tick's notation here and then publishes the array
+     * AS `this.cmd.buffer`, which is what `Fighter#liveCommand` reads to match a
+     * motion input. Carried across a round boundary, round 2's first eight ticks
+     * could complete a qcf whose first half was typed in round 1 — a special
+     * coming out of a neutral round start, from inputs that belong to a round
+     * that is over.
+     *
+     * `_willTech` and `_wakeupAttack` are one-shot flags whose partners
+     * (`_techGrab`, `_wakeupDecided`) were already cleared two lines up; they
+     * are only ever read when the partner is set, so carrying them was harmless
+     * and inconsistent rather than wrong. Cleared for the same reason the
+     * partners are.
+     *
+     * `_heightHist` is deliberately NOT cleared. It is the bot's read of how
+     * this opponent attacks, and a read that survives the round is the point of
+     * it — dropping it would be a difficulty change, not a determinism fix.
+     */
+    this._notationHistory.length = 0;
+    this._willTech = false;
+    this._wakeupAttack = false;
   }
 
   dispose() { for (const off of this._unsubs) off(); }
