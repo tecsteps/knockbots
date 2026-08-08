@@ -2494,6 +2494,14 @@
   .mbtn { min-height: 44px; }
 }
 
+/* ENTER TO SELECT / ARROW KEYS TO NAVIGATE is advice a touchscreen cannot take,
+   and it was showing on handsets underneath the rotate prompt. Same reasoning as
+   the .kbs-hints rule further down: telling a player to press keys they do not
+   have is worse than saying nothing. */
+@media (hover: none) {
+  .title-hint { display: none; }
+}
+
 .title-hint {
   position: absolute; bottom: 2em; left: 0; right: 0;
   text-align: center;

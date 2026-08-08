@@ -386,6 +386,24 @@ const CSS = `
   background: radial-gradient(120% 90% at 50% 45%, rgba(13,20,34,.95), rgba(5,7,12,.99) 70%);
 }
 .kbt-root.kbt-portrait .kbt-rotate { display: grid; }
+
+/* The rotate prompt has to sit above the MENU, and it did not.
+   kbt-root is z-index 40 and kbs-layer (the menu screens) is 41, which is right
+   for the gameplay pad — a menu should cover the stick, not the reverse — but it
+   is exactly wrong for this overlay. The prompt has an opaque background and was
+   still being painted through: on a handset the title screen showed ROTATE YOUR
+   DEVICE colliding with OPTIONS, two lines of unrelated text on top of each other.
+   Raising the whole root in portrait rather than the prompt alone, because
+   z-index 40 makes kbt-root a stacking context and no child can escape it.
+   Safe to raise wholesale: in portrait the stick, cluster, dodge, block and flash
+   are all display:none (right below), so the prompt is the only thing left in
+   here to raise. The root keeps pointer-events:none and the prompt keeps auto, so
+   this also stops taps landing on menu items the player cannot see.
+   NO BACKTICKS IN THIS COMMENT. This block is inside a JS template literal and a
+   backtick ends the string; the first draft of this very comment quoted the two
+   class names in backticks and broke the boot with "root is not defined". That is
+   the eleventh time in this codebase. */
+.kbt-root.kbt-portrait { z-index: 60; }
 .kbt-root.kbt-portrait .kbt-stickzone,
 .kbt-root.kbt-portrait .kbt-cluster,
 .kbt-root.kbt-portrait .kbt-od,
