@@ -2186,6 +2186,65 @@ class BokehDofPass extends Pass {
     this.uniforms.uBlendPx.value = Math.max(1.5, height * 0.004);
   }
 
+  /**
+   * ## `DOF_TAPS` IS A CONSTANT ON PURPOSE, AND MAKING IT FOLLOW THE BLUR WAS
+   * ## TRIED, MEASURED AND REVERTED
+   *
+   * The idea is the obvious one and it is wrong for this frame. A pixel whose
+   * circle of confusion resolves to 2 px pays the same 14 gathers as one at
+   * 10 px, so let the count follow the radius. Holding the tap SPACING instead
+   * of the tap COUNT — `taps = DOF_TAPS * (r/uMaxRadius)^2`, floor 4, which is
+   * the rule that keeps the spacing at the 4.8 px the widest circle already
+   * gets — plus the same idea in `MotionBlurPass` (`taps = ceil(streakPx/2.25)`,
+   * floor 2). Both were built, both fired hard, and both were taken back out.
+   *
+   * **It works, and it is not worth it.** `tools/tapbudget.mjs` (ABBA quads,
+   * live fight, `#define`s asserted off the live material per block) with an
+   * AMPLIFIER — each tap-loop pass re-drawn 16 extra times into a scratch
+   * target, so a sub-millisecond cost lands 17x over on a contended box:
+   *
+   *     per frame, 1632x918, quad-paired, bootstrap 95% CI over 8 quads
+   *     BokehDof + MotionBlur, TOTAL cost      1.219 ms   [1.00, 1.49]
+   *     adaptive taps, saving                 -0.357 ms   [-0.56, -0.14]
+   *     dofTaps 4 / mbTaps 2, saving          -0.519 ms   [-0.72, -0.32]
+   *     null control on the amplifier         -0.007 ms   [-0.34,  0.30]
+   *
+   * The amplifier's positive control recovers 1.219 ms for the two passes
+   * together against the 0.59 / -0.07 ms that `tools/passbudget.mjs` got for
+   * them by ablation — same order, different method. The third row is the
+   * ceiling: an unconditional 4/2 taps is cheaper than any adaptive scheme can
+   * be, and it saves 0.52 ms. **That is the whole of this candidate, and it is
+   * below the +-1.2 ms tolerance of the only instrument that measures p95.**
+   * The direct p95 arm agreed by failing to see it: +1.29 ms [-5.85, 9.04] at
+   * loadavg 10.9, where the null control's own p95 delta was +0.92 [-1.45,
+   * 3.09] and even renderScale 0.70 only just resolved.
+   *
+   * **And the picture pays for it.** `tools/tapgate.mjs` scores RMSE against the
+   * CONVERGED gather (the same shader at 128 / 64 taps — the correct
+   * zero-by-construction reference for a tap count, which a 4x supersample is
+   * not, because every length here is a fraction of frame height and so the 4x
+   * frame is approximated exactly as badly). Eight pinned moments off a live
+   * fight, camera and reprojection matrices restored per arm so the motion blur
+   * is scored on MOVING frames, every arm captured in one task:
+   *
+   *     rmse vs converged      null    shipped   adaptive   4/2 taps
+   *     whole frame            0.41      2.71       4.45      6.60
+   *     SUBJECT pixels         0.83      1.45       4.39      4.56
+   *     pixels the loops touch 0.37      2.93       4.78      7.11
+   *
+   * On the robots — the thing a player reads — the adaptive rule sits at 3.03x
+   * the shipped chain's own distance from converged, and it is 4.39 against a
+   * null of 0.83. It removed 48% of the DOF tap fetches and 83% of the motion
+   * blur's, measured by reading back a debug render of the chosen tap count, so
+   * this is not a scheme that failed to fire; it is one whose entire prize was
+   * 0.36 ms.
+   *
+   * If anyone re-opens this: the ceiling is 0.52 ms and it does not move, so the
+   * question is not the rule but whether 0.5 ms is worth having at all. The
+   * `#define` switch, the debug tap-count readback and the amplifier that
+   * produced these numbers are in `tools/tapbudget*.mjs` and `tools/tapgate*`;
+   * they need `DOF_ADAPTIVE` / `MB_ADAPTIVE` re-applied here to run again.
+   */
   render(renderer, writeBuffer, readBuffer) {
     this.uniforms.tDiffuse.value = readBuffer.texture;
     this.uniforms.uInvProjection.value.copy(this.camera.projectionMatrixInverse);
@@ -2448,6 +2507,20 @@ class MotionBlurPass extends Pass {
   setSize(width, height) {
     this.uniforms.uResolution.value.set(width, height);
   }
+
+  /**
+   * `MB_TAPS` is a constant for the same reason `DOF_TAPS` is: making it follow
+   * the streak length was measured and reverted. It removes 83% of this pass's
+   * tap fetches on a moving frame and it buys, together with the DOF half of the
+   * same change, 0.36 ms. See the long note above `BokehDofPass#render`.
+   *
+   * One measurement from that work is worth keeping on its own, because it is
+   * about this pass rather than about the change: **the loop is bimodal, not
+   * cheap.** Over eight pinned moments of a live fight the reprojection early-out
+   * let it skip the whole frame at three of them and it ran on 26-100% of pixels
+   * at the other five — mean 49%. "Motion blur is free" (it ablates at -0.07 ms)
+   * is true on average and is not true on the frames where the camera moves.
+   */
 
   /**
    * Reprojection measures displacement over one *rendered* frame, not over a
