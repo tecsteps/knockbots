@@ -377,6 +377,8 @@ function maskedDiffs(A, B) {
 
 let rngCalls = 0;
 let rngBroken = false;
+/** Which arm of the control is running; `runScript` advances it. See `breakRng`. */
+let rngArm = -1;
 const RNG_NEXT = Rng.prototype.next;
 
 /**
@@ -405,9 +407,29 @@ function breakReset(on) {
     Fighter.prototype.reset = FIGHTER_RESET;
   }
 }
+/**
+ * The injection: `Rng.next` stops being seeded.
+ *
+ * WAS `Math.random()`, AND THAT MADE THE CONTROL A COIN FLIP. Two runs then draw
+ * different numbers, but whether any of them reaches a traced column is chance —
+ * most rolls here are consumed and discarded, and the few that decide gameplay
+ * (`#getUp`'s `next() < 0.35`, the CPU's guard roll) can land the same way in
+ * both runs. Measured on ONE machine and ONE commit: RED on five runs and GREEN
+ * on the sixth. That is how the same build told one reader "RED as required" and
+ * another "the gate measures nothing".
+ *
+ * A control must not itself be nondeterministic. The two arms return OPPOSITE
+ * CONSTANTS instead — 0.03 and 0.97, straddling every threshold in the sim — so
+ * the first gameplay-relevant roll takes different branches by construction and
+ * the control's own result is reproducible. The rng WORDS are deliberately left
+ * untouched (a constant return never advances `s0`/`s1`), so the divergence this
+ * proves has to arrive through GAMEPLAY rather than through the two rng columns
+ * already in the trace.
+ */
 function breakRng(on) {
   rngBroken = on;
-  if (on) Rng.prototype.next = function brokenNext() { rngCalls++; return Math.random(); };
+  rngArm = -1;
+  if (on) Rng.prototype.next = function brokenNext() { rngCalls++; return rngArm ? 0.97 : 0.03; };
   else Rng.prototype.next = RNG_NEXT;
 }
 
@@ -441,6 +463,8 @@ const scene = new THREE.Scene();
  * shorten the measured window — the KO path itself is covered separately.
  */
 async function runScript(script, { bigHealth = true, perturb = null, prelude = null, resetBetween = false, trial = 'none' } = {}) {
+  // Under the control, successive runs are opposite arms. See `breakRng`.
+  if (rngBroken) rngArm = rngArm <= 0 ? 1 : 0;
   const sim = await makeSim(scene);
   stage(sim);
   if (bigHealth) { sim.f0.health = MAX_HEALTH * 40; sim.f1.health = MAX_HEALTH * 40; }
@@ -548,7 +572,9 @@ if (POSITIVE_CONTROL) breakRng(false);
         'VACUOUS CONTROL: Rng.prototype.next was never called during the measured run');
     } else {
       record('DT-1a  two independent in-process sims, tick for tick', !d,
-        `${cov}; control fired ${controlCalls} rng calls; ${d ? `diverges at tick ${d.tick}` : 'IDENTICAL — control did not bite'}`,
+        `${cov}; INJECTED: Rng.prototype.next returns 0.03 on run 1 and 0.97 on run 2 `
+        + `(${controlCalls} calls fired, rng words deliberately untouched); `
+        + `${d ? `diverges at tick ${d.tick}` : 'IDENTICAL — control did not bite'}`,
         d ? d.cols.slice(0, 4) : []);
     }
   } else {
