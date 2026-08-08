@@ -6063,3 +6063,43 @@ Two consequences to schedule around:
 Raised by the agent that wrote the original proposal, before running it. That is the second
 failure mode identified in advance rather than after the fact today, and both came from the
 author auditing their own design rather than from review.
+
+### CAVEAT on the GTAO trace number in `3d6d133`
+
+The figure committed there — GTAO trace 11 → 3 samples, **−0.903 ms [-1.62, -0.22]**, null
++0.10 ms — **may be contaminated, and it is recorded here rather than quietly trusted.**
+
+Timeline, reconstructed from transcripts by a third party:
+
+```
+21:14:49   the owning agent launches a 170-segment run and blocks on it
+21:16:06   an unrelated agent runs `git checkout -- src/engine/RenderPipeline.js`,
+           removing the AO pass 77 seconds into that run
+21:25      the run reports timings for the AO pass
+```
+
+Whether the numbers survive depends on whether the harness re-reads the file per segment or
+loaded it once at launch — which only the owning agent can say. I committed the figure before
+learning the timeline, so the caveat lands after the fact; that is worse than catching it
+first and is exactly why it is written down rather than left to be discovered.
+
+**Treat −0.903 ms as unverified until its author confirms the harness.** The qualitative
+conclusion is better supported than the number: the cost sits in the *trace* rather than in
+normal reconstruction, which is what makes a shared view-normal buffer the wrong optimisation,
+and that holds regardless of the exact magnitude.
+
+This is a fourth distinct way a measurement can be wrong here, after the born-wrong instrument,
+the product change that retunes an instrument, and the contended machine: **the thing under
+test was modified mid-run by someone else.** In a shared workspace with parallel agents that is
+not exotic, and no gate in this repo asserts that its subject held still while it measured.
+
+### Recovery, stated generally
+
+Established twice today, +73 and +106 lines: **uncommitted work destroyed in a shared
+workspace is usually recoverable verbatim from the authoring agent's own transcript**, as the
+exact `new_string` of its `Edit` calls. Not a reconstruction — the original bytes. One pass
+over `subagents/**/*.jsonl` filtering `tool_use` by `file_path` finds them.
+
+Three agents independently checked `git log`, `git stash` and `git fsck --lost-found`, all
+correctly found nothing, and all concluded the work was unrecoverable. Every check was sound
+and the conclusion was false, because the artefact was never in git to begin with.
