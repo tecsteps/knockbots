@@ -388,6 +388,11 @@ export class CombatSystem {
   }
 
   #doHit(attacker, defender, move, hit, snap) {
+    // The blow landed: the attacker now owes its printed recovery and nothing
+    // more. Deliberately not in `#resolve` above `#guardResult` — a high that
+    // passes through a ducking defender must keep its whiff recovery. See
+    // `Fighter#beginRecovery`.
+    attacker.beginRecovery();
     const combo = this.combos[attacker.index];
 
     // A hit only continues the combo if the defender was already committed to
@@ -484,6 +489,9 @@ export class CombatSystem {
   }
 
   #doBlock(attacker, defender, move, hit) {
+    // See `#doHit`: the guard ate it, but it landed, so the printed `onBlock` is
+    // what this move is worth from here.
+    attacker.beginRecovery();
     const chip = defender.applyBlock(move, attacker, hit.point, {});
     attacker.addMeter(move.meterGain * 0.4);
     // The attacker is pushed back too, which is what makes strings safe at range.
@@ -503,6 +511,9 @@ export class CombatSystem {
   }
 
   #doArmor(attacker, defender, move, hit) {
+    // Armour absorbs the damage, not the contact: the blow reached a body, so
+    // the attacker recovers on the same schedule as any other connection.
+    attacker.beginRecovery();
     defender.absorbArmor(move, attacker, hit.point);
     attacker.addMeter(move.meterGain * 0.3);
     this.combos[attacker.index].hits = 0;

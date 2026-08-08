@@ -625,6 +625,8 @@ export class Fighter {
     this.moveInstance = 0;
     this.connected = new Set();     // "<instance>:<windowIndex>" already landed
     this.hitConnectedThisMove = false;
+    this.moveEndTick = null;        // set by beginRecovery once a blow lands
+    this.postActive = false;        // the "windows are over" beat has fired
 
     this.hurtboxes = [];
     this.hitboxes = [];
@@ -1068,6 +1070,8 @@ export class Fighter {
     this.reaction = null;
     this.currentMove = null;
     this.moveTick = 0;
+    this.moveEndTick = null;
+    this.postActive = false;
     this.connected.clear();
     this.hitboxes.length = 0;
     this.inputBuffer.length = 0;
@@ -1573,6 +1577,8 @@ export class Fighter {
     this.currentMove = move;
     this.moveTick = 0;
     this.moveInstance++;
+    this.moveEndTick = null;
+    this.postActive = false;
     this.connected.clear();
     this.hitConnectedThisMove = false;
     this.isBlocking = false;
@@ -1618,9 +1624,15 @@ export class Fighter {
       this.velocity.y = mv.props.hopVelocity ?? 4.6;
     }
 
-    // The move whiffed: every active window has passed with nothing connected.
+    // The move is past its hitboxes: either the last window has expired, or the
+    // blow landed and `beginRecovery` has already ended the move short of it.
+    // Guarded by a flag rather than by `moveTick === last + 1`, because a
+    // truncated move can step over that tick or terminate before reaching it,
+    // and the whiff event has to fire exactly once either way.
     const last = mv.active[mv.active.length - 1].to;
-    if (this.moveTick === last + 1) {
+    const endAt = this.moveEndTick ?? mv.total;
+    if (!this.postActive && (this.moveTick > last || this.moveTick >= endAt)) {
+      this.postActive = true;
       if (!this.hitConnectedThisMove) {
         if (mv.props.throw) this.#play('t.grabWhiff', 2, false);
         bus.emit('whiff', { fighter: this, move: mv });
@@ -1633,7 +1645,7 @@ export class Fighter {
       }
     }
 
-    if (this.moveTick >= mv.total) {
+    if (this.moveTick >= endAt) {
       this.currentMove = null;
       this.hitboxes.length = 0;
       this.#toNeutral();
@@ -2604,6 +2616,78 @@ export class Fighter {
     const hitClip = first ? this.currentMove?.props?.hitClip : null;
     if (hitClip) this.#play(hitClip, 2, false);
     return true;
+  }
+
+  /**
+   * The blow landed. From here the attacker owes exactly its printed recovery.
+   *
+   * WHY THIS EXISTS AT ALL
+   *
+   * `MoveSchema.defineMove` derives the frame data every move list, every
+   * tooltip and every balance argument in this project is written against:
+   *
+   *     recovery = total - lastActive - 1
+   *     onBlock  = blockStun - recovery
+   *
+   * — recovery measured from the END of the active window. The engine used to
+   * measure it from wherever the capsules happened to overlap, which is
+   * `contactTick`, and `contactTick <= lastActive` always. So the advantage the
+   * simulation actually produced was `blockStun - (total - contactTick)`: short
+   * of the printed number by `lastActive + 1 - contactTick`, which is >= 1
+   * identically. Every blockable move in the game was less safe than its own
+   * data — by its own active span at point blank — and `jab` printed +1 and
+   * played -1. It was measured across all ten sets: 352 blockable moves, 1306
+   * block rows at four ranges, and not ONE of them reached its printed number at
+   * any range. tools/advgate.mjs is that measurement, and its `--control=
+   * no-truncate` is this engine as it was.
+   *
+   * The owner's decision was that the printed number is the promise. So the
+   * attacker's remaining move life is set to `recovery` from the connection, and
+   * the identity holds by construction rather than by tuning: a move's advantage
+   * is now a property of the MOVE and not of the tick a capsule happened to
+   * touch, which is what frame data has always meant everywhere else.
+   *
+   * WHY NOT THE OBVIOUS IMPLEMENTATION
+   *
+   * The natural way to write this is "a connection consumes the rest of the
+   * active window" — jump `moveTick` to `lastActive + 1` on contact. It makes
+   * the same identity true, and it DELETES the later windows of every
+   * multi-window move: `pistonRush` would land its first piston and lose the
+   * other two, `overdrive` likewise. Hence the floor. The end tick is never set
+   * earlier than the last tick of any window that has not yet connected, so a
+   * multi-hit string keeps every hitbox it has coming, and the identity holds on
+   * the connection that matters — the LAST one, the one whose blockstun the
+   * defender is actually sitting in. The end tick can never be later than
+   * `total - 1` either (`moveTick <= lastActive`, so `moveTick + recovery <=
+   * total - 1`), so this only ever shortens a move; nothing gets a longer
+   * recovery than it had.
+   *
+   * WHY IT IS CALLED FROM `#doHit`/`#doBlock`/`#doArmor` AND NOT FROM
+   * `registerConnect`
+   *
+   * `registerConnect` is one call site instead of three and it is the WRONG one.
+   * `CombatSystem#resolve` registers the window as consumed BEFORE it asks
+   * `#guardResult`, so a HIGH that passes through a ducking defender registers a
+   * connection and then resolves as a whiff. Cutting recovery there would make
+   * ducking a high shorten the attacker's recovery — the punish for reading a
+   * high correctly would silently shrink by the move's active span, and nothing
+   * would have said so. A blow that hit nobody ends nothing. advgate AD-5 is
+   * that rule, and it is why the call sits in the three places where the blow
+   * demonstrably landed on somebody.
+   */
+  beginRecovery() {
+    const mv = this.currentMove;
+    if (!mv || this.state !== STATE.ATTACK) return;
+    // The last tick of every window that has NOT yet connected. Windows already
+    // spent are skipped: `#findConnection` will not use them again, so keeping
+    // them alive would buy nothing and cost the identity on single-window moves.
+    let floor = 0;
+    for (let i = 0; i < mv.active.length; i++) {
+      if (this.connected.has(`${this.moveInstance}:${i}`)) continue;
+      const end = mv.active[i].to + 1;
+      if (end > floor) floor = end;
+    }
+    this.moveEndTick = Math.max(this.moveTick + mv.recovery, floor);
   }
 
   // -------------------------------------------------------------------------
