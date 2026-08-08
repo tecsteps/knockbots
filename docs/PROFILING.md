@@ -5514,3 +5514,122 @@ something else:
 because it builds fresh `Fighter`s and both its runs advance `simTick` identically —
 the gate's own construction hides the case. Frame data is the game, so this is a real
 defect and it is not the renderer's.
+
+---
+
+# Five instrument defects in one session, and they all failed the same way
+
+Every one of them was correct within its own construction. Every one was blind
+to the case that mattered. And the mechanism is identical in all five:
+
+**each failed by not varying something it held fixed.**
+
+```
+instrument                  held fixed                        what it therefore could not see
+setEffect / RenderPipeline  the composer, never rebuilt       every "post off" frame had post on
+critic panel                the shot path, composed early     it scored a frame older than the change
+FD-2c                       the population, filtered to       a move that whiffs produces no row,
+                            rows that connected                so a total miss reads as silence
+DT-3                        round-1 LENGTH, equal in both     every absolute-tick field cancelled
+                            arms                               in the diff
+DT-3 / DT-4 trace           the columns, all bulk sim state   an animator-only divergence moved
+                            and no pose                        nothing until it changed a hitbox
+```
+
+`reset()`'s own header is the cleanest example, because it is honest and wrong
+at the same time. It records a four-trial investigation that cleared "the
+animator clock" as a cause of round-2 divergence. That investigation was right
+about what it measured — and both its arms ran round 1 for the same number of
+ticks, so `simTick` was equal on both sides of the reset and could not appear.
+It cleared a suspect it had no power to convict.
+
+## The rule
+
+**Ask what the instrument holds constant, and vary that.** Not "what does this
+measure" but "what can this not see". Every arm of a comparison is also a
+statement that everything unmentioned is irrelevant, and that statement is
+usually untested.
+
+Three concrete forms it took here, all worth stealing:
+
+- **Vary the length, not just the content.** DT-4 is DT-3 with the two round 1s
+  at different lengths. One line of difference, and it found three leaks.
+- **Add a column from a different layer.** `poseSig` (a sum over the rebuilt
+  hurtbox capsules) was added because every existing column was bulk simulation
+  state. It immediately turned DT-3 red too — the defect was never specific to
+  round-1 length, it had just never had a column that could show it.
+- **Make "no result" an outcome.** FD-2w exists because FD-2c's population was
+  built by filtering on success.
+
+## And the controls fail the same way
+
+Three invalid positive controls this session, all of which PASSED:
+
+1. FD-2w's control targeted a move that leaves the ground, which the exclusion I
+   had just written removed — so the injected whiff never appeared and the
+   control rode a pre-existing failure.
+2. Re-targeted, it shrank hitbox radii to 0.001 and the move kept connecting: at
+   point blank the fist is already inside the guard capsule, so a zero-radius
+   point still overlaps a 0.2 m hurtbox.
+3. DT-4p "passed" while DT-4 was still red — detecting the residual leak rather
+   than the injected one. It only became evidence once DT-4 went green.
+
+A fourth was caught before it could mislead: a wall-clock probe read `poseSig`
+after `render`, found it unchanged, and would have reported a null — but
+`poseSig` reads `hurtboxes`, which `render` never rebuilds. It was reading a
+stale array. Two more versions were needed (the bone accessor was `boneByName`,
+not `bones`; and `visualYaw` cannot integrate unless facing actually changes)
+before the control moved on 239 of 239 ticks and the null meant anything.
+
+**A control that goes red is not a control that works.** If the assertion can be
+red for any other reason, or if the injected defect does not appear BY NAME in
+the output, "it went red" is not evidence. And a control that goes green must be
+checked against the thing it claims to move, not against a convenient nearby
+value.
+
+### Refuted: no wall-clock leak reaches the simulation
+
+A hypothesis was offered for the pose residual — that `Fighter.render` advances
+`visualYaw` on real seconds, so round 2's pose would depend on how long round 1 took in
+wall-clock time. **It is wrong.** It was tested rather than adopted, and it is recorded
+here because it was wrong in an instructive place.
+
+The premise is true. `Fighter.render` really does integrate `visualYaw += delta *
+(1 - exp(-14 * dt))` on real seconds, write `group.rotation.y` from it, and call
+`animator.applyTo(bones, alpha)` at a wall-clock alpha. **But none of it reaches the
+collision geometry**, because `#writePose()` runs immediately before `#buildHurtboxes`
+and `#buildHitboxes` inside `simulate` and overwrites every one of those values:
+
+```js
+this.group.position.copy(this.position);                           // sim position, not the lerp
+this.group.rotation.y = yawForFacing(this.facing) + this.animYaw;  // sim yaw, NOT visualYaw
+this.animator.applyTo(this.bones, 1);                              // alpha 1, not render alpha
+this.group.updateMatrixWorld(true);
+```
+
+Measured: two arms with identical sim input, one calling `render()` between every pair of
+sim ticks with deliberately irregular dt (0.004–0.028) and alpha. **The simulated capsules
+are identical on all 240 ticks.** `#writePose` is a firewall, and the render path cannot
+contaminate the sim through it.
+
+Note *why* this needed measuring at all: `dtgate` never calls `render`, so it holds the
+wall clock fixed at "never advanced" and is blind to the question by construction — the
+same shape as the five other findings above. A green determinism gate was not evidence
+either way, and treating it as evidence would have been the mistake.
+
+### The control took three attempts, and every failure was the same disease
+
+1. Sampled `poseSig` after `render` — unchanged, because `poseSig` reads `hurtboxes` and
+   `render` never rebuilds them. It was reading a stale array and would have reported a
+   **vacuous null**: the right answer, arrived at by measuring nothing.
+2. Switched to `f.bones.head` — but `bones` is the array and `boneByName` is the map, so
+   it printed `n/a` and moved on.
+3. Still read zero movement, because `visualYaw` cannot integrate unless facing actually
+   changes and the script never turned anyone.
+
+Only after flipping the pair mid-script did the control move on **239 of 239 ticks**, at
+which point the null result means something. Fourth instance of the standing rule: **a
+control that reports the right colour is not a control that works.** Three of the four
+would have certified a conclusion that happened to be true, which is the failure mode
+that survives review — a wrong control and a correct answer look exactly like a right
+control and a correct answer.
