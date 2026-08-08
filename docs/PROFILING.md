@@ -5982,3 +5982,48 @@ The existing guidance — do not take a timing measurement while another agent i
 covers milliseconds. It does not cover verdicts, and a verdict is exactly what a smoke test
 produces. Contention does not merely add noise to a number; it can invert a boolean, and a
 boolean carries no error bars to warn you.
+
+### A ladder that changes shader keys cannot use fast alternation
+
+Recorded before it is needed, because the experiment it protects has not been run yet and
+the agent holding the reasoning may not be here when it is.
+
+The frame-interleaved A/B design (`tools/scenelace.mjs`) holds a clean null control at
+loadavg 30 by swapping arms every 8–16 frames. That works because every condition it toggles
+is a per-frame property write — `pass.enabled`, `object.visible`, `castShadow`, plain
+`ScenePass` fields — needing no settle.
+
+**A light-count ladder is not in that class.** Changing the number of visible analytic lights
+changes every forward material's **shader key** and triggers a recompile; this file already
+records 437 / 494 / 831 ms per step from the impact-light incident. Alternating fast would
+therefore measure compilation, not shading — and it would do so *reproducibly*, across
+sessions, with a tight null. **A confident, stable, entirely wrong answer**, which is the
+worst output shape this project has encountered today and the hardest to catch, because
+every surface check passes.
+
+So the light ladder has to be its own experiment: set each rung once, warm until compiles
+settle, hold, measure. Slower by construction, and the slowness is the point.
+
+**And fit the slope, never divide per rung** — the intercept trap recorded above applies
+identically here, and with rungs of 16 / 12 / 8 / 4 / 1 the intercept is large relative to
+the steps, so per-rung division would be worse here than it was for draw calls.
+
+### Why the light loop is the right next question
+
+The scene carries **16 analytic lights** (4 directional, 4 spot, 3 RectArea, 4 point, 1
+hemisphere), and the light loop is the dominant term in every forward material's fragment
+shader. It is also **the largest component of the ~74 ms of scene shading for which we have
+the least trustworthy numbers**: the point-light figure was retracted and refitted (9.7 →
+1.5 ms), and the RectAreaLight figure is loosely held on both sides — a live-run 13.67 ms for
+three, from which ~4.6 ms each was derived circularly.
+
+The measurement decides between two large programmes, which is what makes it worth doing
+before either: **if the light loop is ~15 ms of the 27.6 ms frame, relighting the stage is the
+entire remaining job. If it is ~5 ms, the deficit is overdraw and material cost and the work
+goes somewhere else entirely.** The honest current position is that nobody knows which.
+
+Second candidate, if the ladder says the light loop is small: **overdraw depth**, with the
+alpha-tested fence and grating as the named suspect — they skip the depth prepass by
+construction, so the terrace behind them is shaded twice. The signature is already on record
+and uninvestigated: hiding arena subsystems one at a time returns far less than hiding them
+together, ~17 ms against ~27 ms.
