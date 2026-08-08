@@ -163,6 +163,21 @@ const CONTROLS = {
     red: ['FD-4L'],
     green: ['FD-4b'],
   },
+  'fd2-exemption-lapse': {
+    why: "the exempted long poke is pushed to fwd 1.2 so it overshoots at EVERY range; "
+      + 'the exemption must lapse and FD-2w must name it',
+    runtime: 'overshoot-everywhere',
+    // The obvious control — shorten the lead back to the default — does NOT
+    // work, and it was worth measuring rather than assuming. At fwd 0.31
+    // chorale CONNECTS at point blank (-0.240), so it leaves the whiff
+    // population entirely and FD-2w goes green: a vacuous control, not a red
+    // one. Pushing the lead UP keeps it whiffing while breaking condition 2
+    // (still connects at range), which is the condition that stops a broken
+    // move borrowing the exemption. FD-2c stays green because it only inspects
+    // rows that connected, and this move now contributes none.
+    red: ['FD-2w'],
+    green: ['FD-2c'],
+  },
   'fd3-counterstun': {
     why: 'COUNTER_STUN = 0; every counter row must lose exactly 7 ticks of hitstun',
     file: 'combat/CombatSystem.js',
@@ -1120,24 +1135,99 @@ function testFD2(cells) {
   for (const k of flew) started.delete(k);
   const connectsAt = (k, d) => cells.some((r) => `${r.key}/${r.id}` === k && r.dist === d
     && usable(r) && (r.event === 'block' || r.event === 'hit'));
+  /*
+   * THE LONG-POKE EXEMPTION, and it is keyed on PROPERTIES rather than on names.
+   *
+   * `seraph/chorale [qcb+3]` legitimately misses at point blank. It is authored
+   * with `fwd: 0.46` on the foot against a 0.31 default — the move's own comment
+   * calls it "the longest poke in the game that does not travel" — and the
+   * extended foot simply passes BEYOND a defender 0.93 m away. Measured:
+   * -0.436 at 1.5 m, -0.265 at 1.2 m, +0.050 at 1.02 m, +0.056 at 0.9 m. It is
+   * overshoot, not a failure to reach. Sweeping the clip's `impact.tick` from 14
+   * to 26 finds NO value that lands it at point blank, which is what separates
+   * this from the `p.backfist` class where 16 landed every archetype at once.
+   * Forcing `fwd` down to the 0.31 default makes it connect at 0.9 m (-0.240),
+   * which is the causal demonstration that the lead is the miss.
+   *
+   * AN EXEMPTION BY NAME WOULD OUTLIVE ITS REASON. The day someone retunes that
+   * `fwd` to 0.31 the move stops overshooting and starts genuinely failing, and
+   * a name-keyed entry would hold the row green through it. So the entry
+   * re-derives its own justification every run, from three measured conditions:
+   *
+   *   1. the forward lead is above the population's upper quartile (self
+   *      calibrating: p75 is 0.324 today and chorale is 0.458, so a retune to
+   *      the 0.310 default drops it out and the exemption lapses);
+   *   2. the move still connects at the FARTHEST swept range — it is a poke,
+   *      not a whiff, and a broken move cannot borrow the exemption because it
+   *      fails here;
+   *   3. the connect pattern over the sorted distances is a clean upward-closed
+   *      suffix — misses near, hits far, no alternation — which is the signature
+   *      of overshoot rather than of a move that does not work.
+   *
+   * Exempted moves are NAMED in the output with their measured values, so a
+   * reader sees which rows are excused and on what grounds rather than seeing a
+   * shorter list.
+   */
+  const maxFwd = (mv) => Math.max(0, ...mv.active.flatMap((w) => w.boxes.map((b) => b.fwd || 0)));
+  /*
+   * The percentile EXCLUDES the move being judged, or the threshold is one the
+   * candidate helps define. The first version compared chorale against a p90 of
+   * 0.458 — its own value exactly, because it sits at the 90th percentile of
+   * this population — so the test read `0.458 >= 0.458`, true by self-reference
+   * and one rounding away from flipping either way. Asking "is this lead
+   * unusual compared to EVERYTHING ELSE" is the question that was meant.
+   */
+  const fwdAll = POP.filter(({ mv }) => isBlockable(mv) && !mv.props.requireAir)
+    .map(({ key, mv }) => ({ k: `${key}/${mv.id}`, f: maxFwd(mv) }));
+  const leadThreshold = (self) => {
+    const xs = fwdAll.filter((r) => r.k !== self).map((r) => r.f).sort((x, y) => x - y);
+    // p75, not p90. Over this population p90 lands ON chorale's own 0.458, so a
+    // strict comparison there has no margin in either direction — the test would
+    // flip on a rounding change. p75 is 0.324 against the 0.310 default and
+    // chorale's 0.458, which separates "authored long" from "authored normal"
+    // with room on both sides: a retune to the 0.31 default fails it.
+    return xs.length ? xs[Math.floor(xs.length * 0.75)] : Infinity;
+  };
+
   const whiffNear = [];
   const whiffEver = [];
+  const exempt = [];
   for (const { key, mv } of POP) {
     if (!isBlockable(mv) || mv.props.requireAir) continue;
     const k = `${key}/${mv.id}`;
     if (!started.has(k)) continue;               // FD-2s owns "did not start"
     if (connectsAt(k, DISTANCES[0])) continue;
-    const anywhere = DISTANCES.some((d) => connectsAt(k, d));
-    (anywhere ? whiffNear : whiffEver).push(
-      `${k} [${mv.input}] startup=${mv.startup} produced NO connection at ${DISTANCES[0]}m`
-      + (anywhere ? ` (it does connect further out, so it can reach — it cannot reach up close)`
-        : ' — and none at any range in the sweep'));
+    const hits = DISTANCES.map((d) => connectsAt(k, d));
+    const anywhere = hits.some(Boolean);
+    if (!anywhere) {
+      whiffEver.push(`${k} [${mv.input}] startup=${mv.startup} produced NO connection at `
+        + `${DISTANCES[0]}m — and none at any range in the sweep`);
+      continue;
+    }
+    // A clean upward-closed suffix: every miss precedes every hit.
+    const firstHit = hits.indexOf(true);
+    const monotone = hits.slice(firstHit).every(Boolean);
+    const lead = maxFwd(mv);
+    const fwdP75 = leadThreshold(k);
+    const longPoke = lead > fwdP75;
+    const connectsFar = hits[hits.length - 1];
+    if (longPoke && connectsFar && monotone) {
+      exempt.push(`${k} [${mv.input}] EXEMPT: fwd ${lead.toFixed(3)} > p75 ${fwdP75.toFixed(3)}, `
+        + `connects at ${DISTANCES[DISTANCES.length - 1]}m, and the miss is monotone in range `
+        + `(${DISTANCES.map((d, i) => `${d}m ${hits[i] ? 'hit' : 'miss'}`).join(', ')}) — overshoot`);
+      continue;
+    }
+    whiffNear.push(`${k} [${mv.input}] startup=${mv.startup} produced NO connection at `
+      + `${DISTANCES[0]}m (connects further out, so it can reach — it cannot reach up close; `
+      + `fwd ${lead.toFixed(3)} vs p75 ${fwdP75.toFixed(3)}, `
+      + `monotone ${monotone}, connects far ${connectsFar})`);
   }
   const okW = record('FD-2w', 'every blockable grounded move connects at point blank — a whiff is a FAILURE, not a silence',
     whiffNear.length + whiffEver.length === 0,
     `${started.size} started grounded moves (${flew.size} more left the ground and are excluded); `
-    + `${whiffNear.length} whiff only at ${DISTANCES[0]}m, ${whiffEver.length} whiff at every range`,
-    cap([...whiffEver, ...whiffNear]));
+    + `${whiffNear.length} whiff only at ${DISTANCES[0]}m, ${whiffEver.length} whiff at every range, `
+    + `${exempt.length} exempt as long pokes`,
+    cap([...whiffEver, ...whiffNear, ...exempt]));
 
   // --- FD-2n2: contact can only move later with distance ---------------------
   //
@@ -2438,6 +2528,17 @@ function testFD7(asymmetry = 0) {
 
 let RUNTIME_RESTORE = null;
 function applyRuntimeControl(name) {
+  if (name === 'overshoot-everywhere') {
+    const target = MOVES.seraph?.chorale;
+    if (!target) throw new Error('overshoot-everywhere: seraph/chorale not found');
+    const was = target.active.map((w) => w.boxes.map((b) => b.fwd ?? 0));
+    RUNTIME_RESTORE = () => {
+      target.active.forEach((w, i) => w.boxes.forEach((b, j) => { b.fwd = was[i][j]; }));
+    };
+    for (const w of target.active) for (const b of w.boxes) b.fwd = 1.2;
+    return { target: 'seraph/chorale', was: was[0], now: 1.2,
+             expect: 'misses at every range, so the long-poke exemption must lapse' };
+  }
   if (name === 'revert-onebased') {
     /*
      * Undo Option A, at runtime, on every move in every set.
