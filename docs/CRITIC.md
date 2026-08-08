@@ -388,3 +388,76 @@ work were validated this way.
 4. **A crop offered as proof must be at the framing the claim is about.** An improvement demonstrated
    at closeup, for an axis gated at fight distance, is not evidence — it is the flattering framing,
    which is how this axis spent four rounds.
+
+---
+
+# STAGE AXIS, ROUND 44: the midground did not move the verdict
+
+Blind pair, `01-hero-idle` vs `tekken8_02`, four independent lenses. n=2 wide
+references and this is one of them.
+
+```
+lens       BEFORE (no midground)   AFTER (midground live)
+depth               B                       B
+place               B                       B
+craft               B                       B
+staging             A                       A
+tally            1W-0D-3L                1W-0D-3L
+```
+
+**Identical, lens for lens.** The measured improvement was real — the 9–13 m band went
+7.68% → 18.85% of frame and occlusion boundaries rose 19% on the pit, 15% on the roof —
+and it **changed no critic's mind about anything.** The stage axis stays at a loss.
+
+The before-arm exists only because the first panel accidentally read a stale frame,
+which turned a design flaw into the control the run needed.
+
+## What did change: the failure mode
+
+Before, all three losing lenses described an **absence**:
+
+> *"A resolves into essentially two planes… every element laid side by side in one band…
+> no foreground element whatsoever."*
+
+After, all three describe the **thing that was added**:
+
+- **place** — *"A single module repeated at constant size and constant depth across the full
+  width… left group and right group are visibly the same geometry… no stacking, no rotation
+  variance, no contact shadow tying any of them to the ground, and no reason for cargo to be
+  lined up like fenceposts at the edge of a fighting floor. It is the frame's clearest
+  statement that the background was filled rather than built."*
+- **craft** — *"untextured, uniformly-coloured cuboids with unbevelled 90-degree corners…
+  in the exact area the eye rests between fighters."*
+- **depth** — the crates still fail to cross a depth boundary; nothing occludes anything.
+
+So the layer traded *empty* for *obviously synthetic*. That is not nothing — the empty band
+was confirmed independently by two unrelated instruments and had to go — but **"measured
+fuller" and "reads as a place" are separate claims, and only the first was earned.**
+
+## The four named fixes, all cheap, all concrete
+
+1. **Kill the even interval.** Two or three unequal clusters with a wide empty gap; rotate
+   each unit off-axis; stack a couple two-high; tip one on its side.
+2. **Stop being primitives.** Bevel every edge 1–2 cm so corners catch a specular line; give
+   them plank or stamped-metal seams, a stencil, and varied footprints so no two match.
+3. **Contact shadows.** Nothing ties a crate to the floor, so nothing sits *on* it.
+4. **The full-width light bar at y≈400** — and this one is not the midground's fault, it is
+   pre-existing and it may be the single highest-value fix in the frame:
+
+> *"It spans x=0 to x=1920 at a fixed height, with unvarying thickness and no perspective
+> convergence, and nothing in the scene ever occludes it… It is the single element that
+> certifies the entire backdrop as a flat plane, and it is sitting precisely where a ringside
+> rail should be giving the strongest convergence cue in the frame."*
+
+## The one win, and why it is a real one
+
+`staging` picked ours, twice, at high confidence — and did it while explicitly refusing to
+credit us for the wrong reason:
+
+> *"Neither frame is given away as fake by staging, and I am not scoring that… B's problems
+> are art-direction and shot-selection: a real, coherent, high-detail city set that was never
+> value-suppressed behind the P1 side… Nothing looks unfinished — it looks finished and
+> staged badly in this particular frame."*
+
+A critic that names why the reference lost, rather than just picking, is the kind of verdict
+worth having. It is also a reminder that a single frame of a shipped game is not that game.
