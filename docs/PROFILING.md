@@ -5633,3 +5633,54 @@ control that reports the right colour is not a control that works.** Three of th
 would have certified a conclusion that happened to be true, which is the failure mode
 that survives review — a wrong control and a correct answer look exactly like a right
 control and a correct answer.
+
+---
+
+## RETRACTION: the FD-5n asymmetry is not in the armoured defender's move
+
+Commit `d80b723` states, in my words: *"backfist is symmetric against a standing guard
+at ~−0.055 both mirrors, so the asymmetry is in the armoured defender's own move."*
+**That is withdrawn.** It was never measured. It was a process of elimination over two
+candidates, published as a finding.
+
+Measured properly — run `powerCrush` at facing +1 and facing −1 with the attacker
+removed entirely, and compare in the fighter's own frame:
+
+```
+set        ticks   max |travel diff|   max |pose diff|
+seraph       52          0.000000            0.000000
+nyx          52          0.000000            0.000000
+axiom        52          0.000000            0.000000
+volta        52          0.000000            0.000000
+vulkan       54          0.000000            0.000000
+kestrel      51          0.000000            0.000000
+```
+
+Exactly symmetric on every set. A second hypothesis — that FD-5n compares two different
+rigs — is also dead, and was dead before it was raised: `testFD5()` already forces a
+mirror match with `f1.setCharacter(ROSTER[0])`, and the comment above it explains why,
+because an earlier round hit exactly this and fixed it.
+
+**So: same body both sides, attacker move symmetric, defender move symmetric, and the
+cell still differs by side.** Three hypotheses refuted and no cause. That is the honest
+state.
+
+### The seventh instrument failure, and the first that agreed with its author
+
+The first measurement of the defender's move reported a **74-unit asymmetry on every
+set** — which would have *confirmed* the wrong diagnosis and closed the question.
+
+The metric was wrong: it negated `x` and left `z` alone. **A facing flip is a 180° yaw,
+not a mirror about x** — it maps `(x, y, z) → (−x, y, −z)`, so both horizontal axes flip.
+With `z` negated too, every number goes to `0.000000`.
+
+The six earlier instrument failures this session produced **silence or a wrong colour**:
+a gate that printed "0 disagree" for a whiff, a control that did not bite, a positive
+control that was a coin flip. This one produced a **plausible confirmation of what its
+author already believed** — and it is strictly worse, because nothing about it invites a
+second look. A null result provokes suspicion. A result that matches the prior gets
+written up.
+
+The standing rule needs the addition: **be most suspicious of the measurement that
+agrees with you.** Every other failure mode in this file announced itself by being
+boring, empty, or the wrong colour.
