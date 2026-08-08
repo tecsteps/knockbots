@@ -1,7 +1,7 @@
 {
   "name": "knockbots",
   "version": "0.1.0",
-  "description": "Knockbots — a AAA-grade 3D robot fighting game in Three.js",
+  "description": "Knockbots \u2014 a AAA-grade 3D robot fighting game in Three.js",
   "directories": {
     "doc": "docs"
   },
@@ -13,7 +13,9 @@
     "shots": "node tools/capture.mjs",
     "touchgate": "node tools/touchgate.mjs --control=both",
     "simgate": "node tools/simgate.mjs",
-    "simgate:control": "node tools/simgate.mjs --positive-control"
+    "simgate:control": "node tools/simgate.mjs --positive-control",
+    "deploy": "node tools/deploy.mjs",
+    "deploy:verify": "node tools/deploy.mjs --verify-only"
   },
   "author": "",
   "license": "ISC",

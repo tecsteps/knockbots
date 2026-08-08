@@ -5105,3 +5105,70 @@ frame instead; restore control exactly 0.00.
 
 I asked for a before/after at in-match framing. Its answer: *"There is no after — nothing I built
 survived measurement, so showing you a crop would be showing you noise."*
+
+---
+
+## A deploy that succeeds is not a deploy that shipped
+
+Every round for an entire session was announced as deployed. Every one of those
+announcements was true — of `https://knockbots.vercel.app`, a URL the user does not
+open. They play `https://knockbots.com`. Measured:
+
+```
+knockbots.com -> 172.67.200.50, 104.21.60.186   server: cloudflare
+                 cache-control: public, max-age=0, must-revalidate   (Cloudflare Pages)
+
+vercel: assets/index-4etCrLQW.js   assets/three.module-CGb8qfv9.js
+dotcom: assets/index-BLmWjoEL.js   assets/three.module-xWFAZhSg.js
+        >>> DIFFERENT BUILDS
+```
+
+A day of work was invisible to the only person it was for, and **nothing anywhere
+reported a problem, because `vercel deploy` genuinely did succeed.**
+
+This is the same error class as every other one in this file. "The command exited 0"
+is evidence of the same strength as "the renderer drew something": it says an action
+occurred, not that the result is the one wanted. The session had a rule about this
+already — trust the harness as little as the renderer — and applied it to the capture
+pipeline while taking the deploy pipeline entirely on faith.
+
+### What the credential can and cannot do (measured, not assumed)
+
+```
+POST /user/tokens/verify        -> success:false  1000 Invalid API Token
+GET  /accounts (Bearer)         -> success:false  9109 Invalid access token
+GET  /accounts (X-Auth-Key)     -> success:false  6103 Invalid format for X-Auth-Key
+wrangler whoami                 -> not authenticated
+wrangler.toml                   -> does not exist
+.wrangler/                      -> tmp/ only, empty
+```
+
+The token is not merely under-scoped, it is rejected under **both** Cloudflare auth
+schemes. So `.com` is blocked on the user, and this was worth proving rather than
+assuming — the earlier report said only "doesn't authenticate", which left open a
+scope fix that does not exist.
+
+### The fix is the verify, not the deploy
+
+`tools/deploy.mjs` publishes to both targets, but the load-bearing part is `verify()`:
+it fetches the **live** html each host serves and diffs its content-hashed asset names
+against the `dist/` just built. Vite's hashes make the asset set a build id, so this is
+exact, not heuristic.
+
+Controls, on the instrument itself:
+
+```
+--verify-only                 vercel ✓ serving this build   cloudflare ✗ DIFFERENT   exit 1
+--verify-only --only=vercel   vercel ✓                                               exit 0
+```
+
+It discriminates between two live hosts that differ only in content, and its exit code
+moves in both directions. (First run reported `EXIT=0` — that was `tail`'s status
+through a pipe, not the gate's. A gate that cannot fail a build is decoration, so this
+was re-checked without the pipe. Same class of mistake as reading the last line of a
+Python assertion instead of the first, from earlier in this file.)
+
+An unconfigured target **fails** rather than skipping — silently doing one of two
+targets is the original bug. `--only=` makes a partial deploy a stated intent.
+
+`npm run deploy` / `npm run deploy:verify`.
