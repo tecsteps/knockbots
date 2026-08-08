@@ -5330,3 +5330,28 @@ It also means the accidental control was a *useful* one: the panel establishes t
 before-state at 1–3 on this exact pair, so the re-run is a genuine before/after on the
 same critics, same lenses, same reference. **That is a better experiment than the one
 originally designed**, which had no before-arm at all.
+
+### Narrowing an overreach: SMAA is dead, "cheap edge-AA" is not
+
+The entry above concluded *"cheap edge-AA is closed — but closed by a measurement."*
+That is one measurement wider than the evidence. **Exactly one cheap pass was tested:
+SMAA.** It moves away from ground truth (15.39 vs 14.18 subject RMSE) and it is dead.
+Every other cheap candidate is **untested**, which is a different state from disproven.
+
+The reasoning that makes SMAA's failure predictable does generalise — a post-resolve
+filter cannot invent samples it never had, so it can only trade aliasing for blur —
+but a mechanism that explains a result is not the same as having measured the class.
+Recording the distinction because this file exists mostly because of collapses like it.
+
+### And a lever that is closed for a different reason: renderScale
+
+The obvious cheap dial is `renderScale`, and it is worth stating why sweeping it is
+not the answer, so nobody spends a run on it: **1.00 already measures 20.4 ms / 49 fps**
+against a hard 60fps-at-1080p constraint, which is why the shipped tier sits at 0.85.
+Anything above 1.0 is further outside a budget we are already outside of. The RMSE
+curve from 1.0 to 4.0 would be genuinely interesting and entirely unshippable.
+
+That is precisely the argument for temporal accumulation: it approximates the 4×
+integral at roughly 1× cost per frame by spending samples over **time** instead of
+over **area**. Framing the deficit as aliasing energy is what makes that the right
+shape of answer rather than a guess.
