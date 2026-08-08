@@ -4754,3 +4754,43 @@ first is the more useful one: it had claimed FD-1 could answer whether my retime
 FD-1 **structurally could not** — `#buildHitboxes` gates on `isActive(mv, moveTick)`, which knows
 nothing about the animator, so the frame half is true by construction and no measurement through it
 could ever have said otherwise.
+
+## Two agents, both wrong in opposite directions, converging by measurement
+
+Worth recording as a method note rather than a finding.
+
+`fdgate` predicted the punish line at `-onBlock - 2`. `optionB` predicted `S <= -onBlock`. **One was a
+tick tight, the other a tick loose.** Neither conceded to the other's argument. `fdgate` built the
+discriminator — hold guard from the attacker's first actionable tick and ask whether the punish still
+lands — and `optionB` then **re-ran it on its own rig rather than take the result on trust**:
+
+```
+adv -11   punish box on aOut       15/15  hits through the guard
+adv -10   punish box on aOut + 1    1/1   blocked
+adv  -9   punish box on aOut + 2   11/11  blocked
+adv  -8   punish box on aOut + 3   21/21  blocked
+```
+
+`hammerFist` and `heelSlice` at -10: **blocked.** `bulwarkRam` and `lowSpin` at -11: **hit.**
+
+The mechanism neither of them had going in: `Fighter#simulate` runs `#updateGuard` **before**
+`#updateState` (`Fighter.js:1144-1145`) and `#canGuard()` is false in ATTACK, so on tick `aOut` the
+attacker cannot guard and on `aOut + 1` it can.
+
+**An i10 punishes -11 and worse. -10 is defensible.**
+
+## The design fact that falls out, and the balance number
+
+The printed frame data now plays true — that is done and gated. But **the punish threshold sits one
+frame stricter than the Tekken convention the data implies.** Under that convention -10 is exactly
+punishable by an i10; here it is not. Closing the gap means changing when a fighter becomes actionable
+or reordering guard against state, both with their own blast radius. Flagged, untouched.
+
+**And the balance consequence of the frame-data fix, which is the number a player will feel: 86 moves
+left i10 punish range at point blank.** They crossed the -11 line, not -10. That is what "every poke
+got 2 to 7 frames safer" means in practice, and it is the reason the change wants playing rather than
+only measuring.
+
+This was invisible before option B: every move sat 2-9 frames less safe than printed, so **nothing was
+ever measured at its own boundary.** Fixing the first bug is what put moves onto the line where the
+second one could be seen at all.
