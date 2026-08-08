@@ -1,136 +1,136 @@
 {
- "head": "64bd9dfe088d3a3c831789130841d80fa43fc816",
+ "head": "8e9480c5a514f0316d2e3c260561b9b2fee913ba",
  "dirty": true,
  "writtenBy": "tools/capture.mjs",
  "shots": {
   "01-hero-idle": {
-   "bytes": 630771,
+   "bytes": 541977,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "02-closeup-face": {
-   "bytes": 630201,
+   "bytes": 596213,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "03-full-body": {
-   "bytes": 683525,
+   "bytes": 597149,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "04-impact": {
-   "bytes": 581877,
+   "bytes": 565667,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "04b-impact-decay": {
-   "bytes": 615316,
+   "bytes": 574174,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "05-juggle": {
-   "bytes": 625399,
+   "bytes": 531783,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "06-stage-wide": {
-   "bytes": 599084,
+   "bytes": 530739,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "07-super": {
-   "bytes": 503829,
+   "bytes": 438594,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "08-hud": {
-   "bytes": 581639,
+   "bytes": 466269,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "08b-hud-motion": {
-   "bytes": 784587,
+   "bytes": 654740,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "09-roster": {
-   "bytes": 709021,
+   "bytes": 634670,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "10-ko": {
-   "bytes": 545768,
+   "bytes": 455248,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "12-select-screen": {
-   "bytes": 426266,
+   "bytes": 395558,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "18-skydeck-wide": {
-   "bytes": 537473,
+   "bytes": 473987,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "19-cistern-wide": {
-   "bytes": 556272,
+   "bytes": 491980,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "13-announce-fight": {
-   "bytes": 604044,
+   "bytes": 534001,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "14-victory": {
-   "bytes": 394679,
+   "bytes": 342844,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "17-anim-strip": {
-   "bytes": 3087651,
+   "bytes": 2403083,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "15-impact-light": {
-   "bytes": 599104,
+   "bytes": 485196,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "16-impact-heavy": {
-   "bytes": 605017,
+   "bytes": 492244,
    "rendered": "1920x1080",
    "renderScale": 1
   },
   "20-anim-roundhouse": {
-   "bytes": 672184,
+   "bytes": 573333,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "21-anim-straight": {
-   "bytes": 638100,
+   "bytes": 571577,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "22-anim-reaction-launch": {
-   "bytes": 413892,
+   "bytes": 352829,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "23-anim-run": {
-   "bytes": 555809,
+   "bytes": 452890,
    "rendered": null,
    "renderScale": null,
    "strip": true
   },
   "24-anim-uppercut": {
-   "bytes": 738358,
+   "bytes": 636108,
    "rendered": null,
    "renderScale": null,
    "strip": true
