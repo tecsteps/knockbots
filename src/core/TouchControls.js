@@ -353,6 +353,30 @@ const CSS = `
 .kbt-coach span.kbt-done { opacity: 0; transform: translateX(10px); }
 .kbt-root.kbt-portrait .kbt-coach { display: none; }
 
+/* The fullscreen escape hatch. Hidden entirely while fullscreen holds, so it is
+   only ever on screen when it is the thing the player needs. Sits top-left,
+   clear of the timer stack at top-centre, the MENU control under it, and the
+   pads at both bottom corners -- and clear of Brave's own URL bar, which is the
+   chrome it exists to get rid of and which occupies the top of the VIEWPORT,
+   not of the page. 44px both axes, the floor TouchControls derives elsewhere. */
+.kbt-fs {
+  position: fixed;
+  top: calc(8px + var(--kbt-sa-t, 0px));
+  left: calc(8px + var(--kbt-sa-l, 0px));
+  width: 44px; height: 44px;
+  display: none;
+  align-items: center; justify-content: center;
+  z-index: 40;
+  border: 0; padding: 0; cursor: pointer;
+  font-size: 20px; line-height: 1;
+  color: #cfe6ff;
+  background: rgba(9, 13, 20, .88);
+  box-shadow: inset 0 0 0 1px rgba(126, 180, 240, .5);
+  border-radius: 4px;
+  pointer-events: auto;
+}
+.kbt-fs.kbt-fs--on { display: flex; }
+
 /* A fighting game needs the pair side by side and the stick and limbs under
    opposite thumbs. In a tall frame the fighters are two slivers and the pad
    overruns the edge, so ask for the rotation instead of pretending. */
@@ -510,6 +534,63 @@ export class TouchControls {
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) this._wantsFullscreen = true;
       });
+
+      /*
+       * AND A BUTTON, BECAUSE THE AUTOMATIC PATH CAN FAIL SILENTLY AND DID.
+       *
+       * A player reported the game sitting between Brave's URL bar and its
+       * toolbar on a real handset -- on the SELECT screen, which they can only
+       * have reached by tapping twice. So the listener above fired, called
+       * requestFullscreen, and the promise rejected into a `.catch(() => {})`
+       * that threw the reason away. Two taps, two silent failures, no way for
+       * the player or for me to know why.
+       *
+       * I do not know why Brave refused it and I am not going to guess: this
+       * project has a long record of confident mechanisms that were wrong, and
+       * the last three were mine. What is knowable without a diagnosis is that
+       * an invisible automatic mechanism has no fallback when it fails, and the
+       * player is left with no move.
+       *
+       * So: a visible control. It shows only on a coarse pointer and only while
+       * NOT fullscreen, so it costs nothing once fullscreen holds and it is
+       * exactly the affordance a stuck player needs. This is the same lesson the
+       * MENU button taught -- a control you can see beats a mechanism that
+       * should have worked.
+       *
+       * It lives on document.body rather than inside .kbt-root, deliberately: the pad
+       * root carries `kbt-off` during menus, which sets `pointer-events: none`
+       * on every child, and the select screen is exactly where the player was
+       * stranded.
+       *
+       * The rejection reason is also kept now, on `this.fsError`, instead of
+       * being discarded -- so the next report can say WHY rather than only that.
+       */
+      const fsBtn = document.createElement('button');
+      fsBtn.className = 'kbt-fs';
+      fsBtn.type = 'button';
+      fsBtn.textContent = '⛶';
+      fsBtn.setAttribute('aria-label', 'Fill the screen');
+      fsBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const el = document.documentElement;
+        if (document.fullscreenElement || !el.requestFullscreen) return;
+        // Try with the option first, then without. A browser that rejects the
+        // options object outright is a real possibility and costs one retry.
+        el.requestFullscreen({ navigationUI: 'hide' })
+          .then(() => screen.orientation?.lock?.('landscape'))
+          .catch((err) => {
+            this.fsError = String(err && err.message || err);
+            return el.requestFullscreen()
+              .then(() => screen.orientation?.lock?.('landscape'))
+              .catch((e2) => { this.fsError += ' | bare: ' + String(e2 && e2.message || e2); });
+          });
+      });
+      document.body.appendChild(fsBtn);
+      this.fsBtn = fsBtn;
+
+      const syncFs = () => fsBtn.classList.toggle('kbt-fs--on', !document.fullscreenElement);
+      document.addEventListener('fullscreenchange', syncFs);
+      syncFs();
     }
 
     // The rotate prompt is for real handsets only. A desktop window dragged
