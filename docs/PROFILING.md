@@ -5883,3 +5883,53 @@ those diffs was position and facing, not body. The fix is the same lesson as the
 Tenth instrument defect of the session and the **second** to hand its author a confident
 false positive matching what they believed. Both were caught only because someone went
 back and questioned a result that had already agreed with them.
+
+---
+
+## The draw-call cost is 13–17 µs, and the frame is fragment-bound anyway
+
+A figure of "~25–40 µs per draw when it carries a material/program switch" started
+circulating and was being used to scope arena work. It is an artefact. Refitting the
+original ladder rather than defending the published number:
+
+```
+ladder session (n=5)     13.1 µs/draw
+calib session  (n=3)     13.1 µs/draw
+pooled        (n=10)     12.6 µs/draw
+pooled through-origin    16.8 µs/draw
+```
+
+Two independent sessions agreeing to three digits. **The committed 13–17 µs holds.**
+
+The 25–40 band is what **per-rung division** produces: dividing each rung's total delta by
+its own draw count silently attributes the run's intercept — pooled 1.49 ms, the interleave
+null offset — to the draws, and the bias is worst at the smallest rungs. Every ladder
+measurement in this project is exposed to that, and **fitting the slope is what makes it go
+away.** Divide-per-rung and you are measuring your own offset.
+
+### And the attribution is inverted, not merely off
+
+`tools/scenelace-page.js:69` dedupes donor materials by `material.uuid` and slices to 12,
+and line 74 reuses each instance across every injected mesh — so several hundred injected
+draws share twelve materials and three.js sorts them into ~12 program runs. **The ladder
+measured overwhelmingly NON-switching draws.** 13–17 µs is near the floor for a draw that
+changes no state, and **nobody has priced a switch-carrying draw at all.** The rig could do
+it cheaply by cloning materials at line 69 instead of deduping.
+
+### The consequence that matters more than the number
+
+At 294 draws and 13–17 µs, **the entire draw-call budget is ~4–5 ms against a 27.6 ms p50
+frame.** Zeroing every draw call in the game still leaves the frame fragment-bound. So
+draw-call reduction is not the route to 60fps, and any plan scoped against the inflated
+25–40 µs figure would have chased roughly three times the saving that exists.
+
+For the arena's 171 → 158: 13 draws is **0.17–0.22 ms, not 0.3–0.5** — a real image
+regression bought for a fifth of a millisecond.
+
+### A note on how the correction happened
+
+The agent that published 13–17 µs refit its own ladder when a larger number derived from it
+started circulating, rather than defending the figure it had already committed. That is the
+opposite of the failure mode this file is mostly about, and worth recording as such: the
+cheapest moment to catch an error is when someone else's inference from your work comes back
+larger than your work supports.
