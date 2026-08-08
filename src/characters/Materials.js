@@ -882,6 +882,26 @@ function buildPanelLayout(rng, { minCell = 0.055, depth = 7, stopChance = 0.09 }
  *
  * The floor is insulated: `makeFloorMaterial` clones these textures and sets its
  * own repeat of 14 before use, so this constant is character-only.
+ *
+ * ROUND 43 CORRECTION, AND IT DOES NOT CHANGE THE VALUE. The two figures in
+ * bold above are wrong: re-walked off the shipping geometry and settled against
+ * a photographed checker (see the round-43 block in `resolveSizes`), these two
+ * land at **3.02 and 3.09** texels per screen pixel at the closeup, not 0.92
+ * and 0.73 — one and a half mip levels INTO minification at the tightest
+ * framing the game uses, and four mip levels in at fight framing, where they
+ * retain 1.3% of their slope variance. The paragraph claiming the change
+ * "cannot alias" was reasoning from a texel density that was 1.65x too low.
+ *
+ * Sweeping this constant back down (live `texture.repeat` on a frozen frame,
+ * 0.5/1/2/4, restore control 0.00) recovers essentially nothing: darkMetal
+ * micro-contrast +6.4% at fight, piston nil, and 4 against 1 is
+ * indistinguishable at 3x magnification. The reason is that `brushField` lays
+ * its three octaves at 1, 2 and 4 texels — a period fixed in TEXELS, so it is
+ * sub-millimetre at any tiling and no repeat can move it into a band the camera
+ * resolves. 4 is kept because it is not measurably worse than 1 and churning a
+ * shipped constant for a null result costs a re-bake of the roster's look for
+ * nothing. What would move this surface is different CONTENT in the metal bake
+ * at a physical scale above ~5.5 mm, not a different tiling rate.
  */
 const METAL_REPEAT = 4;
 
@@ -3458,6 +3478,198 @@ function paletteKey(p, sizes) {
 
 /**
  * Authoring resolution per bake.
+ *
+ * --- ROUND 43: THE FRAMINGS, AND THE ROUND-36 TABLE IS 2x OUT ---------------
+ *
+ * Read this before the round-36 section below, which is still mostly right but
+ * whose headline number is wrong and whose conclusion follows from it.
+ *
+ * **The character axis is scored at a framing 5.5x tighter than the framing the
+ * game is played at, and nobody had written the played one down.** Measured off
+ * pinned cameras with a pinned pose (scratchpad/r43-probe.mjs), from the same
+ * literals the shots use:
+ *
+ *     framing                  dist     fov    screen px per metre   mm per px
+ *     02-closeup-face         1.27 m    24          2003               0.50
+ *     03-full-body            3.98 m    30           507               1.97
+ *     01-hero-idle            4.59 m   35.5          367               2.72
+ *
+ * So at fight framing nothing finer than about 5.5 mm on the robot can survive
+ * at all, against 1.0 mm at the closeup. Every "this is N screen pixels" figure
+ * anywhere in this file is a CLOSEUP figure unless it says otherwise; divide by
+ * 5.5 for the framing that actually ships.
+ *
+ * **`kb.armor` is at 0.50 texels per screen pixel at the closeup, not 1.01.**
+ * The round-36 table below says 2024 texels/metre and concludes "the plate
+ * atlas is already exactly at the screen's sampling rate ... there is no
+ * headroom above it — raising the plate bake would push it into the mip chain".
+ * There is a full mip level of headroom. Three independent instruments agree
+ * and the last of them is not arithmetic at all:
+ *
+ *   - The geometry walk that the round-36 note says does not exist now does
+ *     (scratchpad/r43-probe.mjs). It reproduces every world-area figure in that
+ *     table to within 3% — so the geometry has NOT moved since round 36 and the
+ *     disagreement is entirely in the UV half — and returns 1057 texels/metre.
+ *   - Screen-space UV derivatives, which is what the mip unit itself computes:
+ *     0.66 mean, 0.62 median at the closeup.
+ *   - GROUND TRUTH, settled against pixels: a checker of known 16-texel cell
+ *     painted onto `kb.armor` and photographed at the closeup framing comes
+ *     back at 32 screen pixels per cell (scratchpad/r43-checker.mjs). One texel
+ *     covers two screen pixels. That is 0.50, and it can be counted by eye.
+ *
+ *     material   texels/m    texels per screen pixel
+ *                            closeup   full-body   fight
+ *     kb.piston     6194       3.09      12.22     16.86
+ *     kb.darkMetal  6044       3.02      11.93     16.46
+ *     kb.rubber     3557       1.78       7.02      9.68
+ *     kb.carbon     2007       1.00       3.96      5.46
+ *     kb.worn       1584       0.79       3.13      4.31
+ *     kb.armor      1057       0.53       2.09      2.88
+ *     kb.gasket      593       0.30       1.17      1.62
+ *     kb.bezel       529       0.26       1.04      1.44
+ *
+ * The errors in the old table are per material, not systematic: `kb.carbon`
+ * reproduces exactly, `kb.armor` is out by 1.9x and `kb.worn` by 2.8x. So the
+ * rule the round-36 note gives — do not trust a texel figure that does not say
+ * which build it was taken on — applies to the round-36 figures too.
+ *
+ * --- WHAT DISTANCE ACTUALLY COSTS -----------------------------------------
+ *
+ * Measured in the maps rather than inferred from them: every map here is a
+ * DataTexture, so scratchpad/r43-maps.mjs reads the bytes back and box-halves
+ * them, which is what the mip chain does. The quantity is tangent SLOPE
+ * VARIANCE, because a normal map's whole contribution is its distribution of
+ * slopes. The fraction still expressed at the mip level each framing selects:
+ *
+ *     material        closeup   full-body    fight     m^2
+ *     kb.gasket        100.0%      96.2%     88.5%    5.77
+ *     kb.bezel         100.0%      97.0%     76.3%    0.14
+ *     kb.armor         100.0%      73.6%     52.4%   14.18
+ *     kb.carbon         99.9%      50.6%     46.7%    0.51
+ *     kb.worn          100.0%      47.5%     31.2%    3.35
+ *     kb.rubber         86.3%      24.7%     19.6%    0.86
+ *     kb.darkMetal      27.2%       2.5%      1.3%   20.60
+ *     kb.piston         26.1%       2.4%      1.3%   12.08
+ *
+ * **The loss is not uniform, and that is the finding.** The two largest
+ * surfaces on the robot — 32.7 of its 58 m^2 — arrive at fight framing having
+ * lost 98.7% of their surface structure while the gasket keeps 88.5% of its.
+ * The roster does not merely get smoother with distance; its order by apparent
+ * micro-structure inverts. None of it is redistributed either: a box average
+ * preserves a mean, so `kb.darkMetal` reads roughness 0.3047 at mip 0 and
+ * 0.3047 at mip 4 and is shaded as a geometrically smooth surface.
+ *
+ * --- AND IT IS NOT "GONE BY CONSTRUCTION" ---------------------------------
+ *
+ * The standing hypothesis was that this signal lives above Nyquist at fight
+ * framing and is therefore unrecoverable. It is not, but the size and the SIGN
+ * of what is available were both got wrong first — see the correction below,
+ * and read it before quoting any number from this section.
+ *
+ * Render the identical framing at 4x and box it back down to 1080p: both arms
+ * end at exactly 1920x1080, so any difference is not resolution, it is the
+ * renderer resolving the surface wrongly. Side by side at 3x the whole of the
+ * difference is EDGES — plate boundaries, greeble rows, rib stacks, bolt heads
+ * — which 1080p aliases into stair-stepping and 4x resolves. That agrees with
+ * round 13's ablation, which found the 4px band on a character crop "is
+ * geometry and lighting: plate silhouettes, chamfer highlights, the rim against
+ * the key". It is geometric, not textural, and no bake reaches it.
+ *
+ * --- CORRECTION: THE FIRST VERSION OF THIS MEASUREMENT HAD POST ARMED -------
+ *
+ * `RenderPipeline.effects` is a plain object and only `setEffect(name, value)`
+ * rebuilds the composer. Round 43's probes assigned to the flags directly, so
+ * every frame described as "post off" was rendered through AO, bloom, DOF,
+ * motion blur, the AgX grade and SMAA:
+ *
+ *     passes at boot            scene gbuffer ao bloom dof motionBlur grade smaa output
+ *     after direct assignment   scene gbuffer ao bloom dof motionBlur grade smaa output
+ *     after setEffect(...)      render output
+ *
+ * The A/Bs in this file are unaffected — both arms always shared the identical
+ * chain, in one session, restore control 0.00 — and so are every texel figure,
+ * the slope-variance table (read off CPU arrays, never rendered) and the two
+ * refuted levers below. **Two claims did depend on the chain changing and were
+ * wrong.** Re-run with the pass list verified per arm and reported:
+ *
+ *     01-hero-idle, per-material mc      bare-1x   SMAA-1x   bare-4x
+ *     between-material spread              3.587     3.563     3.109
+ *     vs bare-1x                             ---     -0.7%    -13.3%
+ *
+ * 1. **Supersampling LOWERS measured micro-contrast, it does not raise it.**
+ *    The "+23.6% more between-material spread" is void; with post genuinely off
+ *    it is -13.3%. It should have been suspect on its face: 4x cannot add
+ *    high-frequency content that 1080p is able to represent, it can only remove
+ *    aliasing — and aliasing is spurious high-frequency energy, so a correct
+ *    measurement has to show mc going DOWN. Most of the 1x frame's apparent
+ *    micro-contrast at fight framing is aliasing rather than surface.
+ *
+ * 2. **The SMAA claim was never a measurement.** SMAA was on in both arms.
+ *    Measured properly, against the 4x-integrated frame as ground truth:
+ *
+ *        arm        RMSE all   RMSE on subject   subject px off by >8/255
+ *        bare-1x      10.57         14.18              126,337
+ *        SMAA-1x      11.51         15.39              129,943
+ *
+ *    SMAA does not close the gap; against ground truth it is slightly WORSE
+ *    than no anti-aliasing at all, which is what a post-resolve edge filter
+ *    that cannot invent the missing samples does to an image.
+ *
+ * So the recommendation survives on a corrected basis. The shipping frame sits
+ * **14.18 RMSE from the correctly integrated image over its subject pixels**,
+ * with 126,337 of them wrong by more than 8/255, the error is aliasing, and it
+ * is bought with SAMPLES — temporal accumulation, or internal resolution spent
+ * on the subject. It is not bought with anything in this file. What it buys is
+ * a cleaner, more correct frame; it is NOT a 23.6% gain in material
+ * differentiation, and nothing should be planned as though it were.
+ *
+ * --- TWO LEVERS BUILT, MEASURED AND REVERTED ------------------------------
+ *
+ * 1. NORMAL-VARIANCE TO ROUGHNESS (Toksvig/vMF: alpha'^2 = alpha^2 + lost
+ *    slope variance, with the loss curve above tabulated per material at bake
+ *    time and the mip level taken from the normal map's own UV derivatives).
+ *    It is the same handoff the machining lay and the chamfer already do for
+ *    their analytic octaves, applied to the sampled normal map, and it costs no
+ *    VRAM and no sampler. **It makes the render worse.** Against the 4x
+ *    supersampled ground truth at fight framing, mean-luma error goes
+ *    `kb.armor` 1.42 -> 3.86 and `kb.piston` 10.03 -> 16.19; only `kb.worn`
+ *    improves. The reason is visible in the table above: the material that
+ *    loses the largest FRACTION (darkMetal, 98.7%) has a small absolute
+ *    variance, while `kb.armor` loses 47.6% of a variance six times larger, so
+ *    the correction lands hardest on the wrong surface — and `kb.armor`'s
+ *    variance is dominated by resolved panel grooves, not by microfacets, which
+ *    is not what the relation assumes. Between-material spread moved +1.7%
+ *    (luma) and +3.1% (mid-band) at fight, and NEGATIVE at full-body and
+ *    closeup. Do not rebuild this without a different variance estimate.
+ *
+ * 2. LOWERING `METAL_REPEAT` back toward 1, which the corrected table above
+ *    appears to demand — at 4 those two materials sit 1.6 mip levels into
+ *    minification at the closeup, not the "below one texel per pixel" the
+ *    constant's own note claims. Swept live on a frozen frame at 0.5/1/2/4:
+ *    `kb.darkMetal` micro-contrast 10.55 -> 11.23 at fight (+6.4%),
+ *    `kb.piston` 11.63 -> 11.61 (nil), 15k of 2.07M pixels moved, and the two
+ *    arms are indistinguishable at 3x magnification. The constant is wrong
+ *    about its own numbers and it does not matter, because `brushField` builds
+ *    its octaves at 1, 2 and 4 TEXELS by construction — sub-millimetre at any
+ *    tiling this file would choose, so no repeat puts them in a band the
+ *    camera can see. Fixing metal means changing what is in the bake, not how
+ *    fast it tiles.
+ *
+ * --- MEASURE A/Bs INSIDE ONE PAGE LOAD, NOT ACROSS TWO --------------------
+ *
+ * This invalidates the method, not just the results, and it may explain several
+ * rounds of material work measuring as "nothing":
+ *
+ *     two grabs inside ONE session      max 0.00/255,  0 pixels differ
+ *     two loads of the IDENTICAL tree   mean 0.83/255, 197,000 pixels differ
+ *                                       (fight framing; 333,000 at full-body)
+ *
+ * **The cross-session floor is the same size as a real material change.** The
+ * `window.__KB_DETAIL` / `__KB_CHAMFER` convention reads at compile time and
+ * therefore needs one page load per arm, so it cannot see an effect this size.
+ * Both round-43 sweeps above were run by writing the LIVE uniform or the live
+ * `texture.repeat` inside one frozen frame, with a restore control that came
+ * back at exactly 0.00. Do that.
  *
  * --- ROUND 36: BOTH HALVES OF THE OLD TABLE WERE STALE ---------------------
  *

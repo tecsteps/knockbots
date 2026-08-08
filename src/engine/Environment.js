@@ -87,6 +87,10 @@ import * as THREE from 'three';
 import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
 import { SPLIT_LIGHT_LAYER } from './RenderPipeline.js';
 import { ARENA_HALF_WIDTH, ARENA_HALF_DEPTH, LAYER } from '../core/Constants.js';
+// The midground borrows the roster's already-baked detail set rather than
+// authoring its own. See {@link MIDGROUND}: the textures are cloned before their
+// repeat is touched, so this adds no texture memory and cannot retile a robot.
+import { getSharedDetailTextures } from '../characters/Materials.js';
 
 /** Height the environment probes are baked from — a robot's chest. */
 const PROBE = new THREE.Vector3(0, 1.4, 0);
@@ -2072,6 +2076,284 @@ void main() {
 `;
 
 // ---------------------------------------------------------------------------
+// MIDGROUND
+//
+// The stage axis lost every blind pair it was entered in and the named cause was
+// "there is no midground". That is a claim about the distribution of scene
+// depth, so it was measured rather than argued. Raycast grid, 192x108 rays
+// through the pinned `01-hero-idle` camera with the fighters hidden; the exact
+// first-surface depth and the NAME of the object hit for each ray
+// (scratchpad/r44-rays.mjs). Positive control: every ray landing on
+// `arena.floor.*` hit it at |y| = 0 exactly. Null control: the cast repeated on
+// the frozen frame moved 14 of 5184 rays, all of them the rotating
+// `arena.structure.fan` and all in the 13-20 m band.
+//
+//     sublevel09        % of frame   occlusion edges   dominant surface
+//     < 4 m                  2.78%          0          floor.slab 100%
+//     4 - 5.5 m             17.59%          0          floor.slab 100%
+//     5.5 - 9 m             17.59%          0          floor.slab 100%
+//     9 - 13 m               9.47%       1344          floor.slab  98%
+//     13 - 20 m             52.06%       1060          set.chain, steel, concrete
+//
+// **From the lens out to nine metres — 37.96% of the frame — there is not one
+// occlusion boundary.** `skydeck` is identical to two decimal places on those
+// three bands; `cistern` has a little flotsam and gets 92 edges. The 1344 in the
+// 9-13 m band is one continuous line, the seam where the floor meets the wall,
+// counted once per grid column. So the complaint is exact, and it is not "there
+// is nothing out there" — 52% of the frame is set geometry. It is that
+// everything out there is TWO PLANES: a floor and a wall. Nothing in between has
+// a silhouette, and a silhouette is the only depth cue that survives at 367
+// screen pixels per metre.
+//
+// --- WHY THE EMPTY BAND CANNOT SIMPLY BE FILLED ---------------------------
+//
+// The 5.5-9 m band maps to world z in [-0.93, -4.43], and `ARENA_HALF_DEPTH` is
+// 5.5, so that band **is the play volume**. It is empty because a crate standing
+// there is a crate standing in the fight. That is the constraint the two usable
+// references (n=2, `tekken8_02` and `tekken8_07`) do not have to solve the same
+// way: their props sit at the play boundary, and their play boundary lands in
+// the mid band because the camera is closer to it than ours is.
+//
+// So this layer fills the band from the two directions that are actually free:
+//
+//   1. GROUND CLUTTER at the play boundary, z in [-8.2, -5.9], which is beyond
+//      `ARENA_HALF_DEPTH` and in front of the wall the raycast found at
+//      z = -8.6. That is 10.4 to 12.9 m from the lens: the 9-13 m band, which is
+//      98% bare floor today. A 1.5 m object there is 230 screen pixels tall and
+//      silhouettes against the wall behind it, which is exactly what the low
+//      stone wall and the standing figures do in `tekken8_07`.
+//
+//   2. AN OVERHEAD RUN across z in [-1, -5] at y 2.9 to 3.6 m. At this framing
+//      the top of frame is only 2.86 m up at 6 m depth and 3.69 m at 10 m, so
+//      that band is on screen, it is in the 5.5-10 m depth the ground cannot
+//      reach, and it is above a standing robot. `tekken8_02` carries exactly
+//      this — overhead wires and a signal gantry cutting the frame behind the
+//      fighters' heads.
+//
+// --- WHAT IT COSTS, MEASURED ----------------------------------------------
+//
+// Six `InstancedMesh` — one per kind, so six draw calls and no per-object
+// overhead — over ~40 instances of two shared materials. Sampled once per
+// animation frame for 40 frames and taken as a median, three alternating
+// repetitions, identical every rep:
+//
+//     arena         layer tris   draw calls      frame triangles
+//     sublevel09         1,700   292 -> 304      1,153,234 -> 1,156,634  (+0.29%)
+//     skydeck            1,304   271 -> 283        765,461 ->   768,069  (+0.34%)
+//     cistern               32   264 -> 266        766,459 ->   766,523  (+0.01%)
+//
+// The +12 is six meshes drawn twice: once for the beauty pass and once for the
+// planar reflector, which is also why frame triangles rise by 2x the layer.
+// Nothing casts a shadow (`castShadow = false`), so there is no shadow-pass
+// cost at all. **No texture memory**: the maps are `getSharedDetailTextures`'
+// plate and metal sets, CLONED so this layer can set its own repeat — mutating
+// `.repeat` on the shared texture itself would retile every robot on the
+// roster, which Materials.js's own note warns about — and a clone shares the
+// GPU upload.
+//
+// Frame time was NOT measurable. Three alternating pairs per arena came back
+// with the sign flipping on all three arenas and one rep 14 ms apart from its
+// neighbour, on a machine with other agents live on it. A structural cost of
+// +12 draws and +0.3% triangles on a frame the charter calls fill-bound is the
+// honest statement; a frame-time figure taken here would be drift.
+//
+// The geometry is chunky on purpose: at 10 m one screen pixel is 6.5 mm, so a
+// bevel under about a centimetre cannot land, and the budget goes to silhouette
+// and depth separation rather than to surface. There is deliberately NO LOD
+// chain — these objects live in a fixed 10-13 m band and the fight camera's own
+// solve ranges only 3.4 to 16 m, so their screen size varies by about 2x and a
+// second level would be machinery that never runs. Culling is three's own
+// frustum test per kind.
+//
+// --- WHAT IT BUYS, MEASURED -----------------------------------------------
+//
+// Same instrument as the baseline, one frozen frame, arms are `visible` on one
+// Group so no program is recompiled between them. RESTORE control 0.00/255 on
+// all three arenas.
+//
+//     arena        9-13 m band       occlusion boundaries    frame pixels
+//                  % of frame        5.5-20 m                changed
+//     sublevel09   7.68 -> 18.85%    1333 -> 1587  (+19%)    23.81%
+//     skydeck      8.02 -> 20.58%    1299 -> 1499  (+15%)    17.39%
+//     cistern      see the note on its entry in MIDGROUND — clutter removed
+//
+// Against the references, and n=2: `tekken8_02` fills this band with a phone
+// box pair, a planter, crowd barricades, a kiosk and overhead signage, and
+// keeps the centre open behind the fighters; `tekken8_07` runs a low stone wall
+// the full width at waist height and puts its height — spectators, alpacas,
+// saplings — out to both sides. Both were read by eye, from the two images; two
+// images are not a distribution and nothing here is fitted to them.
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-mood placement. One entry per arena, because the arenas do not share a
+ * back wall: the raycast puts `sublevel09`'s at z = -8.6, and `skydeck` and
+ * `cistern` carry their own set geometry in the 9-13 m band already.
+ *
+ * `z0`/`z1` bound the clutter band in world z.
+ *
+ * **`z1` is a gameplay constraint, not a taste one.** `Fighter.bounds` is
+ * `halfDepth: 5.5`, so a fighter can legally stand at z = -5.5, and a crate is
+ * up to a metre across once it has been yawed — so the near edge of the band
+ * has to sit at about -6.6 for the nearest prop face to clear the play volume.
+ * The first version had it at -5.9 and put crate corners inside the arena. `z0`
+ * has no such limit: a prop that intersects the back wall is hidden by it.
+ *
+ * That leaves roughly 1.3 m of usable slab between the play bound and the wall,
+ * which is the real reason this band is thin. `lift` raises the whole thing for
+ * an arena whose deck is not at y = 0.
+ */
+const MIDGROUND = {
+  industrial: {
+    seed: 0x4d1d,
+    z0: -8.3, z1: -6.6, halfWidth: 7.4,
+    crates: 13, drums: 9, spools: 5, barriers: 8, posts: 4,
+    // The pit is a machine hall: the overhead run is a pipe bundle.
+    overhead: { count: 3, y: 3.15, z0: -4.6, z1: -1.2, radius: 0.085 },
+    paint: 0x2b2b2c, metal: 0x3a3735, lift: 0,
+  },
+  duskRoof: {
+    seed: 0x5c0f,
+    z0: -8.1, z1: -6.6, halfWidth: 7.0,
+    crates: 10, drums: 7, spools: 3, barriers: 9, posts: 4,
+    // A roof deck gets a cable catenary rather than a pipe bundle: thinner, and
+    // it reads against the sky, which is the one backdrop here that is bright.
+    overhead: { count: 2, y: 3.35, z0: -4.2, z1: -1.6, radius: 0.05 },
+    paint: 0x33302c, metal: 0x45423e, lift: 0,
+  },
+  cistern: {
+    seed: 0x0c15,
+    /*
+     * NO GROUND CLUTTER HERE, and that is a measured decision rather than an
+     * omission.
+     *
+     * The vault already fills 38.12% of the frame in the 9-13 m band with
+     * `vault.cast`, against 7.68% in the pit and 8.02% on the roof — it is the
+     * one arena that already has a midground. Adding this run to it was
+     * measured on the frozen frame and it made the band WORSE: occlusion
+     * boundaries in 9-13 m went 770 -> 700, because simple boxes stood in front
+     * of the vault's own more articulated geometry and replaced its silhouettes
+     * with theirs. It also cost 8.58% of the frame in changed pixels for a mean
+     * difference of 2.07/255, most of which was the overhead run rather than
+     * the clutter.
+     *
+     * So the clutter is off and the overhead run stays: that half does work
+     * here, taking the 5.5-9 m band from 527 to 765 boundaries (+45%), which is
+     * the band no arena can fill from the ground because it is the play volume.
+     */
+    z0: -7.6, z1: -6.6, halfWidth: 6.2,
+    crates: 0, drums: 0, spools: 0, barriers: 0, posts: 0,
+    overhead: { count: 2, y: 3.0, z0: -4.4, z1: -1.8, radius: 0.07 },
+    paint: 0x24282b, metal: 0x333230, lift: 0,
+  },
+};
+
+/**
+ * Where the band is allowed to be TALL, as a half-width in metres.
+ *
+ * The first build put stacked crates, spools and stanchions straight across the
+ * centre and it was wrong twice over. It hid the barrier signage the pit already
+ * had — the one piece of storytelling in that part of the frame — and it put a
+ * busy, light-valued run directly behind the two things the eye is supposed to
+ * be reading.
+ *
+ * Both usable references (n=2) keep the centre open and load the edges.
+ * `tekken8_02` puts its phone box, planters and barricade at the frame margins
+ * and leaves the middle to smoke and open plaza; `tekken8_07` runs a wall the
+ * full width but keeps it BELOW the fighter's waist, and puts the height — the
+ * alpacas, the standing spectators, the saplings — off to either side. Inside
+ * this half-width only the low kinds are placed; outside it, anything.
+ */
+const MIDGROUND_OPEN_CENTRE = 3.1;
+
+/**
+ * The six kinds, as geometry factories. Every one is a primitive or two merged
+ * primitives — the silhouette is the product, and at 153 screen pixels per metre
+ * a rounded corner is three pixels.
+ *
+ * @returns {Record<string, {geo: THREE.BufferGeometry, material: 'paint'|'metal'}>}
+ */
+function buildMidgroundKinds() {
+  const merge = (parts) => {
+    // Local, tiny merge: BufferGeometryUtils is not imported by this module and
+    // this only ever joins two or three non-indexed primitives.
+    const geos = parts.map(({ geo, pos, rot, scale }) => {
+      const g = geo.toNonIndexed();
+      const m = new THREE.Matrix4();
+      const q = new THREE.Quaternion();
+      if (rot) q.setFromEuler(new THREE.Euler(rot[0], rot[1], rot[2]));
+      m.compose(new THREE.Vector3(...(pos ?? [0, 0, 0])), q,
+        new THREE.Vector3(...(scale ?? [1, 1, 1])));
+      g.applyMatrix4(m);
+      return g;
+    });
+    const total = geos.reduce((n, g) => n + g.attributes.position.count, 0);
+    const out = new THREE.BufferGeometry();
+    for (const name of ['position', 'normal', 'uv']) {
+      const size = geos[0].attributes[name].itemSize;
+      const arr = new Float32Array(total * size);
+      let o = 0;
+      for (const g of geos) { arr.set(g.attributes[name].array, o); o += g.attributes[name].array.length; }
+      out.setAttribute(name, new THREE.BufferAttribute(arr, size));
+    }
+    for (const g of geos) g.dispose();
+    // `toNonIndexed` allocates a fresh geometry for an indexed input, so the
+    // sources are still live and would leak one set per arena switch. Deduped
+    // because a part may appear twice in one list (the spool's two flanges).
+    for (const g of new Set(parts.map((p) => p.geo))) g.dispose();
+    return out;
+  };
+
+  const spoolCore = new THREE.CylinderGeometry(0.30, 0.30, 0.52, 12, 1, true);
+  const spoolFlange = new THREE.CylinderGeometry(0.62, 0.62, 0.07, 14);
+
+  return {
+    // A shipping crate, lying square. Proportions vary per instance.
+    crate: { geo: new THREE.BoxGeometry(1.05, 0.86, 0.92), material: 'paint' },
+    // A drum, upright. Twelve sides is enough at this distance and its
+    // silhouette is a rectangle with two soft corners, which is what reads.
+    drum: { geo: new THREE.CylinderGeometry(0.29, 0.29, 0.9, 12), material: 'metal' },
+    // A cable spool on its side: the one kind here with a hole in its outline.
+    spool: {
+      geo: merge([
+        { geo: spoolCore, rot: [Math.PI / 2, 0, 0] },
+        { geo: spoolFlange, pos: [0, 0, 0.26], rot: [Math.PI / 2, 0, 0] },
+        { geo: spoolFlange, pos: [0, 0, -0.26], rot: [Math.PI / 2, 0, 0] },
+      ]),
+      material: 'metal',
+    },
+    // A jersey barrier: wide, low, and the only kind that overlaps its
+    // neighbours, so a run of them makes one long broken line.
+    barrier: {
+      geo: merge([
+        { geo: new THREE.BoxGeometry(1.6, 0.36, 0.62), pos: [0, 0.18, 0] },
+        { geo: new THREE.BoxGeometry(1.6, 0.46, 0.30), pos: [0, 0.59, 0] },
+      ]),
+      material: 'paint',
+    },
+    // A service stanchion: base plate, column, and a head.
+    //
+    // The head is the whole point and the first build did not have it. A bare
+    // 2 m pole with a foot reads as nothing — on `skydeck` a run of them came
+    // out looking like empty flagpoles, which is worse than leaving the band
+    // alone. Both references carry verticals and neither carries a bare one:
+    // `tekken8_02`'s lamp post has a lamp on it and its sign poles have signs.
+    // A vertical earns its place by what it holds up.
+    post: {
+      geo: merge([
+        { geo: new THREE.CylinderGeometry(0.055, 0.07, 1.72, 6), pos: [0, 0.86, 0] },
+        { geo: new THREE.BoxGeometry(0.4, 0.07, 0.4), pos: [0, 0.035, 0] },
+        { geo: new THREE.BoxGeometry(0.52, 0.30, 0.13), pos: [0.13, 1.80, 0] },
+      ]),
+      material: 'metal',
+    },
+    // The overhead run. Built along +X at unit length and stretched per instance.
+    pipe: {
+      geo: new THREE.CylinderGeometry(1, 1, 1, 8, 1, true).rotateZ(Math.PI / 2),
+      material: 'metal',
+    },
+  };
+}
 
 export class Environment {
   /**
@@ -2101,6 +2383,21 @@ export class Environment {
     this._from = cloneParams(this.params);
     this._to = cloneParams(this.params);
     this._fade = { t: 1, dur: 1 };
+
+    /**
+     * The midground clutter band. One group, six `InstancedMesh`, rebuilt
+     * whenever the mood (and therefore the arena) changes. See {@link MIDGROUND}
+     * for the raycast measurement that motivates it.
+     *
+     * Held as a public field on purpose: `visible = false` on this one object is
+     * the null arm of every A/B it will be judged by, and toggling it recompiles
+     * nothing.
+     * @type {?THREE.Group}
+     */
+    this.midground = null;
+    /** Triangles the layer adds, for the cost half of the ledger. */
+    this.midgroundTris = 0;
+    this._midgroundMats = null;
 
     /** @type {?THREE.Texture} PMREM-filtered radiance, assigned to scene.environment. */
     this.envMap = null;
@@ -2275,6 +2572,10 @@ export class Environment {
 
     this._buildEnvScene();
     this._buildRig();
+    // `Stage.setArena` only calls `setMood` when the mood actually changes, so
+    // the default arena would never trigger a build. Do it here as well, and let
+    // `setMood` handle every later switch.
+    this._buildMidground();
 
     const tier = TIERS[this.quality] ?? TIERS.high;
     this._allocateTargets(tier);
@@ -2842,10 +3143,187 @@ export class Environment {
    * @param {string} name one of {@link MOOD_NAMES}
    * @param {number} [t=1.2] fade duration in seconds; 0 snaps
    */
+  /**
+   * Builds (or rebuilds) the midground clutter for the current mood.
+   *
+   * Placement is a seeded {@link Rng}-free deterministic hash rather than
+   * `Math.random`, because every measurement this layer will ever be judged by
+   * is a frozen-frame A/B and a set that reshuffles per boot cannot be
+   * A/B'd at all. Same mood in, same scene out, every time.
+   *
+   * The whole layer hangs off one group so the A/B arm is `visible = false` on
+   * a single object: no material is rebuilt, no program is recompiled, and the
+   * two arms therefore differ by exactly this geometry and nothing else.
+   *
+   * @see MIDGROUND
+   */
+  _buildMidground() {
+    this._disposeMidground();
+    const cfg = MIDGROUND[this.mood];
+    if (!cfg || this.ablate.has('midground')) return;
+
+    const group = new THREE.Group();
+    group.name = 'env.midground';
+    // The set dressing is lit by the same rig as everything else, but it must
+    // not join the split-lighting layer the fighters use.
+    group.layers.set(LAYER.DEFAULT);
+
+    // Deterministic, cheap, and independent per stream so adding a kind cannot
+    // reshuffle the kinds authored before it.
+    const rand = (i, salt) => {
+      let h = Math.imul(i + 1, 374761393) ^ Math.imul(salt, 668265263) ^ Math.imul(cfg.seed, 1442695041);
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    };
+
+    const shared = this._midgroundMaps();
+    const kinds = buildMidgroundKinds();
+    const counts = {
+      crate: cfg.crates, drum: cfg.drums, spool: cfg.spools,
+      barrier: cfg.barriers, post: cfg.posts, pipe: cfg.overhead.count,
+    };
+
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const pos = new THREE.Vector3();
+    const scl = new THREE.Vector3();
+    const col = new THREE.Color();
+    let tris = 0;
+
+    let slot = 0;
+    for (const [name, kind] of Object.entries(kinds)) {
+      const n = counts[name] | 0;
+      if (n <= 0) { kind.geo.dispose(); continue; }
+      const mat = kind.material === 'paint' ? shared.paint : shared.metal;
+      const mesh = new THREE.InstancedMesh(kind.geo, mat, n);
+      mesh.name = 'env.midground.' + name;
+      mesh.castShadow = false;      // measured; see the note on MIDGROUND cost
+      mesh.receiveShadow = true;
+      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+
+      for (let i = 0; i < n; i++) {
+        const s = slot * 97 + i;
+        if (name === 'pipe') {
+          // One long run across the frame, at a depth the ground cannot reach.
+          const t = n === 1 ? 0.5 : i / (n - 1);
+          const z = cfg.overhead.z0 + (cfg.overhead.z1 - cfg.overhead.z0) * t;
+          const len = cfg.halfWidth * 2 + 3.0;
+          pos.set((rand(s, 11) - 0.5) * 1.2, cfg.overhead.y + cfg.lift + (rand(s, 12) - 0.5) * 0.5, z);
+          q.setFromEuler(new THREE.Euler(0, (rand(s, 13) - 0.5) * 0.06, (rand(s, 14) - 0.5) * 0.035));
+          const r = cfg.overhead.radius * (0.7 + rand(s, 15) * 0.7);
+          scl.set(len, r, r);
+        } else {
+          // Ground clutter. x is jittered off an even spread so the run reads as
+          // placed rather than as a grid, and z is free across the whole band so
+          // the objects occlude EACH OTHER — which is the point, since an
+          // occlusion boundary between two props is worth more than one against
+          // the wall.
+          const t = (i + 0.5) / n;
+          let x = (t * 2 - 1) * cfg.halfWidth + (rand(s, 1) - 0.5) * (cfg.halfWidth / n) * 2.4;
+          // The tall kinds are pushed out of the open centre rather than
+          // dropped, so the run keeps its count and loses only its height where
+          // the fighters and the barrier signage are. See MIDGROUND_OPEN_CENTRE.
+          const tall = name === 'post' || name === 'spool';
+          if (tall && Math.abs(x) < MIDGROUND_OPEN_CENTRE) {
+            x = Math.sign(x || 1) * (MIDGROUND_OPEN_CENTRE + rand(s, 9) * (cfg.halfWidth - MIDGROUND_OPEN_CENTRE));
+          }
+          const z = cfg.z0 + (cfg.z1 - cfg.z0) * rand(s, 2);
+          const yaw = rand(s, 3) * Math.PI * 2;
+          const sx = 0.74 + rand(s, 4) * 0.72;
+          const sy = 0.7 + rand(s, 5) * 0.8;
+          const sz = 0.74 + rand(s, 6) * 0.72;
+          // Crates stack, but only out at the edges: a stack is 1.7 m and that
+          // is head height on the barrier line.
+          const stack = name === 'crate' && Math.abs(x) > MIDGROUND_OPEN_CENTRE && rand(s, 7) > 0.55
+            ? 0.86 * sy : 0;
+          pos.set(x, cfg.lift + stack, z);
+          q.setFromEuler(new THREE.Euler(0, yaw, 0));
+          scl.set(sx, sy, sz);
+        }
+        m.compose(pos, q, scl);
+        mesh.setMatrixAt(i, m);
+        // Per-instance tint. The spread is wide (0.55 to 1.65) and carries a
+        // little hue drift as well as value, because the first build gave every
+        // instance nearly the same light grey and a row of identical grey boxes
+        // reads as blockout geometry rather than as a place. The base colours
+        // are also dark on purpose: this band sits BEHIND the fighters and a
+        // midground brighter than its subject stops being depth and becomes
+        // competition.
+        const v = 0.55 + rand(s, 8) * 1.1;
+        col.setHex(kind.material === 'paint' ? cfg.paint : cfg.metal).multiplyScalar(v);
+        col.offsetHSL((rand(s, 10) - 0.5) * 0.06, (rand(s, 16) - 0.5) * 0.12, 0);
+        mesh.setColorAt(i, col);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      const g = mesh.geometry;
+      tris += (g.index ? g.index.count / 3 : g.attributes.position.count / 3) * n;
+      group.add(mesh);
+      slot++;
+    }
+
+    this.scene.add(group);
+    this.midground = group;
+    this.midgroundTris = Math.round(tris);
+  }
+
+  /**
+   * The two materials the layer uses, built once and reused across mood
+   * rebuilds. Textures are clones of the roster's shared detail set: a clone
+   * shares the GPU upload, so this costs no texture memory, and it is the only
+   * safe way to pick a repeat — writing `.repeat` on the shared texture itself
+   * would retile every robot in the scene.
+   */
+  _midgroundMaps() {
+    if (this._midgroundMats) return this._midgroundMats;
+    let shared = null;
+    try {
+      shared = getSharedDetailTextures(this.renderer);
+    } catch {
+      shared = null;   // headless or a stubbed renderer: fall through to plain
+    }
+    const clone = (tex, repeat) => {
+      if (!tex) return null;
+      const t = tex.clone();
+      t.needsUpdate = true;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(repeat, repeat);
+      return t;
+    };
+    const paint = new THREE.MeshStandardMaterial({
+      name: 'env.midground.paint',
+      color: 0xffffff, roughness: 0.78, metalness: 0.15,
+      normalMap: clone(shared?.plateNormal, 1.6),
+      roughnessMap: clone(shared?.plateOrmPainted, 1.6),
+    });
+    const metal = new THREE.MeshStandardMaterial({
+      name: 'env.midground.metal',
+      color: 0xffffff, roughness: 0.55, metalness: 0.85,
+      normalMap: clone(shared?.metalNormal, 2.2),
+      roughnessMap: clone(shared?.metalOrm, 2.2),
+    });
+    this._midgroundMats = { paint, metal };
+    return this._midgroundMats;
+  }
+
+  /** Removes the group and frees the per-kind geometry; materials persist. */
+  _disposeMidground() {
+    if (!this.midground) return;
+    this.scene.remove(this.midground);
+    this.midground.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
+    this.midground = null;
+    this.midgroundTris = 0;
+  }
+
   setMood(name, t = 1.2) {
     const target = MOODS[name];
     if (!target) return;
+    const changed = this.mood !== name;
     this.mood = name;
+    // The arena and the mood change together (see `Stage.setArena`), so this is
+    // where the clutter learns which set it is standing in.
+    if (changed || !this.midground) this._buildMidground();
 
     if (t <= 0 || !this._rig) {
       this._from = cloneParams(target);
@@ -3403,6 +3881,15 @@ export class Environment {
 
     this.keyLight?.shadow.map?.dispose();
     for (const rig of this.fighterRims) rig.key?.shadow.map?.dispose();
+    this._disposeMidground();
+    if (this._midgroundMats) {
+      for (const mat of Object.values(this._midgroundMats)) {
+        mat.normalMap?.dispose();
+        mat.roughnessMap?.dispose();
+        mat.dispose();
+      }
+      this._midgroundMats = null;
+    }
     if (this._rig) this.scene.remove(this._rig);
     if (this.practicalMeshes) this.scene.remove(this.practicalMeshes);
     this.practicals.length = 0;
