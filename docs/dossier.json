@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.39.0",
-    "commits": "234",
+    "rev": "0.40.0",
+    "commits": "240",
     "modules": 73,
-    "lines": "92k",
+    "lines": "96k",
     "clips": 92,
     "moves": 777,
     "characters": 10
@@ -1495,11 +1495,51 @@
           "state": "RED 1 — the descriptor half"
         }
       ]
+    },
+    {
+      "phase": "PHASE 45",
+      "when": "The frame data becomes true",
+      "rev": "rev 0.40.0",
+      "title": "Three bugs in the clauses the charter calls non-negotiable, and six premises refuted along the way",
+      "paras": [
+        "The move list had been lying since it was written. Every blockable move in the game was between two and seven frames less safe than its own printed number, and the printed number was unreachable at any distance — matching it would have required a hitbox to connect one tick after it stopped existing. A jab advertised as plus one on block, the foundation of every pressure string, actually played minus one. The cause was a convention mismatch: the data was derived assuming contact on the last active frame, and the engine resolved contact on the first tick two capsules overlapped.",
+        "The owner chose to fix the engine rather than the data, on the grounds that the charter says frame data is the game. It now is: three hundred and fifty-two moves measure exactly zero deviation on block and seven hundred and sixty-five on hit, at four separate ranges, driven through the real fighter and the real combat system from real key events.",
+        "The implementation briefed for it was wrong and the agent building it refused. The obvious approach — let a connection consume the rest of the active window — makes the arithmetic true and silently deletes the later hits of every multi-window move. What shipped instead floors the attacker’s recovery at the last tick of any window that has not yet connected, so a three-hit string keeps all three and the identity holds on the connection whose blockstun the defender is actually sitting in.",
+        "Two other bugs were found and fixed in the same pass, neither visible in any screenshot. The second round of a match depended on how the first round had gone, because resetting a fighter left its random number generator wherever the previous round had abandoned it — and wake-up rolls a die, so a knockdown late in a match could resolve differently because of something that happened in a round already over. And the retimer that stretches a wind-up to match an advertised startup was discontinuous on exactly the tick the hitbox appeared, which the collision system faithfully turned into reach: one move handed it a swept capsule of a hundred and four centimetres against a five centimetre median, connecting at a range the animation never showed.",
+        "Then the frame-data fix uncovered a bug it had been hiding. With every move sitting two to seven frames past the punish boundary, nothing had ever been measured sitting on it. Once the deficit was gone, six moves printing exactly minus ten turned out not to be punishable by the fastest jab in the game — an off-by-one caused by guard being updated before state, so on the tick an attacker leaves its attack it is still, briefly, attacking.",
+        "The honest accounting of the method matters more than any single fix. Six premises were refuted this session, three of them the lead agent’s own, and one would have shipped a regression into the combat system. A finding published as twenty-six moves turned out to be six, with the wrong mechanism attached, and the correction came from a second agent measuring rather than arguing — after both of their competing tick predictions proved off by one in opposite directions. Seven instruments were found defective by their own authors, five of them producing stable, reproducible numbers about the wrong event, including a punish test that passed cleanly against a defender physically incapable of punishing anything."
+      ],
+      "tags": [
+        {
+          "label": "frame data",
+          "state": "352 moves at +0, four ranges"
+        },
+        {
+          "label": "determinism",
+          "state": "round 2 no longer depends on round 1"
+        },
+        {
+          "label": "phantom hitbox",
+          "state": "104 cm vs 5 cm — fixed"
+        },
+        {
+          "label": "unpunishable",
+          "state": "26 -> 6, mechanism corrected"
+        },
+        {
+          "label": "premises refuted",
+          "state": "6, three of them mine"
+        },
+        {
+          "label": "gates",
+          "state": "8, ~75s, no browser"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.39.0",
-    "note": "Deployed after the gameplay pass. Source on github.com/tecsteps/knockbots."
+    "rev": "0.40.0",
+    "note": "Deployed after the frame-data fix. Source on github.com/tecsteps/knockbots."
   }
 }
