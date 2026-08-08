@@ -5355,3 +5355,162 @@ That is precisely the argument for temporal accumulation: it approximates the 4�
 integral at roughly 1× cost per frame by spending samples over **time** instead of
 over **area**. Framing the deficit as aliasing energy is what makes that the right
 shape of answer rather than a guess.
+
+---
+
+# A gate that cannot see a whiff reports it as silence
+
+`fdgate` FD-2c asks "at point blank, does contact land on the move's first
+active frame". It iterates `nearest`, which is built from `blockRows`, which is
+`cells.filter(r => usable(r) && r.event === 'block')`.
+
+**A move that misses produces no row, so it is filtered out before any assertion
+sees it, and the gate prints "0 disagree".** Silence, formatted exactly like a
+pass, for the worst outcome a move can have.
+
+That is not hypothetical. `p.backfist` declared its contact frame three ticks
+before the fist arrived, and `retimeFor` pins the declared contact pose onto the
+move's first active frame — so on every archetype that plays the clip the first
+active frame showed a folded arm. The technical and standard sets missed by 1-3
+millimetres, connected one frame late, and were correctly flagged by FD-2c. The
+agile sets missed by 9 millimetres, connected on **neither** active frame, and
+were not mentioned at all. The gate reported the near miss and stayed quiet
+about the total one.
+
+## The rule
+
+**"No row" must be a failure, not a pass.** Any gate that filters its population
+by an outcome has to assert on the moves that produced no outcome, separately
+and by name, or its silence is indistinguishable from its success. FD-2w is that
+assertion for FD-2c.
+
+## And the exclusion needs measuring too
+
+The first version of FD-2w went red on 21 moves, and 20 of them were
+`launcherKick [uf+3]` and `axeKick [uf+4]` across all ten sets. An input
+beginning `uf` makes the fighter jump; the strike then travels over a grounded
+guard. That is a jump arc, not a whiff — and **none of those moves carries
+`props.requireAir`**, so the flag could not be used to spot them. `probe` now
+records `leftGround` from `f0.airborne` on the actual ticks. Excluding a class
+from an assertion is fine; excluding it on a property that does not mean what
+the name suggests is how a gate acquires its next blind spot.
+
+## The control had the same disease
+
+The positive control for FD-2w shrinks one move's hitboxes so it must be
+reported as a whiff. Two versions of it were invalid:
+
+1. It picked `__ordered`'s first blockable single-window move and got
+   `vulkan/risingFang`, which **leaves the ground** — so the new exclusion I had
+   just written removed it, the injected whiff was never reported, and the
+   control passed on a pre-existing failure instead.
+2. Re-targeted at `vulkan/jab`, it shrank the radii to 0.001 and the move **kept
+   connecting**: at point blank the fist is already inside the defender's guard
+   capsule, so a zero-radius point at the same place still overlaps a 0.2 m
+   hurtbox.
+
+Both passed the framework's red/green check while proving nothing, because
+FD-2w was already red for another reason. The injection is now the box's forward
+lead (`fwd = -3`, three metres behind the attacker), and the control names the
+move it broke so the report can be checked by eye rather than by a boolean.
+
+**A control that goes red is not a control that works.** If the assertion it
+targets can be red for any other reason, "it went red" is not evidence — the
+injected defect has to appear, by name, in the output.
+
+This is the third instrument defect this session in the same family: post
+effects assigned to a plain object that only `setEffect` acts on, a critic panel
+reading a frame that predated the change, and now a gate that filters away the
+failures it exists to find. Each was honest about everything except its own
+blind spot.
+
+---
+
+## ROUND 45: temporal AA reverted, and the two things it found are bigger than it was
+
+TAA was built, measured, and **reverted on its own numbers**. Three independent
+verifiers were asked to refute it; two succeeded.
+
+### It won the frozen test and lost the moving one
+
+On the decided metric — RMSE against the 4×-integrated frame over subject pixels —
+against a **frozen** frame it was a genuine win:
+
+```
+arm                     RMSE subj     vs A
+A  before, 0.85           16.6933    0.00%
+   SMAA 0.85 (ships today) 18.1342   +8.63%
+T  TAA 0.85               15.8464   -5.07%     (-12.62% vs shipped SMAA)
+```
+
+Reproduced across three processes, null controls bit-exact. And then a verifier ran
+the same metric on a **moving** frame:
+
+> *"On the project's own metric, on the same scene state and in the same session, the
+> shipped configuration is **56–104% WORSE than shipping no AA at all** whenever the
+> fighters move (77% of subject pixels changing during a launcher) — while reproducing
+> the claimed −5% only when nothing moves. 102,794 additional subject pixels wrong by
+> more than 8/255, 28% of the robot. A torso plate is reduced to directional mush with
+> its panel lines, vent slots and thin pipe geometry erased, and both robots carry a
+> double image."*
+
+**The gate that certified the change only ever ran with the sim frozen.** It was blind
+to the single failure mode temporal accumulation without a velocity buffer actually
+has. The 3×3 neighbourhood clamp is not a substitute for per-object velocity at fight
+speeds, and this is a fighting game.
+
+So: reverted. The patch is kept at `docs/attempts/taa-2026-08-08.patch` because it is
+correct work that fails on one axis, and it becomes viable the day a per-object
+velocity buffer exists — which was deliberately removed once, for reasons recorded in
+`RenderPipeline.js`. The instruments stay: `tools/ssgate.mjs`, `taagate.mjs`,
+`taaghost.mjs`, `movegate.mjs`.
+
+**A frozen-frame gate cannot certify a moving-image change.** Every quality
+measurement this project has taken at fight framing has been taken on a pinned pose.
+
+### The game does not hold 60fps, and never did
+
+The far bigger finding, from the verifier that re-measured rather than trusting:
+
+```
+8 min continuous CPU-vs-CPU fight, 27,678 frames, adaptive resolution OFF
+statistic            median   IQR            P95      >16.67 ms
+raw interval          15.50   10.80-24.90    36.40      43.0%
+pair (2-frame)        15.75   14.00-18.25    30.35      39.4%
+slide-12 (0.2 s)      15.90   14.18-18.32    28.87      40.1%
+```
+
+**p95 is 28.87 ms against a 16.67 ms constraint — 73% over, on the most generous
+statistic. 40% of frames miss budget. Free-running average 57.7 fps.** The quietest
+single 20 s block still measured p95 17.4 ms.
+
+**TAA did not cause this.** The pre-change SMAA chain measures the same or marginally
+worse back-to-back, so reverting does not recover 60fps. The deficit predates the
+change, lives in the base chain at `renderScale 0.85`, and is why the shipped adaptive
+controller drops itself to 0.73–0.77 unprompted.
+
+Every "60fps" claim in this file rests on **medians**. Nobody computed a percentile.
+A median frame time of 15.50 ms and a p95 of 28.87 ms describe the same run, and only
+one of them is what a player feels — 40% of frames late is visible stutter, not a
+rounding error. The constraint in the charter is not met and has not been met.
+
+Caveat kept, not buried: sibling agents held loadavg at 3.4–8.0 during the run and
+corr(load, frame time) = 0.445, so the absolute numbers are pessimistic. The direction
+is not in doubt; the magnitude is.
+
+### A pre-existing determinism gap, found by the verifier that PASSED
+
+Jitter isolation held perfectly — bit-identical sim state across 400 frames and 78
+columns per frame, even at `jitterScale 250`. But building that probe exposed
+something else:
+
+> *`Fighter.reset()` does not reset `Fighter.simTick`, and `Animator.simulate(tick)`
+> uses that absolute tick as its deterministic noise phase; `reset()` also leaves
+> `pulsePhase`, `cmd`, `hitboxPool`, `moveBones` and `CPU._notationHistory` uncleared.
+> Two arms **with TAA off in both** diverged on tick 1 — `p1.state` dash vs walk,
+> `p1.vx` −5.920 vs −2.200.*
+
+**An in-session round reset is not a clean replay start.** `dtgate` DT-3 cannot see it,
+because it builds fresh `Fighter`s and both its runs advance `simTick` identically —
+the gate's own construction hides the case. Frame data is the game, so this is a real
+defect and it is not the renderer's.

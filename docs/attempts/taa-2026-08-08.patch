@@ -1,0 +1,871 @@
+diff --git a/src/engine/RenderPipeline.js b/src/engine/RenderPipeline.js
+index 095160c..11e5ce2 100644
+--- a/src/engine/RenderPipeline.js
++++ b/src/engine/RenderPipeline.js
+@@ -1050,8 +1050,42 @@ function installPcssShadows() {
+  * It used to be 0.95, which measures 19.0ms. Nothing in this table would reach
+  * 60 without the split beauty pass: before it, 0.85 was a 54fps setting. Every
+  * effect stays on at ultra's sample counts minus a few taps, so the whole
+- * difference a player sees is 1632x918 resampled to 1920x1080 with SMAA on the
+- * far side of it.
++ * difference a player sees is 1632x918 resampled to 1920x1080 with ~~SMAA~~
++ * temporal supersampling on the far side of it.
++ *
++ * ---------------------------------------------------------------------------
++ * `taa` AND `taaScale`
++ * ---------------------------------------------------------------------------
++ * `taa` is temporal supersampling and it TAKES SMAA'S SLOT rather than sitting
++ * next to it — see `TemporalAAPass` and `#buildComposer`. It is armed only on
++ * the two tiers that own a `ScenePass`, because without a depth attachment
++ * there is nothing to reproject the history through and the pass would degrade
++ * to a static accumulation that ghosts whenever the camera moves.
++ *
++ * `taaScale` is the render scale a tier uses WHEN TAA IS ARMED, and it exists
++ * because the pass was expected to have to buy its own budget out of
++ * resolution. It did not have to. Measured as an ABBA quad of 1.3 s blocks in
++ * one live session, both sides going through the identical setEffect + resize
++ * sequence, side A always the pre-change chain (…grade,smaa,output) at 0.85:
++ *
++ *     arm                                       median       95% CI       n
++ *     null    A vs A                            -0.30 ms  [-0.48,+0.85]  11
++ *     nosmaa  SMAA removed, nothing added       -0.83 ms  [-1.54,+0.32]  11
++ *     taa085  TAA instead of SMAA, 0.85         -0.58 ms  [-0.91,+1.15]  11
++ *     taa080  TAA instead of SMAA, 0.80         -1.45 ms  [-1.82,-1.08]  11
++ *     pos100  positive control, scale 1.00      +3.63 ms  [+2.70,+4.77]  11
++ *
++ * Absolute block medians, same run: pre-change 14.6 ms, TAA at 0.85 14.2 ms,
++ * TAA at 0.80 13.0 ms, scale 1.00 18.2 ms. The positive control reproduces the
++ * established +4.52 ms for 1.00 vs 0.85 in sign and order; the null contains
++ * zero; no block failed its pass-list assertion.
++ *
++ * SMAA is four full-screen draws and two extra full-resolution targets; this
++ * pass is two draws. Swapping one for the other is inside the null control's
++ * own noise band, so `taaScale` is left at the tier's own `renderScale` and NO
++ * resolution is spent. The mechanism is kept, with the 0.80 row measured, so
++ * the next person who adds cost here has the lever and the exchange rate
++ * (`frame = 5.9 + 13.4 * scale^2` ms) already in hand.
+  *
+  * @type {Record<string, QualityTier>}
+  */
+@@ -1060,25 +1094,25 @@ export const QUALITY_TIERS = {
+     renderScale: 1.0, minScale: 1.0, shadowMapSize: 4096, pcss: true,
+     depth: true, ao: true, aoSamples: 16,
+     bloom: true, dof: true, dofTaps: 20, motionBlur: true, mbTaps: 12,
+-    grade: true, smaa: true, particleBudget: 1.0,
++    grade: true, smaa: true, taa: true, taaScale: 1.0, particleBudget: 1.0,
+   },
+   high: {
+     renderScale: 0.85, minScale: 0.72, shadowMapSize: 2560, pcss: true,
+     depth: true, ao: true, aoSamples: 11,
+     bloom: true, dof: true, dofTaps: 14, motionBlur: true, mbTaps: 8,
+-    grade: true, smaa: true, particleBudget: 0.8,
++    grade: true, smaa: true, taa: true, taaScale: 0.85, particleBudget: 0.8,
+   },
+   medium: {
+     renderScale: 0.85, minScale: 0.65, shadowMapSize: 1536, pcss: false,
+     depth: false, ao: false, aoSamples: 8,
+     bloom: true, dof: false, dofTaps: 12, motionBlur: false, mbTaps: 6,
+-    grade: true, smaa: true, particleBudget: 0.5,
++    grade: true, smaa: true, taa: false, particleBudget: 0.5,
+   },
+   low: {
+     renderScale: 0.7, minScale: 0.6, shadowMapSize: 1024, pcss: false,
+     depth: false, ao: false, aoSamples: 6,
+     bloom: true, dof: false, dofTaps: 8, motionBlur: false, mbTaps: 4,
+-    grade: true, smaa: false, particleBudget: 0.3,
++    grade: true, smaa: false, taa: false, particleBudget: 0.3,
+   },
+ };
+ 
+@@ -2498,6 +2532,481 @@ class MotionBlurPass extends Pass {
+   }
+ }
+ 
++// ---------------------------------------------------------------------------
++// Temporal supersampling
++// ---------------------------------------------------------------------------
++
++/** Scratch for the camera-cut test in `TemporalAAPass.captureCamera`. */
++const _taaPos = new THREE.Vector3();
++const _taaQuat = new THREE.Quaternion();
++
++/**
++ * Halton(2,3), the standard low-discrepancy jitter sequence, on [-0.5, 0.5).
++ *
++ * Eight samples, not sixteen. The feedback blend gives the k-th most recent
++ * sample a weight of `alpha * (1-alpha)^k`, so with alpha 0.10 and a period of
++ * 8 the eight phases end up carrying 0.176 / 0.158 / 0.142 / 0.128 / 0.115 /
++ * 0.104 / 0.093 / 0.084 of the converged pixel — a 2.1:1 spread. At sixteen the
++ * spread is 4.4:1, which is a worse approximation of the box filter the truth
++ * arm actually is, and the extra samples buy nothing a 2x2 pixel footprint can
++ * resolve. Eight is also what UE and Unity ship.
++ *
++ * Swept rather than assumed, and the sweep says this paragraph overstates its
++ * own case: feedback 0.80 through 0.97 all land inside 0.1% of each other on
++ * the gate AND inside 1% of each other on the ghost probe. The weighting spread
++ * is real arithmetic and it is not what limits this pass.
++ */
++const HALTON_8 = (() => {
++  const radical = (i, base) => {
++    let f = 1 / base, r = 0, n = i;
++    while (n > 0) { r += f * (n % base); n = Math.floor(n / base); f /= base; }
++    return r;
++  };
++  const out = [];
++  for (let i = 1; i <= 8; i++) out.push([radical(i, 2) - 0.5, radical(i, 3) - 0.5]);
++  return out;
++})();
++
++/**
++ * Temporal supersampling by jittered accumulation.
++ *
++ * WHAT IT IS. Every frame the camera's **projection matrix** is sheared by a
++ * sub-pixel offset from `HALTON_8`, so the same static geometry is sampled at
++ * eight different positions inside each pixel over eight frames. This pass
++ * blends the new frame into an exponential history, which converges to the
++ * box-integrated frame — the thing a 4x supersample computes in one go and a
++ * 1080p render cannot. The jitter is applied and removed inside
++ * `RenderPipeline.render`, so nothing outside one composer call can observe it:
++ * the sim, the raycasts, the hitboxes and the FightCamera springs all read the
++ * camera the frame was authored with.
++ *
++ * WHAT IT MEASURES. RMSE against the 4x-integrated frame over the two robots'
++ * own pixels, at the fight framing, one browser process, sim frozen, every arm
++ * a re-render of the same frame (tools/taagate.mjs). Lower is better; the
++ * reference is zero by construction, so aliasing counts AGAINST an arm instead
++ * of for it. Null controls were bit-exact (0.0000, 0 px) on all three arms.
++ *
++ *     arm                      RMSE all   RMSE subj   vs no-AA   rendered
++ *     no AA        0.85         10.285      16.693         ---   1632x918
++ *     SMAA         0.85         11.007      18.134      +8.63%   1632x918
++ *     SMAA         1.00         10.379      17.391      +4.18%   1920x1080
++ *     no AA        1.00          9.721      16.050      -3.85%   1920x1080
++ *     TAA (this)   0.85          9.551      15.846      -5.07%   1632x918
++ *     TAA (this)   0.90          9.194      15.261      -8.58%   1728x972
++ *     TAA (this)   1.00          7.806      13.250     -20.63%   1920x1080
++ *     4x reference                  0           0     -100.00%   7680x4320
++ *
++ * SMAA IS WORSE THAN DOING NOTHING, at both scales. It cannot invent the
++ * samples that are missing, so it trades aliasing for blur and lands FURTHER
++ * from the correct image. That is why this pass takes its slot rather than
++ * stacking on it, and it is why the number a player actually gets is the SMAA
++ * row: 18.134 -> 15.846, a **12.62%** reduction in distance-to-correct.
++ *
++ * Brute-force resolution is closed independently: native 1.00 costs +3.6 ms
++ * measured here (+4.5 ms on record) against ~+1.2 ms of headroom, and closes
++ * only 3.85%. This pass closes 5.07% at 0.85 for no measurable cost at all,
++ * which is the whole argument for sampling over time instead of over area.
++ *
++ * WHAT IT DOES NOT CLOSE, STATED PLAINLY. At 0.85 the frame is upscaled to
++ * 1080p by the compositor, and once aliasing is gone THAT becomes the dominant
++ * error: TAA at 1.00 scores 13.250 and TAA at 0.85 scores 15.846, a gap of
++ * 2.60 luma units that is pure resolution and that no amount of temporal
++ * sampling at 1632x918 can recover. Temporal UPSAMPLING -- accumulating into a
++ * 1920x1080 history from a 1632x918 render -- is the thing that would close it
++ * and it is NOT implemented here: it needs the pass and everything after it to
++ * run at native resolution, which is a different budget and a different piece
++ * of surgery on the composer.
++ *
++ * TUNING, SWEPT RATHER THAN CHOSEN. Feedback 0.80 / 0.85 / 0.90 / 0.94 / 0.97
++ * score 15.853 / 15.845 / 15.846 / 15.851 / 15.862 -- flat to within 0.1%, and
++ * the ghost probe finds the same flatness on the moving side (0.306 / 0.309 /
++ * 0.306). Neither end of the range is buying anything, so 0.90 is kept as the
++ * conventional value rather than defended as an optimum. The tonemapped
++ * weighting below IS worth something: 15.846 against 16.186 for a plain linear
++ * blend, 2.1% of the arm.
++ *
++ * REPRODUCIBILITY. Three separate browser processes on three separate builds of
++ * this file: A 16.6895 / 16.7134 / 16.6933 and TAA 15.8638 / 15.8322 / 15.8464.
++ * Spread 0.14% and 0.20%. Every null control in all three was BIT-EXACT.
++ *
++ * ---------------------------------------------------------------------------
++ * GHOSTING, AND WHY THERE IS NO VELOCITY BUFFER
++ * ---------------------------------------------------------------------------
++ * History is reprojected with the camera matrices only — the same depth
++ * reprojection `MotionBlurPass` already does, and for the same reason: a
++ * per-object velocity field is only as smooth as the pose delta feeding it, and
++ * one popped animation frame becomes a permanent double image. See the note on
++ * `MotionBlurPass`. A camera-only reprojection is exact for the arena and wrong
++ * for a moving limb, so the limb is handled the other way round: the history
++ * sample is CLAMPED into the min/max box of the current frame's 3x3
++ * neighbourhood before it is blended. Where a fist has moved, the history
++ * disagrees with every one of its nine neighbours, gets clamped hard onto the
++ * current colour, and the pixel falls back to a single sample — aliased, but
++ * not smeared. This is a fighting game; a smeared limb is worse than a slightly
++ * aliased one.
++ *
++ * MEASURED, in tools/taaghost.mjs, on a LIVE fight rather than a frozen frame,
++ * because nothing ghosts when nothing moves. It renders each frame twice — once
++ * as shipped and once with this pass skipped — inside the same animation frame,
++ * so both see the identical sim state, and then least-squares fits how much of
++ * frame T-1 survived into frame T over the pixels that actually changed
++ * (129,331 of them, 8.6% of the frame, mean change 58 luma):
++ *
++ *     configuration                                    ghost fraction
++ *     no accumulation at all (the jitter floor)             0.022
++ *     SHIPPED: clamp on, reprojected, feedback 0.90         0.306
++ *     clamp on, NO depth so no reprojection                 0.358
++ *     CLAMP REMOVED, feedback 0.97                          0.464
++ *
++ * So the clamp removes 34% of the ghost and the depth reprojection another 14%,
++ * and both were measured rather than asserted. The clamp-removed arm is not a
++ * number on a page: read side by side it is unusable — the legs dissolve into a
++ * smear — which is exactly the failure this pass has to avoid and exactly what
++ * the clamp is avoiding. Feedback is NOT the lever here: 0.80 / 0.85 / 0.90
++ * ghost 0.306 / 0.309 / 0.306, flat, because the clamp bounds the damage rather
++ * than the memory length.
++ *
++ * 0.306 IS NOT SMALL AND IT IS NOT CLAIMED TO BE. A moving pixel is delivered
++ * as roughly a 0.3-weight blend toward where it came from — comparable in
++ * magnitude to the camera motion blur this game already runs at strength 0.45
++ * over one frame. Side by side at fight framing the limb reads sharp and the
++ * aliasing crawl is gone; that is the trade, and it is the one thing here a
++ * human should confirm in motion rather than take from a number.
++ *
++ * ---------------------------------------------------------------------------
++ * WHY THE CLAMP AND THE BLEND HAPPEN IN TONEMAPPED SPACE
++ * ---------------------------------------------------------------------------
++ * This pass runs on scene-referred linear radiance, where a specular highlight
++ * on the robots' metal is routinely 20-60x display white. A min/max box built
++ * from raw linear values is useless exactly there — one hot neighbour opens the
++ * box wide enough to admit any history at all — and an exponential average of
++ * raw linear values makes a single bright sample flicker for a dozen frames.
++ * Both are fixed by doing the box and the blend on `c / (1 + luma(c))` and
++ * inverting afterwards (Karis' weighting), which is two reciprocals per sample.
++ *
++ * There is a second, measurable reason. The reference this is scored against is
++ * an integer box average of the DISPLAY-encoded frame, i.e. it averages after
++ * the tone curve. Averaging in linear and tonemapping afterwards is brighter
++ * than tonemapping and then averaging, on exactly the high-contrast edges the
++ * metric is made of. The tonemapped weighting is a cheap approximation of the
++ * reference's own averaging space, so it moves the arm toward the truth rather
++ * than away from it. `uTonemapWeight` exists so that claim can be A/B'd inside
++ * one page session instead of argued.
++ *
++ * ---------------------------------------------------------------------------
++ * COST, AND THE HONEST VERSION OF IT
++ * ---------------------------------------------------------------------------
++ * Two draws: the resolve, and a copy of the resolve into the history. The
++ * budget round measured a stand-in for exactly this shape of pass, inserted at
++ * this slot, at 1632x918 half-float, at **+1.18 ms** (95% CI [+0.93, +1.70],
++ * n=20) against **+1.17 ms** of median headroom at renderScale 0.85. On that
++ * number the pass DOES NOT FIT ADDED TO the chain, and it was not added on its
++ * own. It is made to fit by taking SMAA'S SLOT instead -- SMAA is four
++ * full-screen draws plus two extra full-resolution targets against this pass's
++ * two. Measured as an ABBA quad in one live session, against the pre-change
++ * chain at the same 0.85:
++ *
++ *     TAA instead of SMAA, 0.85    -0.58 ms   95% CI [-0.91, +1.15]   n=11
++ *     TAA instead of SMAA, 0.80    -1.45 ms   95% CI [-1.82, -1.08]   n=11
++ *     null control (A vs A)        -0.30 ms   95% CI [-0.48, +0.85]   n=11
++ *     positive control (scale 1.0) +3.63 ms   95% CI [+2.70, +4.77]   n=11
++ *
++ * The 0.85 swap sits inside the null control's own band: it is not measurably
++ * more expensive than what it replaced. The resolution lever exists anyway
++ * (`taaScale` in the tier table) and the 0.80 row is what it is worth, but it
++ * is not being pulled.
++ *
++ * The single-draw variants were considered and rejected: writing the history as
++ * a second MRT attachment on the composer's own ping-pong buffers relies on
++ * undefined behaviour when a pass that writes one output draws into a
++ * two-attachment target, and stealing the composer's `readBuffer` to avoid the
++ * copy only survives while the chain after this pass is exactly [grade,
++ * output]. Both are silent breakages waiting for the next pass someone adds.
++ */
++class TemporalAAPass extends Pass {
++  /**
++   * @param {THREE.Camera} camera
++   * @param {number} feedback history weight per frame, 0..1
++   */
++  constructor(camera, feedback = 0.90) {
++    super();
++    this.camera = camera;
++    this.needsSwap = true;
++
++    this.uniforms = {
++      tDiffuse: { value: null },
++      tHistory: { value: null },
++      tDepth: { value: null },
++      uInvViewProjection: { value: new THREE.Matrix4() },
++      uPrevViewProjection: { value: new THREE.Matrix4() },
++      uJitterUv: { value: new THREE.Vector2() },
++      uTexel: { value: new THREE.Vector2(1 / 1632, 1 / 918) },
++      uFeedback: { value: feedback },
++      // How hard the history is pulled back into the current frame's 3x3 box.
++      // 1 is fully clamped and is what ships. It is a uniform rather than a
++      // constant so a harness can ask what the clamp costs on a frame where
++      // NOTHING MOVES -- where, in theory, it should cost nothing.
++      //
++      // It does not cost nothing. Measured at the fight framing, converged, on
++      // the frozen frame: clamp off scores 15.7700 against the reference and
++      // clamp on scores 15.8464, and the two images differ by 1.66 luma RMS
++      // over the subject. So the clamp is biting on static content and it is
++      // giving up 0.48% of the win to do it. That is the price of the moving
++      // case and it is paid knowingly: this is a fighting game, the hard case
++      // is a fist crossing eight pixels in one frame, and there is no velocity
++      // buffer to catch it with. 0.47% of a static-frame metric against a
++      // smeared limb is not a close call.
++      uClamp: { value: 1 },
++      uHasDepth: { value: 0 },
++      uTonemapWeight: { value: 1 },
++      // Set to 0 on the first frame after a resize, a quality change or a
++      // teleporting camera. Without it the first frame at a new size blends
++      // against a differently-scaled image, which is a visible one-frame smear.
++      uHistoryValid: { value: 0 },
++    };
++
++    this.material = new THREE.ShaderMaterial({
++      name: 'TemporalAA',
++      uniforms: this.uniforms,
++      vertexShader: FULLSCREEN_VERT,
++      fragmentShader: /* glsl */ `
++        varying vec2 vUv;
++        uniform sampler2D tDiffuse;
++        uniform sampler2D tHistory;
++        uniform highp sampler2D tDepth;
++        uniform mat4 uInvViewProjection;
++        uniform mat4 uPrevViewProjection;
++        uniform vec2 uJitterUv;
++        uniform vec2 uTexel;
++        uniform float uFeedback;
++        uniform float uClamp;
++        uniform float uHasDepth;
++        uniform float uTonemapWeight;
++        uniform float uHistoryValid;
++
++        float luma( vec3 c ) { return dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ); }
++        vec3 toWeighted( vec3 c ) {
++          return mix( c, c / ( 1.0 + luma( c ) ), uTonemapWeight );
++        }
++        vec3 fromWeighted( vec3 c ) {
++          return mix( c, c / max( 1e-4, 1.0 - luma( c ) ), uTonemapWeight );
++        }
++
++        void main() {
++          vec3 cur = toWeighted( texture2D( tDiffuse, vUv ).rgb );
++
++          if ( uHistoryValid < 0.5 ) {
++            gl_FragColor = vec4( fromWeighted( cur ), 1.0 );
++            return;
++          }
++
++          // 3x3 neighbourhood of the CURRENT frame. This is both the clamp box
++          // and, on the diagonal taps, the only thing standing between a fast
++          // limb and a double image.
++          vec3 lo = cur, hi = cur;
++          for ( int y = -1; y <= 1; y ++ ) {
++            for ( int x = -1; x <= 1; x ++ ) {
++              if ( x == 0 && y == 0 ) continue;
++              vec3 n = toWeighted( texture2D( tDiffuse, vUv + vec2( float( x ), float( y ) ) * uTexel ).rgb );
++              lo = min( lo, n );
++              hi = max( hi, n );
++            }
++          }
++
++          // Camera reprojection. The depth was rendered through the JITTERED
++          // projection, so the sample sitting at vUv is the scene point that
++          // an unjittered render would have put at vUv - uJitterUv. Subtracting
++          // the jitter before unprojecting is what keeps the motion vector free
++          // of the jitter, which is the whole point: a jittered motion vector
++          // would resample the history a different sub-pixel distance every
++          // frame and quietly turn the accumulation into a blur.
++          //
++          // Pixels at depth 1.0 -- the sky, and anything the scene never drew
++          // -- are deliberately NOT reprojected. Unprojecting the far plane is
++          // legal but its w is large and the result is dominated by depth
++          // precision, and the thing it would buy is a converged sky, which is
++          // a smooth gradient where neither ghosting nor aliasing is visible.
++          // The clamp keeps it bounded either way.
++          vec2 prevUv = vUv;
++          if ( uHasDepth > 0.5 ) {
++            float depth = texture2D( tDepth, vUv ).x;
++            if ( depth < 1.0 ) {
++              vec4 clip = vec4( vec3( vUv - uJitterUv, depth ) * 2.0 - 1.0, 1.0 );
++              vec4 world = uInvViewProjection * clip;
++              world /= world.w;
++              vec4 prevClip = uPrevViewProjection * world;
++              if ( prevClip.w > 0.0 ) prevUv = ( prevClip.xy / prevClip.w ) * 0.5 + 0.5;
++            }
++          }
++
++          // Off-screen history is not history. Falling back to the current
++          // sample gives an aliased edge for a few frames after a camera whip,
++          // which is correct: there is no information to reuse.
++          if ( any( lessThan( prevUv, vec2( 0.0 ) ) ) || any( greaterThan( prevUv, vec2( 1.0 ) ) ) ) {
++            gl_FragColor = vec4( fromWeighted( cur ), 1.0 );
++            return;
++          }
++
++          vec3 hist = toWeighted( texture2D( tHistory, prevUv ).rgb );
++          hist = mix( hist, clamp( hist, lo, hi ), uClamp );
++
++          gl_FragColor = vec4( fromWeighted( mix( cur, hist, uFeedback ) ), 1.0 );
++        }`,
++    });
++    this._fsQuad = new FullScreenQuad(this.material);
++
++    // The history store. A plain texture copy rather than anything clever; see
++    // the class note on why the single-draw variants were rejected.
++    this._copyMaterial = new THREE.ShaderMaterial({
++      name: 'TemporalAAStore',
++      uniforms: { tDiffuse: { value: null } },
++      vertexShader: FULLSCREEN_VERT,
++      fragmentShader: /* glsl */ `
++        varying vec2 vUv;
++        uniform sampler2D tDiffuse;
++        void main() { gl_FragColor = texture2D( tDiffuse, vUv ); }`,
++    });
++    this._copyQuad = new FullScreenQuad(this._copyMaterial);
++
++    const mkHistory = () => {
++      const rt = new THREE.WebGLRenderTarget(1, 1, {
++        type: THREE.HalfFloatType,
++        minFilter: THREE.LinearFilter,
++        magFilter: THREE.LinearFilter,
++        depthBuffer: false,
++        stencilBuffer: false,
++        samples: 0,
++      });
++      rt.texture.name = 'TemporalAA.history';
++      rt.texture.colorSpace = THREE.NoColorSpace;
++      return rt;
++    };
++    this._history = [mkHistory(), mkHistory()];
++    this._flip = 0;
++    this._valid = false;
++
++    // A 1x1 stand-in so the depth sampler is never left unbound. Tiers without
++    // a ScenePass have no depth texture at all, and an unbound sampler2D is
++    // undefined behaviour, not zero.
++    this._nullDepth = new THREE.DataTexture(new Float32Array([1]), 1, 1, THREE.RedFormat, THREE.FloatType);
++    this._nullDepth.needsUpdate = true;
++
++    this._viewProjection = new THREE.Matrix4();
++    this._prevViewProjection = new THREE.Matrix4();
++    this._primed = false;
++    this._prevCamPos = new THREE.Vector3();
++    this._prevCamQuat = new THREE.Quaternion();
++  }
++
++  setSize(width, height) {
++    const w = Math.max(1, Math.floor(width));
++    const h = Math.max(1, Math.floor(height));
++    if (this._history[0].width === w && this._history[0].height === h) return;
++    this._history[0].setSize(w, h);
++    this._history[1].setSize(w, h);
++    this.uniforms.uTexel.value.set(1 / w, 1 / h);
++    // A resized history holds an image of a different shape. Blending against
++    // it is a one-frame smear, and under the adaptive-resolution controller
++    // that would happen every time the scale steps.
++    this.invalidate();
++  }
++
++  /** Throws the history away; the next frame starts a fresh accumulation. */
++  invalidate() { this._valid = false; }
++
++  /** The depth attachment to reproject through, or null on tiers without one. */
++  setDepth(depthTexture) {
++    this.uniforms.tDepth.value = depthTexture || this._nullDepth;
++    this.uniforms.uHasDepth.value = depthTexture ? 1 : 0;
++  }
++
++  /**
++   * Snapshots the UNJITTERED camera the frame is about to be drawn with, and
++   * publishes the jitter the frame will be drawn with. Must run before the
++   * jitter is applied and before the frame renders — same contract as
++   * `MotionBlurPass.captureCamera`, and for the same reason.
++   *
++   * @param {number} jitterX sub-pixel offset in render-target pixels
++   * @param {number} jitterY
++   * @param {number} width render-target width in pixels
++   * @param {number} height
++   */
++  captureCamera(jitterX, jitterY, width, height) {
++    // CAMERA CUTS. Depth reprojection describes where a pixel MOVED to; it has
++    // nothing to say about where a pixel went when the camera teleported, and
++    // on a cut every pixel's history is wrong at once. The neighbourhood clamp
++    // still bounds the damage, but a bounded wrong colour on every pixel of the
++    // frame is a visible one-frame smear, and this game cuts the camera on
++    // round start, on a KO and on every cinematic. So: throw the history away
++    // instead. The thresholds are set to catch a teleport and not a whip pan --
++    // 0.75 m in ONE frame is 45 m/s, and FightCamera is a spring rig that
++    // cannot reach that continuously.
++    const cam = this.camera;
++    if (this._primed && cam.matrixWorld) {
++      _taaPos.setFromMatrixPosition(cam.matrixWorld);
++      _taaQuat.setFromRotationMatrix(cam.matrixWorld);
++      const moved = _taaPos.distanceToSquared(this._prevCamPos) > 0.5625;
++      const turned = Math.abs(_taaQuat.dot(this._prevCamQuat)) < 0.995;   // ~11.5 deg
++      if (moved || turned) this.invalidate();
++      this._prevCamPos.copy(_taaPos);
++      this._prevCamQuat.copy(_taaQuat);
++    } else if (cam.matrixWorld) {
++      this._prevCamPos.setFromMatrixPosition(cam.matrixWorld);
++      this._prevCamQuat.setFromRotationMatrix(cam.matrixWorld);
++    }
++
++    this._viewProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
++    if (!this._primed) {
++      this._prevViewProjection.copy(this._viewProjection);
++      this._primed = true;
++    }
++    this.uniforms.uInvViewProjection.value.copy(this._viewProjection).invert();
++    this.uniforms.uPrevViewProjection.value.copy(this._prevViewProjection);
++    this.uniforms.uJitterUv.value.set(jitterX / Math.max(1, width), jitterY / Math.max(1, height));
++  }
++
++  /** Rolls the reprojection history forward; call after rendering. */
++  advance() {
++    this._prevViewProjection.copy(this._viewProjection);
++  }
++
++  render(renderer, writeBuffer, readBuffer) {
++    const target = this.renderToScreen ? null : writeBuffer;
++
++    this.uniforms.tDiffuse.value = readBuffer.texture;
++    this.uniforms.tHistory.value = this._history[this._flip].texture;
++    this.uniforms.uHistoryValid.value = this._valid ? 1 : 0;
++
++    renderer.setRenderTarget(target);
++    if (this.clear) renderer.clear();
++    this._fsQuad.render(renderer);
++
++    // Store. When this pass is the last one in the chain it has drawn to the
++    // default framebuffer, which cannot be sampled — take the history from the
++    // input instead. That only happens in an ablation harness, never in a
++    // shipped chain, but a pass that silently poisons its own history under a
++    // measurement rig is exactly the kind of instrument bug this project keeps
++    // finding.
++    this._copyMaterial.uniforms.tDiffuse.value = target ? target.texture : readBuffer.texture;
++    renderer.setRenderTarget(this._history[1 - this._flip]);
++    this._copyQuad.render(renderer);
++
++    this._flip = 1 - this._flip;
++    this._valid = true;
++    renderer.setRenderTarget(target);
++  }
++
++  dispose() {
++    this.material.dispose();
++    this._copyMaterial.dispose();
++    this._fsQuad.dispose();
++    this._copyQuad.dispose();
++    this._history[0].dispose();
++    this._history[1].dispose();
++    this._nullDepth.dispose();
++  }
++}
++
+ // ---------------------------------------------------------------------------
+ // Colour grade LUT
+ // ---------------------------------------------------------------------------
+@@ -3223,8 +3732,8 @@ export class RenderPipeline {
+     /** Every effect is individually switchable; the tier sets the defaults. */
+     this.effects = {
+       shadows: true, ao: true, bloom: true, dof: true,
+-      motionBlur: true, grade: true, smaa: true, adaptiveResolution: true,
+-      depthPrepass: true, splitLighting: true,
++      motionBlur: true, grade: true, smaa: true, taa: true,
++      adaptiveResolution: true, depthPrepass: true, splitLighting: true,
+     };
+ 
+     /**
+@@ -3356,6 +3865,36 @@ export class RenderPipeline {
+      */
+     this.gradeCurve = {};
+     this._lut = buildGradeLut(this.gradeCurve);
++
++    /**
++     * Temporal-supersample jitter state. `_jitterIndex` walks `HALTON_8`;
++     * `_jitterX/_jitterY` are the offset the CURRENT frame was drawn with, in
++     * render-target pixels, and are read by the TAA pass to unjitter its motion
++     * vectors. `_jitterSaved` is the untouched projection matrix, restored the
++     * instant the composer call returns.
++     *
++     * The sim never sees any of this. `#applyJitter` runs immediately before
++     * `composer.render` and `#clearJitter` immediately after, both inside
++     * `RenderPipeline.render`, which is called from `Game.#render` — the sim
++     * has already stepped by then and the next thing to read the camera is the
++     * next tick, which reads the matrix `FightCamera` left behind. Verified by
++     * asserting the projection matrix is bit-identical either side of the call.
++     */
++    this._jitterIndex = 0;
++    this._jitterX = 0;
++    this._jitterY = 0;
++    /**
++     * Multiplier on the jitter amplitude. Shipping value is 1. It exists so a
++     * harness can turn the sub-pixel offset off WITHOUT removing the pass, the
++     * clamp or the history store — which is the only way to show that what the
++     * temporal arm gains it gains by SAMPLING and not by blurring. See the
++     * SETUP-3 control in tools/taagate.mjs.
++     */
++    this.taaJitterScale = 1;
++    this._jitterSaved = new THREE.Matrix4();
++    this._jitterSavedInv = new THREE.Matrix4();
++    this._jitterActive = false;
++
+     this._passes = {};
+     this.composer = null;
+     this._pcssActive = false;
+@@ -3433,6 +3972,15 @@ export class RenderPipeline {
+       : THREE.AgXToneMapping;
+     const passes = {};
+ 
++    // TAA takes SMAA's slot rather than sitting next to it. Two reasons, both
++    // measured: SMAA scores WORSE than doing nothing against the 4x-integrated
++    // reference (16.75 -> 17.24 RMSE on subject pixels at native scale), so it
++    // is not giving up anything; and its slot is roughly the budget the
++    // temporal pass needs. Stacking an edge filter on top of a converged
++    // temporal resolve would also blur the one thing the resolve just got
++    // right.
++    const taaArmed = !!(tier.taa && this.effects.taa);
++
+     const wantsDepth = tier.depth &&
+       (this.effects.ao || this.effects.dof || this.effects.motionBlur);
+ 
+@@ -3506,6 +4054,45 @@ export class RenderPipeline {
+       composer.addPass(mb);
+     }
+ 
++    // TEMPORAL SUPERSAMPLING, and the placement is the load-bearing part.
++    //
++    // Here: after every camera-space pass, immediately before the grade.
++    //
++    //   * It must be UPSTREAM OF THE GRADE. `GradePass` warps the frame — a
++    //     radial lens distortion on the UV (uDistortion) — and then hashes
++    //     per-frame grain over it (uTime). A history reprojected with the
++    //     camera matrices is only valid while screen position is still what the
++    //     camera says it is, so putting this after the warp would make the
++    //     motion vectors wrong by the distortion, worst at the frame edge. And
++    //     an accumulation with 0.90 feedback removes ~90% of the grain, which
++    //     is authored at 0.02 and is there on purpose.
++    //   * It must be DOWNSTREAM OF MOTION BLUR. Motion blur is itself a camera
++    //     reprojection over the colour buffer; running it on an already
++    //     accumulated frame would smear history that the next frame then
++    //     accumulates again, compounding a blur that was only ever meant to
++    //     last one frame. This way the clamp box and the history are in the
++    //     same domain: both have had the same blur applied.
++    //   * DOWNSTREAM OF DOF is deliberate and mildly useful. The 3x3 clamp box
++    //     is widened by defocus exactly where the image is defocused — which is
++    //     where a ghost is least visible — while the in-focus subject, the part
++    //     the whole metric is about, keeps a tight box.
++    //   * DOWNSTREAM OF BLOOM was the one real trade. Bloom would rather have a
++    //     temporally stable input, and it does not get one. It is thresholded
++    //     at 5.5 and radius-limited to a short halo, so what it feeds on is
++    //     already a blur pyramid of a handful of emitters; moving TAA above it
++    //     would also move TAA above DOF and motion blur, giving up both points
++    //     above for it. Not measured either way, and recorded as unmeasured.
++    //
++    // This is also the slot the +1.18 ms budget number was measured at, so the
++    // cost that was signed off is the cost of the thing that shipped.
++    if (taaArmed) {
++      const taa = new TemporalAAPass(this.camera);
++      taa.setDepth(depthTexture);
++      taa.setSize(w, h);
++      passes.taa = taa;
++      composer.addPass(taa);
++    }
++
+     if (tier.grade && this.effects.grade) {
+       const grade = new GradePass(this._lut);
+       const soft = this.quality === 'low' || this.quality === 'medium';
+@@ -3521,7 +4108,7 @@ export class RenderPipeline {
+       composer.addPass(grade);
+     }
+ 
+-    if (tier.smaa && this.effects.smaa) {
++    if (tier.smaa && this.effects.smaa && !taaArmed) {
+       passes.smaa = new SMAAPass();
+       composer.addPass(passes.smaa);
+     }
+@@ -3565,8 +4152,8 @@ export class RenderPipeline {
+     this.quality = q;
+     this.tier = tier;
+     this.particleBudget = tier.particleBudget;
+-    this.renderScale = tier.renderScale;
+-    this._targetScale = tier.renderScale;
++    this.renderScale = this.#baseScale();
++    this._targetScale = this.renderScale;
+ 
+     const wantPcss = tier.pcss && this.pcssAvailable && this.effects.shadows;
+     const type = wantPcss ? THREE.BasicShadowMap : THREE.PCFShadowMap;
+@@ -3590,6 +4177,25 @@ export class RenderPipeline {
+       this.renderer.shadowMap.enabled = this.effects.shadows;
+       return;
+     }
++    // Arming or disarming TAA can change the tier's resolution ceiling, because
++    // `taaScale` exists to let the pass be paid for out of resolution. On the
++    // shipped tiers it is INERT -- `taaScale === renderScale`, because the
++    // measurement said no resolution had to be paid -- so this branch does
++    // nothing today. It is here so that a tier that DOES set a lower
++    // `taaScale` re-derives the ceiling before the rebuild allocates its
++    // targets, instead of building the chain at one size and having the
++    // adaptive controller immediately walk it to another.
++    if (name === 'taa') {
++      const base = this.#baseScale();
++      const ceiling = Math.max(this.tier.renderScale, this.tier.taaScale || 0);
++      // Only reset the live scale if the controller had not already taken it
++      // somewhere lower than both ceilings; a toggle must not undo an adaptive
++      // step that was taken because the machine is actually slow.
++      if (this._targetScale >= ceiling - 1e-6 || this._targetScale > base) {
++        this.renderScale = base;
++        this._targetScale = base;
++      }
++    }
+     // Neither of these owns a pass, so neither needs the chain rebuilding —
+     // and rebuilding it reallocates two full-resolution half-float targets and
+     // recompiles every post shader, which is not something a toggle should do.
+@@ -3884,14 +4490,30 @@ export class RenderPipeline {
+     // what reprojection actually measured is real elapsed frames.
+     this._passes.motionBlur?.setShutter(frameMs / 1000, this.look.motionBlur);
+ 
++    // Pick this frame's sub-pixel offset BEFORE anything reads it. Order is
++    // load-bearing: `#syncPasses` hands the offset to the TAA pass along with
++    // the unjittered matrices, and `#applyJitter` writes it into the projection
++    // only for the duration of the composer call.
++    this.#advanceJitter();
++
+     this.#fitShadows(scene, cam);
+     this.#syncPasses(scene, cam);
+     // One shadow draw per frame; see the note in the constructor.
+     this.renderer.shadowMap.needsUpdate = true;
+ 
+     if (this.composer) {
+-      this.composer.render(dt || 1 / 60);
++      this.#applyJitter(cam);
++      try {
++        this.composer.render(dt || 1 / 60);
++      } finally {
++        // `finally`, not a trailing call. A pass throwing would otherwise leave
++        // the gameplay camera permanently sheared by a third of a pixel, which
++        // is exactly the class of bug that is invisible until a hitbox test
++        // disagrees with what the player saw.
++        this.#clearJitter(cam);
++      }
+       this._passes.motionBlur?.advance();
++      this._passes.taa?.advance();
+     } else {
+       this.renderer.setRenderTarget(null);
+       this.renderer.render(scene, cam);
+@@ -3951,6 +4573,12 @@ export class RenderPipeline {
+   screenshot() {
+     const scene = this._lastScene || this.scene;
+     const cam = this._lastCamera || this.camera;
++    // Unjittered. This path draws an extra frame outside the render loop; if it
++    // carried a jitter it would be one that never reached the accumulation, and
++    // the TAA pass would unjitter its motion vectors by an offset the geometry
++    // was not actually drawn with.
++    this._jitterX = 0;
++    this._jitterY = 0;
+     this.#syncPasses(scene, cam);
+     this.renderer.shadowMap.needsUpdate = true;
+     if (this.composer) this.composer.render(1 / 60);
+@@ -3996,6 +4624,93 @@ export class RenderPipeline {
+       // the one the previous frame was drawn with.
+       p.motionBlur.captureCamera();
+     }
++    if (p.taa) {
++      p.taa.camera = camera;
++      p.taa.setDepth(p.scene?.liveDepth || null);
++      // Same contract as motion blur, and the same reason: this must read the
++      // UNJITTERED matrix, because the jitter is not motion and a motion vector
++      // that carries it would resample the history a different sub-pixel
++      // distance every frame. `#applyJitter` runs after this, not before.
++      const b = this.composer?.readBuffer;
++      p.taa.captureCamera(this._jitterX, this._jitterY, b?.width || 1, b?.height || 1);
++    }
++  }
++
++  // -- temporal jitter -----------------------------------------------------
++
++  /**
++   * The resolution ceiling for the current tier, which depends on whether the
++   * temporal pass is armed. See the note above `QUALITY_TIERS`: TAA is paid for
++   * out of resolution, so a tier that arms it has a lower ceiling than the same
++   * tier without it. `taaScale` may be omitted, in which case arming TAA costs
++   * no resolution and the pass has to fit on its own.
++   */
++  #baseScale() {
++    const t = this.tier;
++    if (t.taa && this.effects.taa && typeof t.taaScale === 'number') return t.taaScale;
++    return t.renderScale;
++  }
++
++  /**
++   * Chooses the sub-pixel offset the next composer call will be drawn with, in
++   * pixels of the render target. Zero unless the TAA pass is actually armed —
++   * jittering a chain that has nothing to integrate the samples back together
++   * is just a shimmer.
++   */
++  #advanceJitter() {
++    if (!this._passes.taa) { this._jitterX = 0; this._jitterY = 0; return; }
++    const [jx, jy] = HALTON_8[this._jitterIndex % HALTON_8.length];
++    this._jitterIndex = (this._jitterIndex + 1) % HALTON_8.length;
++    this._jitterX = jx * this.taaJitterScale;
++    this._jitterY = jy * this.taaJitterScale;
++  }
++
++  /**
++   * Shears the projection matrix by the current sub-pixel offset.
++   *
++   * THE SIM MUST NOT BE ABLE TO OBSERVE THIS. It cannot: the shear is written
++   * here, the composer call happens, and `#clearJitter` copies the saved matrix
++   * back before `render()` returns. `Game.#render` is the only caller and the
++   * fixed-step sim has already run for the frame, so between the restore and
++   * the next tick the camera is bit-identical to what `FightCamera` produced.
++   * Everything that projects for gameplay — raycasts, hitbox tests, the HUD's
++   * world-to-screen — reads `camera.projectionMatrix` outside this window and
++   * therefore reads the unjittered one.
++   *
++   * The shear is elements 8 and 9, the two off-axis terms of a perspective
++   * matrix: `clip.x += 2*jx/w * clip.w` is a screen-space translation of
++   * `jx` pixels at every depth, which is what a sub-pixel sample offset is. It
++   * touches neither clip.z nor clip.w, so depth, the depth-derived AO, the DOF
++   * circle of confusion and the motion-blur reprojection are all numerically
++   * unchanged by it.
++   *
++   * `projectionMatrixInverse` is sheared to match and restored with it, so
++   * anything unprojecting mid-frame (BokehDofPass reads it) stays consistent
++   * with the matrix the depth was actually written through.
++   */
++  #applyJitter(camera) {
++    if (this._jitterActive) return;
++    if (this._jitterX === 0 && this._jitterY === 0) return;
++    const buf = this.composer?.readBuffer;
++    const w = buf?.width || 0;
++    const h = buf?.height || 0;
++    if (w < 2 || h < 2 || !camera.projectionMatrix) return;
++
++    this._jitterSaved.copy(camera.projectionMatrix);
++    this._jitterSavedInv.copy(camera.projectionMatrixInverse);
++    const e = camera.projectionMatrix.elements;
++    e[8] += (2 * this._jitterX) / w;
++    e[9] += (2 * this._jitterY) / h;
++    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
++    this._jitterActive = true;
++  }
++
++  /** Puts the camera back exactly as it was found. */
++  #clearJitter(camera) {
++    if (!this._jitterActive) return;
++    camera.projectionMatrix.copy(this._jitterSaved);
++    camera.projectionMatrixInverse.copy(this._jitterSavedInv);
++    this._jitterActive = false;
+   }
+ 
+   #recordFrame(ms) {
+@@ -4026,7 +4741,13 @@ export class RenderPipeline {
+ 
+     const avg = this.stats.frameMs;
+     const min = this.tier.minScale;
+-    const max = this.tier.renderScale;
++    // The ceiling is the tier's TAA-aware base scale, not its raw renderScale.
++    // If it were the raw one the controller would climb back to a resolution
++    // the temporal pass was explicitly not given the budget for, drop under
++    // 21 ms, and oscillate — and every step resets the history, so the
++    // oscillation would be visible as a periodic burst of aliasing rather than
++    // as a resolution wobble.
++    const max = this.#baseScale();
+     let next = this._targetScale;
+ 
+     if (avg > 21.0) next = Math.max(min, this._targetScale - 0.04);
