@@ -109,6 +109,10 @@ const SETS_ARG = opt('sets', 'roster');
 const GROUP_ARG = opt('group', null);
 /** `--fd5-trace=<set>/<defState>` dumps guardCell's per-tick geometry for one cell. */
 const FD5_TRACE = opt('fd5-trace', null);
+/** `--state-sig` prints a signature of shared harness state after the run. */
+const STATE_SIG = flag('state-sig');
+/** `--order-check` runs FD-5's matrix twice in one process and diffs the two. */
+const ORDER_CHECK = flag('order-check');
 
 // ---------------------------------------------------------------------------
 // The controls
@@ -1992,6 +1996,11 @@ function guardCell(key, mv, defState, aIdx = 0) {
       // before every branch of `#resolve` except the invulnerable one, so an
       // empty `connected` set means nothing touched — the strike simply did not
       // reach, which is a statement about capsules and not about guard.
+      if (FD5_TRACE === `${key}/${defState}`) {
+        console.log(`[fd5] => attacker=f${aIdx} OUT=${out} armourSeen=${armourSeen} `
+          + `consumed=${A.connected.size} Dhp=${D.health.toFixed(2)} hp0=${hp0.toFixed(2)} `
+          + `Astate=${A.state} Dstate=${D.state}`);
+      }
       return { out, invulnAtContact, consumed: A.connected.size > 0, staged: true, available: true };
     }));
   } finally {
@@ -2116,14 +2125,30 @@ function fd5Both() {
   // guard result is a facing bug, and it would be invisible from one side.
   const m1 = fd5Matrix(1);
   const sideBad = [];
-  for (let i = 0; i < m0.length; i++) {
-    if (m0[i].out !== m1[i].out) {
-      sideBad.push(`${m0[i].key} ${m0[i].height}/${m0[i].id} vs ${m0[i].defState}: `
-        + `attacker 0 -> ${m0[i].out}, attacker 1 -> ${m1[i].out}`);
+  // COMPARE BY CELL IDENTITY, NOT BY ARRAY POSITION.
+  //
+  // `fd5Matrix` skips heights with no representative (`if (!mv) continue`), so
+  // the two runs only line up positionally if both produced exactly the same
+  // cells in the same order. Diffing by index quietly compares cell N of one
+  // matrix against cell N of the other; if the sets ever differ the mismatch is
+  // reported under the FIRST matrix's labels, which reads as a side-dependent
+  // guard result for a cell that never disagreed with itself.
+  const cellKey = (c) => `${c.key}|${c.height}|${c.id}|${c.defState}`;
+  const byKey = new Map(m1.map((c) => [cellKey(c), c]));
+  const missing = [];
+  for (const c of m0) {
+    const other = byKey.get(cellKey(c));
+    if (!other) { missing.push(`${cellKey(c)} present for attacker 0 and absent for attacker 1`); continue; }
+    if (c.out !== other.out) {
+      sideBad.push(`${c.key} ${c.height}/${c.id} vs ${c.defState}: `
+        + `attacker 0 -> ${c.out}, attacker 1 -> ${other.out}`);
     }
   }
+  if (m0.length !== m1.length) {
+    missing.push(`matrix sizes differ: ${m0.length} cells for attacker 0, ${m1.length} for attacker 1`);
+  }
   const okN = record('FD-5n', 'null control — the same matrix with the fighters swapped',
-    sideBad.length === 0, `${m0.length} cells compared both ways round`, cap(sideBad));
+    sideBad.length === 0 && missing.length === 0, `${m0.length} cells compared both ways round`, cap(sideBad));
 
   return { okM, okN };
 }
@@ -2679,10 +2704,78 @@ if (ALL_CONTROLS) {
     if (wanted('FD-3')) testFD3();
     if (wanted('FD-4')) testFD4(CTL?.runtime === 'slow-punisher' ? 50 : 0);
     if (wanted('FD-5')) testFD5();
+    /*
+     * FD-5o — ORDER STABILITY, and it is an assertion about the GATE.
+     *
+     * FD-5n passes when FD-5 runs alone and fails after FD-4, so its verdict
+     * depends on what ran before it. A group whose result moves with test order
+     * is not measuring the product; every other FD group is order-stable and
+     * nobody knew that was a property worth asserting until it stopped being
+     * true. This runs the matrix a SECOND time in the same process, immediately
+     * after the first, and requires the identical verdict cell for cell.
+     *
+     * It fails on a defect in the harness, not in the game, and the message says
+     * so — a red row here means the two runs of one matrix disagreed, which no
+     * amount of frame data can cause.
+     */
+    if (ORDER_CHECK || wanted('FD-5')) {
+      const wasDef = f1.def;
+      f1.setCharacter(ROSTER[0]);
+      let a1, b1;
+      try { a1 = fd5Matrix(0); b1 = fd5Matrix(0); } finally { f1.setCharacter(wasDef); }
+      const drift = [];
+      for (let i = 0; i < a1.length; i++) {
+        if (a1[i].out !== b1[i].out) {
+          drift.push(`${a1[i].key} ${a1[i].height}/${a1[i].id} vs ${a1[i].defState}: `
+            + `first run "${a1[i].out}", second run "${b1[i].out}" — same matrix, same process`);
+        }
+      }
+      record('FD-5o', 'the guard matrix is order-stable — running it twice gives the same verdict',
+        drift.length === 0,
+        `${a1.length} cells run twice back to back; ${drift.length} moved. `
+        + 'A red row here is a HARNESS defect, not a frame-data one.', cap(drift));
+    }
     if (wanted('FD-6')) testFD6();
     if (wanted('FD-7')) testFD7(CTL?.runtime === 'asymmetric-hitstop' ? 3 : 0);
   }
   RUNTIME_RESTORE?.();
+
+/**
+ * A signature of everything SHARED between test groups.
+ *
+ * FD-5n passes when FD-5 runs alone and fails after FD-4, so something outlives
+ * a group. `stage()` calls the product's own `reset()` on both fighters, so
+ * whatever leaks is either outside the Fighter or a field `reset()` does not
+ * own. Printing the candidates side by side lets a diff name one instead of
+ * three being argued about.
+ */
+function stateSig() {
+  const out = [];
+  const handlers = [...(bus.handlers?.entries?.() ?? [])]
+    .map(([k, v]) => `${k}:${v?.size ?? v?.length ?? 0}`).sort();
+  out.push(`bus.handlers   ${handlers.join(' ')}`);
+  out.push(`bus.anyHandlers  ${bus.anyHandlers?.size ?? 0}`);
+  out.push(`combat  tick=${combat.tick} round=${combat.round} over=${combat.roundOver} `
+    + `combos=${combat.combos.map((c) => `${c.hits}/${c.damage}/${c.lastTick}`).join(',')}`);
+  for (const f of [f0, f1]) {
+    out.push(`f${f.index}  def=${f.def?.id} simTick=${f.simTick} state=${f.state} `
+      + `clip=${f.currentClip} animTick=${f.animator?.tick} `
+      + `phase=${(f.animator?.breathing?.phase ?? 0).toFixed(4)} `
+      + `rng=${f.rng.s0},${f.rng.s1} pos=${f.position.x.toFixed(4)} hp=${f.health.toFixed(2)}`);
+  }
+  let h = 0;
+  for (const key of SET_KEYS) {
+    for (const mv of MOVES[key].__ordered) {
+      const s = `${mv.id}|${mv.startup}|${mv.total}|${mv.active.map((w) => `${w.from}-${w.to}`)}`;
+      for (let k = 0; k < s.length; k++) h = (Math.imul(h, 31) + s.charCodeAt(k)) | 0;
+    }
+  }
+  out.push(`MOVES checksum  ${(h >>> 0).toString(16)}`);
+  return out;
+}
+
+if (STATE_SIG) { say(''); for (const r of stateSig()) say(`[state] ${r}`); }
+
 
   if (!HASH_ONLY) {
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
