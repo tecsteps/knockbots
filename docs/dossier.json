@@ -1,9 +1,9 @@
 {
   "status": {
-    "rev": "0.38.0",
-    "commits": "224",
+    "rev": "0.39.0",
+    "commits": "234",
     "modules": 73,
-    "lines": "89k",
+    "lines": "92k",
     "clips": 92,
     "moves": 777,
     "characters": 10
@@ -1452,11 +1452,54 @@
           "state": "75.2 fps"
         }
       ]
+    },
+    {
+      "phase": "PHASE 44",
+      "when": "The gameplay pass",
+      "rev": "rev 0.39.0",
+      "title": "Two real bugs in the parts the charter calls non-negotiable, neither visible in any screenshot",
+      "paras": [
+        "The brief was redirected: gameplay, not visual perfection. Four instruments were built to answer it, all of them headless — the entire simulation constructs and runs in bare Node in under three seconds, and dispatching real key events at a real event target drives the genuine input path rather than a synthesised buffer beneath it. That distinction is the whole reason the tools exist. An earlier round audited a twelve-by-twelve input matrix by feeding the matcher a made-up buffer, passed every cell, and missed an eighty-six frame unblockable that lived one layer upstream.",
+        "The first bug was in the word deterministic. Resetting a fighter restored position, velocity, health and state, and left its random number generator wherever the previous round had advanced it to. So the second round of a match depended on how the first round had gone — two matches playing an identical second round diverged, by eight millimetres within four seconds, and wake-up rolls a die, so a knockdown late in a round could resolve differently because of something that happened in a round already over. Four independent trials isolated it to the generator and cleared the animation clock, which refuted half of the original hypothesis. It is fixed, and the control that must catch a billionth-of-a-unit nudge at the round boundary still catches it, so the fix is real rather than a weakened test.",
+        "The second was worse and had a visible consequence nobody could see. The retimer that stretches a wind-up to match a move’s advertised startup is two segments, and they only meet cleanly when a particular scale factor takes a particular value — precisely the value the safety clamp is allowed to overrule. The joining tick is the tick the hitbox appears on. So for every clamped move the animation jumped exactly when the attack became active, and because the collision system correctly sweeps a capsule back to where the limb was a tick earlier, that jump became reach: one move handed the combat system a swept capsule of a hundred and four centimetres against a five centimetre median for the same move. A hitbox twenty times too long, on one tick, connecting at a range the animation never showed. The fix makes the join continuous by construction so the clamp can no longer break it, and moves the cost onto the first tick of a wind-up, where nothing has happened yet.",
+        "The third finding is not fixed because it is a design decision. Every blockable move in the game is between two and eight frames less safe than its own move list says, and none is safer. The cause is a convention mismatch — the frame data is derived assuming contact on the last active frame, and the engine resolves contact on the first tick two capsules overlap. Four hundred and fifteen blockable moves were checked and there is not one for which the printed number is reachable at any distance: matching the print would require the hitbox to connect one tick after it stops existing. A jab advertised as plus one on block actually plays minus one, which inverts what it means to throw it.",
+        "The instruments themselves behaved better than the game did. One gate reported red on two of its own controls rather than on the product, and its author then found all three causes were harness bugs of their own making — including a setup that pressed forward for a fighter facing the other way, and a defender sampled one tick after the moment being measured, which is why every successful throw had scored as a failure. Another discarded an instrument rather than tune it, because the clean population’s own worst case sat fifty-two times above the ceiling it had drawn. A third refused to credit a thousand-cell pass because its null showed no throw had ever landed, so the sweep proved nothing."
+      ],
+      "tags": [
+        {
+          "label": "determinism",
+          "state": "round 2 depended on round 1 — fixed"
+        },
+        {
+          "label": "phantom hitbox",
+          "state": "104 cm vs 5 cm — fixed"
+        },
+        {
+          "label": "frame data",
+          "state": "415 moves, unreachable at any range"
+        },
+        {
+          "label": "simgate",
+          "state": "GREEN 2.9s"
+        },
+        {
+          "label": "dtgate",
+          "state": "GREEN 9.8s"
+        },
+        {
+          "label": "smgate",
+          "state": "GREEN 6.0s"
+        },
+        {
+          "label": "retimegate",
+          "state": "RED 1 — the descriptor half"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.38.0",
-    "note": "Deployed after round 42. Source on github.com/tecsteps/knockbots."
+    "rev": "0.39.0",
+    "note": "Deployed after the gameplay pass. Source on github.com/tecsteps/knockbots."
   }
 }
