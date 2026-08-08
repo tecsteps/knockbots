@@ -107,6 +107,8 @@ const ALL_CONTROLS = flag('controls');
 const HASH_ONLY = opt('hash-only', null); // internal: the fresh-process null control
 const SETS_ARG = opt('sets', 'roster');
 const GROUP_ARG = opt('group', null);
+/** `--fd5-trace=<set>/<defState>` dumps guardCell's per-tick geometry for one cell. */
+const FD5_TRACE = opt('fd5-trace', null);
 
 // ---------------------------------------------------------------------------
 // The controls
@@ -1946,7 +1948,22 @@ function guardCell(key, mv, defState, aIdx = 0) {
         const hpBefore = D.health;
         const inAttack = D.state === STATE.ATTACK;
         const before = rec.ev.length;
+        const trace = FD5_TRACE === `${key}/${defState}`;
+        if (trace && i === 0) {
+          console.log(`[fd5] ${key} ${mv.id} vs ${defState}  attacker=f${aIdx}  `
+            + `lead=${lead}  A.startup=${mv.startup} windowEnd=${windowEnd}  `
+            + `setup=${setup ? setup.id : '-'}`);
+        }
         step(null);
+        if (trace) {
+          const box = (f) => (f.hitboxes.length ? 'BOX' : '   ');
+          console.log(`[fd5]  i=${String(i).padStart(2)}  A ${A.currentMove ? A.currentMove.id : '-'}`
+            + `@${String(A.moveTick).padStart(2)} ${box(A)} x=${A.position.x.toFixed(3)}`
+            + `   D ${D.currentMove ? D.currentMove.id : '-'}@${String(D.moveTick).padStart(2)} ${box(D)}`
+            + ` x=${D.position.x.toFixed(3)}  sep=${Math.abs(A.position.x - D.position.x).toFixed(3)}`
+            + `  Dhp=${D.health.toFixed(2)}  Ahp=${A.health.toFixed(2)}`
+            + `  ev=${rec.ev.slice(before).map((x) => `${x.kind}(atk${x.attacker}:${x.move})`).join(' ')}`);
+        }
         for (let e = before; e < rec.ev.length; e++) {
           const x = rec.ev[e];
           if (x.kind === 'parry') { out = 'parry'; break; }

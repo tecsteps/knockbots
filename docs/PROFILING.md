@@ -5744,3 +5744,54 @@ project got here. The entry must re-derive its own justification each run: the a
 forward lead is still long, the move still connects at range, and the miss is still
 monotone in distance. If any of those stops being true the exemption lapses and the row
 goes red on its own.
+
+---
+
+# A threshold derived from a population containing the subject will agree with you
+
+FD-2w exempts `seraph/chorale` from "every blockable move connects at point
+blank", because it is a long poke that overshoots at minimum range rather than a
+move that fails to reach. The exemption is property-keyed so it lapses on its
+own, and one condition is that the move's forward lead is unusually long
+compared to the rest of the roster.
+
+The first version compared it against the **p90 of a population that included
+chorale**. p90 came out at 0.458 — chorale's own value, exactly. The test read
+`0.458 >= 0.458`: true by self-reference, one rounding from flipping either way,
+and excluding the candidate did not save it because several moves share that
+value.
+
+It passed. It named the move. It printed a plausible justification. Nothing
+about the output suggested the threshold and the subject were the same number.
+
+## The rule
+
+**A cutoff computed from a set that contains the thing being judged is not a
+test, it is a restatement.** Exclude the subject, and then check that the
+threshold still has margin on both sides — if the answer sits on the boundary,
+the population is too small or the statistic is the wrong one. The fix here was
+p75 (0.324), which separates the 0.310 authored default from chorale's 0.458
+with room in both directions, so a retune to the default lapses the exemption
+and a genuinely long poke still earns it.
+
+This is the same family as "be most suspicious of the measurement that agrees
+with you". A self-referential threshold agrees with you **by construction**, and
+it will keep agreeing after the thing it was written for has changed.
+
+## And the control for it was vacuous in the other direction
+
+The obvious control — shorten chorale's lead back to the default and require the
+row to go red — does not work, and measuring that was worth more than the
+control would have been. At `fwd` 0.31 the move **connects** at point blank
+(-0.240): it leaves the whiff population entirely and the assertion goes green.
+
+```
+fwd authored (0.458)   0.9m +0.056 miss   1.2m -0.265 HIT   1.5m -0.436 HIT
+fwd forced to 0.31     0.9m -0.240 HIT    1.2m -0.381 HIT   1.5m -0.456 HIT
+fwd forced to 1.2      0.9m +0.701 miss   1.2m +0.549 miss  1.5m +0.288 miss
+```
+
+That table is a direct causal demonstration that the forward lead IS the miss —
+which the arc profile could only infer. The working control pushes the lead UP,
+so the move keeps whiffing while failing the "still connects at range" condition
+that stops a broken move borrowing the exemption.
