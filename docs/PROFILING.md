@@ -5933,3 +5933,30 @@ started circulating, rather than defending the figure it had already committed. 
 opposite of the failure mode this file is mostly about, and worth recording as such: the
 cheapest moment to catch an error is when someone else's inference from your work comes back
 larger than your work supports.
+
+### Read 13–17 µs as a FLOOR, and the one experiment nobody has run
+
+Two follow-ons to the entry above, recorded here because the agent they were addressed to
+is gone and a relay with no recipient is just a lost finding.
+
+**The honest form of the number is `>= 13–17 µs, switch cost unmeasured`.** It prices a
+draw that changes no GPU state. Anything scoped against it for state-changing draws is
+using a floor as an estimate.
+
+**Why the wrong number looked credible.** Per-rung division on the *same data* spans
+**12–58 µs** and reads as ordinary run-to-run variation rather than as a systematic bias.
+That is what makes this trap dangerous: it does not produce an absurd number, it produces a
+plausible spread, and the spread invites picking a value from the middle of it.
+
+**The unclaimed experiment, fully specified so it survives whoever reads this.**
+`tools/scenelace-page.js:69` dedupes donor materials by `material.uuid` and line 74 reuses
+each instance across every injected mesh. **Cloning the material per injected mesh at line
+69 instead of deduping** would force a program switch per draw and price it directly on the
+existing rig — roughly a one-line change plus a run. Nobody has done it. It is the only way
+we currently have to learn what a state change actually costs here.
+
+Whether it is worth running is a different question, and the answer is probably no: at 294
+draws the whole draw-call budget is ~4–5 ms of a 27.6 ms frame, so even a switch costing
+several times the floor cannot close a 12 ms deficit. **The frame is fragment-bound, and the
+per-pixel cost is where the remaining work is.** Recorded so the next person to reach for
+draw-call reduction finds the measurement that closes the direction, rather than repeating it.
