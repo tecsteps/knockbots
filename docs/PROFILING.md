@@ -4411,3 +4411,29 @@ the roundhouse contact frame the off-arm is occluded behind the torso and the pr
 Six clips re-authored, rig divergence from 59% to 93% of the foot's rate, every anchor byte-identical
 — and it lands everywhere except the frame most likely to be screenshotted. **The rig metric was right
 and insufficient**, which is the same lesson as the first off-arm pass, one level further in.
+
+## The training panel is not unreachable. It has no controls on it.
+
+I left this open with an honest "cause not established", after a probe that failed to reproduce the
+gate's state and therefore proved nothing. The frame settles it: `training-4-train-panel.png` shows
+the in-match training panel is **LAST MOVE plus a frame-data readout and nothing else.** No
+`.kbg-toggle`, no `.kbg-step-btn`. The gate's `hitTargetMissing` was correct and literal — there was
+no target, because there is no control.
+
+The toggles (HITBOXES / FRAME DATA / INPUT HISTORY) and the difficulty stepper exist and are reachable
+— through pause, then options. **So the 44px floor declared at `MenuSystem.js:3806` is applied to
+controls that are real, just two menus deep and never on the surface that names them.**
+
+That is exactly what the interface critic said from source alone: *"it's a pure readout with no
+interactive path of its own; a player only reaches its toggles by first finding Training in the main
+menu, then Pause. It teaches nothing to someone who hasn't already gone looking."* It was right, and
+the frame confirms it.
+
+**So the fix is not "make the toggles reachable."** They are. It is that a panel showing frame data
+gives no hint that the things which control it exist — the same defect class as the throw chord and
+the swipe specials, which were on screen in name only until a coach line named them. The panel should
+either carry its own toggles or point at where they live.
+
+And the gate's step should be renamed: `train-toggle` asserts a control that was never on that screen,
+so it fails for a true reason under a misleading name. **A test that fails correctly and describes the
+failure wrongly still costs the next reader an hour.**
