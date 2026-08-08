@@ -5960,3 +5960,25 @@ draws the whole draw-call budget is ~4–5 ms of a 27.6 ms frame, so even a swit
 several times the floor cannot close a 12 ms deficit. **The frame is fragment-bound, and the
 per-pixel cost is where the remaining work is.** Recorded so the next person to reach for
 draw-call reduction finds the measurement that closes the direction, rather than repeating it.
+
+### A failure observed under contention is not a failure of the thing under test
+
+The production smoke test that reported *"the shipped game fails to boot in 122 seconds"*
+belongs in this file as the **most dangerous** instance of the session's pattern, not the
+mildest — and it is worth separating from the timing traps above.
+
+Every other instrument defect here cost measurement time. This one **fails toward a
+shipping blocker.** It returned a true number about the wrong system: my laptop under
+loadavg 30 with fifteen sibling Chromiums, not the game. Had it been believed, the cheapest
+response would have been to hunt a boot failure that does not exist; a worse one would have
+been to "fix" it.
+
+The rule, and it is the pass/fail counterpart of the timing rule already recorded:
+
+> **A failure observed under contention is not a failure of the thing under test until it
+> reproduces on a quiet machine.**
+
+The existing guidance — do not take a timing measurement while another agent is taking one —
+covers milliseconds. It does not cover verdicts, and a verdict is exactly what a smoke test
+produces. Contention does not merely add noise to a number; it can invert a boolean, and a
+boolean carries no error bars to warn you.
