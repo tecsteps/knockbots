@@ -4983,3 +4983,22 @@ and was left alone.
 Replaced by the fold test above. That is the eleventh instrument on this project found to be stable,
 reproducible and incapable of measuring what it claimed — and the second in two days caught by the
 person who built it, before it was used.
+
+## Still live: the same UV defect at every joint on every robot
+
+`strutfix` fixed `latheProfile` and named where the identical defect survives, then correctly declined
+to chase it:
+
+> *"The actuator housings and rods (`RobotBuilder.js:1089`, `:1110`) are **unit-space geometry on an
+> InstancedMesh scaled non-uniformly per instance** — radius, length, radius. Their world texel density
+> therefore **cannot be fixed in the geometry**; it needs per-instance UV scaling in the shader. They
+> are the pistons at every joint."*
+
+That is the same unit mismatch by a different route: the lathe's was normalized-versus-metres in the
+generator, this one is a uniform mesh stretched to different world sizes per instance, so one texel
+grid serves parts of different physical dimensions. **Every joint on every robot**, ten characters.
+
+Not attempted here because it is a shader change on an instanced path rather than a geometry fix, and
+because another agent currently holds `RobotBuilder.js`. Recorded so it is not rediscovered from
+scratch — the lathe defect took three critics across three rounds and two wrong mechanisms to reach,
+and this one arrives already diagnosed.
