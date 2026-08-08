@@ -1015,6 +1015,38 @@ export class Fighter {
   }
 
   reset(pos, facing) {
+    /*
+     * RESEED THE RNG. Round 2 used to depend on how round 1 went.
+     *
+     * `reset()` restored position, velocity, health and state, and left
+     * `this.rng` wherever round 1 had advanced it to. So two matches that played
+     * an identical round 2 diverged, because the generator entered it in a
+     * different place. Measured by `tools/dtgate.mjs` DT-3, driving two real
+     * 1400-tick scripts through actual key events and diffing round 2 after two
+     * different round 1s:
+     *
+     *   TRIAL none   DIVERGES at round-2 tick 0   rng.s0 1130603015 vs 2498565824
+     *                OBSERVABLE at tick 223       pos.x -3.5442645 vs -3.5358588
+     *   TRIAL rng    CLEAN
+     *   TRIAL anim   DIVERGES (identical to none)
+     *   TRIAL both   CLEAN
+     *
+     * Four INDEPENDENT trials, which is the whole point: an earlier pass ran its
+     * candidates in sequence, so the later ones may have inherited a settled
+     * state rather than fixed anything, and it said so rather than claiming a
+     * cause. Run separately, the answer is unambiguous -- **it is the rng and it
+     * is not the animator clock.** Half the original hypothesis was wrong.
+     *
+     * 8.4 mm of divergence by tick 223 is not cosmetic: `#getUp` picks between
+     * `r.getUp` and `r.getUpRoll` on `rng.next() < 0.35`, so a knockdown late in
+     * round 2 could wake up differently depending on round 1. The charter says
+     * "deterministic 60Hz simulation, because frame data is the game", and this
+     * is the clause that was quietly untrue.
+     *
+     * Same expression as the constructor, deliberately: one definition of what a
+     * fighter's initial randomness is, in two places that must not drift.
+     */
+    this.rng = new Rng(0x51ed2701 + this.index * 0x9e37);
     this.position.copy(pos);
     this.position.y = this.floorY;
     this.prevPosition.copy(this.position);
