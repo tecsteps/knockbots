@@ -2180,7 +2180,26 @@ export class MenuSystem {
     }
     inputs.appendChild(hist);
 
-    panel.append(frames, inputs);
+    /*
+     * TELL THE PLAYER WHERE THE CONTROLS ARE.
+     *
+     * This panel shows frame data and never mentions that anything can change
+     * it. The toggles -- HITBOXES, FRAME DATA, INPUT HISTORY -- and the CPU
+     * stepper are real, work, and carry a 44px touch floor, and they live two
+     * menus away behind pause -> options. A touch-path gate looking for a
+     * control ON this panel reported `hitTargetMissing`, correctly and
+     * literally: there is no target here, because there is no control here.
+     *
+     * That is the same defect as the throw chord and the swipe specials, which
+     * were reachable and undiscoverable until a line of text named them. A
+     * readout that shows a number and hides the switch for it is teaching a
+     * player that the number is all there is.
+     *
+     * One line, in the panel, naming the path. Cheaper than moving the controls
+     * and it does not risk the pad's hit region, which has its own history.
+     */
+    const hint = el('div', 'kbg-hint', 'MENU \u2192 OPTIONS for hitboxes, input history and CPU level');
+    panel.append(frames, inputs, hint);
     root.append(banner, panel);
     this.uiRoot.appendChild(root);
 
@@ -3441,6 +3460,20 @@ const KBG_CSS = `
 .kbg-step-btn--plus::after { width: 0.11em; height: 0.72em; }
 .kbg-step-btn:hover { color: var(--kb-text); background: rgba(255,138,42,0.18); }
 .kbg-step-btn:active { transform: scale(0.94); }
+
+/* The path to the controls this panel reports on. Deliberately quiet -- it is a
+   signpost, not a call to action, and it sits under the cards so it never
+   competes with the frame numbers a player is actually reading. */
+.kbg-hint {
+  grid-column: 1 / -1;
+  margin-top: 0.35em;
+  font-family: var(--kb-font-label);
+  font-size: 0.62em;
+  letter-spacing: 0.14em;
+  color: var(--kb-text-dim);
+  opacity: 0.85;
+}
+@media (max-width: 900px) { .kbg-hint { font-size: 0.58em; letter-spacing: 0.1em; } }
 .kbg-step-btn:focus-visible { outline: 2px solid var(--kb-cyan); outline-offset: 2px; }
 
 .kbg-step-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.3em; }
