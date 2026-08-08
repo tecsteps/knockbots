@@ -4700,3 +4700,57 @@ Recorded because five produced stable, reproducible numbers about the **wrong ev
 10 levels, every one a root move or a cancel the previous move actually lists; guard first raised
 **exactly `reactionTicks`** after the move starts at all ten levels; 1,200 `think()` calls with zero
 off-whitelist reads.
+
+## CORRECTION: "26 moves print as jab-punishable and are not" was 6, and my cause was wrong
+
+I reported that finding here and to the owner. Both the count and the mechanism were wrong, and the
+correction came from a second agent challenging the first with a direct measurement rather than an
+argument about the arithmetic.
+
+**The test was measuring a model, not the game.** FD-4 predicted punishability from a tick predicate.
+The replacement measures it: three runs — a baseline for the advantage, a punish against a passive
+defender, and a punish against an attacker **holding guard from the instant it recovers**, which is
+the earliest a real player could. **A punish is a hit in the third run.** The tick predicate survives
+as a *prediction checked against that measurement*, never as the definition.
+
+Roster-wide, against an i10 punisher:
+
+```
+adv -11   hitbox out on aOut        15/15  HIT through the guard   -> a punish
+adv -10   hitbox out on aOut + 1     1/1   BLOCKED by it           -> not one
+adv  -9   hitbox out on aOut + 2    11/11  BLOCKED by it
+```
+
+**The guaranteed-punish line is `startup + 1`.** Not `startup + 2` as I published, and not `startup`
+as the challenger first proposed — both were off by one, in opposite directions.
+
+**And my stated cause was wrong.** I blamed the tick blockstun ends being consumed inside
+`#updateState`'s BLOCKSTUN branch. The attacker loses that same tick leaving ATTACK, so the two
+cancel. The real mechanism is ordering: **`Fighter#simulate` runs `#updateGuard` before
+`#updateState`**, so on the tick the attacker leaves ATTACK its state is still ATTACK when
+`#canGuard()` is consulted. It cannot block that tick, and can on the next.
+
+**Revised: 6 moves print exactly −10 and cannot be jab-punished** — `hammerFist` (vulkan, anvil,
+bastion), `heelSlice` (kestrel, mantis), `counterweight` (anvil). Still a real one-frame gap against
+the Tekken reading of −10, still a design call, but a sixth the size and confined to a single printed
+value.
+
+**The other 20 were never a timing problem at all.** They are out of range after `blockPush` — a
+*reach* failure I had conflated with a *timing* failure. Splitting the ledger on reach is what made
+both halves attributable, and 29 rows now sit in that note.
+
+FD-4a is green and non-degenerate: 111 punishes reached, 94 hit through the guard, 17 blocked by it.
+It also gained a vacuity guard, because the old FD-4a **passed cleanly against a defender that
+physically cannot punish anything** — every row came out identical under a deliberately slow punisher.
+
+## The shape worth keeping
+
+The first agent found something real, published a count and a mechanism, and both were wrong. The
+second agent's challenge was *also* off by one. Neither argument settled it — **a measurement did**,
+by making the guard actually held and asking whether the punish still landed.
+
+That is now the sixth premise refuted this session and the second of this agent's own. Its note on the
+first is the more useful one: it had claimed FD-1 could answer whether my retime fix was complete, and
+FD-1 **structurally could not** — `#buildHitboxes` gates on `isActive(mv, moveTick)`, which knows
+nothing about the animator, so the frame half is true by construction and no measurement through it
+could ever have said otherwise.

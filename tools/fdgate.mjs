@@ -1332,7 +1332,7 @@ function punisherFor(key) {
  * Block the attacker's move, then press the punisher through a real `Input` on
  * the first tick the defender is actionable.
  *
- * TWO RUNS, AND BOTH OF THEM ARE NECESSARY.
+ * THREE RUNS, AND ALL THREE ARE NECESSARY.
  *
  * The advantage has to come from a run in which NOBODY PUNCHES BACK. Two
  * versions of this failed before that was obvious. The first read `probe`'s
@@ -1350,7 +1350,31 @@ function punisherFor(key) {
  * the block tick aligns and the punish can be compared against the baseline's
  * own recovery tick.
  *
- * @returns {?{inTime:boolean, connected:boolean, adv:number, punisherStartup:number}}
+ * RUN 3 IS WHY THIS TEST NEEDS NO CONVENTION CALL.
+ *
+ * "Did the punish land" against an attacker who stands still is not the question
+ * — a punish is a blow the attacker CANNOT AVOID. The tick criterion for that
+ * differs by one from the criterion for merely connecting, and by two from
+ * "connects while the attacker is still committed", and picking between three
+ * off-by-one definitions from the arithmetic is how this test would end up
+ * asserting a convention instead of a fact. So run 3 lets the attacker HOLD
+ * GUARD from the instant it recovers, and a punish is a run-3 `hit`. A run-3
+ * `block` is a blow the attacker defended, whatever the tick maths says.
+ *
+ * Measured across the roster, punisher startup 10, and it is not close:
+ *
+ *     adv -11   hitbox out on the attacker's LAST committed tick   15/15 hit under guard
+ *     adv -10   hitbox out one tick later                           1/1  BLOCKED under guard
+ *      adv -9   hitbox out two ticks later                         11/11 BLOCKED under guard
+ *
+ * The mechanism is one line of ordering: `Fighter#simulate` runs `#updateGuard`
+ * BEFORE `#updateState`, so on the tick the attacker leaves ATTACK its state is
+ * still ATTACK when `#canGuard()` is consulted and it cannot block — but it can
+ * on the next tick. So the guaranteed-punish line is `punishBoxAt <= aOut`, and
+ * an i10 punisher guarantee-punishes -11 and worse. -10 is defensible.
+ *
+ * @returns {?{inTime:boolean, guaranteed:boolean, connected:boolean, adv:number,
+ *             punisherStartup:number}}
  */
 function probePunish(key, mv, punisher, slowFactor = 0) {
   const kb = makeKeyboard();
@@ -1372,8 +1396,14 @@ function probePunish(key, mv, punisher, slowFactor = 0) {
     punisher.startup = punisher.startup + slowFactor;
   }
 
-  /** @param {boolean} punish whether the defender presses back at all */
-  const run = (punish) => withSet(f0, key, () => withSet(f1, key, () => {
+  /**
+   * @param {'baseline'|'punish'|'punish-vs-guard'} mode
+   *   baseline        nobody presses back; owns the advantage
+   *   punish          the defender punishes an attacker who does nothing
+   *   punish-vs-guard the defender punishes an attacker who guards on recovery
+   */
+  const run = (mode) => withSet(f0, key, () => withSet(f1, key, () => {
+    const punish = mode !== 'baseline';
     stage(f0, f1, DISTANCES[0]);
     let tick = 0;
     let phase = 0;
@@ -1383,6 +1413,7 @@ function probePunish(key, mv, punisher, slowFactor = 0) {
     let aOut = -1;
     let punishBoxAt = -1;
     let punishHitAt = -1;
+    let punishKind = null;
     const defCmd = () => {
       const codes = [];
       if (!punish || !pressed) {
@@ -1401,6 +1432,10 @@ function probePunish(key, mv, punisher, slowFactor = 0) {
       phase++;
       return cmd;
     };
+    // The attacker holds nothing while committed; in `punish-vs-guard` it puts
+    // its guard up the instant it is out of the move — the earliest a player
+    // could — and whether that saves it is the whole question.
+    const atkCmd = () => (mode === 'punish-vs-guard' && aOut >= 0 ? mkCmd('', [], true) : null);
     for (let i = 0; i < 6; i++) { rec.at(tick); f0.simulate(null); f1.simulate(defCmd()); combat.simulate(tick++); }
     rec.clear();
     rec.at(tick);
@@ -1413,7 +1448,7 @@ function probePunish(key, mv, punisher, slowFactor = 0) {
     for (let i = 0; i < 400; i++) {
       rec.at(tick);
       const before = rec.ev.length;
-      f0.simulate(null);
+      f0.simulate(atkCmd());
       f1.simulate(defCmd());
       combat.simulate(tick);
       for (let e = before; e < rec.ev.length; e++) {
@@ -1423,7 +1458,10 @@ function probePunish(key, mv, punisher, slowFactor = 0) {
           blockAt = tick;
           if (x.kind !== 'block') return null;   // it was not blocked; not an FD-4 row
         }
-        if (x.attacker === 1 && (x.kind === 'hit' || x.kind === 'block') && punishHitAt < 0) punishHitAt = tick;
+        if (x.attacker === 1 && (x.kind === 'hit' || x.kind === 'block') && punishHitAt < 0) {
+          punishHitAt = tick;
+          punishKind = x.kind;   // a `block` here is the attacker defending it
+        }
       }
       if (blockAt >= 0 && dFree < 0 && ACTIONABLE.has(f1.state) && !f1.stunTicks) dFree = tick;
       if (blockAt >= 0 && aOut < 0 && !(f0.state === STATE.ATTACK && f0.moveInstance === instance)) aOut = tick;
@@ -1433,24 +1471,30 @@ function probePunish(key, mv, punisher, slowFactor = 0) {
       if (!punish && aOut >= 0 && dFree >= 0) break;
     }
     if (blockAt < 0 || dFree < 0) return null;
-    return { blockAt, dFree, aOut, punishBoxAt, punishHitAt };
+    return { blockAt, dFree, aOut, punishBoxAt, punishHitAt, punishKind };
   }));
 
   try {
-    const base = run(false);
+    const base = run('baseline');
     if (!base || base.aOut < 0) return null;
-    const p = run(true);
+    const p = run('punish');
     if (!p) return null;
+    const g = run('punish-vs-guard');
+    if (!g) return null;
     // The baseline's recovery, re-expressed relative to the block so it can be
     // compared against the punish run's own timeline.
     const recoverAfterBlock = base.aOut - base.blockAt;
     return {
-      // The frame-data claim: was the punisher's hitbox out while the attacker
-      // would still have been committed to the move that was blocked?
-      inTime: p.punishBoxAt >= 0 && (p.punishBoxAt - p.blockAt) < recoverAfterBlock,
-      // The spacing fact: did it actually reach? `blockPush` shoves both
-      // fighters apart, so a punish can be in time and still whiff.
-      connected: p.punishHitAt >= 0 && (p.punishHitAt - p.blockAt) < recoverAfterBlock,
+      // The frame-data claim: was the punisher's hitbox out no later than the
+      // attacker's last committed tick? Measured `<=`, not `<` — see the header.
+      inTime: p.punishBoxAt >= 0 && (p.punishBoxAt - p.blockAt) <= recoverAfterBlock,
+      // THE CLAIM THAT NEEDS NO CONVENTION: the attacker guarded the instant it
+      // recovered and got hit anyway.
+      guaranteed: g.punishKind === 'hit',
+      // The spacing fact: did it reach at all? `blockPush` shoves both fighters
+      // apart, so a punish can be in time and still whiff.
+      connected: p.punishHitAt >= 0,
+      defended: g.punishKind === 'block',
       adv: base.dFree - base.aOut,
       punisherStartup: punisher.startup,
     };
@@ -1484,43 +1528,58 @@ function testFD4(slowFactor = 0) {
       const r = probePunish(key, mv, punisher, slowFactor);
       if (!r) continue;                                     // never blocked at this range
       measured++;
-      // THE PREDICTION, AND THE TWO FRAMES THAT ARE NOT IN THE FRAME DATA.
+      // THE PREDICTION, AND THE ONE FRAME THAT IS NOT IN THE FRAME DATA.
       //
-      // The defender is free `-adv` frames before the attacker, and their move
-      // needs `startup` of those. It needs TWO more, and both are properties of
-      // the engine rather than of any move:
+      // The defender is free `-adv` frames before the attacker, and its move
+      // needs `startup` of those. It needs exactly ONE more, and the frame does
+      // not come from where it looks like it should:
       //
-      //   +1  the tick blockstun ends is spent inside `#updateState`'s BLOCKSTUN
-      //       branch, which decrements, calls `#toNeutral` and RETURNS —
-      //       `#tickNeutral` and therefore `#tryMove` are not reached that tick.
-      //       So the earliest a punish can start is one tick after the defender
-      //       becomes actionable, whether the player buffered it or reacted.
-      //   +1  the hitbox has to exist strictly BEFORE the attacker leaves
-      //       ATTACK, not on the same tick.
+      //   the tick blockstun ends is spent inside `#updateState`'s BLOCKSTUN
+      //   branch, which decrements, calls `#toNeutral` and RETURNS — so the
+      //   earliest a punish can START is one tick after the defender becomes
+      //   actionable. But the attacker loses the SAME tick leaving ATTACK, for
+      //   the same reason, and those two cancel exactly.
       //
-      // So the real threshold is `startup + 2`, which means a move printing -10
-      // or -11 is NOT punishable by an i10 jab. This was invisible until
-      // `Fighter#beginRecovery` landed: with the old deficit every move sat 2-7
-      // frames further into the unsafe range and nothing was ever measured
-      // sitting exactly on the boundary. FD-4L names the moves this costs.
-      const predict = r.adv <= -(r.punisherStartup + 2);
-      if (r.inTime !== predict) {
+      //   What does not cancel is that `Fighter#simulate` runs `#updateGuard`
+      //   BEFORE `#updateState`. On the tick the attacker leaves ATTACK its
+      //   state is still ATTACK when `#canGuard()` is consulted, so it cannot
+      //   block that tick — and it can on the next. The punisher's hitbox
+      //   therefore has to be out no later than `aOut`, and the threshold is
+      //   `startup + 1`.
+      //
+      // This was measured, not derived: at adv -11 the hitbox lands exactly on
+      // `aOut` and 15 of 15 rows stay a HIT with the attacker guarding, while at
+      // adv -10 it lands one tick later and is BLOCKED. `guaranteed` below is
+      // that measurement, so the assertion does not rest on the arithmetic at
+      // all — see `probePunish`'s header.
+      const predict = r.adv <= -(r.punisherStartup + 1);
+      // A punish that never reached says nothing about TIMING. `blockPush`
+      // separates the pair and `rocketPunch`, `roundhouse`, `orbitalKick` and
+      // friends are simply out of range afterwards — a metres problem, and
+      // FD-4r's to report. The timing assertion is over the rows where the
+      // punisher's capsule actually touched a body.
+      const reached = r.guaranteed || r.defended;
+      if (reached && r.guaranteed !== predict) {
         predBad.push(`${key}/${mv.id} onBlock=${mv.onBlock} measured=${r.adv} `
           + `punisher=${punisher.id} i${r.punisherStartup}  predicted ${predict ? 'punishable' : 'safe'} `
-          + `but the punish was ${r.inTime ? 'in time' : 'too late'}`);
+          + `but against an attacker guarding on recovery it ${r.guaranteed ? 'HIT' : 'did not'}`);
       }
       if (r.inTime && !r.connected) {
         outOfReach.push(`${key}/${mv.id} measured=${r.adv}: an i${r.punisherStartup} punish is `
           + `${-r.adv - r.punisherStartup} frames in time but does not reach — blockPush put the defender out of range`);
       }
-      // The ledger against the number the move list prints.
+      // The ledger against the number the move list prints, over the rows the
+      // punish REACHED — so this is a frame-data disagreement and not a
+      // restatement of FD-4r's range finding. The Tekken reading of -10 is "jab
+      // punishable"; measured, an i10 is one tick short of guaranteeing it.
       const printedSaysPunishable = mv.onBlock <= -10;
-      if (printedSaysPunishable !== r.inTime) {
+      if (reached && printedSaysPunishable !== r.guaranteed) {
         printedBad.push(`${key}/${mv.id} prints ${mv.onBlock >= 0 ? '+' : ''}${mv.onBlock} `
           + `(${printedSaysPunishable ? 'punishable' : 'safe'}) and measures ${r.adv} — `
-          + `an i${r.punisherStartup} punish is ${r.inTime ? 'IN TIME' : 'too late'}`);
+          + `an i${r.punisherStartup} punish ${r.guaranteed ? 'is guaranteed' : 'is BLOCKED by an attacker who guards on recovery'}`);
       }
-      rows.push({ key, id: mv.id, onBlock: mv.onBlock, adv: r.adv, inTime: r.inTime, connected: r.connected });
+      rows.push({ key, id: mv.id, onBlock: mv.onBlock, adv: r.adv,
+        inTime: r.inTime, guaranteed: r.guaranteed, defended: r.defended, connected: r.connected });
     }
   }
 
@@ -1529,26 +1588,29 @@ function testFD4(slowFactor = 0) {
   // unpunishable and the prediction agrees with every row — so without this
   // guard, FD-4a would report a clean bill of health against a defender who
   // physically cannot punish anything.
-  const landed = rows.filter((r) => r.inTime).length;
-  const degenerate = measured > 0 && (landed === 0 || landed === rows.length);
-  const okA = record('FD-4a', 'punishability follows the MEASURED advantage exactly',
-    predBad.length === 0 && measured > 0 && !degenerate,
+  const reachedRows = rows.filter((r) => r.guaranteed || r.defended);
+  const landed = reachedRows.filter((r) => r.guaranteed).length;
+  const degenerate = reachedRows.length > 0 && (landed === 0 || landed === reachedRows.length);
+  const okA = record('FD-4a', 'a punish lands against an attacker guarding on recovery iff adv <= -(startup+1)',
+    predBad.length === 0 && reachedRows.length > 0 && !degenerate,
     `${measured} moves blocked and counter-attacked through the real key path `
     + `(${punishable.length} print onBlock<=-10, ${safe.length} print onBlock>=+1); `
-    + `${landed} were punished, ${rows.length - landed} were not`
+    + `${reachedRows.length} punishes reached: ${landed} hit through the guard, `
+    + `${reachedRows.length - landed} were blocked by it`
     + (degenerate ? ' — DEGENERATE: every row came out the same way, so this differential tested nothing' : ''),
     cap(predBad));
 
   const safeRows = rows.filter((r) => r.onBlock >= 1);
   const okB = record('FD-4b', 'null control — a move that prints safe is not punished',
-    safeRows.every((r) => !r.inTime) && safeRows.length > 0,
-    `${safeRows.length} moves printing onBlock >= +1; ${safeRows.filter((r) => r.inTime).length} were punished anyway`,
-    cap(safeRows.filter((r) => r.inTime).map((r) => `${r.key}/${r.id} prints +${r.onBlock}, measures ${r.adv}, was punished`)));
+    safeRows.every((r) => !r.guaranteed) && safeRows.length > 0,
+    `${safeRows.length} moves printing onBlock >= +1; ${safeRows.filter((r) => r.guaranteed).length} were punished anyway`,
+    cap(safeRows.filter((r) => r.guaranteed).map((r) => `${r.key}/${r.id} prints +${r.onBlock}, measures ${r.adv}, was punished`)));
 
   record('FD-4L', 'ledger — punishability against the PRINTED onBlock',
     printedBad.length === 0,
-    `${measured} measured; ${printedBad.length} disagree with what the move list prints `
-    + '(FD-0: the printed number is a best case reached only at maximum range)',
+    `${reachedRows.length} punishes reached; ${printedBad.length} disagree with what the move list prints. `
+    + 'Every one is a move printing exactly -10: an i10 punisher needs -11 to beat a guard put up on '
+    + 'the first tick the attacker can, because #updateGuard runs before #updateState.',
     cap(printedBad));
 
   // Not an assertion. Pushback is a real mechanic and nobody has claimed that
