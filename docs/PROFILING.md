@@ -6027,3 +6027,39 @@ alpha-tested fence and grating as the named suspect — they skip the depth prep
 construction, so the terrace behind them is shaded twice. The signature is already on record
 and uninvestigated: hiding arena subsystems one at a time returns far less than hiding them
 together, ~17 ms against ~27 ms.
+
+### Correction to the light ladder, before it runs: the rungs are not interchangeable
+
+The design recorded above — "16 → 12 → 8 → 4 → 1 visible lights" — **is broken as stated**,
+and the confound is worth more than the fix.
+
+The scene's 16 lights are not one population. 3 RectArea carry a full LTC integral, two
+texture lookups and matrix work per fragment; 4 point cost a normalize, an attenuation and a
+dot product. The known spread is already large — ~1.5 ms for a shadowless point light against
+a RectArea figure nobody trusts but everyone assumes is several times it.
+
+So **a single slope fitted through mixed-type rungs measures removal order, not light cost.**
+Drop the RectAreas first and the slope is steep; drop the points first and it is shallow. Both
+fit cleanly, both have tight nulls, and they disagree by perhaps 3×. It is the fast-alternation
+trap wearing different clothes: a well-fitted, reproducible number about **a quantity that does
+not exist** — and this one is worse, because *the more carefully you fit it, the more
+trustworthy it looks.*
+
+**Corrected design: four ladders, one per light type**, each varying that type's count with all
+others held fixed, each fitted independently against its own null. The output is per-type
+marginal cost, which is also the more actionable answer — it says *which* lights to cut, not
+merely how many.
+
+Two consequences to schedule around:
+
+- **The RectArea ladder is the thin one and the most important.** Only 3 exist, so it is
+  3/2/1/0 — four points, with the intercept dominating hardest at exactly the small end where
+  the fit-don't-divide warning bites. It needs more repetitions than the others, and
+  over-sampling it is cheaper than reporting a shaky number for the light type most likely to
+  be the answer.
+- **Rung count roughly triples**, since each type needs its own settle-for-compiles cycle, and
+  it cannot be split across sessions without reintroducing cross-session drift.
+
+Raised by the agent that wrote the original proposal, before running it. That is the second
+failure mode identified in advance rather than after the fact today, and both came from the
+author auditing their own design rather than from review.
