@@ -5684,3 +5684,63 @@ written up.
 The standing rule needs the addition: **be most suspicious of the measurement that
 agrees with you.** Every other failure mode in this file announced itself by being
 boring, empty, or the wrong colour.
+
+---
+
+## A shipped change can silently retune the instruments pointed at it
+
+A new class, and the eighth and ninth instances this session. The earlier seven were
+instruments that were *born* wrong. These two were **correct when written and were
+invalidated by a product change, with no error anywhere**:
+
+1. **Option A broke an arc probe.** Moving `retimeFor`'s `pivotAt` to `active[0].from`
+   means widening a window to `from: 0` now makes `retimeFor` bail — so the probe was
+   profiling an **un-retimed clip**, a different animation from the one the game plays.
+2. **`r45-impact` sampled `mv.startup`**, which after Option A is one tick past the
+   window opening — a frame with no box on it.
+
+Neither threw. Both returned plausible numbers. They were caught only because they
+**disagreed with each other by 0.226 on the same quantity**; after fixing, two
+independent instruments agree to 3 mm (+0.062 against +0.059).
+
+This is the same shape as Option A breaking DT-4p, which had been passing by luck for
+weeks. The generalisation is uncomfortable: **every gate in this repo is calibrated
+against the product as it was when the gate was written.** A change large enough to be
+worth gating is large enough to move the gate, and nothing in the toolchain reports it.
+
+The only thing that caught either was **redundancy** — two instruments measuring one
+quantity by different routes. That is expensive and cannot be the default, but it is the
+one method that has worked on this class, since a single instrument has no way to notice
+it has been retuned underneath.
+
+## Chorale is a design property, and FD-2w's fix must not become a suppression list
+
+`seraph/chorale [qcb+3]` misses at point blank and connects further out:
+
+```
+range     t19      t20      t21
+1.5 m   -0.403   -0.392   -0.383     deep
+1.2 m   -0.106   -0.095   -0.088     connects
+0.9 m   +0.059   +0.062   +0.062     misses
+```
+
+Monotone in range, and the miss **grows as you close** — overshoot, which is what a foot
+carrying an authored `fwd: 0.46` lead does at minimum range. The move's own comment calls
+it *"the longest poke in the game that does not travel"*. Ruled out the alternative by
+measurement rather than inference: sweeping `impact.tick` from 14 to 26 finds **no value**
+that makes the declared window connect at point blank. Retiming cannot fix it, because the
+problem is not when the foot arrives but where it ends up.
+
+So the move is right and the gate is wrong — but the tempting fix is worse than the bug.
+Demoting "connects far, misses near" to a note would **re-hide the defect FD-2w exists
+for**: `kestrel/mantis` backfist was in exactly that category, and it had never been
+reported in the gate's life.
+
+**The rule for the exemption: an allowlist entry must be conditional on the measured
+property that justifies it, not on a name.** A named exemption is a suppression that
+outlives its reason — the day someone retunes `chorale`'s `fwd` down to 0.31, a name-keyed
+entry keeps the row green and the gate goes quiet again, which is precisely how this
+project got here. The entry must re-derive its own justification each run: the authored
+forward lead is still long, the move still connects at range, and the miss is still
+monotone in distance. If any of those stops being true the exemption lapses and the row
+goes red on its own.
