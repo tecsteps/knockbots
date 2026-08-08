@@ -4437,3 +4437,98 @@ either carry its own toggles or point at where they live.
 And the gate's step should be renamed: `train-toggle` asserts a control that was never on that screen,
 so it fails for a true reason under a misleading name. **A test that fails correctly and describes the
 failure wrongly still costs the next reader an hour.**
+
+---
+
+# Gameplay testing: the whole sim runs in bare Node, and Playwright can silently swallow a keypress
+
+The owner redirected the project — *"focus is on gameplay, not visual perfection"* — and asked whether
+the tooling was adequate. A research pass answered by **building the thing rather than theorising
+about it**, in ~2 s including the robot build:
+
+```
+ok  construct Fighter 0/1, init(), setOpponent, CombatSystem(stage=null)
+ok  construct Input(new EventTarget())
+ok  hold KeyD for exactly 60 ticks     dx=2.229  state=idle
+ok  hold KeyS 8 ticks then KeyK        notation=d+2  buffer=[5,2,2]  move=duckingStraight
+ok  ff dash                            motion=ff  buffer=[2,5,6,5,6]
+ok  press-to-hit at 1.05 m             hits=1  health 200 -> 169
+```
+
+`Input` takes its event target as a constructor argument, so `new Input(new EventTarget())` plus
+dispatched key events runs the **real** path — `#rawAxis`, `#buttons`, the history push, `#notation`,
+`#motion`. `CombatSystem`'s `stage` is optional-chained throughout and falls back to
+`ARENA_HALF_WIDTH` / `GROUND_Y`, so `stage: null` costs only camera shake and debris while every
+collision path stays live.
+
+## Why Playwright cannot do frame-exact input, mechanically
+
+`Input.keys` is a `Set` read at `beginTick`; `prevKeys` is snapshotted at `endTick`. **A keydown and
+keyup that both land between two sim ticks are added and deleted before `beginTick` ever sees them —
+so `page.keyboard.press()` with no delay can be swallowed entirely, silently.** Hold duration in ticks
+is wall-clock/16.667 filtered through rAF pacing and `Game`'s accumulator, and
+`MAX_TICKS_PER_FRAME` discards the accumulator on catch-up. "Hold forward for exactly 7 ticks" is not
+expressible. `touchscreen.tap` is single-point, so the throw chord — **every throw in the game is a
+chord** — is not expressible at all.
+
+**This is not a reason to distrust `touchgate`.** Reachability, occlusion, the 44 px floor, portrait,
+layout collapse: it does all of that correctly and its null/positive/NO-VERDICT structure is stricter
+than any test runner's pass/fail. The split is clean — browser for *can a thumb reach it*, Node for
+*does the frame data mean what it says*.
+
+## The design that detects the class that got missed
+
+The most expensive bug here was a 12/12 matrix audit that passed while an 86-frame unblockable was
+live, because it fed a **synthesised** buffer to `findMove` and the defect was upstream in
+`commandsFor`. The proposed core assertion is a **differential**: run every move's notation twice —
+once through the synthetic `mkCmd` path, once through real dispatched key events — and diff them.
+
+**Agreement is the null. Any disagreement is, by construction, a `commandsFor`/history/motion bug and
+nothing else.** That is a detector for the class rather than a test that merely avoids its blind spot.
+Positive control: revert the dedupe filter at `Input.js:280` and the gate must go red on the
+held-direction cases and green everywhere else.
+
+The probe already demonstrates it working: `hold KeyS then KeyK` produces buffer `[5,2,2]` — the
+duplicate history entry is **visible**, with the dedupe correctly suppressing `dd`. A synthesised
+buffer cannot contain that defect. This one does.
+
+## And the null control found something on first use
+
+**`Fighter.reset()` does not establish a reproducible initial state.**
+
+```
+DIVERGED  reset() only    a=-0.683812456   b=-0.694042370   c=-0.694042370
+```
+
+The **first** run after `init()` differs from every later one by 10 mm; runs 2..n are bit-identical.
+`reset()` does not reseed `this.rng`, does not touch the animator clock, and caps rather than zeros
+meter. There is no `Math.random` in the sim path and the CPU is fully seeded. **So the simulation is
+deterministic and the initial state is not** — a property this project has claimed since the charter
+and never tested.
+
+The researcher was scrupulous about its own limit: *"Both candidate fixes appeared to work, but my
+trials ran in sequence so the later ones may have inherited the settled state rather than been fixed
+by the change. The convergence is measured; the cause is not established. Do not write 'reseed the
+rng' into a harness on the strength of my run."* That constraint has been passed through verbatim to
+whoever builds the gate.
+
+## Verdict on tooling: install nothing
+
+Node 26 ships `node:test`; Playwright and its Chromium are already present; `jsdom` is unnecessary
+because the `check.mjs` shim plus native `EventTarget` carries the whole input path — **measured, not
+assumed**. It argued specifically *against* adding `@playwright/test`, on the grounds that a runner's
+pass/fail is weaker than this project's controls-gate-admissibility discipline and *"would encourage
+exactly the shape this project has shipped nine times."*
+
+A real-device service is the only thing worth money, and only for the class emulation genuinely cannot
+reach: the Brave `requestFullscreen` rejection, backgrounding and resume, real `env(safe-area-inset-*)`
+values, and a ~9 mm contact patch against a synthetic point.
+
+## The cheapest finding, already shipped
+
+`this.fsError` was being **written by one path and read by nothing.** The automatic handler — the one
+that failed on the player's phone — still ended in `.catch(() => {})`. It now keeps the reason,
+mirrors it onto the button's tooltip, and counts attempts, because *"never fired"* and *"fired and was
+refused"* are different bugs that were previously indistinguishable.
+
+**Eighth wiring-not-authoring finding of the session, and the cheapest.**
