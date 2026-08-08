@@ -4610,3 +4610,93 @@ clean population's own worst case sat 52x above that ceiling.** Stable, reproduc
 `TESTPLAN`'s "33 throws" is **33 slots** across 14 sets = **11 distinct objects, 4 distinct ids**. The
 612 move slots are **190 distinct objects, 73 distinct ids**. The "66 moves clamped" console warning is
 likewise a slot count: **19 distinct move objects.**
+
+---
+
+# Option B: the frame data is true, my briefing for it was wrong, and the fix uncovered a bug it had been hiding
+
+The owner chose the engine fix over the data fix. Result, measured end to end through the real
+`Fighter` and real `CombatSystem` at four ranges:
+
+```
+before   352 moves:  +1:15  +2:111  +3:125  +4:33  +5:34  +6:21  +7:13    none at zero
+after    +0:352 on block,  +0:765 on hit
+```
+
+## I briefed an implementation that would have broken the game
+
+I wrote: *"a connection consumes the rest of the active window — advance `moveTick` to
+`lastActive + 1`."* The implementing agent rejected it and said exactly why: **that makes the same
+identity true and deletes the later windows of every multi-window move.** `pistonRush` would land its
+first piston and lose the other two. `overdrive` likewise.
+
+What shipped is `Fighter#beginRecovery`: the attacker's end tick becomes `contactTick + recovery`,
+**floored at the last tick of any window that has not yet connected.** A multi-hit string keeps every
+hitbox it has coming, and the identity holds on the *last* connection — the one whose blockstun the
+defender is actually sitting in. `AD-3` asserts it directly: 20 multi-window moves at point blank,
+every window still connects.
+
+**Fifth time this session an agent refused a premise I handed it. This one would have shipped a
+regression into the combat system.** The pattern is now beyond anecdote: hand agents hypotheses,
+never conclusions, and say which it is.
+
+## The before-state is permanently re-runnable, which is the point
+
+`advgate --control=no-truncate` restores the old resolution. Under it **AD-1 fails 1306 of 1306 block
+rows and AD-2 fails 628 of 628**, with the original deficit histogram intact, and the runner reports
+`expected red: AD-1, AD-2 / actually red: AD-1, AD-2`.
+
+**A fix whose before-state cannot be re-run is not a measured fix.** This one can be, at any future
+commit, by anyone.
+
+## And the fix revealed a bug it had been masking
+
+**26 moves print as jab-punishable and are not.** The real threshold is `startup + 2`, not `+1`, and
+two frames sit outside the frame data entirely:
+
+- the tick blockstun ends is spent inside `#updateState`'s BLOCKSTUN branch, which decrements, calls
+  `#toNeutral` and **returns** — `#tickNeutral` and `#tryMove` are never reached that tick, buffered
+  or not;
+- and the hitbox must exist strictly before the attacker leaves ATTACK.
+
+So everything printing exactly −10 or −11 is safe from an i10 jab: `hammerFist` in 8 sets, plus
+`bulwarkRam`, `shadowRush`, `coolantLance`, `kesaLine`, `snakeEyes`, `lowSpin`, `holdTheLine`,
+`heelSlice`, `counterweight`.
+
+**This was invisible before.** The old deficit pushed every move 2–7 frames past the boundary, so
+nothing was ever measured sitting *on* it. Fixing one bug is what made the second one observable —
+and neither was reachable from a screenshot.
+
+## A correction to my own count, and to the retime verdict
+
+"415 fails" was wrong in both directions: **364** blockable moves can be made to block at any range,
+and the ledger population — grounded, single-window, non-air — is **352**. Multi-window (20) and air
+(12) have their own clocks and are broken out.
+
+And my retime fix **was** complete, both halves. But the test that says so could not have said
+otherwise: `#buildHitboxes` gates purely on `isActive(mv, moveTick)`, which knows nothing about the
+animator, so the frame half is **true by construction**. The question that actually bears on gameplay
+— does the pose at that frame still *reach* — needed its own instrument, and the clamped moves pass
+it. RT-1 is a pose problem and nothing else.
+
+## Seven instrument defects, found by their own author
+
+Recorded because five produced stable, reproducible numbers about the **wrong event**:
+
+- a probe attributed any attacker event to the intended move, so four air moves per set came back
+  carrying `jab`'s contact tick under `airJab`'s name — reading as a state-machine bug in a move that
+  had never run;
+- a hand-written stage list omitted `animYaw`, so `spinKick` measured −12 on one run and nothing on
+  the next. Fixed by calling the product's own `Fighter#reset` rather than a copy of its field list;
+- a punish test measured advantage in the run where the punish landed — so the thing measured was
+  caused by the thing tested, and two versions returned **constants** across eleven moves with eleven
+  different totals;
+- a guard-matrix null compared **two different characters**, and reported a facing bug when it had
+  measured that a high reaches one robot's jump and not the other's. Now a mirror match;
+- an AI block-rate test reported 0 blocks at every level, because the bot is in ATTACK more than half
+  the time and `#decide` returns before `#tryBlock` — it was measuring how busy the bot is.
+
+**The AI pass then found nothing, and said so plainly.** 983 move starts over 60 seeded rounds across
+10 levels, every one a root move or a cancel the previous move actually lists; guard first raised
+**exactly `reactionTicks`** after the move starts at all ten levels; 1,200 `think()` calls with zero
+off-whitelist reads.
