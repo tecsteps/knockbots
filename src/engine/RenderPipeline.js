@@ -1954,6 +1954,46 @@ class ScenePass extends Pass {
  * this pass then runs a Poisson denoise over, so three quarters of the
  * fragments buy nothing the blur does not put back — and they cost more than
  * every other post pass combined at 1080p.
+ *
+ * ## A SHARED VIEW-NORMAL BUFFER WAS BUILT HERE, MEASURED, AND REVERTED
+ *
+ * The pipeline hands this pass depth and no normal texture, so
+ * `NORMAL_VECTOR_TYPE` is 0 on both of three's materials and `getViewNormal()`
+ * expands to `computeNormalFromDepth()` — 9 `texelFetch` plus 3 unprojections.
+ * The GTAO trace calls it once per pixel; the Poisson denoise calls it for the
+ * centre AND once per tap, which at 12 taps is 13 reconstructions and ~117
+ * depth fetches per pixel. Rendering that once into a half-res packed RGBA8
+ * buffer and handing it to `setGBuffer` collapses all of it to one
+ * `textureLod`. The arithmetic says that should be most of the pass.
+ *
+ * It is not. `NORMAL_VECTOR_TYPE` is a `#define` and nothing else — no composer
+ * rebuild, no reallocation — so the two arms can be interleaved in 1s segments
+ * and paired faster than the contention on this box moves (`tools/aochop.mjs`;
+ * the ABBA-quad rig in `tools/aogate.mjs` could not, its NULL arm came back
+ * +2.85ms). Live CPU-vs-CPU fight, 1632x918, 85-90 pairs per arm:
+ *
+ *     Poisson denoise, 12 taps -> 2    -0.12 ms  [-0.43, +0.21]   <- FREE
+ *     GTAO trace, 11 -> 3 samples      -0.90 ms  [-1.62, -0.22]   <- the cost
+ *     shared normal buffer             -0.99 ms  [-2.31, +0.34]
+ *     NULL (a mode against itself)     +0.10 ms  [-1.22, +1.45]
+ *
+ * Ten of twelve denoise taps — ninety depth fetches a pixel — cost nothing
+ * measurable, because that 5x5 stencil is one or two cache lines on this GPU
+ * and the fetch COUNT is not the cost. The buffer therefore removes work that
+ * was already free, and across three sessions its delta never separated from
+ * its own null. 225 lines and a render target for a saving under this rig's
+ * stated 1.2ms tolerance, so it went back out.
+ *
+ * It did not cost quality, which is worth recording for anyone who revisits it:
+ * `tools/aoquality.mjs` scored it at 21.3804 subject RMSE against its own
+ * 4x-integrated frame versus 21.3822 shipped, and 7.3837 against 7.3914
+ * frame-to-frame under a replayed camera orbit.
+ *
+ * WHERE THE COST ACTUALLY IS: the trace. 11 -> 3 samples takes it from 24 depth
+ * taps a pixel to 6 and returns 0.90 ms, so a cheaper kernel or a quarter-res
+ * trace is the live option and the denoise is not worth touching. And AO is not
+ * invisible at fight framing — removing the pass moves subject RMSE by 9.36
+ * with 59,480 subject pixels past 8/255 — so cutting it is not free either.
  */
 class HalfResGtaoPass extends GTAOPass {
   setSize(width, height) {
@@ -3528,7 +3568,9 @@ export class RenderPipeline {
     if (tier.ao && this.effects.ao && depthTexture) {
       const gtao = new HalfResGtaoPass(this.scene, this.camera, w >> 1, h >> 1);
       // No normal texture: GTAO reconstructs view normals from the depth
-      // gradient, which is what the second geometry pass used to buy.
+      // gradient, which is what the second geometry pass used to buy. Handing
+      // it a shared normal buffer instead was built and measured; see the note
+      // above HalfResGtaoPass for why it is not here.
       gtao.setGBuffer(depthTexture, undefined);
       gtao.output = GTAOPass.OUTPUT.Default;
       gtao.blendIntensity = this.look.aoIntensity;
@@ -3643,7 +3685,12 @@ export class RenderPipeline {
 
     const wantPcss = tier.pcss && this.pcssAvailable && this.effects.shadows;
     const type = wantPcss ? THREE.BasicShadowMap : THREE.PCFShadowMap;
-    if (this.renderer.shadowMap.type !== type) this.renderer.shadowMap.type = type;
+    // The drop is not optional; see `#dropShadowMaps` for what three does with
+    // a type change when something draws shadow maps twice in a frame.
+    if (this.renderer.shadowMap.type !== type) {
+      this.renderer.shadowMap.type = type;
+      this.#dropShadowMaps();
+    }
     this.renderer.shadowMap.enabled = this.effects.shadows;
     this._pcssActive = wantPcss;
 
@@ -4124,6 +4171,49 @@ export class RenderPipeline {
       if (obj.shadow.mapSize.x === size && obj.shadow.mapSize.y === size) return;
       obj.shadow.mapSize.set(size, size);
       obj.shadow.map?.dispose();
+      obj.shadow.map = null;
+    });
+  }
+
+  /**
+   * Frees every shadow map so the next frame reallocates it.
+   *
+   * Called when `renderer.shadowMap.type` changes, and it has to be, because of
+   * an interaction between three's shadow map and this file's own two-stage
+   * caster pass that is invisible until you hit it:
+   *
+   *   - `WebGLShadowMap.render` recreates a map on a type change only while
+   *     `typeChanged` is true, and it resets `_previousType` at the END of that
+   *     same call (three r185, `three.module.js` :9179 and :9416). Exactly one
+   *     `shadowMap.render` per type change sees the flag.
+   *   - `ScenePass.#prepass` runs TWO shadow-drawing renders per frame on
+   *     purpose: stage one draws the split per-fighter casters, then
+   *     `shadowMap.needsUpdate` is re-armed and stage two draws the rest. The
+   *     second one sees `typeChanged === false` and leaves its maps configured
+   *     for the OLD type, while every material has been recompiled for the new
+   *     one.
+   *
+   * A `sampler2DShadow` then gets a depth texture with no comparison mode (or
+   * the reverse), which is GL_INVALID_OPERATION on every draw that samples it:
+   * "Mismatch between texture format and sampler type". Every scene draw is
+   * dropped and the frame that reaches the screen is the post chain over an
+   * almost empty beauty buffer and a stale depth texture — dark and smeared.
+   *
+   * This was latent rather than live: every tier changes `shadowMapSize` as well
+   * as `pcss`, and `#applyShadowResolution` above already nulls a map whose size
+   * moved, which hides it. Verified both ways — `tools/shadowtypebug.mjs` walks
+   * high -> medium -> high and measures mean scene luma, 68.58 at boot and 68.19
+   * on the return with zero GL errors, so the shipped menu path was never
+   * broken. What IS broken without this is any change of `pcss` at a FIXED map
+   * size, which is what a `high` tier with `pcss: false` would be — and that
+   * silently turned a PCSS-vs-PCF frame-time A/B into a measurement of a
+   * corrupted frame that drew almost nothing (it read 40% faster).
+   */
+  #dropShadowMaps() {
+    this.scene.traverse((obj) => {
+      if (!obj.isLight || !obj.shadow || !obj.shadow.map) return;
+      obj.shadow.map.depthTexture?.dispose();
+      obj.shadow.map.dispose();
       obj.shadow.map = null;
     });
   }
