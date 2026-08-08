@@ -4794,3 +4794,74 @@ only measuring.
 This was invisible before option B: every move sat 2-9 frames less safe than printed, so **nothing was
 ever measured at its own boundary.** Fixing the first bug is what put moves onto the line where the
 second one could be seen at all.
+
+---
+
+# RETRACTED: the edge-doubling artifact does not exist. The critic was scoring the bevel shading.
+
+I published this twice — as "the highest-value finding of the round" and again as an item on the
+visual queue. **It is not a defect.** An ablation pass with a **0/255 null** refutes it at the root.
+
+## What was eliminated, and how
+
+The null is byte-identical: two renders, nothing changed, **mean 0, max 0 over 2,073,600 px**. That
+required pinning the sim, the presentation clock, the camera, `renderScale` **and the grain phase** —
+`uTime` re-seeds grain every frame, and without pinning it the floor is ~2.5/255 and every diff is
+noise. Positive controls move the instrument: no-vignette 10.2, no-LUT 15.9, no-distortion 8.3,
+no-AO 6.3, no-bloom 3.4.
+
+- **TAA — the pass does not exist.** The chain is scene → GTAO → bloom → DOF → motion blur → grade →
+  SMAA → output. The only temporal term is camera-velocity reprojection. **The standing hypothesis
+  had no referent.** The `capture.mjs` comment about pausing the sim "so TAA has a still frame to
+  converge on" is stale, and is almost certainly where it came from.
+- **Motion blur — exactly zero pixels changed**, on both frames, including one with a genuinely live
+  rig at 1.775 px of reprojection delta.
+- **No post pass removes the fringe** — bloom, DOF, GTAO, SMAA, distortion, grain, vignette, LUT,
+  saturation, all ablated, fringe survives all of them.
+- **Not aliasing.** 9x supersampled to 1080p moves the edge-chroma population from 1.28% to 1.31%.
+  Aliasing averages away; this does not.
+- **Not a channel offset.** Whole-frame R→B registration is 0.03 px and 0.14 px. There is no copy to
+  be offset.
+- **Not the archive encode**, which was the agent's own hypothesis and which it refuted with its own
+  measurement: the 4:2:0 JPEG *reduces* Cr swing 9.74 → 6.89 against the identical PNG.
+
+## What it actually is
+
+A real, systematic **warm/cool split across every strong edge — the bevel shading itself.** Walking
+the luma-gradient normal across the top-0.5% edges against walking *along* them:
+
+```
+                across edge   along edge   ratio
+01-hero-idle      17.7/255      0.8/255     22x
+03-full-body      19.1/255      1.9/255     10x
+09-roster         36.6/255      1.2/255     30x
+```
+
+A warm line and a cool line one to two pixels apart on every bevel, rivet and pipe. **Read blind, that
+is indistinguishable from "a duplicated red/cyan-tinted offset copy."**
+
+## And this is the part that matters more than the retraction
+
+> *"The critic is scoring the intended warm/cool bevel separation as an artifact. More material
+> differentiation produces MORE of exactly this signature, so the complaint gets worse the more
+> successfully that work lands. The rounds weren't cancelled by an artifact; they were penalised for
+> succeeding."*
+
+The character axis has been **punishing the exact thing it was asking for.** Every round spent
+widening material spread made the "artifact" stronger, and the critics reported it as damage.
+
+That is a different and worse failure than a rendering bug. A bug can be fixed. **A scoring instrument
+that inverts sign on its own top-ranked fix will keep steering the project backwards for as long as
+nobody checks it** — and this one was only caught because the finding was handed to an isolation pass
+instead of a repair pass.
+
+## Two side findings
+
+- **A broken handle:** `bloom.highPassUniforms.luminosityThreshold` had **zero effect across a
+  10,000x sweep** — every arm byte-identical. Whatever owns the live threshold, that is not it. Worth
+  knowing before anyone tunes bloom through it.
+- **One result that did not replicate, reported as such:** on the closeup, ablating bloom collapsed Cr
+  edge width 5.50 → 2.50 px while every other arm held at 5.50 — which looked like a clean isolation
+  and **did not reproduce** on the other frame. What did hold, monotonically across a 6-point sweep,
+  is bloom driving edge-chroma *ringing* on closeups: overshoot 0.34 → 5.26 from strength 0 to
+  shipped. Real, dose-dependent, second-order, and not the reported artifact.
