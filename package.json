@@ -11,7 +11,9 @@
     "preview": "vite preview",
     "build:one": "KB_SINGLEFILE=1 vite build",
     "shots": "node tools/capture.mjs",
-    "touchgate": "node tools/touchgate.mjs --control=both"
+    "touchgate": "node tools/touchgate.mjs --control=both",
+    "simgate": "node tools/simgate.mjs",
+    "simgate:control": "node tools/simgate.mjs --positive-control"
   },
   "author": "",
   "license": "ISC",
