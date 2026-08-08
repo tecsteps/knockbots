@@ -522,9 +522,26 @@ export class TouchControls {
       this._goFullscreen = () => {
         const el = document.documentElement;
         if (document.fullscreenElement || !el.requestFullscreen) return;
+        /*
+         * KEEP THE REJECTION REASON. This used to end in `.catch(() => {})`.
+         *
+         * A player reported the game stuck between Brave's URL bar and its
+         * toolbar, on a screen they could only reach by tapping twice -- so this
+         * handler had fired at least twice, called requestFullscreen, and thrown
+         * the reason away both times. Two silent failures and no diagnosis
+         * available to anyone.
+         *
+         * `fsAttempts` counts how often it has tried, so a report can also
+         * distinguish "never fired" from "fired and was refused" -- which are
+         * completely different bugs and were indistinguishable before.
+         */
+        this.fsAttempts = (this.fsAttempts || 0) + 1;
         el.requestFullscreen({ navigationUI: 'hide' })
           .then(() => screen.orientation?.lock?.('landscape'))
-          .catch(() => {});
+          .catch((err) => {
+            this.fsError = String((err && err.message) || err);
+            if (this.fsBtn) this.fsBtn.title = `fullscreen refused: ${this.fsError}`;
+          });
       };
       window.addEventListener('touchend', this._goFullscreen, { capture: true, passive: true });
       window.addEventListener('pointerup', this._goFullscreen, { capture: true, passive: true });
