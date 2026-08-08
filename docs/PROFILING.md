@@ -5002,3 +5002,106 @@ Not attempted here because it is a shader change on an instanced path rather tha
 because another agent currently holds `RobotBuilder.js`. Recorded so it is not rediscovered from
 scratch — the lathe defect took three critics across three rounds and two wrong mechanisms to reach,
 and this one arrives already diagnosed.
+
+---
+
+# The character axis is scored 5.5x tighter than the game is played, and the texel table it reasoned from is 2x out
+
+An agent was sent to make material identity survive to fight framing. **It shipped no change** — both
+levers it built were measured, refuted and reverted. The findings are worth more than the feature.
+
+## 1. Nobody had written down the framing that ships
+
+Pinned camera, pinned pose, within-session self-test **0.00/255**:
+
+```
+framing            dist    fov    screen px/m    mm per px
+02-closeup-face   1.27 m    24        2003          0.50
+03-full-body      3.98 m    30         507          1.97
+01-hero-idle      4.59 m   35.5        367          2.72
+```
+
+**The axis is scored 5.5x tighter than the game is played.** Nothing finer than ~5.5 mm on a robot
+survives a fight frame. Every round of material work has been validated on the one framing a player
+never sees — which is exactly what two critics said independently, now with the number attached.
+
+## 2. `kb.armor` is at 0.50 texels per screen pixel, not 1.01
+
+Round 36's table concluded *"the plate atlas is already exactly at the screen's sampling rate... there
+is no headroom above it."* **There is a full mip level of headroom.** Seven rounds reasoned from that
+number.
+
+Settled against pixels rather than arithmetic: a checker of known 16-texel cell painted on `kb.armor`
+photographs at **32 screen px per cell** — countable by eye. A geometry walk (the tool round 36 said
+did not exist; it does now) agrees, and reproduces every world-area figure in that table to within 3%
+— so **the geometry half was right and the UV half was wrong.** Errors are per-material: `kb.carbon`
+reproduces exactly, `kb.armor` is out 1.9x, `kb.worn` 2.8x.
+
+## 3. What distance actually costs, and it is wildly uneven
+
+Fraction of tangent-slope variance surviving the mip level each framing selects:
+
+```
+material        closeup   full-body   fight     m2
+kb.gasket         100%      96.2%     88.5%    5.77
+kb.armor          100%      73.6%     52.4%   14.18
+kb.worn           100%      47.5%     31.2%    3.35
+kb.darkMetal     27.2%       2.5%      1.3%   20.60
+kb.piston        26.1%       2.4%      1.3%   12.08
+```
+
+**The two largest surfaces — 32.7 of 58 m² — arrive at fight framing having lost 98.7% of their
+structure**, while the gasket keeps 88.5%. The roster's *order* by apparent micro-structure **inverts
+with distance.** And none of it is redistributed: a box average preserves a mean, so `darkMetal` reads
+roughness 0.3047 at mip 0 and 0.3047 at mip 4 and is shaded as a smooth surface.
+
+## 4. My hypothesis was half right, and the wrong half is the important one
+
+I briefed that the signal lives above Nyquist at fight framing and is therefore **gone by
+construction**. Right that it is lost. **Wrong that it is unrecoverable.**
+
+Decisive test: render the identical framing at 4x and box-filter back to 1080p. Both arms end at
+1920x1080, so any difference is **not resolution**. Shade-then-average carries **+23.6% more
+between-material micro-contrast spread** at fight framing.
+
+**And SMAA recovers none of it** — 3.578 -> 3.567, **-0.3%**. It is a post-resolve edge filter; the
+information is missing before the resolve.
+
+Side by side at 3x the entire difference is **edges** — plate boundaries, greeble rows, rib stacks,
+bolt heads. It is **geometric aliasing, not texture**, which round 13's ablation had already said about
+a character crop. So the 23.6% is bought with **samples** — temporal accumulation, or internal
+resolution spent on the subject — and **it is not a `Materials.js` job at all.**
+
+## 5. Two levers, both null, both reverted
+
+**Normal-variance to roughness** (Toksvig/vMF — the same handoff the machining lay already does).
+**It makes the render worse.** Against the 4x ground truth at fight, mean-luma error goes `kb.armor`
+1.42 -> 3.86 and `kb.piston` 10.03 -> 16.19. The reason is the interesting part: the material losing
+the biggest *fraction* has small absolute variance, while `kb.armor` loses 47.6% of a variance **6x
+larger** — so the correction lands hardest on the wrong surface. And armor's variance is **resolved
+panel grooves, not microfacets**, which is not what that model is for.
+
+**Lowering `METAL_REPEAT`**, which the corrected table appears to demand: swept live at 0.5/1/2/4,
+`darkMetal` micro-contrast +6.4%, piston nil, **15k of 2.07M pixels moved**, indistinguishable at 3x.
+`brushField` builds its octaves at 1, 2 and 4 **texels**, sub-millimetre at any tiling, so no repeat
+can move them into a visible band. Kept at 4 — churning a shipped constant for a null result is not
+worth a re-bake.
+
+## 6. And a method finding that may explain several rounds that measured "nothing"
+
+```
+                              max    mean    pixels differing
+two grabs, ONE session       0.00  0.0000            0
+two loads, IDENTICAL tree     189  0.8300      197,000  (fight)
+```
+
+**The cross-session noise floor is the same size as a real material change.** The
+`__KB_DETAIL` / `__KB_CHAMFER` convention reads at compile time and needs one page load per arm — so
+**it cannot see effects this size.** Every A/B run that way has been reading a difference against a
+floor as large as its own signal. Both of this pass's sweeps wrote a live uniform inside one frozen
+frame instead; restore control exactly 0.00.
+
+## And it declined to show me a crop
+
+I asked for a before/after at in-match framing. Its answer: *"There is no after — nothing I built
+survived measurement, so showing you a crop would be showing you noise."*
