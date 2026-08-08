@@ -5795,3 +5795,35 @@ That table is a direct causal demonstration that the forward lead IS the miss �
 which the arc profile could only infer. The working control pushes the lead UP,
 so the move keeps whiffing while failing the "still connects at range" condition
 that stops a broken move borrowing the exemption.
+
+### A production smoke test that measured the laptop, not the game
+
+Attempted an end-to-end check of the deployed build on a handset profile — nothing had
+ever verified `knockbots.com` itself, only a local dev server. It reported:
+
+```
+booted: false     bootMs: 122006     phase: "menu"     canvas 1467x612
+```
+
+and then the screenshot itself timed out at 30 s. Read literally that is "the shipped
+game fails to boot on a phone in two minutes", which would have been alarming and wrong.
+
+```
+load averages: 24.31 17.08 12.57      15 headless Chromium processes
+```
+
+Four frame-budget agents were mid-measurement, each driving live fights in its own
+browser. The number describes contention on this machine, not the product. **Deleted
+rather than reported.** The frame-budget agents already established this hazard —
+`corr(loadavg, frame ms) = 0.68`, and a sibling agent's Chromium took an identical scene
+from 16 ms to 60 ms — and I ran a browser measurement into it anyway.
+
+**Do not take a timing measurement while another agent is taking a timing measurement.**
+Deferred until the workflow lands.
+
+One real defect did come out of it, and it was mine. The first probe waited on
+`#boot?.classList.contains('hidden')`. `main.js:65-66` adds `.hidden` and then **removes
+the node 650 ms later**, so the check reads `undefined` on a boot that succeeded and can
+never be satisfied. It had already reported a false "boot never hid" against the local
+server earlier in the session and I read it as an environment quirk instead of a bug in
+my own probe. Correct predicate is `!el || el.classList.contains('hidden')`.
