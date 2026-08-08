@@ -40,6 +40,10 @@ const SRC = join(ROOT, 'src');
 
 const ARGV = process.argv.slice(2);
 const flag = (n) => ARGV.includes(`--${n}`);
+const opt = (n, d = null) => {
+  const hit = ARGV.find((a) => a.startsWith(`--${n}=`));
+  return hit ? hit.slice(n.length + 3) : d;
+};
 const POSITIVE_CONTROL = flag('positive-control');
 const VERBOSE = flag('verbose');
 
@@ -88,7 +92,7 @@ function patchedModuleUrl(relPath, edits) {
   const abs = join(SRC, relPath);
   const dir = dirname(abs);
   let src = readFileSync(abs, 'utf8');
-  for (const [find, replace, label] of edits) {
+  for (const [find, replace, label = 'control'] of edits) {
     if (!src.includes(find)) {
       throw new Error(`positive control "${label}": the source string this gate patches is gone from src/${relPath}. `
         + 'Update tools/smgate.mjs — a silent no-op here reports a green control against healthy code.');
@@ -121,8 +125,33 @@ const HITSTUN_REPLACE = `      case STATE.HITSTUN:\n        this.#tickNeutral(cm
 const THROWPATH_FIND = `    if (move.props.throw) return null;`;
 const THROWPATH_REPLACE = `    /* POSITIVE CONTROL: grabs resolve down the strike path again */`;
 
-const fighterUrl = POSITIVE_CONTROL
-  ? patchedModuleUrl('combat/Fighter.js', [[HITSTUN_FIND, HITSTUN_REPLACE, 'act out of hitstun']])
+/*
+ * SM-1n's control: take the round-boundary rng reseed back out of `reset()`.
+ *
+ * SM-1n failed when this gate was first written — same seed, same transition
+ * COUNT, different transition SEQUENCE. That was not an instrument fault and it
+ * was not a state machine fault: it was dtgate's DT-3 seen from another angle.
+ * `reset()` carried `this.rng` across the boundary, so the second of two
+ * identical runs entered its first knockdown with the generator in a different
+ * place and picked `r.getUpRoll` where the first picked `r.getUp` — a different
+ * clip, a different KNOCKDOWN -> WAKEUP tick, a different sequence at the same
+ * length.
+ *
+ * `--control=no-reseed` reinstates exactly that one line's absence, and SM-1n
+ * must go red on it. Without this control the claim "the reseed fixed SM-1n" is
+ * a story about a coincidence in time; with it, it is a measurement.
+ */
+const RESEED_FIND = `    this.rng = new Rng(0x51ed2701 + this.index * 0x9e37);`;
+const RESEED_REPLACE = `    /* CONTROL: round-boundary reseed removed */`;
+
+const NO_RESEED = opt('control', null) === 'no-reseed';
+
+const fighterEdits = [];
+if (POSITIVE_CONTROL) fighterEdits.push([HITSTUN_FIND, HITSTUN_REPLACE, 'act out of hitstun']);
+if (NO_RESEED) fighterEdits.push([RESEED_FIND, RESEED_REPLACE, 'no round-boundary reseed']);
+
+const fighterUrl = fighterEdits.length
+  ? patchedModuleUrl('combat/Fighter.js', fighterEdits)
   : pathToFileURL(join(SRC, 'combat/Fighter.js')).href;
 const combatUrl = POSITIVE_CONTROL
   ? patchedModuleUrl('combat/CombatSystem.js', [[THROWPATH_FIND, THROWPATH_REPLACE, 'grab down the strike path']])
@@ -339,28 +368,23 @@ const fuzzTransitions = transitions.slice();
 // This doubles as a determinism smoke test and it is what makes the census above
 // a measurement rather than a sample.
 //
-// The two measured runs are preceded by a boundary rewind that `Fighter.reset()`
-// does NOT do on its own: the per-fighter rng is reseeded and the idle clip is
-// replayed past `#play`'s early return. That is the DT-3 finding applied from
-// outside — `reset()` carries the rng stream across a round boundary, so two
-// back-to-back runs of the same script legitimately differ at the first wakeup
-// roll. Without this the null control measures dtgate's DT-3 defect instead of
-// the state machine, which is a null control measuring the wrong thing.
+// This control failed when it was written, and the failure was real: `reset()`
+// carried the per-fighter rng across the round boundary, so two back-to-back
+// runs of the same script legitimately diverged at the first wakeup roll. That
+// is dtgate's DT-3, and it has since been fixed in `Fighter.reset()`. Nothing is
+// patched from outside here — the control runs against the shipping `reset()`
+// and passes because the product is now right, which is the only version of
+// this control worth having.
+//
+// The first run is still discarded: whatever settles, settles during a run, and
+// simgate's first-run rule applies to every measured block in this repo.
 {
-  const rewind = () => {
-    for (const f of fighters) {
-      f.rng.reseed(0x51ed2701 + f.index * 0x9e37);
-      f.animator?.play('idle.fight', { blend: 0, loop: true });
-    }
-  };
-  runFuzz(0x51a70000, FUZZ_TICKS);          // warm-up; discarded (see simgate's first-run rule)
+  runFuzz(0x51a70000, FUZZ_TICKS);          // warm-up; discarded
   recording = true;
   transitions.length = 0;
-  rewind();
   runFuzz(0x51a70000, FUZZ_TICKS);
   const a = transitions.slice();
   transitions.length = 0;
-  rewind();
   runFuzz(0x51a70000, FUZZ_TICKS);
   const b = transitions.slice();
   recording = false;
@@ -404,11 +428,15 @@ const fuzzTransitions = transitions.slice();
 // ---------------------------------------------------------------------------
 
 const THROWS = [];
+const ALL_MOVES = [];
 {
   const seen = new Set();
   for (const key of MOVE_SET_KEYS) {
     for (const mv of MOVES[key]?.__ordered || []) {
-      if (mv.props?.throw && !seen.has(mv.id + key)) { seen.add(mv.id + key); THROWS.push(mv); }
+      if (seen.has(mv)) continue;
+      seen.add(mv);
+      ALL_MOVES.push(mv);
+      if (mv.props?.throw) THROWS.push(mv);
     }
   }
 }
@@ -451,7 +479,25 @@ function idleTick(t) {
 function setupDefender(cond, tick) {
   const d = f1;
   if (cond === 'normal') return true;
-  if (cond === 'invulnerable') { d.invulnerable = true; return true; }
+  if (cond === 'invulnerable') {
+    // `invulnerable` is recomputed from the current move's window every tick in
+    // `#updateFlags`, so assigning it to an idle fighter is erased on the next
+    // tick — it has to come from a real evasive move sitting inside its own
+    // i-frames. Setting the flag directly and calling it staged was the harness
+    // scoring 132 cells against a defender who was never invulnerable.
+    const evasive = ALL_MOVES.find((m) => m.props?.invulnFrom != null && !m.meterCost && m.props.invulnFrom > 0);
+    if (!evasive) return false;
+    d.meter = METER_MAX;
+    d.startMove(evasive);
+    if (d.currentMove !== evasive) return false;
+    const p = evasive.props;
+    if (p.invulnFrom > 1) d.fastForward(p.invulnFrom - 1);
+    for (let k = 0; k < 3; k++) {
+      if (d.invulnerable) return true;
+      idleTick(tick + k);
+    }
+    return d.invulnerable;
+  }
   if (cond === 'backdash') {
     // A real backdash: the fighter's own #dash(-1) sets throwInvuln = 10.
     const kb = makeKeyboard();
@@ -592,6 +638,15 @@ function placeAttacker(dist) {
   }
 
   let notStarted = 0;
+  /**
+   * Per-defender-state coverage.
+   *
+   * A total cell count hides which of the ten states were actually reached, and
+   * a state that was never staged is a state the gate does not cover — not a
+   * state that passed. This ledger is printed on every run, green or red, so
+   * the verdict can never be read as broader than the sweep.
+   */
+  const cover = new Map(CONDITIONS.map((c) => [c, { cells: 0, releases: 0, payouts: 0 }]));
   for (const cond of CONDITIONS) {
     for (const mv of THROWS) {
       for (const dist of DISTANCES) {
@@ -647,6 +702,7 @@ function placeAttacker(dist) {
           continue;
         }
         cells++;
+        cover.get(cond).cells++;
       }
     }
   }
@@ -657,12 +713,35 @@ function placeAttacker(dist) {
   for (const p of payouts) byCond.set(p.cond, (byCond.get(p.cond) || 0) + 1);
   const rows = [...byCond.entries()].map(([c, n]) => `${n.toString().padStart(5)}x in ${c}  e.g. ${payouts.find((p) => p.cond === c).move}`);
   record('SM-3  a rejected grab never pays out as an unblockable strike', payouts.length === 0,
-    `${cells} cells (${THROWS.length} throws x ${CONDITIONS.length} states x ${DISTANCES.length} ranges), `
+    `${cells} cells (${THROWS.length} distinct throw move objects x ${CONDITIONS.length} states x ${DISTANCES.length} ranges; `
+    + `the plan's "33 throws" is 33 SLOTS across 14 move sets — 11 distinct objects, 4 distinct ids), `
     + `${payouts.length} payouts, ${legitimate.length} legitimate throw releases`, rows.slice(0, 10));
 
-  // The plan's null control, and the harness ledger it insists on.
-  record('SM-3n null control — a legitimate throw still lands at range', legitimate.length > 0,
-    legitimate.length ? `${legitimate.length} throw releases against reachable defenders` : 'NO throw ever landed — the sweep proves nothing');
+  for (const p of payouts) cover.get(p.cond).payouts++;
+  for (const l of legitimate) cover.get(l.cond).releases++;
+
+  // The plan's null control. It must distinguish "throws are safe against these
+  // defenders" from "no throw ever fired", which is the difference between a
+  // result and an empty sweep — and it must do so PER STATE, because a sweep
+  // that lands 88 throws all in `normal` has still never tested a grab against
+  // a juggle.
+  const reachable = ['normal', 'wakeup'];      // the states a grab is DESIGNED to catch
+  const landedIn = reachable.filter((c) => cover.get(c).releases > 0);
+  record('SM-3n null control — a legitimate throw still lands at range',
+    legitimate.length > 0 && landedIn.length === reachable.length,
+    legitimate.length
+      ? `${legitimate.length} throw releases, landing in: ${landedIn.join(', ') || 'nothing'}`
+      : 'NO throw ever landed — the sweep proves nothing');
+
+  say('[smgate] SM-3 coverage by defender state (cells tested / legit releases / payouts):');
+  for (const c of CONDITIONS) {
+    const v = cover.get(c);
+    const verdict = v.cells === 0 ? '  NOT COVERED — no cell staged' : (v.releases ? '  grab lands (by design)' : '  grab correctly refused');
+    say(`          ${c.padEnd(13)} ${String(v.cells).padStart(3)} cells  ${String(v.releases).padStart(3)} releases  ${String(v.payouts).padStart(3)} payouts${verdict}`);
+  }
+  const uncovered = CONDITIONS.filter((c) => cover.get(c).cells === 0);
+  if (uncovered.length) say(`[smgate] SM-3 DOES NOT COVER: ${uncovered.join(', ')}`);
+
   const hrows = [...harnessRows.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${n} cells — ${c}`);
   if (harnessFail || notStarted) {
     say(`[smgate] note   ${harnessFail} cells reported as HARNESS failures and ${notStarted} as notStarted, neither counted as results:`);
