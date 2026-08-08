@@ -5827,3 +5827,59 @@ the node 650 ms later**, so the check reads `undefined` on a boot that succeeded
 never be satisfied. It had already reported a false "boot never hid" against the local
 server earlier in the session and I read it as an environment quirk instead of a bug in
 my own probe. Correct predicate is `!el || el.classList.contains('hidden')`.
+
+---
+
+## `Fighter.setCharacter` leaves ~12 mm of leg capsule behind, on a path players reach
+
+FD-5n's four-round mystery bottoms out in a **partial rebuild**, and it is not confined to
+the test harness.
+
+Both fighters mirrored to `ROSTER[0]`, staged apart, each capsule measured **in its own
+frame** (relative to its own position, both horizontal axes multiplied by facing):
+
+```
+constructed scalars   radius, floorY, moveSetKey, stats     all identical
+hurtDefs              22 vs 22, 0 differing entries
+hurtboxes             22 vs 22, 2 meaningfully differing
+                      [16] leg   worst component 0.0037 m
+                      [17] leg   worst component 0.0119 m
+```
+
+The **definitions match exactly and the resolved capsules do not.** 11.9 mm on a leg
+capsule is the right order of magnitude to flip a cell whose margin is centimetres — which
+is precisely what FD-5n has been reporting as a facing bug for four rounds. The residue is
+confined to the lower leg, pointing at foot-IK / plant state: stateful, applied after the
+pose is written, and not obviously rebuilt with the rig.
+
+### It splits into two items and they must not be folded together
+
+`setCharacter`'s own comment says `startMatch` calls it for both fighters **on every
+rematch**. So:
+
+- **fdgate / FD-5n** — comparing two bodies that are not identical. A harness bug.
+- **`Fighter.setCharacter`** — leaves ~12 mm of leg-capsule residue across a rebuild.
+  **Product code, reachable by any player who hits rematch**, and unknown whether 12 mm
+  matters at that magnitude.
+
+The symptom is a harness artefact — only fdgate mirrors two different rigs onto one body —
+but the mechanism underneath it is shipped code. Folding them together would have filed a
+real product bug as a tooling annoyance, which is the more comfortable of the two readings
+and the wrong one. Neither is fixed; the second wants its own round and a decision about
+whether 12 mm of hurtbox on a rematch is worth chasing.
+
+This is the same family as `reset()` leaving `currentClip` and `breathing.phase` behind:
+**a rebuild that rebuilds most of the object.** Third instance in this codebase, and the
+pattern is now worth stating as a suspicion rather than a discovery — anything named
+`reset`, `setCharacter` or `rebuild` in this project has so far been partial.
+
+### The probe was wrong first, in the direction of its author's prior
+
+Version one placed both fighters at the origin, let `#separatePair` push them apart, and
+printed **"22 of 22 capsules differ"** — the conclusion already expected. Every one of
+those diffs was position and facing, not body. The fix is the same lesson as the
+`powerCrush` measurement: a facing flip is a 180° yaw, so **both** horizontal axes negate.
+
+Tenth instrument defect of the session and the **second** to hand its author a confident
+false positive matching what they believed. Both were caught only because someone went
+back and questioned a result that had already agreed with them.
