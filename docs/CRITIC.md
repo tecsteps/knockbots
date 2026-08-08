@@ -217,3 +217,59 @@ was yes, and the regression would have shipped.
 
 **Every round that changes something must ask its critics specifically about that change**, in
 addition to the blind pairs.
+
+---
+
+# SECOND SUPERSEDING CORRECTION: a warm/cool edge split is the material working, not an artifact
+
+A critic on the character axis reported, as its highest-impact finding, *"every panel corner, rivet and
+pipe edge shows a duplicated red/cyan-tinted offset copy — an edge-doubling/ghosting artifact."* It was
+believed, published twice, and queued as the top visual fix.
+
+**An ablation pass with a 0/255 null refutes it completely.** There is no duplicated copy. There is no
+TAA pass in this renderer at all. Motion blur changes exactly zero pixels. Supersampling 9x does not
+touch it. Whole-frame R→B registration is 0.03 px.
+
+**What it is:** the warm/cool split across every strong edge — the bevel shading itself. Measured by
+walking the luma-gradient normal *across* the top-0.5% edges versus walking *along* them:
+
+```
+                across edge   along edge   ratio
+01-hero-idle      17.7/255      0.8/255     22x
+03-full-body      19.1/255      1.9/255     10x
+09-roster         36.6/255      1.2/255     30x
+```
+
+A warm line and a cool line one to two pixels apart on every bevel, rivet and pipe. Read blind, that is
+genuinely indistinguishable from a doubled edge — which is why a careful critic reported it in good
+faith and why nobody caught it for several rounds.
+
+## Why this is a protocol failure and not a critic's mistake
+
+**More material differentiation produces MORE of this signature.** So the axis's own top-ranked
+fix — differentiate the materials — makes its own top-ranked complaint worse. Every round spent
+widening the roughness, metalness and coat spread strengthened the "artifact" and was then penalised
+for it.
+
+**The rounds were not cancelled by a defect. They were marked down for succeeding.**
+
+That is worse than a noisy instrument. A 27-point spread wastes rounds; **an instrument that inverts
+sign on its own advice spends them going backwards**, and does so consistently rather than randomly.
+
+## The rules that follow
+
+1. **A chromatic edge is not evidence of an artifact.** On a metal robot lit warm-key/cool-rim, a
+   warm-and-cool pair one or two pixels apart across a bevel is the *intended* result. Do not report
+   it as ghosting, doubling, fringing or aberration.
+2. **The discriminator is direction, and it is cheap.** An artifact is indifferent to edge
+   orientation; shading is not. If the chroma swing runs *across* the edge and vanishes *along* it, it
+   is shading. A ratio near 1 is an artifact; the ratios here are 10x to 30x.
+3. **Chromatic aberration is off and has been for many rounds.** `look.chroma` is `0.0`, and
+   `capture.mjs` additionally zeroes it at the freeze for the closeup. Three separate critics have now
+   filed it. **It is not there.** Any report of it is a report about something else.
+4. **Do not act on a rendering-defect claim before it is isolated.** This one was only caught because
+   it was handed to an *isolation* pass with a null control rather than to a repair pass. A repair pass
+   would have found something to change, and the axis would have got worse.
+5. **When a fix and a complaint move together, suspect the complaint.** If the thing the axis asks for
+   reliably increases the thing the axis penalises, the rubric is describing one phenomenon in two
+   contradictory ways, and no amount of work resolves that from the code side.
