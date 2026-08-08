@@ -232,7 +232,14 @@ async function publishVercel() {
   const token = ENV.VERCEL_API_KEY;
   if (!token) return { ok: false, why: 'VERCEL_API_KEY missing from .env' };
   // Token goes through env, never argv (ps would expose argv to any local user).
-  const r = await run('npx', ['--yes', 'vercel@latest', 'deploy', '--prod', '--yes', '--prebuilt=false'], {
+  // NO --prebuilt. It is a boolean flag, so `--prebuilt=false` still ENABLES it and
+  // the CLI then fails with "no prebuilt output found in .vercel/output". That bug
+  // shipped in the first version of this file and stayed invisible for two deploys,
+  // because Vercel already happened to be serving the same asset hashes from an
+  // earlier manual deploy — the publish was failing while verify went green on a
+  // coincidence. It only surfaced once the local build changed. Exactly the failure
+  // this file exists to catch, caught in this file's own publish step.
+  const r = await run('npx', ['--yes', 'vercel@latest', 'deploy', '--prod', '--yes'], {
     VERCEL_TOKEN: token,
   });
   return r.code === 0 ? { ok: true } : { ok: false, why: `vercel exited ${r.code}` };
