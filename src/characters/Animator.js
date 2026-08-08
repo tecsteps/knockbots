@@ -352,7 +352,48 @@ class Spring3 {
  * @param {number} clock
  */
 function retimeClip(r, clock) {
-  if (clock <= r.pivotAt) return clock * r.inScale;
+  /*
+   * ANCHOR THE WIND-UP AT ITS END, NOT ITS START.
+   *
+   * This read `clock * r.inScale` before the pivot, which meets the outgoing
+   * segment at `clock === pivotAt` **only when `inScale === pivot / pivotAt`** --
+   * exactly the value `Fighter.retimeFor` is allowed to overrule when it clamps.
+   * And `pivotAt` IS `move.startup`. So for every clamped move the clip was
+   * discontinuous on the tick the hitbox appears, which is the worst tick in the
+   * move to be discontinuous on.
+   *
+   * Measured by `tools/retimegate.mjs`, on 19 distinct clamped move objects:
+   *
+   *   RT-1  airSideKick wants 2.00x, clamped to 1.38x -- on its first ACTIVE
+   *         frame the clip sat 4.96 frames short of its declared contact pose,
+   *         then advanced 6.01 clip-frames in one tick against a normal 1.05.
+   *   RT-2  through the real animator, broken-pin moves took their largest
+   *         single-tick limb step exactly one tick past the pin in 10/27;
+   *         intact-pin moves in 4/146. airHammer's striking bone moved 97.6 cm
+   *         in one tick, 13.8x its own median.
+   *   RT-3  and it reached collision. `#buildHitboxes` sweeps the capsule back
+   *         to last tick's anchor -- correctly -- so capsule length IS limb
+   *         travel. **airSideKick handed CombatSystem a 104 cm swept capsule
+   *         against a 5 cm median for the same move**, on one tick, invisible in
+   *         the pose the player saw. 9 broken-pin moves; 0 intact-pin moves.
+   *
+   * A phantom hitbox twenty times too long is a correctness bug, not a polish
+   * one: it connects at a range the animation never showed.
+   *
+   * The form below is continuous at the pivot **by construction** -- at
+   * `clock === pivotAt` it returns exactly `pivot`, for any `inScale` -- so the
+   * clamp can no longer break it. The cost moves to `clock === 0`: a clamped
+   * wind-up now begins partway into its own first pose rather than ending
+   * partway short of contact. That trade is deliberate and one-directional. The
+   * start of a wind-up is a tick on which nothing has happened yet; the contact
+   * frame is the one the hitbox and the eye both land on.
+   *
+   * After: RT-2 0/27 and RT-3 0. RT-1 stays red and should -- it measures the
+   * *descriptor*, and 19 clips still want a wind-up scale the clamp will not
+   * give them. Re-authoring their `impact.tick` is the remaining half and is a
+   * separate, authorial change.
+   */
+  if (clock <= r.pivotAt) return Math.max(0, r.pivot - (r.pivotAt - clock) * r.inScale);
   return r.pivot + (clock - r.pivotAt) * r.outScale;
 }
 
