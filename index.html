@@ -89,5 +89,31 @@
       </div>
     </div>
     <script type="module" src="/src/main.js"></script>
+
+    <!--
+      Cloudflare Web Analytics.
+
+      The account had Web Analytics switched ON for knockbots.com already
+      (enabled: true, auto_install: true) and it was doing nothing: the served page
+      carried exactly one script tag, and the live response was byte-identical to
+      the local dist (5261 = 5261), so nothing was being injected. Automatic
+      install works by rewriting HTML as it passes through the proxy, and a Pages
+      custom domain serves the response directly, so there was no rewrite step. The
+      dashboard said on; the page said otherwise. Same shape as the setEffect defect
+      in RenderPipeline -- a flag set is not an effect had -- so this is the beacon
+      placed explicitly, where it can be verified in the served bytes.
+
+      The site token is not a secret. It is designed to sit in public page source
+      and identifies the site, not the account; it grants no API access.
+
+      `defer` matters: this is the one external request the page makes, and it must
+      never sit in front of the game booting. If Cloudflare is slow or blocked, the
+      game is unaffected and the only casualty is a missing datapoint.
+
+      Cookieless and no cross-site tracking -- no consent banner, and nothing about
+      an individual player is collected.
+    -->
+    <script defer src="https://static.cloudflareinsights.com/beacon.min.js"
+            data-cf-beacon='{"token": "21298906eb06411f85965c6c20914d60"}'></script>
   </body>
 </html>
