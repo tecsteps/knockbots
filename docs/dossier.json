@@ -1,20 +1,20 @@
 {
   "status": {
-    "rev": "0.40.0",
-    "commits": "240",
+    "rev": "0.41.0",
+    "commits": "250",
     "modules": 73,
-    "lines": "96k",
+    "lines": "99k",
     "clips": 92,
     "moves": 777,
     "characters": 10
   },
   "verdicts": [
     {
-      "axis": "Animation — 1W 1D 2L (first wins)",
-      "score": 1
+      "axis": "Character — 0W 4D 8L (first draws)",
+      "score": 0
     },
     {
-      "axis": "Interface — 81 under the retired scale, not re-run",
+      "axis": "Animation — 1W 1D 2L",
       "score": 0
     },
     {
@@ -26,11 +26,11 @@
       "score": 0
     },
     {
-      "axis": "Character — 0W 0D 3L",
+      "axis": "Lighting — protocol rebuilt, unscored",
       "score": 0
     },
     {
-      "axis": "Lighting — VOID, capture ran mid-scoring",
+      "axis": "Interface — 81 on the retired scale",
       "score": 0
     }
   ],
@@ -1535,11 +1535,52 @@
           "state": "8, ~75s, no browser"
         }
       ]
+    },
+    {
+      "phase": "PHASE 46",
+      "when": "The scoring instrument gets audited",
+      "rev": "rev 0.41.0",
+      "title": "Two of six axes were measuring the wrong thing, and one was rewarding the opposite of its own advice",
+      "paras": [
+        "A critic reported, as the highest-impact finding on character rendering, a duplicated red and cyan offset copy on every panel corner and rivet — an edge-doubling artifact. It was believed, published twice, and queued as the top visual fix. An ablation pass with a byte-identical null control refuted it completely. There is no duplicated copy. There is no temporal anti-aliasing pass in this renderer at all. Motion blur changes exactly zero pixels, nine-times supersampling does not touch it, and whole-frame channel registration is three hundredths of a pixel.",
+        "What the critics were seeing is the warm and cool split across every strong edge — the bevel shading itself, measured at seventeen to thirty-seven code values of colour swing across an edge against under two along the same edge. A warm line and a cool line a pixel or two apart on every bevel. Read blind, that is indistinguishable from a doubled edge, which is why three separate critics reported it in good faith.",
+        "The consequence is worse than the bug would have been. More material differentiation produces more of that signature — so the axis’s own top-ranked fix made its own top-ranked complaint worse. Rounds of work were not cancelled by a defect; they were marked down for succeeding. A noisy instrument wastes rounds at random. An instrument that inverts sign on its own advice spends them going backwards, consistently.",
+        "The protocol was rewritten with the discriminator, which is cheap: an artifact is indifferent to edge orientation and shading is not, so chroma that runs across an edge and vanishes along it is shading. Re-scored on the corrected rubric by three critics, the character axis recorded its first draws — four of them across twelve pairs. Not one critic re-filed a struck finding, and one used the new rule unprompted to separate a real texture defect from the cleared one.",
+        "That real defect turned out to be a genuine unit bug, and three critics across three rounds had described it as wood grain without anyone finding the cause. One axis of the lathe’s texture coordinates was normalised and the other was in metres, so density around a cylinder depended on its radius while density along it did not. They agreed only at a radius of sixteen centimetres, and every such part on the roster is thinner. On the shoulder struts that is a fourfold squash in one direction, and an even grain squashed fourfold is a stripe field.",
+        "Two critics disagreed about the mechanism and both were half right, which is why measuring beat arguing. One said the texture ignored the curvature; it did not, and a fold test proves the mapping was genuinely cylindrical. The other said the mapping was therefore innocent and the problem was the material; it was not, and the material cue they said was missing — a directional metal sweep — turned out to exist, be sampled through those same squashed coordinates, and be restored by the mapping fix they argued was unnecessary. Neither had considered that a correct projection can carry a wrong shape.",
+        "And the fix revealed the next thing under it, as three fixes have this week. With the texture at its true density the struts read darker and blotchier, because the modulation map was only ever acceptable while it was being compressed four times too fine. The wood is gone; brushed metal is not yet reached. That is a separate tuning job, recorded rather than hidden."
+      ],
+      "tags": [
+        {
+          "label": "edge doubling",
+          "state": "refuted — 0/255 null"
+        },
+        {
+          "label": "character axis",
+          "state": "was inverting on its own advice"
+        },
+        {
+          "label": "character",
+          "state": "0W 4D 8L — first draws"
+        },
+        {
+          "label": "lathe UV",
+          "state": "3.91x squash — fixed"
+        },
+        {
+          "label": "aniso >1.6x",
+          "state": "20.3% -> 14.8% roster-wide"
+        },
+        {
+          "label": "premises refuted",
+          "state": "7, four of them mine"
+        }
+      ]
     }
   ],
   "deploy": {
     "url": "https://knockbots.vercel.app",
-    "rev": "0.40.0",
-    "note": "Deployed after the frame-data fix. Source on github.com/tecsteps/knockbots."
+    "rev": "0.41.0",
+    "note": "Deployed after the lathe UV fix. Source on github.com/tecsteps/knockbots."
   }
 }
