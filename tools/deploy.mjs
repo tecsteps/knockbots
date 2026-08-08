@@ -165,26 +165,65 @@ function localAssets() {
  * what we actually built. Cache-bust, because a CDN edge holding an old index.html
  * is itself a real deploy failure a player would experience.
  */
-async function verify(target, expected) {
+async function fetchAssets(target) {
   const url = `${target.verifyUrl}/?_cb=${process.hrtime.bigint()}`;
-  let html;
   try {
     const res = await fetch(url, { headers: { 'cache-control': 'no-cache' }, redirect: 'follow' });
-    if (!res.ok) return { ok: false, why: `HTTP ${res.status}` };
-    html = await res.text();
+    if (!res.ok) return { err: `HTTP ${res.status}` };
+    return { live: assetsOf(await res.text()) };
   } catch (e) {
-    return { ok: false, why: `unreachable: ${e.message}` };
+    return { err: `unreachable: ${e.message}` };
   }
+}
 
-  const live = assetsOf(html);
-  if (!live.length) return { ok: false, why: 'no hashed assets in served html' };
-  if (!expected) return { ok: null, why: 'no local dist to compare against', live };
+/**
+ * Poll until the host serves the expected build, or the settle window expires.
+ *
+ * WHY THE WINDOW EXISTS. The first version of this checked once, immediately after
+ * wrangler printed "Deployment complete!", and reported knockbots.com as serving a
+ * DIFFERENT build. It wasn't: the Cloudflare API confirmed the deployment was
+ * production on branch main, and seconds later the domain served the new hashes.
+ * The deploy was fine; the instrument had no settling time and reported "not yet"
+ * as "wrong".
+ *
+ * For a gate that is the worse direction to fail in. A false FAIL trains you to
+ * discount red, which destroys the only thing this file is for — and it would have
+ * done it on the very first run, while the tool was still earning trust.
+ *
+ * So: poll, and report HOW LONG it took. A deploy that needs 40 s to land is
+ * healthy; one that never lands is broken; a single instantaneous check cannot tell
+ * those apart. Timing out still fails, and still prints what the host was serving
+ * instead — the window makes the check patient, not lenient.
+ */
+async function verify(target, expected, { settleMs = 90_000, everyMs = 5_000 } = {}) {
+  const t0 = Date.now();
+  let last = null;
 
-  const missing = expected.filter((a) => !live.includes(a));
-  if (missing.length) {
-    return { ok: false, why: `serving a DIFFERENT build`, live, expected, missing };
+  for (;;) {
+    const r = await fetchAssets(target);
+    const elapsed = Date.now() - t0;
+
+    if (!r.err) {
+      const live = r.live;
+      last = { live };
+      if (!live.length) last.why = 'no hashed assets in served html';
+      else if (!expected) return { ok: null, why: 'no local dist to compare against', live };
+      else {
+        const missing = expected.filter((a) => !live.includes(a));
+        if (!missing.length) return { ok: true, live, waitedMs: elapsed };
+        last.why = 'serving a DIFFERENT build';
+        last.missing = missing;
+      }
+    } else {
+      last = { why: r.err };
+    }
+
+    if (elapsed + everyMs > settleMs) {
+      return { ok: false, ...last, waitedMs: elapsed, timedOut: true };
+    }
+    if (elapsed === 0 || elapsed < everyMs) log(`      ${target.name}: not live yet, waiting…`);
+    await new Promise((r2) => setTimeout(r2, everyMs));
   }
-  return { ok: true, live };
 }
 
 /* --------------------------------------------------------------- publish */
@@ -349,11 +388,14 @@ async function main() {
   log(`\n── verifying what each host actually serves ──`);
   let bad = 0;
   for (const r of results) {
-    const v = await verify(r.target, expected);
+    // No settle window when nothing was just published — a stale host is stale now,
+    // and making --verify-only sit through 90 s to say so is pure friction.
+    const v = await verify(r.target, expected, VERIFY_ONLY ? { settleMs: 1 } : {});
     r.verify = v;
     const label = `${r.target.name.padEnd(11)} ${r.target.verifyUrl}`;
     if (v.ok === true) {
-      log(`  ✓ ${label}  serving this build`);
+      const t = v.waitedMs > 4000 ? `  (settled after ${Math.round(v.waitedMs / 1000)}s)` : '';
+      log(`  ✓ ${label}  serving this build${t}`);
     } else if (v.ok === null) {
       log(`  ? ${label}  ${v.why}`);
     } else {
