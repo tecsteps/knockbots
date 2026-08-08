@@ -152,6 +152,17 @@ const CONTROLS = {
     red: ['FD-2w'],
     green: ['FD-2a'],
   },
+  'fd4-revert-onebased': {
+    why: 'the one-based window shift is undone, putting every hitbox back one tick; '
+      + 'the moves printing -10 must go back to being unpunishable by an i10',
+    runtime: 'revert-onebased',
+    // FD-4L is the assertion Option A exists to satisfy: it must go red, and it
+    // must go red naming the moves. FD-4b stays green — a move that prints safe
+    // was not punished before the shift and is not punished after reverting it,
+    // so the control cannot be passing merely by breaking everything.
+    red: ['FD-4L'],
+    green: ['FD-4b'],
+  },
   'fd3-counterstun': {
     why: 'COUNTER_STUN = 0; every counter row must lose exactly 7 ticks of hitstun',
     file: 'combat/CombatSystem.js',
@@ -799,7 +810,8 @@ function fd1Rows() {
     if (at == null) { at = fd1ViaCommand(key, mv); layer = 'L2'; }
     if (at == null) { at = fd1ViaStartMove(key, mv); layer = 'L2-startMove'; }
     if (at == null) { layer = 'unstartable'; at = -1; }
-    rows.push({ key, id: mv.id, input: mv.input, startup: mv.startup, at, layer });
+    rows.push({ key, id: mv.id, input: mv.input, startup: mv.startup,
+      firstTick: firstActiveTick(mv), at, layer });
   }
   return rows;
 }
@@ -823,13 +835,13 @@ function testFD1() {
   const byLayer = {};
   for (const r of a) {
     byLayer[r.layer] = (byLayer[r.layer] || 0) + 1;
-    if (r.at !== r.startup) bad.push(r);
+    if (r.at !== r.firstTick) bad.push(r);
   }
 
   const rows = cap(bad.map((r) => `${r.key}/${r.id} [${r.input}] startup=${r.startup} `
     + `hitbox first existed on moveTick ${r.at === -1 ? 'NEVER' : r.at}  (${r.layer})`));
   const layerLine = Object.entries(byLayer).map(([k, v]) => `${k}:${v}`).join('  ');
-  const offByOne = bad.length && bad.every((r) => r.at === r.startup + 1);
+  const offByOne = bad.length && bad.every((r) => r.at === r.firstTick + 1);
   const ok = record('FD-1', 'startup is the frame the hitbox appears',
     bad.length === 0 && zeroStartup.length === 0,
     `${a.length} moves — ${layerLine} — ${bad.length} disagree`
@@ -861,7 +873,7 @@ function testFD1() {
   });
   const clampedBad = clamped.filter(({ key, mv }) => {
     const r = a.find((x) => x.key === key && x.id === mv.id);
-    return r && r.at !== mv.startup;
+    return r && r.at !== firstActiveTick(mv);
   });
   record('FD-1r', 'the clamped-wind-up clips still put their hitbox on the declared frame',
     clampedBad.length === 0,
@@ -898,7 +910,27 @@ const DISTANCES = [0.9, 1.02, 1.2, 1.5];
  * a different staging path, an L3 sample — because an acceptance test that only
  * ever agrees with itself is one instrument, not two.
  */
-const recoveryOf = (mv) => mv.total - lastActive(mv) - 1;
+/**
+ * The move's PRINTED first and last active frames.
+ *
+ * Move windows are stored ONE-BASED-SHIFTED: `Moves.js` authors them the way the
+ * move list prints them and then subtracts 1 once, after `defineMove` has
+ * derived `startup`/`recovery`/`blockStun`, so `moveTick` (which counts from 0)
+ * and the printed frame finally mean the same thing. Everything in this gate
+ * that compares a measured `moveTick` against an authored number has to go
+ * through one of these two rather than reading `mv.startup` directly.
+ */
+const firstActiveTick = (mv) => Math.min(...mv.active.map((w) => w.from));
+const lastActiveTick = (mv) => Math.max(...mv.active.map((w) => w.to));
+
+/**
+ * Recovery, re-derived from the windows rather than read off `mv.recovery`,
+ * because an acceptance test that only ever agrees with the field it is checking
+ * is one instrument and not two. `lastActiveTick` is the shifted value, so the
+ * printed last frame is one higher and the authored formula
+ * `total - printedLast - 1` becomes `total - lastActiveTick - 2`.
+ */
+const recoveryOf = (mv) => mv.total - lastActiveTick(mv) - 2;
 const modelBlockAdv = (mv) => mv.blockStun - recoveryOf(mv);
 
 function fd2Sweep() {
@@ -999,7 +1031,7 @@ function testFD2(cells) {
     if (delta !== 0) {
       ledgerBad.push(`${k} @${r.dist}m plays ${r.adv} against a printed onBlock of `
         + `${mv.onBlock >= 0 ? '+' : ''}${mv.onBlock} — a deficit of ${delta}`
-        + (r.lastContactTick !== mv.startup
+        + (r.lastContactTick !== firstActiveTick(mv)
           ? `; contact is ${r.lastContactTick - mv.startup} frame(s) off the first active frame, see FD-2c` : ''));
     }
   }
@@ -1039,7 +1071,7 @@ function testFD2(cells) {
     if (r.dist !== DISTANCES[0] || r.air) continue;
     const mv = MOVES[r.key][r.id];
     reachRows++;
-    if (r.contactTick !== mv.startup) {
+    if (r.contactTick !== firstActiveTick(mv)) {
       reachBad.push(`${k} [${mv.input}] startup=${mv.startup} but at ${DISTANCES[0]}m the first `
         + `connection is on moveTick ${r.contactTick} — ${r.contactTick - mv.startup} frame(s) late`);
     }
@@ -1624,7 +1656,7 @@ function testFD4(slowFactor = 0) {
       // adv -10 it lands one tick later and is BLOCKED. `guaranteed` below is
       // that measurement, so the assertion does not rest on the arithmetic at
       // all — see `probePunish`'s header.
-      const predict = r.adv <= -(r.punisherStartup + 1);
+      const predict = r.adv <= -r.punisherStartup;
       // A punish that never reached says nothing about TIMING. `blockPush`
       // separates the pair and `rocketPunch`, `roundhouse`, `orbitalKick` and
       // friends are simply out of range afterwards — a metres problem, and
@@ -1663,7 +1695,7 @@ function testFD4(slowFactor = 0) {
   const reachedRows = rows.filter((r) => r.guaranteed || r.defended);
   const landed = reachedRows.filter((r) => r.guaranteed).length;
   const degenerate = reachedRows.length > 0 && (landed === 0 || landed === reachedRows.length);
-  const okA = record('FD-4a', 'a punish lands against an attacker guarding on recovery iff adv <= -(startup+1)',
+  const okA = record('FD-4a', 'a punish lands against an attacker guarding on recovery iff adv <= -startup',
     predBad.length === 0 && reachedRows.length > 0 && !degenerate,
     `${measured} moves blocked and counter-attacked through the real key path `
     + `(${punishable.length} print onBlock<=-10, ${safe.length} print onBlock>=+1); `
@@ -1681,17 +1713,15 @@ function testFD4(slowFactor = 0) {
   record('FD-4L', 'ledger — punishability against the PRINTED onBlock',
     printedBad.length === 0,
     `${reachedRows.length} punishes reached; ${printedBad.length} disagree with what the move list prints. `
-    + 'Every one prints exactly -10, and the cause is NOT the guard ordering this message used to '
-    + 'name. `#updateGuard` does run before `#updateState`, but it reads `this.state` before the '
-    + 'transition, so on the tick the attacker leaves the move it still sees ATTACK and REFUSES the '
-    + 'guard — measured with the attacker holding guard from the block onward. That costs the '
-    + 'attacker a tick, not the defender, and the defender loses one symmetrically leaving blockstun, '
-    + 'so the two cancel. The real cause is that `startup` is used as a 0-BASED `moveTick` index: an '
-    + 'i10 move starts at moveTick 0 and puts its box out at moveTick 10, i.e. on the 11th frame, so '
-    + 'ten ticks elapse where the convention the printed number implies expects nine. -N is therefore '
-    + 'exactly SAFE against an i(N) punisher rather than exactly punishable, which is what FD-4a\'s '
-    + 'own passing rule `adv <= -(startup+1)` says in the other direction. Frozen timeline in '
-    + 'scratchpad/r45-punish.mjs. Fixing it is a balance or presentation decision, not a code one.',
+    + 'This is the assertion Option A exists to satisfy, so a red row here means the '
+    + 'one-based window shift in `Moves.js` has been undone or broken. Windows are authored '
+    + 'the way the move list prints them and shifted down by one once, after `defineMove` has '
+    + 'derived startup/recovery/blockStun — so an i10 puts its box on the TENTH frame of the '
+    + 'move rather than the eleventh, and -N is exactly punishable by an i(N) rather than '
+    + 'exactly safe. Before that shift every move printing -X was safe against an i(X), and '
+    + 'six sat exactly on the boundary; the cause was `startup` compared against a 0-based '
+    + '`moveTick`, NOT the guard ordering an earlier version of this message named. Frozen '
+    + 'timeline in scratchpad/r45-punish.mjs; --control=fd4-revert-onebased reproduces it.',
     cap(printedBad));
 
   // Not an assertion. Pushback is a real mechanic and nobody has claimed that
@@ -2408,6 +2438,32 @@ function testFD7(asymmetry = 0) {
 
 let RUNTIME_RESTORE = null;
 function applyRuntimeControl(name) {
+  if (name === 'revert-onebased') {
+    /*
+     * Undo Option A, at runtime, on every move in every set.
+     *
+     * `Moves.js` subtracts 1 from each authored window once at build time so a
+     * printed i10 puts its box on the tenth frame rather than the eleventh. This
+     * adds it back, which restores the exact defect FD-4L used to report: -N
+     * becomes exactly SAFE against an i(N) punisher again.
+     *
+     * Applied to the DATA rather than through the source, because the shift is
+     * data — patching `isActive` instead would change a different mechanism and
+     * prove a different thing.
+     */
+    const touched = [];
+    for (const key of SET_KEYS) {
+      for (const mv of Object.values(MOVES[key])) {
+        if (!mv || !mv.active) continue;
+        for (const w of mv.active) { w.from += 1; w.to += 1; }
+        touched.push(mv);
+      }
+    }
+    RUNTIME_RESTORE = () => {
+      for (const mv of touched) for (const w of mv.active) { w.from -= 1; w.to -= 1; }
+    };
+    return { moves: touched.length, shift: '+1 tick on every active window' };
+  }
   if (name === 'shrink-hitbox') {
     /*
      * A move that is GROUNDED and connects at point blank today, so the control

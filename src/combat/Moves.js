@@ -296,6 +296,44 @@ function make(s, cfg) {
   delete s.character;
 
   const m = defineMove(s);
+  /*
+   * ONE-BASED FRAME NUMBERING, and this is the whole of Option A.
+   *
+   * Every window in this file is authored the way a move list prints it: `jab`
+   * is i10 and its window is `W(10, 11)`. But `moveTick` counts from ZERO on the
+   * tick the move starts, and every comparison site tested the authored number
+   * against it directly — so an i10's hitbox appeared on the ELEVENTH frame of
+   * the move, ten ticks after it began where the convention the printed number
+   * implies expects nine.
+   *
+   * The visible consequence was that -N was exactly SAFE against an i(N)
+   * punisher rather than exactly punishable. Six moves printing -10 sat on the
+   * boundary and fdgate FD-4L flagged them, but the off-by-one is systemic:
+   * every move printing -X was safe against an i(X), and fixing the six would
+   * have papered over 771 others. The user chose to fix the behaviour rather
+   * than the labels.
+   *
+   * The shift is applied HERE, once, after `defineMove` has derived and
+   * validated `startup`, `recovery`, `blockStun` and `hitStun` from the authored
+   * numbers — so every printed figure keeps the value it had, and only the tick
+   * each window is evaluated on moves. Doing it at the comparison sites instead
+   * would mean finding all six of them (isActive, activeBoxes, isInvulnerable,
+   * two windowIndex lookups and the armour test) and getting every one right;
+   * shifting the data means they all inherit it and cannot drift apart.
+   *
+   * RELATIVE FRAME DATA IS UNTOUCHED. Every move moves by the same one tick, so
+   * every startup difference, every gap and every punish window between two
+   * moves is what it was. Contact lands one tick earlier and `beginRecovery`'s
+   * `moveTick + recovery` therefore ends the move one tick earlier too, which is
+   * why the measured advantage does not move — fdgate FD-2a/2b and FD-3a/3b are
+   * the check on that, not this comment.
+   */
+  for (const w of m.active) { w.from -= 1; w.to -= 1; }
+  if (m.cancelWindow) m.cancelWindow = [m.cancelWindow[0] - 1, m.cancelWindow[1] - 1];
+  const p = m.props;
+  for (const k of ['invulnFrom', 'invulnTo', 'armorFrom', 'armorTo', 'parryFrom', 'parryTo']) {
+    if (p[k] != null) p[k] -= 1;
+  }
   m.followUp = m.input.includes(',');
   m.stepInput = m.input.split(',').pop().trim();
   m.parsed = parseToken(m.input.split(',')[0]);

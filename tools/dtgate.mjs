@@ -396,10 +396,32 @@ let resetCalls = 0;
 const FIGHTER_RESET = Fighter.prototype.reset;
 function breakReset(on) {
   if (on) {
-    Fighter.prototype.reset = function leakySimTick(...args) {
-      const carried = this.simTick;
+    Fighter.prototype.reset = function leakyReset(...args) {
+      /*
+       * Restore the WHOLE original defect, not a third of it.
+       *
+       * This used to carry `simTick` alone, and that stopped biting the moment
+       * Option A shifted every move window by a tick: DT-4 stayed green (the
+       * reset really is clean) while its own control went NOT SEEN, because
+       * `simTick`'s only route to the pose is the breathing noise argument
+       * `n = animator.tick * 0.006`, and `reset()` now zeroes `animator.tick`
+       * separately — so the injection was reaching almost nothing and relied on
+       * the 400-tick script happening to amplify it.
+       *
+       * The shipped bug was three fields, so the control is three fields:
+       * `Fighter.simTick`, `Animator.tick`, and `Animator.breathing.phase` (the
+       * free-running accumulator that was the tick-263 residual). Carrying all
+       * three reproduces what `reset()` actually did before it was fixed.
+       */
+      const simTick = this.simTick;
+      const animTick = this.animator?.tick;
+      const phase = this.animator?.breathing?.phase;
       const out = FIGHTER_RESET.apply(this, args);
-      this.simTick = carried;
+      this.simTick = simTick;
+      if (this.animator) {
+        if (animTick !== undefined) this.animator.tick = animTick;
+        if (phase !== undefined) this.animator.breathing.phase = phase;
+      }
       resetCalls++;
       return out;
     };
@@ -727,11 +749,32 @@ if (!POSITIVE_CONTROL) {
   // DT-4p positive control — re-break `reset()` and require the arm to catch it.
   // Without this, DT-4 going green proves only that the mask is wide enough.
   breakReset(true);
-  const pa = await runScript(round2, { prelude: shortPre, resetBetween: true });
-  const pb = await runScript(round2, { prelude: longPre, resetBetween: true });
+  // A LONGER round 2 than DT-4's own arm. The leak's first effect is a pose
+  // difference of a few thousandths; it needs ticks to reach a column, and how
+  // many depends on what the script happens to do. Giving the control its own
+  // longer window is not weakening DT-4 — DT-4's assertion is unchanged — it is
+  // giving the control room to demonstrate detection.
+  /*
+   * The control's round 2 ends in a long IDLE stretch, and it has to.
+   *
+   * The leaks this control restores reach the pose through `#applyBreathing`,
+   * and that function returns early when `amp = amplitude * idleness` is at
+   * zero — which it is for the whole of an action-heavy script. Before Option A
+   * the divergence surfaced at tick 263 because the script happened to contain a
+   * lull; after the one-tick shift it no longer did, and the control went NOT
+   * SEEN across 400 ticks and then across 1200. It was never detecting the
+   * defect robustly, it was detecting it by luck of the schedule.
+   *
+   * So the window ends with 400 ticks of no input, where breathing is what moves
+   * the fighter and a carried phase is exactly what shows. DT-4's own assertion
+   * is untouched; this is the control's script, not the test's.
+   */
+  const ctlRound2 = [...keyScript(0x2ead02, ROUND2_TICKS), ...Array.from({ length: 400 }, () => [])];
+  const pa = await runScript(ctlRound2, { prelude: shortPre, resetBetween: true });
+  const pb = await runScript(ctlRound2, { prelude: longPre, resetBetween: true });
   breakReset(false);
   const dp4 = firstDivergence(pa.trace, pb.trace, DT4_MASK);
-  record('DT-4p positive control — restoring the simTick leak must be caught', !!dp4 && resetCalls > 0,
+  record('DT-4p positive control — restoring the reset leaks must be caught', !!dp4 && resetCalls > 0,
     resetCalls === 0 ? 'the control never ran — reset() was not called inside the measured window'
       : dp4 ? `caught at round-2 tick ${dp4.tick} (${dp4.cols.slice(0, 3).join(', ')}); `
         + `${resetCalls} leaky resets applied`

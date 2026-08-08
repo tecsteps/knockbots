@@ -373,7 +373,17 @@ export function retimeFor(move) {
   if (move.retime !== undefined) return move.retime;
   const clip = CLIPS[move.clip];
   const pivot = move.contact > 0 ? move.contact : clipContactFrame(move.clip);
-  const pivotAt = move.startup;
+  /*
+   * The FIRST ACTIVE TICK, not `startup`.
+   *
+   * These were the same number until move windows became one-based (see the
+   * shift in `Moves.js`): `startup` is the printed frame and the window now
+   * opens on `startup - 1`. Reading `startup` here would pin the clip's contact
+   * pose one tick AFTER the hitbox appears, which is the `p.backfist` defect
+   * re-introduced on every move in the game at once. Derived from the window so
+   * the two can never drift again.
+   */
+  const pivotAt = move.active?.[0]?.from ?? move.startup;
   // A clip with no declared contact — a stance, a reaction, a whiff — plays at
   // its authored rate. There is nothing to line up.
   if (!clip || !(pivot > 0) || !(pivotAt > 0)) { move.retime = null; return null; }
