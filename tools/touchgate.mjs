@@ -69,7 +69,13 @@
  *                       else. The MENU step MUST fail and every step before it
  *                       MUST still pass. A gate that passes with the control
  *                       hidden is not testing that the control is findable.
- *   --control=both      both, in order. This is what CI should run.
+ *   --control=show-training
+ *                       force `.kbg-root` back on screen on touch. The
+ *                       `train-panel-hidden` step MUST fail. An ABSENCE
+ *                       assertion is the easiest kind to pass for the wrong
+ *                       reason -- a blank page passes it -- so it does not count
+ *                       as measured until this control breaks it.
+ *   --control=both      all of them, in order. This is what CI should run.
  *
  * The positive control is deliberately the pause button, because that is the
  * control the real player could not find. If hiding it does not fail this gate,
@@ -315,36 +321,39 @@ const TRAINING_PATH = [
     wait: 25000,
   },
   {
-    id: 'train-panel',
-    goal: 'The training panel is on screen and readable',
-    // Nothing to tap -- this step asserts the panel arrived at all. A panel that
-    // never shows makes every measurement after it meaningless, and it is worth
-    // failing here rather than reporting "no toggle found" three steps later.
-    via: () => ({ text: '(training panel)', cls: 'kbg-root', x: -1, y: -1, w: 999, h: 999, occluder: null }),
-    done: `!!document.querySelector('.kbg-root--on')`,
+    id: 'train-panel-hidden',
+    // RE-SCOPED. This step used to read "the training panel is on screen and
+    // readable" and assert `.kbg-root--on`. On a handset the panel is
+    // DELIBERATELY not on screen: it is display:none under @media (hover: none),
+    // because the player asked for it -- at handset width it was unreadably small
+    // and crowded the fight. Its controls live in pause -> options and were always
+    // reachable from the phone.
+    //
+    // So the old pair was one false pass and one false fail. `--on` is a CLASS,
+    // and the element carries it while display:none, so the panel step passed on
+    // an invisible element while claiming it was readable -- the more dangerous of
+    // the two, because a green row is never re-read. The toggle step then failed
+    // for the honest reason that the control it wanted does not exist here, and a
+    // permanently red row on a deliberate design decision is how a gate teaches
+    // you to ignore it.
+    //
+    // Now it asserts the DESIGN INTENT instead: on touch the panel must be
+    // genuinely absent. Checked by offsetParent and the computed style rather than
+    // by a class name, so it cannot pass on something that is merely marked.
+    goal: 'On touch, the training panel is genuinely absent, not merely unmarked',
+    via: () => ({ text: '(training panel absent)', cls: 'kbg-root', x: -1, y: -1, w: 999, h: 999, occluder: null }),
+    done: `(() => {
+      const p = document.querySelector('.kbg-root');
+      if (!p) return true;                        // not built at all is fine
+      if (p.offsetParent !== null) return false;  // laid out => visible
+      return getComputedStyle(p).display === 'none';
+    })()`,
     wait: 30000,
     pre: `window.KB?.phase === 'fight'`,
     preWait: 30000,
     noTap: true,
   },
-  {
-    id: 'train-toggle',
-    goal: 'Turn a training readout on with a thumb',
-    via: (t) => t.find((e) => /kbg-toggle/.test(e.cls)),
-    // The toggle must change state. Reading the class back is the only thing
-    // that separates "the pad fired" from "the pad is painted there".
-    done: `(() => { const r = document.querySelectorAll('.kbg-toggle--on').length;
-             return window.__kbgOn !== undefined ? r !== window.__kbgOn : true; })()`,
-    wait: 4000,
-  },
-  {
-    id: 'train-step',
-    goal: 'Move a stepper -- the smallest control in the game',
-    via: (t) => t.find((e) => /kbg-step-btn/.test(e.cls)),
-    done: `true`,
-    wait: 2000,
-  },
-  {
+    {
     id: 'train-leave',
     goal: 'Get out of training, which is what the player actually asked',
     via: (t) => t.find((e) => /hud-pause/.test(e.cls)),
@@ -423,9 +432,6 @@ async function runPath(page, { label, injectCss = '', path = PATH }) {
       rec.small = `hitTargetSmall: ${target.w.toFixed(1)}x${target.h.toFixed(1)} < ${TOUCH_FLOOR}`;
     }
 
-    if (step.id === 'train-toggle') {
-      await page.evaluate(`window.__kbgOn = document.querySelectorAll('.kbg-toggle--on').length`);
-    }
     if (!step.noTap) await page.touchscreen.tap(target.x, target.y);
 
     try {
@@ -574,6 +580,34 @@ async function main() {
     }
   }
 
+  /*
+   * POSITIVE CONTROL FOR `train-panel-hidden`.
+   *
+   * An ABSENCE assertion is the easiest kind of test to pass for the wrong
+   * reason: a blank page passes it, a page that never finished loading passes
+   * it, and a selector typo passes it forever. So it does not count as measured
+   * until something makes it fail.
+   *
+   * The first version of this control was wired into the `wants` loop above and
+   * did NOT bite -- it injected the CSS into a run of the ARCADE path, which does
+   * not contain the assertion at all. It reported "PASS 8/8" and looked healthy.
+   * A control has to run the path that carries the step it is controlling, which
+   * is why it lives down here beside the training run rather than up there with
+   * the others.
+   */
+  if (CONTROL === 'show-training' || CONTROL === 'both') {
+    const { ctx, page } = await freshPage(browser, url);
+    const r = await runPath(page, {
+      label: 'training-shown',
+      path: TRAINING_PATH,
+      injectCss: '@media (hover: none) { .kbg-root { display: block !important; } }',
+    });
+    await ctx.close();
+    runs.push(r);
+    const step = r.steps.find((x) => x.id === 'train-panel-hidden');
+    console.log(`[touchgate] ${'tr-shown'.padEnd(9)} ${step && !step.ok ? 'BIT (correct)' : 'DID NOT BITE'}`);
+  }
+
   const portrait = await portraitCheck(browser, url);
   console.log(`[touchgate] portrait ${portrait.ok ? 'PASS' : 'FAIL'}  ${JSON.stringify(portrait)}`);
 
@@ -588,6 +622,7 @@ async function main() {
   const path = runs.find((r) => r.label === 'path');
   const nul = runs.find((r) => r.label === 'null');
   const hid = runs.find((r) => r.label === 'hide-menu');
+  const shown = runs.find((r) => r.label === 'training-shown');
   const notes = [];
   let admissible = true;
 
@@ -602,6 +637,12 @@ async function main() {
     const menuStep = hid.steps[menuIdx];
     const good = before && menuStep && !menuStep.ok;
     notes.push(`positive control: ${good ? 'OK' : 'VIOLATED'} (menu step ${menuStep ? (menuStep.ok ? 'passed with the button hidden' : 'failed as required') : 'was never reached'})`);
+    if (!good) admissible = false;
+  }
+  if (shown) {
+    const step = shown.steps.find((x) => x.id === 'train-panel-hidden');
+    const good = !!step && !step.ok;
+    notes.push(`training positive control: ${good ? 'OK' : 'VIOLATED'} (train-panel-hidden ${step ? (step.ok ? 'passed with the panel forced visible — it is measuring nothing' : 'failed as required') : 'was never reached'})`);
     if (!good) admissible = false;
   }
   for (const n of notes) console.log(`[touchgate] ${n}`);
@@ -626,7 +667,7 @@ async function main() {
      * without touching this line still counts.
      */
     verdict: !admissible ? 'NO VERDICT — controls violated'
-      : (runs.filter((r) => r.label !== 'hide-menu').every((r) => r.ok) && portrait.ok ? 'PASS' : 'FAIL'),
+      : (runs.filter((r) => r.label !== 'hide-menu' && r.label !== 'training-shown').every((r) => r.ok) && portrait.ok ? 'PASS' : 'FAIL'),
   };
   mkdirSync(OUT, { recursive: true });
   writeFileSync(resolve(OUT, 'report.json'), JSON.stringify(report, null, 2));
