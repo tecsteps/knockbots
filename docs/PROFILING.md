@@ -5172,3 +5172,57 @@ An unconfigured target **fails** rather than skipping — silently doing one of 
 targets is the original bug. `--only=` makes a partial deploy a stated intent.
 
 `npm run deploy` / `npm run deploy:verify`.
+
+---
+
+## RETRACTION: "post was off" was never true, and the SMAA number is void
+
+Commit `c020b78` recorded that a 4x supersample carries +23.6% more between-material
+spread at fight framing and that **SMAA recovers only −0.3% of it**. The second claim
+is **withdrawn**, and the first is **provisional**.
+
+Cause: `RenderPipeline.effects` is a plain object, and the composer is only rebuilt by
+`setEffect(name, enabled)`. The probes wrote the flags directly — `e.bloom = false;
+e.smaa = false; …` — which sets the flags and rebuilds nothing. Proven by dumping the
+armed pass list:
+
+```
+armed at boot                 scene gbuffer ao bloom dof motionBlur grade smaa output
+after DIRECT assignment       scene gbuffer ao bloom dof motionBlur grade smaa output   <- unchanged
+after setEffect(..., false)   render output
+```
+
+`adaptiveResolution` is read per-frame, so that one flag did take. Nothing else did.
+Every frame in that round rendered through AO, bloom, DOF, motion blur, AgX grade and
+SMAA while the note said post was off.
+
+**What survives**, because both arms of every A/B ran the identical full chain in one
+session with a restore control of exactly 0.00: the px/m figures at all three framings
+(camera arithmetic), the corrected texel table and its 0.50 texels/px checker ground
+truth, slope-variance-through-the-mip-chain (read off CPU typed arrays, never
+rendered), Toksvig-makes-it-worse, `METAL_REPEAT`-is-null, and the 197k-pixel
+cross-session noise floor.
+
+**What does not.** The SMAA figure is void — SMAA was never toggled, both arms were
+SMAA-on. And +23.6% must be re-measured with post genuinely off, because DOF at 4x
+resolution is not the same blur as DOF at 1x, so the number can move either way.
+The consequence that mattered: an in-flight workflow was building temporal
+accumulation partly on the premise that cheap edge-AA was a closed avenue. It was
+stopped before the implement phase and re-briefed — **if a cheap pass recovers a large
+share, that is the better answer and the one to ship.**
+
+### The method finding, which is the durable part
+
+The probes had a null control and a positive control **on the measurement**. They had
+none **on the setup**. So the instrument was honest about a configuration that was
+never real.
+
+**A control on the measurement is not enough; the setup needs one too.** Assert the
+configuration you believe you have — dump the armed passes and check them — rather
+than assuming an assignment took. This is the same shape as every other entry here:
+the failure was never in the number, it was in believing an action had an effect
+because the code that requested it ran.
+
+It was caught only because a *new* instrument was given a positive control that could
+fail: a floor-depth check returned 1.74 m against an analytic 4.50 m, and that gap was
+the vignette and AgX curve that were supposedly switched off.
