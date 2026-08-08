@@ -199,13 +199,78 @@ async function publishVercel() {
   return r.code === 0 ? { ok: true } : { ok: false, why: `vercel exited ${r.code}` };
 }
 
+/**
+ * Ask Cloudflare what a token can do. The DIAGNOSIS matters more than the boolean:
+ * `/accounts` distinguishes failure modes that `/user/tokens/verify` flattens into
+ * one unhelpful "1000 Invalid API Token".
+ *
+ *   CLOUDFLARE_API_KEY   -> 9109 "Invalid access token"                    dead
+ *   CLOUDFLARE_API_KEY2  -> 9109 "Cannot use the access token from
+ *                                 location: 79.140.115.60"                 VALID, IP-blocked
+ *
+ * That second one is a real token behind an IP allowlist that does not include this
+ * machine — on IPv4 *or* IPv6, both were tried. Telling the user "invalid token"
+ * there would send them to mint a new one when the actual fix is one allowlist
+ * entry. So this returns the message, not just a pass/fail.
+ */
+async function probeToken(token) {
+  try {
+    const res = await fetch('https://api.cloudflare.com/client/v4/accounts', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await res.json();
+    if (body.success) return { ok: true, accounts: body.result?.map((a) => a.name) ?? [] };
+    const msg = body.errors?.[0]?.message ?? 'unknown error';
+    return { ok: false, msg, ipBlocked: /from location/i.test(msg) };
+  } catch (e) {
+    return { ok: false, msg: `network: ${e.message}` };
+  }
+}
+
 async function publishCloudflare() {
-  // Two ways in: an API token, or an interactive `wrangler login` on this machine.
-  // Both are checked, because as of writing the token in .env fails BOTH auth
-  // schemes — /user/tokens/verify returns 1000 Invalid API Token, and the global
-  // key form returns 6103 Invalid format — so it is revoked or malformed, and the
-  // only path that works today is the interactive login.
-  const token = ENV.CLOUDFLARE_API_KEY;
+  // Three ways in, tried in order: any working token in .env, then an interactive
+  // `wrangler login`. More than one token is supported because .env has carried two
+  // with entirely different failure modes, and picking the wrong one silently is how
+  // an hour goes missing.
+  const candidates = Object.keys(ENV)
+    .filter((k) => /^CLOUDFLARE_API_KEY\d*$/.test(k) && ENV[k])
+    .sort();
+
+  let token = null;
+  const diagnoses = [];
+  for (const key of candidates) {
+    const p = await probeToken(ENV[key]);
+    if (p.ok) {
+      log(`  ${key}: authenticated${p.accounts.length ? ` (${p.accounts.join(', ')})` : ''}`);
+      token = ENV[key];
+      break;
+    }
+    log(`  ${key}: ${p.msg}`);
+    diagnoses.push({ key, ...p });
+  }
+
+  const ipBlocked = diagnoses.find((d) => d.ipBlocked);
+  if (!token && ipBlocked) {
+    return {
+      ok: false,
+      why: `${ipBlocked.key} is a VALID token blocked by an IP allowlist`,
+      fix: [
+        `Cloudflare says: ${ipBlocked.msg}`,
+        '',
+        'This is NOT a bad token — it is the token\'s IP filter. Fix it in one place:',
+        '  Cloudflare dashboard -> My Profile -> API Tokens -> (the token) -> Edit',
+        '  under "Client IP Address Filtering", either add the address named above',
+        '  or remove the restriction entirely.',
+        '',
+        'A home IP is usually dynamic, so it will drift and this will recur. Removing',
+        'the filter and instead scoping the token to "Cloudflare Pages: Edit" on the',
+        'one account is the more durable trade.',
+        '',
+        'Alternative that needs no dashboard visit: run `wrangler login` here.',
+      ].join('\n'),
+    };
+  }
+
   const project = process.env.KB_CF_PROJECT || ENV.KB_CF_PROJECT;
 
   const who = await run('npx', ['--yes', 'wrangler@4', 'whoami'],
