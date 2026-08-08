@@ -4931,3 +4931,55 @@ with different paint."*
 **Hero plate still covers 60%+ of surface area**, and material gains visible at closeup scale do not
 survive to in-match camera distance — *"01/03/09's distance vs 02's closeup scale"* — which is the
 framing a player actually sees. A closeup-only win is not a win.
+
+## Adjudicated: you can be cylindrical and still wrong
+
+Two critics disagreed about why the strut read as wood. The adjudication is that **they were arguing
+about two different properties as if they were one**:
+
+- **(a) does the mapping FOLLOW the surface** — projection?
+- **(b) is it the right SHAPE** — aspect?
+
+**`ch-B` was right about (a). `ch-A` was right that it was a mapping bug, wrong about which kind.**
+
+**Projection.** Legacy `u = (j / segments) * uvU` depends only on the angular index and rises
+monotonically over a full revolution: **20 steps up, 0 down.** A planar projection *folds* — the
+synthetic control gives **10 up, 10 down**, because front and back receive the same `u`. So the
+shipped mapping was definitionally a cylindrical wrap and *did* attenuate with curvature. `ch-B`'s
+observation was correct.
+
+**Aspect.** U density is `repeat/(2*pi*r)` against a flat V of 4 tiles/m — 15.66 against 4.00 on the
+strut, a 3.91x compression. **An isotropic grain squashed 3.9x along one axis is a stripe field.** So
+`ch-B`'s *inference* — "correct UV, so not a mapping bug" — is wrong. It was a mapping bug of aspect,
+not of projection.
+
+Both critics were looking at real stripes. One reached for the familiar cause and named the wrong
+mechanism; the other confirmed the mapping was cylindrical and concluded it was therefore innocent.
+**Neither considered that a correct projection can carry a wrong aspect.**
+
+## And the material claim refuted itself into the same fix
+
+`ch-B` said the strut lacked "any cue that says metal: no anisotropic sweep across the width, no
+environment reflection."
+
+`darkMetal` **has** anisotropy 0.62 with an anisotropy map, and the envMap is bound scene-wide. But
+**that anisotropy map is sampled through the same UVs** — so at 3.9x compression the directional sweep
+it encodes was itself squashed into fine stripes. **The perceived absence was real and the UV bug was
+its cause.**
+
+So the mapping fix `ch-B` argued was unnecessary is precisely what restores the metal cue `ch-B` said
+was missing. A material complaint and a mapping complaint turned out to be one defect seen from two
+sides.
+
+The warm base is not a defect either: `gunmetal` is a cool grey deliberately blended 50% with the
+character's own secondary palette colour, which for Vulkan is copper. Changing it is an art decision
+and was left alone.
+
+## The failed discriminator, disclosed by its own author
+
+> *"My first discriminator measured the angle of `dP/du` and was degenerate — inside one flat quad
+> `dP/du` lies along the chord whatever the mapping, so it could not separate the three cases."*
+
+Replaced by the fold test above. That is the eleventh instrument on this project found to be stable,
+reproducible and incapable of measuring what it claimed — and the second in two days caught by the
+person who built it, before it was used.
