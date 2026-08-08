@@ -348,18 +348,28 @@ export function bevelBox(w, h, d, bevel = 0.012, opts = {}) {
  * `segments: 6` and `faceted: true` the same routine produces hex fastener heads
  * and hexagonal reactor housings.
  *
+ * UVs are metre-based on both axes — U is arc length *around* the sweep at the
+ * ring's own radius, V is arc length *along* the profile — which is the same
+ * convention `loftHull` uses. It has to be. A normalized U (0..1 across the
+ * sweep whatever the radius) makes texel density scale as 1/r, so a 0.046 m
+ * strut got 15.7 tiles/m around against 4 tiles/m up. A grain texture squashed
+ * 3.9x in one direction stops being grain and becomes stripes, and stripes
+ * locked to the parameterization do not attenuate as the cylinder turns away —
+ * which is precisely what read as wood on parts that should read as steel.
+ *
  * @param {Array<{r:number,y:number,smooth?:boolean}>} profile bottom-to-top
  * @param {number} [segments=16] angular subdivisions
  * @param {Object} [opts]
  * @param {boolean} [opts.faceted=false] use per-quad flat normals instead of swept normals
  * @param {number} [opts.arc=Math.PI*2] sweep angle
  * @param {number} [opts.phase=0] starting angle
- * @param {number} [opts.uvU=1] U tiling across the sweep
  * @param {number} [opts.uvV] V tiling per metre of profile arc length
+ * @param {number} [opts.uvU=uvV] U tiling per metre around the sweep; tracks
+ *   `uvV` by default so a site that retunes density stays square on both axes
  * @returns {THREE.BufferGeometry}
  */
 export function latheProfile(profile, segments = 22, opts = {}) {
-  const { faceted = false, arc = Math.PI * 2, phase = 0, uvU = 1, uvV = UV_DENSITY } = opts;
+  const { faceted = false, arc = Math.PI * 2, phase = 0, uvV = UV_DENSITY, uvU = uvV } = opts;
   const s = new Surf();
   const nSeg = profile.length - 1;
   if (nSeg < 1) return s.geometry();
@@ -391,8 +401,9 @@ export function latheProfile(profile, segments = 22, opts = {}) {
     const n0 = nAt(i, 0), n1 = nAt(i, 1);
     const v0 = arcLen[i] * uvV, v1 = arcLen[i + 1] * uvV;
     for (let j = 0; j < segments; j++) {
-      const t0 = phase + (j / segments) * arc;
-      const t1 = phase + ((j + 1) / segments) * arc;
+      const a0 = (j / segments) * arc, a1 = ((j + 1) / segments) * arc;
+      const t0 = phase + a0;
+      const t1 = phase + a1;
       const c0 = Math.cos(t0), s0 = Math.sin(t0), c1 = Math.cos(t1), s1 = Math.sin(t1);
       const A = [p0.r * c0, p0.y, p0.r * s0];
       const B = [p0.r * c1, p0.y, p0.r * s1];
@@ -411,8 +422,11 @@ export function latheProfile(profile, segments = 22, opts = {}) {
         nC = [n1[0] * c1, n1[1], n1[0] * s1];
         nD = [n1[0] * c0, n1[1], n1[0] * s0];
       }
-      const u0 = (j / segments) * uvU, u1 = ((j + 1) / segments) * uvU;
-      s.quad(A, B, C, D, nA, nB, nC, nD, [u0, v0], [u1, v0], [u1, v1], [u0, v1]);
+      // U in metres around the sweep, taken at each ring's own radius, so a
+      // taper unwraps like a cone rather than like a cylinder
+      const u0a = a0 * p0.r * uvU, u1a = a1 * p0.r * uvU;
+      const u0b = a0 * p1.r * uvU, u1b = a1 * p1.r * uvU;
+      s.quad(A, B, C, D, nA, nB, nC, nD, [u0a, v0], [u1a, v0], [u1b, v1], [u0b, v1]);
     }
   }
   return s.geometry();
@@ -613,13 +627,21 @@ export function shellLathe(profile, thickness, segments = 20, opts = {}) {
 
   const s = new Surf();
   const k = profile.length;
+  // Rim UVs are metres too — U along the profile, V across the plate thickness.
+  // A normalized 0..1 quad here stretches one whole tile over a 4 mm rim.
+  const along = [0];
+  for (let i = 1; i < k; i++) {
+    along.push(along[i - 1] + Math.hypot(profile[i].r - profile[i - 1].r, profile[i].y - profile[i - 1].y) * uvV);
+  }
+  const across = profile.map((q, i) => Math.hypot(q.r - inner[i].r, q.y - inner[i].y) * uvV);
   for (const [ang, dir] of [[phase, -1], [phase + arc, 1]]) {
     const c = Math.cos(ang), si = Math.sin(ang);
     const nrm = [-si * dir, 0, c * dir];
     const P = (q) => [q.r * c, q.y, q.r * si];
     for (let i = 0; i < k - 1; i++) {
       s.quad(P(profile[i]), P(profile[i + 1]), P(inner[i + 1]), P(inner[i]),
-        nrm, nrm, nrm, nrm, [0, 0], [1, 0], [1, 1], [0, 1]);
+        nrm, nrm, nrm, nrm,
+        [along[i], 0], [along[i + 1], 0], [along[i + 1], across[i + 1]], [along[i], across[i]]);
     }
   }
   return joinGeometries([shell, s.geometry()]);
