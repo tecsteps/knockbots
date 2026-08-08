@@ -273,3 +273,59 @@ sign on its own advice spends them going backwards**, and does so consistently r
 5. **When a fix and a complaint move together, suspect the complaint.** If the thing the axis asks for
    reliably increases the thing the axis penalises, the rubric is describing one phenomenon in two
    contradictory ways, and no amount of work resolves that from the code side.
+
+---
+
+# THIRD CORRECTION: the character reference subset is classified by framing and not by material
+
+The per-image table above records **framing** — closeup, wide, rage art — and that is what got `ref/06`
+out of the stage list. It records nothing about **what the reference is made of**, and on an axis
+called *character rendering* that is the property that decides the pair.
+
+A critic ran the **full six-reference closeup population** and its record split cleanly:
+
+```
+DRAWS   tekken8_01  leather jacket, metal choker, chain, skin
+        tekken8_05  glove: leather wrap vs metal knuckle band
+        tekken8_08  jaguar-fur mask, oiled skin, mic mesh, gold chain
+
+LOSSES  tekken8_03  dove — individual feather barbs, hair flyaways
+        tekken8_04  skin pores and wrinkles, croc-embossed leather
+        tekken8_09  cat — per-strand fur, colour-point shading, ear translucency
+```
+
+Its reading: *"the mechanical-plate material does not lose to mechanical-adjacent materials — King's
+mic mesh and chain, Jin's knuckle plate. It loses specifically against organic strand-level rendering,
+which the robot cast structurally cannot present."*
+
+**This is a hypothesis and it has a counterexample.** `tekken8_08` carries a full jaguar-fur mask and
+came back a **draw**, which a simple "fur present -> loss" rule does not survive. The honest form is
+narrower: the losses cluster where **strand-level organic detail is the dominant subject of the
+frame**, and the draws cluster where metal, leather and chain are the comparison point — including one
+frame that contains fur but is not about it.
+
+## Why this belongs in the protocol rather than in a critic's caveat
+
+The ship bar is **no losses across nine pooled pairs**. If some references cannot be won by a cast made
+entirely of machines, the bar is not merely hard — it is **unreachable by construction**, which is the
+same defect as the `p90 >= 12` tile-contrast gate that exceeded every matched reference in linear
+light, and as `ref/06` sitting in a stage list for four rounds.
+
+**No round should be spent trying to out-render a dove.**
+
+## The rules
+
+1. **Classify a character reference by its dominant material, not only its framing.** A frame whose
+   subject is hair, fur or feather is testing a capability this project does not have and will not
+   acquire — every mesh is generated in code and every character is a machine.
+2. **Report those pairs, do not silently drop them.** A loss to strand rendering is a real observation
+   about the frame; it is just not a finding about the material work. Critics have been flagging this
+   themselves, unprompted, and were right to.
+3. **The ship bar counts pairs where the comparison is possible.** Nine pooled pairs, no losses, at
+   least one win, **against references whose dominant material a robot can present** — metal, leather,
+   painted surface, glass, rubber. That is the honest reading of "presentation that holds up in a
+   screenshot comparison" for a game whose cast is machines.
+4. **This does not lower the bar and must not be used to.** Against the metal-and-leather references
+   the axis currently draws — it does not win. Three draws is not three wins, and the remaining gap
+   there is real: hero plate still covers 60%+ of surface area, and closeup-scale material gains do not
+   survive to in-match camera distance.
