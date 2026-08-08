@@ -1103,6 +1103,46 @@ export class Fighter {
     this.finisher.ticksLeft = 0;
     this.lastDamageTick = -999;
     this.impactTick = -999;
+    /*
+     * THE SIM CLOCK, AND EVERY FIELD MEASURED AGAINST IT.
+     *
+     * `simTick` was left wherever round 1 had run it to, and
+     * `Animator.simulate(tick)` takes that absolute tick as its deterministic
+     * NOISE PHASE — so round 2 breathed on a different phase depending on how
+     * long round 1 lasted, the pose handed to the hitbox builder differed from
+     * the first tick, and an in-session reset was not a clean replay start. The
+     * same field drives the input-buffer window (`#pushInput`), the motion
+     * window (`#liveCommand`), the special-move repeat lock and the throw,
+     * damage and KO clocks.
+     *
+     * The header above records a four-trial investigation that cleared "the
+     * animator clock" as a cause of the round-2 divergence, and it was right
+     * about what it measured: both of its arms ran round 1 for the SAME number
+     * of ticks, so `simTick` was equal on both sides of the reset and cancelled
+     * in the diff. dtgate DT-3 has the same shape and the same blind spot,
+     * which is why DT-4 exists — it makes the two round 1s DIFFERENT LENGTHS,
+     * and it goes red on this line alone.
+     *
+     * The companions are not optional. Every `*Tick` below is an ABSOLUTE tick
+     * compared against `simTick`, so zeroing the clock without them leaves e.g.
+     * `#regen`'s `simTick - lastDamageTick < 60` reading a large negative and
+     * suppressing regeneration for the whole of round 2. They move together or
+     * not at all.
+     */
+    this.simTick = 0;
+    this.koTick = -999;
+    this.lastMotion = null;
+    this.lastMotionTick = -999;
+    // Set every tick by `simulate`, but read by `#startMove` before the first
+    // one of a round; a stale Command could start a move nobody pressed.
+    this.cmd = null;
+    // `#trackMoveBones` returns early on a null, and otherwise keeps sweeping
+    // the PREVIOUS round's move bones into `boneTrack` — which is where a swept
+    // hitbox gets its `p0`.
+    this.moveBones = null;
+    // Presentation only, but it is a clock and it belongs with the others.
+    this.pulsePhase = 0;
+    for (const hb of this.hitboxPool) { hb.move = null; hb.bone = null; hb.windowIndex = -1; }
     this.pelvisLift = 0;
     for (const side of ['L', 'R']) {
       const st = this.plantState[side];
@@ -1111,9 +1151,33 @@ export class Fighter {
       st.hasLast = false;
     }
     if (this.animator) {
-      // Nothing else in the loop calls `Animator.reset()`, so a reaction armed on
-      // the KO frame would otherwise still be decaying through the first ticks of
-      // the next round, on a fighter standing on its mark.
+      /*
+       * `Animator.reset()`, AND IT WAS NEVER CALLED FROM HERE.
+       *
+       * This block used to be `clearImpacts()` plus a rewind, and the comment
+       * above it said "nothing else in the loop calls `Animator.reset()`" —
+       * which was true, and was the bug rather than the justification. The
+       * animator carries springs, inertia, the ripple queue, the hit layer, the
+       * IK hold quaternions, the foot-plant weights and the breathing energy
+       * accumulator, and every one of them entered round 2 holding whatever
+       * round 1 finished with. So the POSE at round-2 tick 0 depended on round
+       * 1, and the pose is what the hitbox builder sweeps.
+       *
+       * Neither dtgate arm could see it until this round. DT-3 and DT-4 traced
+       * position, velocity, state and the clocks — bulk simulation state, no
+       * pose — so an animator-only divergence moved no column until it happened
+       * to change whether a hitbox reached. `poseSig` (a sum over the rebuilt
+       * hurtbox capsules) is the column that made it visible, and it turned
+       * DT-3 red as well: the defect was never specific to round-1 LENGTH.
+       *
+       * `reset()` clears every stateful field except `tick`, which is the
+       * animator's own clock and the phase its entries are stamped against, so
+       * that is zeroed here too. The rewind has to follow, because `reset()`
+       * empties `layer.entries` and would otherwise leave the fighter posed by
+       * nothing at all.
+       */
+      this.animator.reset?.();
+      this.animator.tick = 0;
       this.animator.clearImpacts?.();
       this.#play('idle.fight', 0, true);
     }

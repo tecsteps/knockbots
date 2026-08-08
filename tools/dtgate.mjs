@@ -234,8 +234,32 @@ const FIELDS = [
   'pos.x', 'pos.y', 'pos.z', 'vel.x', 'vel.y', 'vel.z',
   'health', 'meter', 'state', 'stateTicks', 'stunTicks',
   'moveTick', 'moveInstance', 'move', 'juggleCount', 'facing', 'animYaw',
-  'rng.s0', 'rng.s1',
+  'rng.s0', 'rng.s1', 'hurtN', 'poseSig',
 ];
+
+/**
+ * A pose-derived column, and DT-4 is why it exists.
+ *
+ * Every other field here is bulk simulation state — position, velocity, state,
+ * the clocks. None of it is a POSE, so a divergence that lives only in the
+ * animator (a different breathing-noise phase, say) moves no column until it
+ * eventually changes whether a hitbox reaches. DT-4's positive control proved
+ * that gap: re-breaking `reset()`'s `simTick` leak was NOT SEEN across 400
+ * ticks, because the leak's first effect is the pose and the trace could not
+ * read one.
+ *
+ * The hurtbox capsules are rebuilt from the posed skeleton every tick by
+ * `#buildHurtboxes`, so summing their endpoints is a cheap, deterministic
+ * signature of the pose that costs no extra simulation. Rounded to 1e-6 so
+ * ordinary float noise in the sum does not make the column a hair trigger.
+ */
+function poseSig(f) {
+  let acc = 0;
+  for (const h of f.hurtboxes) {
+    acc += h.p0.x + h.p0.y * 3 + h.p0.z * 7 + h.p1.x * 11 + h.p1.y * 13 + h.p1.z * 17 + h.radius * 19;
+  }
+  return Math.round(acc * 1e6) / 1e6;
+}
 
 function fighterRow(f) {
   return [
@@ -243,7 +267,7 @@ function fighterRow(f) {
     f.velocity.x, f.velocity.y, f.velocity.z,
     f.health, f.meter, f.state, f.stateTicks, f.stunTicks,
     f.moveTick, f.moveInstance, f.currentMove?.id ?? '-', f.juggleCount,
-    f.facing, f.animYaw, f.rng.s0, f.rng.s1,
+    f.facing, f.animYaw, f.rng.s0, f.rng.s1, f.hurtboxes.length, poseSig(f),
   ];
 }
 
@@ -289,6 +313,23 @@ const DT3_MASK = new Set(['p0.moveInstance', 'p1.moveInstance']);
  * divergence, or a latent one that bites on the first knockdown.
  */
 const DT3_MASK_STRICT = new Set([...DT3_MASK, 'p0.rng.s0', 'p0.rng.s1', 'p1.rng.s0', 'p1.rng.s1']);
+
+/**
+ * DT-4's mask: DT-3's, plus the two combo clocks.
+ *
+ * `combo.lastTick` is stamped from `CombatSystem.tick`, a MATCH-long clock that
+ * deliberately keeps running across a round boundary — and DT-4 deliberately
+ * makes the two arms reach the boundary at different absolute ticks. So the two
+ * arms differ on that column by exactly the difference in round-1 length, every
+ * time, whatever the product does. `combat.reset()` does clear it to -999; what
+ * is being compared is the value it is re-stamped with during round 2.
+ *
+ * Masking it is therefore removing the arm's own offset, not hiding a defect —
+ * and `maskedDiffs` still reports it, so the exclusion cannot go quiet. Nothing
+ * else here is match-absolute: positions, velocities, states, stun and move
+ * clocks are all round-relative, which is why the real defect showed up in them.
+ */
+const DT4_MASK = new Set([...DT3_MASK, 'c0.lastTick', 'c1.lastTick']);
 
 /** First index where two traces disagree, and the field that did it. */
 function firstDivergence(A, B, mask = null) {
@@ -337,6 +378,33 @@ function maskedDiffs(A, B) {
 let rngCalls = 0;
 let rngBroken = false;
 const RNG_NEXT = Rng.prototype.next;
+
+/**
+ * DT-4's own positive control: put the `simTick` leak back.
+ *
+ * `Fighter.reset()` used to leave `simTick` wherever round 1 had run it to, and
+ * `Animator.simulate(tick)` takes that absolute tick as its deterministic noise
+ * phase. This wraps the shipping `reset()` and restores the pre-reset value
+ * afterwards, which reproduces exactly that defect and nothing else — no source
+ * is rewritten, so the method under test stays the shipping one.
+ *
+ * `resetCalls` counts executions: a control that never ran is not a control.
+ */
+let resetCalls = 0;
+const FIGHTER_RESET = Fighter.prototype.reset;
+function breakReset(on) {
+  if (on) {
+    Fighter.prototype.reset = function leakySimTick(...args) {
+      const carried = this.simTick;
+      const out = FIGHTER_RESET.apply(this, args);
+      this.simTick = carried;
+      resetCalls++;
+      return out;
+    };
+  } else {
+    Fighter.prototype.reset = FIGHTER_RESET;
+  }
+}
 function breakRng(on) {
   rngBroken = on;
   if (on) Rng.prototype.next = function brokenNext() { rngCalls++; return Math.random(); };
@@ -587,6 +655,61 @@ if (!POSITIVE_CONTROL) {
   const dp = firstDivergence(n1.trace, p2.trace, DT3_MASK);
   record('DT-3p positive control — a 1e-9 nudge at the boundary must be seen', !!dp,
     dp ? `caught at round-2 tick ${dp.tick}` : 'NOT SEEN — the round-2 trace is not reading the sim');
+}
+
+// ---------------------------------------------------------------------------
+// DT-4 — a round reset is a clean replay start REGARDLESS OF HOW LONG ROUND 1 WAS
+//
+// DT-3 above cannot see this, and the reason is its own construction. Both of
+// its arms run a prelude of exactly `PRELUDE_TICKS`, so when they hit the reset
+// they have advanced `Fighter.simTick` by the same amount and it CANCELS in the
+// diff. Every absolute-tick field in the fighter is invisible to it by design.
+//
+// `Fighter.reset()` did not reset `simTick`, and `Animator.simulate(tick)` takes
+// that absolute tick as its deterministic noise phase — so a round 2 entered
+// after a long round 1 breathed on a different phase than one entered after a
+// short round 1, and the pose fed the hitbox builder differed from tick 1. The
+// same field also drives the input-buffer window, the motion window and the
+// throw/damage clocks.
+//
+// It is not a hypothetical the way DT-3's was: `reset()`'s own header records a
+// four-trial investigation that cleared "the animator clock" as a cause. That
+// investigation was right about what it measured and blind to this, because it
+// too compared two equal-length round 1s.
+//
+// So this arm makes the preludes DIFFERENT LENGTHS. Everything else is DT-3.
+// ---------------------------------------------------------------------------
+if (!POSITIVE_CONTROL) {
+  const shortPre = keyScript(SEED_MAIN, PRELUDE_TICKS);
+  const longPre = keyScript(SEED_MAIN, PRELUDE_TICKS + 137);
+  const round2 = keyScript(0x2ead02, ROUND2_TICKS);
+  const a = await runScript(round2, { prelude: shortPre, resetBetween: true });
+  const b = await runScript(round2, { prelude: longPre, resetBetween: true });
+  const d = firstDivergence(a.trace, b.trace, DT4_MASK);
+  record('DT-4  round 2 is identical whether round 1 was long or short', !d,
+    d ? `diverges at round-2 tick ${d.tick} (${d.cols.slice(0, 4).join(', ')}) — `
+      + 'something absolute-tick survived reset()'
+      : `${a.trace.length} ticks identical across a ${137}-tick difference in round-1 length`);
+
+  // NULL: the same LENGTH twice must agree, or the arm is measuring the script
+  // and not the reset.
+  const a2 = await runScript(round2, { prelude: shortPre, resetBetween: true });
+  const dn4 = firstDivergence(a.trace, a2.trace, DT4_MASK);
+  record('DT-4n null control — same round-1 length, twice', !dn4,
+    dn4 ? `diverges at round-2 tick ${dn4.tick}` : `${a.trace.length} ticks identical`);
+
+  // DT-4p positive control — re-break `reset()` and require the arm to catch it.
+  // Without this, DT-4 going green proves only that the mask is wide enough.
+  breakReset(true);
+  const pa = await runScript(round2, { prelude: shortPre, resetBetween: true });
+  const pb = await runScript(round2, { prelude: longPre, resetBetween: true });
+  breakReset(false);
+  const dp4 = firstDivergence(pa.trace, pb.trace, DT4_MASK);
+  record('DT-4p positive control — restoring the simTick leak must be caught', !!dp4 && resetCalls > 0,
+    resetCalls === 0 ? 'the control never ran — reset() was not called inside the measured window'
+      : dp4 ? `caught at round-2 tick ${dp4.tick} (${dp4.cols.slice(0, 3).join(', ')}); `
+        + `${resetCalls} leaky resets applied`
+        : `NOT SEEN across ${pa.trace.length} ticks — DT-4 cannot detect the defect it exists for`);
 }
 
 // ---------------------------------------------------------------------------
