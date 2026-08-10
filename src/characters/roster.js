@@ -20,12 +20,24 @@
  *    wheel, so the two fighters on screen never share a glow colour and the
  *    bloom pass separates them.
  *  - `trim` is the character's POLISHED BRIGHT-WORK: brass, gold or nickel. It
- *    is the hue of `kb.chrome` (Materials.js), which is the metal on every ring
- *    bezel, rim, fastener and edge break — and on the reference sheets that
- *    metal is the design's *second colour*, not a detail. It follows that a
- *    `trim` entry has to be a real metal: an iridescent cyan or a greasy oxide
- *    reads as neither brass nor nickel once it is handed a mirror lobe, which
- *    is why two of them changed in the reference round.
+ *    is the metal on every ring bezel, rim, fastener and edge break — and on the
+ *    reference sheets that metal is the design's *second colour*, not a detail.
+ *
+ *    EVERY TRIM ENTRY IS AN F0, NOT A PAINT, AND THAT IS WHY THEY ALL MOVED.
+ *    `RobotBuilder.resolveMaterials` builds its `trim` batch as
+ *    `tint(pick('worn'), palette.trim, { metalness: 1.0 })` — the hex lands
+ *    straight on `material.color` of a full conductor, where it is the
+ *    normal-incidence REFLECTANCE and nothing else. A conductor has no diffuse
+ *    term, so a mid-value paint swatch there does not produce "dark brass", it
+ *    produces a metal that reflects a fifth of what brass reflects: the capture
+ *    round measured NYX's gold bezels as "a matte brown dome ... reading as felt
+ *    or clay" and VOLTA's brass shoulder disc as "chalky salmon", off entries of
+ *    #D2A63F and #B98C4E. Measured F0 for the three metals this roster uses,
+ *    converted to sRGB: polished gold #FFDE92, polished brass #F0D399, nickel
+ *    #E1E5ED. Every entry below now sits in that range and carries only the
+ *    character's HUE — which is the part that was always doing the work, and
+ *    the part `Materials.alloy()` renormalises anyway when it derives
+ *    `kb.chrome`.
  *
  * Proportion multipliers stay inside 0.9..1.15 as the rig requires; the real
  * silhouette differentiation comes from `silhouette` and `build`, which change
@@ -232,7 +244,9 @@ export const ROSTER = [
       // the closest pair on the wheel, which the "distinct hue per character"
       // rule above exists to prevent.
       emissive: '#FF4A08',  // furnace red-orange
-      trim: '#C7752E',      // hot brass
+      // Warm, and a shade off the brass the other three warm fighters use, so
+      // `furnace`'s hardware still reads as scorched rather than as showroom.
+      trim: '#E6BE84',      // hot brass, F0
     },
     stats: { power: 10, speed: 3, reach: 7, weight: 9, defense: 5 },
     moveSet: 'vulkan',
@@ -268,7 +282,7 @@ export const ROSTER = [
       secondary: '#1E2A38', // deep slate underskin
       accent: '#00A8FF',    // cobalt racing stripe
       emissive: '#31E8FF',  // cyan coolant glow
-      trim: '#BCCBD9',      // polished aluminium
+      trim: '#DCE3EB',      // polished aluminium, F0
     },
     stats: { power: 4, speed: 10, reach: 6, weight: 3, defense: 5 },
     moveSet: 'kestrel',
@@ -305,7 +319,10 @@ export const ROSTER = [
       secondary: '#2B2820', // olive-black oil film
       accent: '#FFC53D',    // hazard chevrons
       emissive: '#FFD21A',  // amber warning strobes
-      trim: '#B0873C',      // aged brass hubs and collars
+      // `atlas-7`'s whole second colour. Every hub ring, rivet collar and wheel
+      // spoke on that sheet is warm brass against olive plate, and at #B0873C
+      // they were reflecting less than half of what brass does.
+      trim: '#EFD9A2',      // aged brass hubs and collars, F0
     },
     stats: { power: 9, speed: 4, reach: 5, weight: 10, defense: 7 },
     moveSet: 'anvil',
@@ -341,7 +358,7 @@ export const ROSTER = [
       secondary: '#2A2836', // graphite spine, faintly indigo
       accent: '#B49CFF',    // lilac inlay
       emissive: '#8A5CFF',  // violet field glow
-      trim: '#C3CBD8',      // bright nickel
+      trim: '#E2E7EE',      // bright nickel, F0
     },
     stats: { power: 6, speed: 6, reach: 9, weight: 4, defense: 4 },
     moveSet: 'seraph',
@@ -368,16 +385,28 @@ export const ROSTER = [
     proportions: { height: 1.0, torso: 1.0, arms: 1.03, legs: 1.03, head: 0.97 },
     palette: {
       // Sheet: `neon-ronin` — "teal/magenta → lacquer black / crimson" (§3).
-      // The bone shoulder plates are NOT on that sheet and they stay anyway:
-      // §3 also makes NYX a black-and-magenta glossy slim frame, so without a
-      // pale mass on the shoulder stack the two are one silhouette at the 40px
-      // the acceptance criteria measure at. Warmed and greyed off pure white so
-      // it reads as lacquered bone rather than as a second highlight.
+      //
+      // THE BONE SHOULDER PLATES ARE GONE. The argument for them was 40px
+      // separation from NYX, and it was answered with the wrong field: the
+      // builder puts `armorSecondary` on 41 call sites against `armorPrimary`'s
+      // 34, so a pale secondary is not "a pale mass on the shoulder stack", it
+      // is more than half the fighter. The capture round read RONIN-07 as
+      // "chalky sand-beige with red-and-white candy stripes ... the value is
+      // light, not lacquer" — against a sheet that is the darkest of the eight.
+      // Silhouette separation is a shape problem and §3 hands it to the kabuto,
+      // the spike stacks and the scabbards; it cannot be bought by breaking the
+      // one thing the sheet is actually about.
+      //
+      // Graphite rather than a second black: the lacquer needs something a stop
+      // above it to sit against or the panel layout stops reading at all, and
+      // graphite is what `neon-ronin`'s underskin panels are. Against NYX —
+      // black, gold rings, magenta line — this is black, GREY, crimson, nickel:
+      // separated by hue and by trim metal, not by value.
       primary: '#141418',   // lacquer black
-      secondary: '#CFC9BC', // bone shoulder plates
+      secondary: '#33363D', // graphite underskin panels
       accent: '#FF2B45',    // crimson cord wrap
       emissive: '#FF1A3C',  // crimson blade-edge glow
-      trim: '#8C8F97',      // polished nickel
+      trim: '#D6DAE2',      // polished nickel, F0
     },
     stats: { power: 7, speed: 7, reach: 6, weight: 5, defense: 6 },
     moveSet: 'ronin',
@@ -411,7 +440,7 @@ export const ROSTER = [
       secondary: '#161B14', // matte void underside
       accent: '#9DFF3C',    // acid green wing flash
       emissive: '#7CFF00',  // bio-luminous acid glow
-      trim: '#C9D2C0',      // nickel mandible edge
+      trim: '#DAE2D4',      // nickel mandible edge, F0
     },
     stats: { power: 5, speed: 9, reach: 8, weight: 4, defense: 3 },
     moveSet: 'mantis',
@@ -443,8 +472,14 @@ export const ROSTER = [
       // gloss black; an iridescent cyan trim was a fourth hue on a character
       // whose whole design is black + gold + one glow, and it read as a smear
       // of the emissive rather than as hardware.
+      // The secondary comes down hard. `vesper` is gloss black, gold and ONE
+      // thin edge colour; a #2E1B3A on the builder's 41 `armorSecondary` sites
+      // is a third large area of chromatic paint, and the capture read NYX as
+      // "bubblegum pink, teal, mint and gold at once ... no glossy black
+      // anywhere". At #171320 the second body is black with a violet cast in it
+      // and the gold rings have something to be gold against.
       primary: '#12101A',   // void black, oil-slick clearcoat
-      secondary: '#2E1B3A', // bruised violet
+      secondary: '#171320', // black with a bruised-violet cast
       accent: '#FF2E88',    // magenta neon piping
       // Three fighters own the red half of the wheel — VULKAN's furnace orange,
       // RONIN's crimson and this — and the three were bunched at 11°/350°/328°,
@@ -452,7 +487,11 @@ export const ROSTER = [
       // 16°/350°/322° they sit about 27° apart each, which is the widest the
       // three can be without one of them ceasing to be its character's colour.
       emissive: '#FF34B4',  // magenta core glow
-      trim: '#D2A63F',      // polished gold ring bezels
+      // The textbook sRGB value for polished gold's F0. This is the character's
+      // entire second colour and it is on 77 call sites; §1.4 wants every one of
+      // them to show a bright rim over a dark core, which is what an F0 this
+      // high and a roughness this low do together.
+      trim: '#FFDE92',      // polished gold ring bezels, F0
     },
     stats: { power: 6, speed: 8, reach: 5, weight: 4, defense: 6 },
     moveSet: 'nyx',
@@ -484,11 +523,23 @@ export const ROSTER = [
       // that navy is the sheet's second-largest area. It also feeds the alloy
       // the structural frame is tinted from, so a near-neutral black there gave
       // BASTION a colourless skeleton under a blue skin.
-      primary: '#2E3946',   // gunmetal blue
+      // Deepened off a muddy mid-grey-blue. The file's own first design rule
+      // rules out mid-greys under rim light and #2E3946 was one; the capture
+      // round separately found BASTION's chest reading as "the brightest object
+      // in the frame, brighter than the practical strip lights behind it".
+      primary: '#27364A',   // gunmetal blue
       secondary: '#1C2740', // navy underlayer
       accent: '#3A7BFF',    // sector blue stripe
       emissive: '#2F6BFF',  // shield field blue
-      trim: '#A8B6C6',      // polished nickel
+      // The one trim in the cast that is deliberately NOT bright-work. Look at
+      // the `paladin` sheet: its bright mass is the ivory SHELL, and every ring,
+      // collar and joint barrel on it is dark blued steel. BASTION inherits that
+      // reading, and it also has to: the builder puts `trim` on 77 call sites
+      // against `armorPrimary`'s 34, so a nickel F0 here turns the whole
+      // defensive fighter into chrome — which is what the first capture of this
+      // round showed. #9EABBB is still a real metal (blued steel sits near 0.35
+      // linear) and is a stop and a half under NYX's gold.
+      trim: '#9EABBB',      // blued steel, F0
     },
     stats: { power: 7, speed: 4, reach: 5, weight: 9, defense: 10 },
     moveSet: 'bastion',
@@ -524,7 +575,11 @@ export const ROSTER = [
       secondary: '#1C2E2D', // dark teal slate underlayer
       accent: '#00C79A',    // calibration green
       emissive: '#28FFC8',  // mint diagnostic glow
-      trim: '#8FA5A2',      // anodised grey-green
+      // §3 turns `volt-monk`'s brass into anodised grey-green. Anodising is a
+      // transparent oxide over the metal, so the substrate's reflectance is
+      // still a metal's — only the hue shifts. #8FA5A2 was the hue with the
+      // metal taken out of it.
+      trim: '#C6D4CC',      // anodised grey-green, F0
     },
     stats: { power: 6, speed: 7, reach: 6, weight: 6, defense: 7 },
     moveSet: 'axiom',
@@ -564,7 +619,7 @@ export const ROSTER = [
       secondary: '#2A2119', // tar-dipped insulation
       accent: '#E4B266',    // polished brass collars
       emissive: '#F2F7FF',  // arc-white discharge
-      trim: '#B98C4E',      // polished brass
+      trim: '#F0D399',      // polished brass, F0
     },
     stats: { power: 8, speed: 6, reach: 5, weight: 7, defense: 6 },
     moveSet: 'volta',

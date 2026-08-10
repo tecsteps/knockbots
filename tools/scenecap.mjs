@@ -184,7 +184,15 @@ const main = async () => {
         const top = new THREE.Vector3(c.x, box.max.y, c.z).project(cam);
         const bot = new THREE.Vector3(c.x, box.min.y, c.z).project(cam);
         const frac = Math.abs(top.y - bot.y) / 2;
-        return frac > 0.50 && frac < 0.98 && cam.position.distanceTo(c) > 1.8;
+        // project() is happy to return NDC outside [-1,1] for a subject that is
+        // off screen or BEHIND the lens, and |top.y - bot.y| stays large when it
+        // does. That is how half the round-2 body frames came out as close-ups
+        // of the OTHER fighter in the pair: the predicate was satisfied by a
+        // subject the camera was not pointing at. Require the centre to be
+        // inside the frame and in front of the lens before believing the size.
+        const p = c.clone().project(cam);
+        const inFrame = Math.abs(p.x) < 0.55 && Math.abs(p.y) < 0.55 && p.z < 1;
+        return inFrame && frac > 0.50 && frac < 0.98 && cam.position.distanceTo(c) > 1.8;
       })()`, 30000, 600);
       if (!framed) console.log(`[scenecap] ${ids[s]} body: framing never converged — frame is suspect`);
       await sleep(900);

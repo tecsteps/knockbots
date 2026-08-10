@@ -1162,12 +1162,24 @@ function actuatorRodGeo(segments) {
 const LIMB_PROFILES = {
   //          elbow ......................................... shoulder
   upperArm: [[0, 0.62], [0.12, 0.71], [0.55, 0.92], [0.86, 1.10], [1, 0.98]],
+  // The elbow is a JOINT, so the two segments either side of it have to agree
+  // there: the upper arm necks to 0.62 and the forearm used to arrive at 0.88,
+  // which put the widest point of the whole arm at the hinge — the exact
+  // inverse of §1.1, and why the forearm photographed as two parallel lines.
   //          wrist ........................................... elbow
-  forearm: [[0, 0.55], [0.14, 0.63], [0.68, 1.02], [0.90, 1.00], [1, 0.88]],
+  forearm: [[0, 0.52], [0.14, 0.62], [0.67, 1.03], [0.88, 0.93], [1, 0.70]],
   //          knee ............................................ hip
   thigh: [[0, 0.60], [0.18, 0.72], [0.62, 0.96], [0.82, 1.06], [1, 0.94]],
+  // A calf belly is not a cone. The old shank peaked at 1.02 against 0.92 at
+  // the knee — a 10% swell over a 0.14 span, which at fight distance is a
+  // straight column. The peak now stands a fifth clear of the knee station and
+  // sits at t = 0.74 (a quarter of the way down from the knee, which is where a
+  // gastrocnemius is), over an ankle at 0.44. Widest-to-narrowest is 2.5:1.
+  // 1.08 is the ceiling, not a preference: `shankW` is derived from `kneeW`,
+  // which is itself capped at 0.90 of the hip spacing, so a taller peak walks
+  // the two calves into each other in a narrow stance.
   //          ankle ........................................... knee
-  shank: [[0, 0.48], [0.14, 0.56], [0.66, 1.00], [0.88, 1.02], [1, 0.92]],
+  shank: [[0, 0.44], [0.14, 0.55], [0.50, 0.92], [0.74, 1.08], [1, 0.92]],
 };
 
 /**
@@ -2378,7 +2390,14 @@ const TORSO_PLANS = {
     pelvis: [0.96, 1.02], waistLo: [1.02, 1.14], waistHi: [1.16, 1.30],
     ribs: [1.30, 1.42], chest: [1.24, 1.38], yoke: [0.88, 0.98],
     round: 0.92, rake: 0, hunch: 0.004, gap: 0.020,
-    pauldron: { w: 0.70, h: 0.76, d: 0.80, layers: 1 },
+    // §3 builds VOLTA to `aegis-01`, and the two things anyone would name about
+    // that sheet are the ENORMOUS ROUNDED PAULDRON DOMES and the thick capsule
+    // limbs under them. At 0.70 × 0.76 this plan had the second-smallest
+    // shoulder in the cast — a heavyweight with no shoulders at all — and the
+    // fight frames show a barrel with arms. The single-piece boss branch in
+    // `buildArm` is that dome (sphere plus an inset wheel hub, which is also
+    // what aegis-01's shoulder close-up tile shows), so this plan takes it.
+    pauldron: { w: 1.10, h: 1.08, d: 1.14, layers: 1, slab: true },
   },
 };
 
@@ -2395,7 +2414,10 @@ const DORSAL_UNITS = Object.freeze({
 /** Chest-core style per body mass, so a plan cannot inherit a chassis-mate's. */
 const PLAN_CORE = {
   barrel: 'hex', keel: 'slit', hump: 'cage', column: 'crystal', cuirass: 'column',
-  carapace: 'slit', skeletal: 'crystal', wall: 'hex', reference: 'column', drum: 'cage',
+  // `reference` was 'column', the same sealed sternum strip as `cuirass` — so
+  // AXIOM and RONIN-07 wore the identical chest feature and AXIOM had none of
+  // the arc-reactor disc §3 gives it. It has its own now.
+  carapace: 'slit', skeletal: 'crystal', wall: 'hex', reference: 'reactor', drum: 'cage',
 };
 
 /**
@@ -3155,7 +3177,11 @@ function buildChestCore(rig, spec, cw, cd, ch, cy, dz = 0) {
       for (let i = 0; i < 5; i++) {
         const a = (-0.34 + i * 0.17) * Math.PI;
         rig.add('chest', bevelBox(R * 0.16, R * 1.70, R * 0.30, 0.005, { topX: 0.55, botX: 0.55 }), 'darkMetal', {
-          p: [Math.sin(a) * R * 0.62, cy, zf + FRONT * (R * 0.06 + Math.cos(a) * R * 0.26)],
+          // Bedded onto the reflector, not hovering in front of it: the dish's
+          // front face sits at `zf + 0.02 R`, and at the old `+0.06 R` the
+          // centre bar's back face stood 0.15 R clear of it — a 14 mm chrome
+          // rod floating across ANVIL's and VOLTA's chests in every frame.
+          p: [Math.sin(a) * R * 0.62, cy, zf + FRONT * (Math.cos(a) * R * 0.26 - R * 0.10)],
           r: [0, -a * 0.6, 0], tier: TIER.PRIMARY,
         });
       }
@@ -3178,6 +3204,37 @@ function buildChestCore(rig, spec, cw, cd, ch, cy, dz = 0) {
         rig.add('chest', bevelBox(R * 0.20, h * 1.02, R * 0.28, 0.005), 'trim',
           { p: [sign * R * 0.44, cy, zf], mirror, tier: TIER.SECONDARY });
       }
+      break;
+    }
+    case 'reactor': {
+      // Reference chassis: the arc-reactor disc. §3 names it as the thing that
+      // carries AXIOM — "smooth featureless ovoid head, arc-reactor chest disc,
+      // exposed brass spine" — and it was the one item on that row with nothing
+      // built for it: the plan fell through to `column`, the same sealed strip
+      // light RONIN-07 wears, so the cleanest chassis in the cast had no hero
+      // element at all and the two fighters shared their only chest feature.
+      //
+      // Three concentric parts and nothing else, because §1.6 allows exactly
+      // one hero emitter and this is it: a polished bezel ring, a dark stator
+      // inset behind it, and a small bright rotor in the middle. The bright
+      // area is deliberately a quarter of the bezel's — a disc that glows edge
+      // to edge is the "large glowing face" the contract rules out.
+      rig.add('chest', latheProfile([
+        { r: R * 0.62, y: 0 }, { r: R * 0.92, y: R * 0.06, smooth: true },
+        { r: R * 0.92, y: R * 0.20 }, { r: R * 0.70, y: R * 0.30 },
+        { r: R * 0.62, y: R * 0.26 },
+      ], 26), 'trim', { p: [0, cy, zf], r: FACE_FRONT, tier: TIER.PRIMARY });
+      rig.add('chest', latheProfile([
+        { r: 0, y: 0 }, { r: R * 0.66, y: 0 }, { r: R * 0.66, y: R * 0.12 },
+        { r: R * 0.30, y: R * 0.16 }, { r: 0, y: R * 0.16 },
+      ], 24), 'darkMetal', { p: [0, cy, zf], r: FACE_FRONT, tier: TIER.PRIMARY, role: 'frame' });
+      // Six stator poles bedded on the dark inset, so the disc reads as a
+      // machine rather than as a porthole once the glow is bloomed out.
+      rig.add('chest', boltRing(6, R * 0.46, R * 0.09, R * 0.10), 'trim',
+        { p: [0, cy, zf + FRONT * R * 0.13], r: FACE_FRONT, tier: TIER.SECONDARY });
+      rig.glow('chest', latheProfile([
+        { r: 0, y: 0 }, { r: R * 0.30, y: 0 }, { r: R * 0.26, y: R * 0.05 }, { r: 0, y: R * 0.06 },
+      ], 22), 'core', { p: [0, cy, zf + FRONT * R * 0.14], r: FACE_FRONT });
       break;
     }
     default: { // crystal
@@ -3282,7 +3339,13 @@ function buildBackHardware(rig, spec, cyIn, rz = () => 0) {
       // Dockyard: a cable winch lying across the back on its own axis, wider
       // than the shoulders and unmistakable end-on. Nothing else in the cast
       // has a horizontal cylinder on it.
-      const R = 0.115, half = t.chestW * 0.56;
+      // Sized DOWN from R 0.115 / half 0.56: a barrel wider than the shoulders
+      // and a quarter-metre across photographed as a satellite dish bolted to
+      // the back, and on ANVIL it merged with the shoulder mass into one convex
+      // lump with no neck. A winch still reads as a winch at 0.082 on 0.40 —
+      // the identity is the horizontal axis, which nothing else in the cast
+      // has, not the diameter.
+      const R = 0.082, half = t.chestW * 0.40;
       rig.add('chest', latheProfile([
         { r: R * 0.62, y: -half }, { r: R * 0.94, y: -half + 0.012, smooth: true },
         { r: R, y: -half + 0.030 }, { r: R * 0.86, y: -half * 0.72 },
@@ -3402,7 +3465,9 @@ function buildBackHardware(rig, spec, cyIn, rz = () => 0) {
         const blocks = [];
         for (let i = 0; i < SEGS; i++) {
           const a = (i / SEGS) * Math.PI * 2;
-          const g = bevelBox(0.030, 0.026, (2 * Math.PI * R) / SEGS * 0.92, 0.005);
+          // Arc on the tangent — see the note in `segmentRing`, which had the
+          // same transposition and made this winding a ring of loose blocks.
+          const g = bevelBox((2 * Math.PI * R) / SEGS * 0.92, 0.030, 0.026, 0.005);
           g.applyMatrix4(new THREE.Matrix4().compose(
             new THREE.Vector3(Math.cos(a) * R, Math.sin(a) * R, 0),
             new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, a + Math.PI / 2)),
@@ -3414,11 +3479,17 @@ function buildBackHardware(rig, spec, cyIn, rz = () => 0) {
           p: [0, cy + 0.05, zb + back * (0.02 + k * 0.032)], r: [12 * DEG, 0, k * 0.22], tier: TIER.PRIMARY,
         });
       }
+      // The windings are raked 12° about X, and `p` is not rotated by `r`, so a
+      // lamp positioned in the un-raked circle drifted up to 45 mm off the ring
+      // it is set into at the top and bottom of the sweep. Rake the position by
+      // the same angle and it lands in the winding every time.
+      const rake = 12 * DEG;
       for (let i = 0; i < 5; i++) {
         const a = (i / 5) * Math.PI * 2 + 0.4;
+        const ry = Math.sin(a) * 0.215;
         rig.glow('chest', bevelBox(0.044, 0.016, 0.010, 0.004), 'core', {
-          p: [Math.cos(a) * 0.215, cy + 0.05 + Math.sin(a) * 0.215, zb + back * 0.036],
-          r: [12 * DEG, 0, a + Math.PI / 2],
+          p: [Math.cos(a) * 0.215, cy + 0.05 + ry * Math.cos(rake), zb + back * 0.036 + ry * Math.sin(rake)],
+          r: [rake, 0, a + Math.PI / 2],
         });
       }
       rig.add('chest', latheProfile([
@@ -3597,21 +3668,31 @@ function buildTorsoMass(rig, spec, P, rz) {
       // Dockyard: an enormous rounded upper back that climbs past the head line.
       // Nothing else in the cast has mass above its own shoulders, so this is
       // the whole silhouette from any angle.
+      // Lowered and pushed further aft. At 1.66 collars the crest of the hump
+      // reached the skull's own crown and sat only 0.30 of a chest depth behind
+      // it, so from every bearing the fight camera uses ANVIL's head was inside
+      // its own back: the frames show one convex yellow lump with no neck and
+      // no head break in the outline, which §4.8 fails on. 1.44 keeps the mass
+      // unmistakably above the shoulder line — still the only fighter in the
+      // cast with any — while leaving the helm as sky, and 0.42 puts the whole
+      // crest behind the head in profile rather than beside it.
       const w = P.yoke.w * 1.34;
       rig.add('chest', loftHull([
         { y: m.collar * 0.30, w: w * 0.80, d: P.chest.d * 1.02, round: 0.46 },
-        { y: m.collar * 0.86, w, d: P.chest.d * 1.16, round: 0.44, smooth: true },
-        { y: m.collar * 1.36, w: w * 0.92, d: P.chest.d * 1.02, round: 0.46, smooth: true },
-        { y: m.collar * 1.66, w: w * 0.52, d: P.chest.d * 0.60, round: 0.5 },
+        { y: m.collar * 0.84, w, d: P.chest.d * 1.16, round: 0.44, smooth: true },
+        { y: m.collar * 1.20, w: w * 0.92, d: P.chest.d * 1.02, round: 0.46, smooth: true },
+        { y: m.collar * 1.44, w: w * 0.52, d: P.chest.d * 0.60, round: 0.5 },
       ]), 'armorPrimary', {
-        p: [0, 0, back * P.chest.d * 0.30 + rz(m.collar)], r: [-10 * DEG, 0, 0], tier: TIER.PRIMARY,
+        p: [0, 0, back * P.chest.d * 0.42 + rz(m.collar)], r: [-10 * DEG, 0, 0], tier: TIER.PRIMARY,
       });
       for (let i = 0; i < 5; i++) {
         rig.add('chest', latheProfile([
           { r: w * (0.42 - i * 0.03), y: 0 }, { r: w * (0.46 - i * 0.03), y: 0.010, smooth: true },
           { r: w * (0.46 - i * 0.03), y: 0.028 }, { r: w * (0.42 - i * 0.03), y: 0.038 },
         ], 20), 'trim', {
-          p: [0, m.collar * (0.44 + i * 0.24), back * P.chest.d * (0.30 - i * 0.02) + rz(m.collar)],
+          // Follows the shell above, which moved back and down; these hoops are
+          // shrunk onto it and cannot be authored against the old station.
+          p: [0, m.collar * (0.42 + i * 0.20), back * P.chest.d * (0.42 - i * 0.02) + rz(m.collar)],
           r: [-10 * DEG, 0, 0], s: [1, 1, 1.16], tier: TIER.SECONDARY,
         });
       }
@@ -3682,10 +3763,22 @@ function buildTorsoMass(rig, spec, P, rz) {
           { y: 0.040 * f, w: 0.104 * f, d: 0.066 * f, round: 0.50 },
         ]), 'armorPrimary', {
           p: [0, y, z], r: [-(16 + i * 7) * DEG * FRONT, 0, 0],
-          tier: TIER.PRIMARY, sprung: i >= 2 ? (i % 2 ? 'skirt_L' : 'skirt_R') : null,
+          // ONE trailing bone for the whole chain. Alternating `skirt_L` and
+          // `skirt_R` down a tail that sits on the centreline gave neighbouring
+          // segments two independent hinges: the moment the fighter moved, the
+          // chain came apart into a row of capsules hanging in mid-air behind
+          // the hips, which is what the frames show. A tail is one flexible
+          // object or it is a rigid one; it is never two interleaved ones.
+          tier: TIER.PRIMARY, sprung: i >= 2 ? 'skirt_L' : null,
         });
-        z += back * 0.082 * f;
-        y -= 0.030 + i * 0.010;
+        // The step has to be SHORTER than the segment it steps off, or the
+        // abdomen is not a tail, it is a row of separate capsules hanging in
+        // mid-air behind the hips — which is what the fight frames show. Each
+        // ring is `0.086 * f` deep; a 0.082 step plus a 0.030–0.070 drop put
+        // 0.09–0.11 between centres, so every joint in the chain had daylight
+        // in it. 0.056 and 0.020 keep neighbours overlapping the whole way.
+        z += back * 0.056 * f;
+        y -= 0.020 + i * 0.007;
       }
       rig.glow('hips', loftHull([
         { y: 0, w: 0.030, d: 0.026, round: 0.5 },
@@ -4020,10 +4113,17 @@ const HEAD_CROWN = 0.15;
  * and there was nothing between them to see. §1.7 makes the exposed neck a
  * defining element of all eight sheets, so the ring gives back a sixth of its
  * height and the head clearance solve holds the rest of the gap open.
+ *
+ * 0.86 was still not enough. Every fight frame of the round that produced it
+ * shows the head running straight into the collar with no gap and no mechanism
+ * on any of the ten fighters — 14% of a neck bone is about twenty-five
+ * millimetres, which is one row of ribs and is gone the moment the camera is
+ * more than two metres away. At 0.70 nearly a third of the column stands clear,
+ * which is what the sheets show and what the ribs need to register.
  */
-const GORGET_TOP = 0.86;
+const GORGET_TOP = 0.70;
 /** Column that must stay exposed above the gorget, in neck-bone lengths. */
-const NECK_SHOW = 0.30;
+const NECK_SHOW = 0.34;
 
 /**
  * The canonical skull envelope, in authoring units before the head scale.
@@ -4099,7 +4199,12 @@ function buildNeck(rig, lift, k) {
   // the gorget bore, so shortening the gorget would have revealed nothing but
   // more of the same diameter; a neck has to be visibly narrower than the throat
   // it comes out of or the taper never registers.
-  const nr = 0.042 * m.torsoK;
+  // ...but not so slim that it vanishes inside the gorget bore, which is what
+  // 0.042 did: the ring's inner radius is about 0.18 of the yoke width, so a
+  // 41 mm column stood with two centimetres of clear annulus all round it and
+  // the ribs were never on screen at all. 0.052 still necks visibly out of the
+  // throat and now actually fills the hole it comes through.
+  const nr = 0.052 * m.torsoK;
 
   // ZONE 2 (matte composite). The core the rings are stacked on. A mirror here
   // put a second bright brushed streak directly under the jaw and flattened the
@@ -4115,7 +4220,7 @@ function buildNeck(rig, lift, k) {
   // PRIMARY, not SECONDARY: the ribs are the silhouette of the neck, and a neck
   // that loses them at LOD1 goes back to being the smooth cylinder this replaces.
   rig.ribStack('neck', {
-    count: 4, r0: nr * 0.97, r1: nr * 0.88,
+    count: 6, r0: nr * 0.97, r1: nr * 0.88,
     y0: bot + m.collar * 0.06, y1: top - m.nape * 0.14,
     h: 0.010 * m.torsoK, deep: 1.05, mat: 'darkMetal', tier: TIER.PRIMARY,
   });
@@ -4123,7 +4228,7 @@ function buildNeck(rig, lift, k) {
   // Riser: the half of the column that follows the skull. Authored OUTSIDE the
   // lift (it is placed on the unlifted bone) but reaching UP TO the lifted jaw,
   // so its length absorbs the clearance solve instead of a gap doing it.
-  const rr = (0.044 + lift * 0.14) * m.torsoK;
+  const rr = (0.054 + lift * 0.14) * m.torsoK;
   // Where the riser has to reach: the jaw, but never below the shoulder of its
   // own profile. The clearance solve gives a fighter with low pauldrons about
   // fifteen millimetres of lift, and at that value the raw jaw height lands
@@ -4139,7 +4244,7 @@ function buildNeck(rig, lift, k) {
     { r: rr * 0.90, y: rise },
   ], seg), 'gasket', { tier: TIER.PRIMARY });
   rig.ribStack('head', {
-    count: 3, r0: rr * 0.96, r1: rr * 0.84,
+    count: 4, r0: rr * 0.96, r1: rr * 0.84,
     y0: -m.nape * 0.62, y1: rise - 0.012,
     h: 0.010 * m.torsoK, deep: 1.05, mat: 'darkMetal', tier: TIER.PRIMARY,
   });
@@ -4186,6 +4291,12 @@ function buildHead(rig, spec, def) {
   const lift = clamp(Math.max(clear - (headAboveChest + HEAD_JAW * k), throat - HEAD_JAW * k), 0, 0.095);
 
   buildNeck(rig, lift, k);
+  // Published for the landmark builders, which run later and hang rings and
+  // halos at head height off `chest`. They cannot re-derive it — the solve
+  // reads the pauldron geometry — and a halo authored against the UNLIFTED
+  // skull sits up to nine centimetres low, i.e. round the neck.
+  rig.headLift = lift;
+  rig.headScale = k;
 
   rig.lifted(lift, () => rig.scaled(k, () => {
     (HEAD_BUILDERS[spec.head] ?? headFurnace)(rig, spec, def);
@@ -4943,38 +5054,81 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   // the joint it is supposed to protect.
   const ballX = Math.abs((rig.restPos[`shoulder_${S}`]?.x ?? 0.155 * m.armS)
     - (rig.restPos[`clavicle_${S}`]?.x ?? 0)) * 0.58;
-  // A slab shoulder is not a stack of lames with the count turned down — a
-  // corridor guard's pauldron is one square plate with a hard rolled rim, and
-  // the difference between "curved shells" and "flat plate" is most of what
-  // separates BASTION's outline from every other heavy in the cast.
+  // A slab shoulder is not a stack of lames with the count turned down — it is
+  // one big single-piece mass, and the difference between that and the stacked
+  // arcs below is most of what separates BASTION's and ANVIL's outlines from
+  // every other heavy in the cast. What it is NOT is flat (see below).
   if (pd.slab) {
+    // The heavy shoulder BOSS. This was three flat faces and two straight trim
+    // rails on a 0.06-round loft — a rectangular flap, and the fight frames of
+    // ANVIL and BASTION show exactly that: cardboard hanging off the shoulder,
+    // the "walking crate" §1.1 exists to kill. `atlas-7`'s shoulder, which §3
+    // assigns ANVIL, is a SPHERE with a spoked wheel hub inset in its outer
+    // face, and `paladin`'s is the same form under a smaller cowl. Same
+    // footprint, same three-tier budget, two-directional curvature everywhere:
+    // the round fractions below are what turns the loft from a box into a boss.
     const l0 = lames[0];
-    const sw = pd.w * 1.30, sh = pd.h * 1.85, sd = pd.d * 1.24;
+    // SIZED AGAINST THE SHOULDER, not against the lame stack it replaces.
+    //
+    // These were 1.30 / 1.66 / 1.30, and the arithmetic underneath them is why
+    // that is not a taste call. `pd` has already been through three multipliers
+    // by the time it arrives — the plan's own (wall: 1.22/1.14/1.12), the
+    // roster's `shoulders` impression (shK 1.225 on BASTION) and `arms` (1.06)
+    // — so pd is 0.372 x 0.299 x 0.378 m before anything here touches it.
+    // Multiplying that by 1.3/1.66/1.3 produced a 0.48 x 0.50 x 0.49 m SOLID per
+    // shoulder: two of them met over the sternum and BASTION photographed as a
+    // machine carrying a packing crate where its chest should be, head barely
+    // clear of the lid. The lame stack these replace is not that volume — a lame
+    // is a 5cm shell on a 0.26m radius, and three of them enclose air.
+    //
+    // A boss is one pressing about as wide as the joint it caps, so it is sized
+    // at slightly UNDER `pd` across and a touch over it in height, which is the
+    // proportion `paladin`'s shoulder actually shows: as tall as it is wide, and
+    // narrower than the upper arm is long.
+    const sw = pd.w * 0.80, sh = pd.h * 1.06, sd = pd.d * 0.86;
     const at = [sign * (ballX + pd.w * 0.34), l0.dy + pd.h * 0.10, 0];
+    const roll = [0, 0, sign * -pd.tilt * 0.35 * DEG];
     rig.add(`clavicle_${S}`, loftHull([
-      { y: -sh * 0.5, w: sw * 0.92, d: sd * 0.92, round: 0.08 },
-      { y: 0, w: sw, d: sd, round: 0.06, smooth: true },
-      { y: sh * 0.5, w: sw * 0.96, d: sd * 0.94, round: 0.08 },
-    ]), 'armorPrimary', {
-      p: at, r: [0, 0, sign * -pd.tilt * 0.35 * DEG], mirror, tier: TIER.PRIMARY,
-      // The one square plate a corridor guard's shoulder is: a bolted deck, not
-      // a pressing, so it takes the wide pitch and the fastener row.
-      role: 'deck',
+      { y: -sh * 0.50, w: sw * 0.58, d: sd * 0.62, round: 0.62 },
+      { y: -sh * 0.22, w: sw * 0.92, d: sd * 0.94, round: 0.72, smooth: true },
+      { y: sh * 0.10, w: sw, d: sd, round: 0.76, smooth: true },
+      { y: sh * 0.36, w: sw * 0.86, d: sd * 0.88, round: 0.74, smooth: true },
+      { y: sh * 0.52, w: sw * 0.52, d: sd * 0.56, round: 0.66 },
+    ], { perQuad: 4 }), 'armorPrimary', {
+      p: at, r: roll, mirror, tier: TIER.PRIMARY,
+      // A boss is a pressing with a free rim, not a bolted deck: `deck` is what
+      // put the wide fastener pitch on a face that is now doubly curved.
+      role: 'lame',
     });
-    for (const sy of [-1, 1]) {
-      rig.add(`clavicle_${S}`, bevelBox(sw * 1.04, 0.026, sd * 1.04, 0.006), 'trim', {
-        p: [at[0], at[1] + sy * sh * 0.49, at[2]], r: [0, 0, sign * -pd.tilt * 0.35 * DEG], mirror, tier: TIER.PRIMARY,
-      });
+    // Wheel hub, inset into the boss's outer face on the joint axis. It is the
+    // one piece of shoulder hardware on the sheet that survives 40 pixels, and
+    // it is why the disc §1.4 asks for is not buried under the plate here.
+    const hubX = at[0] + sign * sw * 0.42;
+    const axis = [0, 0, sign * -90 * DEG];
+    rig.add(`clavicle_${S}`, latheProfile([
+      { r: 0, y: 0 }, { r: sw * 0.34, y: 0 }, { r: sw * 0.36, y: 0.014, smooth: true },
+      { r: sw * 0.30, y: 0.034 }, { r: sw * 0.13, y: 0.030 }, { r: sw * 0.13, y: 0.056 },
+      { r: sw * 0.07, y: 0.062 }, { r: 0, y: 0.062 },
+    ], 24), 'trim', { p: [hubX, at[1], at[2]], r: axis, mirror, tier: TIER.PRIMARY });
+    // Four spokes across the hub face, which is what says "wheel" rather than
+    // "washer" once the disc is only twenty pixels across.
+    const spokes = [];
+    for (let i = 0; i < 4; i++) {
+      const g = bevelBox(sw * 0.52, 0.014, 0.020, 0.004);
+      // Built in the hub's own frame (axis +Y) and rotated with it, rather than
+      // composing a second Euler at the call site — the hub is already rolled
+      // onto the joint axis and two orders do not compose readably.
+      g.applyMatrix4(new THREE.Matrix4().makeRotationY((i / 4) * Math.PI));
+      g.translate(0, 0.028, 0);
+      spokes.push(g);
     }
-    rig.add(`clavicle_${S}`, bevelBox(0.026, sh * 1.02, sd * 1.04, 0.006), 'trim', {
-      p: [at[0] + sign * sw * 0.49, at[1], at[2]], r: [0, 0, sign * -pd.tilt * 0.35 * DEG], mirror, tier: TIER.PRIMARY,
-    });
-    addPanelDetail(rig, `clavicle_${S}`, {
-      p: [at[0], at[1], FRONT * (sd * 0.5 + 0.005)], r: [0, YAW_FRONT, 0],
-      w: sw * 0.74, h: sh * 0.70, bolts: 4, splitsY: [-0.24, 0.26], splitsX: [0.16], mirror,
-    });
-    rig.glow(`clavicle_${S}`, bevelBox(sw * 0.56, 0.014, 0.012, 0.004), 'joints',
-      { p: [at[0], at[1] - sh * 0.30, FRONT * (sd * 0.5 + 0.008)], mirror });
+    rig.add(`clavicle_${S}`, joinGeometries(spokes), 'darkMetal',
+      { p: [hubX, at[1], at[2]], r: axis, mirror, tier: TIER.SECONDARY });
+    rig.add(`clavicle_${S}`, boltRing(6, sw * 0.30, 0.010, 0.012), 'trim',
+      { p: [hubX, at[1], at[2]], r: axis, mirror, tier: TIER.GREEBLE });
+    rig.glow(`clavicle_${S}`, latheProfile([
+      { r: 0, y: 0.058 }, { r: sw * 0.10, y: 0.058 }, { r: 0, y: 0.066 },
+    ], 16), 'joints', { p: [hubX, at[1], at[2]], r: axis, mirror });
   }
   if (!pd.slab) {
     lames.forEach((l, i) => {
@@ -5019,15 +5173,26 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     r: [0, 0, sign * -pd.tilt * 0.5 * DEG], mirror, tier: TIER.PRIMARY,
   });
 
+  // Panel breakup on the CAP, which is a solid loft, not on the lame's mid-plane
+  // — `cap.half` is the half-thickness of a swept band whose material only
+  // exists at radius `cap.R`, and the old point sat at 0.65 of that radius,
+  // i.e. in the hole the arc encloses. The panel and its four corner brackets
+  // were therefore hanging in clear air in front of every shoulder in the cast:
+  // that is the "eight or nine bare chrome rods projecting from the shoulders
+  // at random angles like scaffolding poles" the ANVIL close-up shows, and the
+  // chrome staples on RONIN's. The cap's widest station is 0.86 of `pd.d` and
+  // it is placed 0.02 back, so its front face sits at 0.41 — which is where the
+  // panel plane goes, leaving the split strips and bolt heads (authored 5–7 mm
+  // proud of it) standing on the surface rather than buried in the block.
   addPanelDetail(rig, `clavicle_${S}`, {
-    p: [sign * (ballX + cap.dx + cap.R * 0.30), cap.dy + cap.R * 0.58, FRONT * (cap.half + 0.006)],
-    r: [0, YAW_FRONT, sign * -34 * DEG],
-    w: pd.w * 0.46, h: pd.h * 0.42, bolts: 3, splitsY: [0.22], splitsX: [-0.18], mirror,
+    p: [sign * (ballX * 0.55), pd.up * 0.42, FRONT * (pd.d * 0.41)],
+    r: [0, YAW_FRONT, sign * -20 * DEG],
+    w: pd.w * 0.40, h: pd.h * 0.38, bolts: 3, splitsY: [0.22], splitsX: [-0.18], mirror,
   });
-  rig.add(`clavicle_${S}`, boltRing(5, pd.w * 0.22, 0.008, 0.010), 'trim', {
-    p: [sign * (ballX + cap.dx), cap.dy, FRONT * (cap.half + 0.008)],
-    r: FACE_FRONT, mirror, tier: TIER.GREEBLE,
-  });
+  // The five-bolt collar that used to sit here is gone rather than moved: it
+  // was struck on the same non-existent lame mid-plane as the panel above, and
+  // the panel already brings its own fastener row to the one face they were
+  // both aiming at. Two rings of hardware on a cap this size is a crowd.
 
   const shellSeg = rig.maxTier >= 2 ? 16 : 10;
 
@@ -5221,12 +5386,19 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     // same wrapped shell as the segment it sits on, just flared toward the fist
     // and left open on the inner face like everything else. Width is capped well
     // short of `gaunt` scaling linearly, or a brute swings a billboard.
-    const gw = fore * (1.22 + gaunt * 0.40);
+    // It has to STOP AT THE WRIST. At `1.22 + 0.40 gaunt` the flare reached a
+    // radius of 1.04 forearm widths and ran to `-fLen * 1.02` — past the wrist
+    // joint and wider than the palm behind it, so on the two brutes the whole
+    // articulated hand was inside the cuff and the fist photographed as one
+    // smooth mitten with two engraved lines on it. §1.5 makes the hand a hero
+    // element; the cuff sits BEHIND it now, ending a shell's thickness short of
+    // the joint, and its widest station is inside the palm's own half-width.
+    const gw = fore * (1.10 + gaunt * 0.24);
     rig.add(`elbow_${S}`, shellLathe([
-      { r: gw * 0.52, y: -fLen * 1.02 },
-      { r: gw * 0.64, y: -fLen * 0.90, smooth: true },
-      { r: gw * 0.62, y: -fLen * 0.64, smooth: true },
-      { r: gw * 0.44, y: -fLen * 0.46 },
+      { r: gw * 0.46, y: -fLen * 0.94 },
+      { r: gw * 0.56, y: -fLen * 0.84, smooth: true },
+      { r: gw * 0.54, y: -fLen * 0.62, smooth: true },
+      { r: gw * 0.40, y: -fLen * 0.46 },
     ], gw * 0.11, shellSeg, { arc: 236 * DEG, phase: -118 * DEG }), 'armorAccent',
     { mirror, tier: TIER.PRIMARY });
     addPanelDetail(rig, `elbow_${S}`, {
@@ -5237,8 +5409,8 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
       p: [sign * (gw * 0.58 + 0.004), -fLen * 0.78, 0], r: [0, sign * 90 * DEG, 0],
       w: gw * 0.62, h: fLen * 0.34, bolts: 3, splitsY: [0.2], splitsX: [], mirror,
     });
-    rig.add(`elbow_${S}`, boltRing(8, gw * 0.46, 0.009, 0.011), 'trim',
-      { p: [0, -fLen * 1.00, 0], r: [180 * DEG, 0, 0], mirror, tier: TIER.GREEBLE });
+    rig.add(`elbow_${S}`, boltRing(8, gw * 0.40, 0.009, 0.011), 'trim',
+      { p: [0, -fLen * 0.92, 0], r: [180 * DEG, 0, 0], mirror, tier: TIER.GREEBLE });
     // knuckle-duster ridge along the striking face, following the flare
     for (let i = -1; i <= 1; i++) {
       rig.add(`elbow_${S}`, bevelBox(gw * 0.20, 0.05, gw * 0.22, 0.006, { topX: 0.5, topZ: 0.5 }), 'trim',
@@ -5282,7 +5454,16 @@ function segmentRing(R, w, h, segs, bevel = 0.005) {
   const blocks = [];
   for (let i = 0; i < segs; i++) {
     const a = (i / segs) * Math.PI * 2;
-    const g = bevelBox(w, h, (2 * Math.PI * R) / segs * 0.92, bevel);
+    // THE ARC LENGTH GOES ON THE TANGENT. It was on the block's local Z, which
+    // the Euler below leaves pointing along the ring AXIS — so every ring in
+    // the cast was a row of `w`-wide blocks spaced an arc apart, with the arc's
+    // worth of daylight between each pair and the block itself standing out
+    // sideways. That is the "corona of thirty box modules orbiting the
+    // shoulders" on AXIOM, the "bundle of coloured pegs" on NYX and the gappy
+    // halo on SERAPH, all from one transposed argument. Rz(a + 90°) sends local
+    // +X to the tangent and local +Y to the radius, so the box is
+    // (arc, radial, axial) in that order.
+    const g = bevelBox((2 * Math.PI * R) / segs * 0.92, w, h, bevel);
     g.applyMatrix4(new THREE.Matrix4().compose(
       new THREE.Vector3(Math.cos(a) * R, Math.sin(a) * R, 0),
       new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, a + Math.PI / 2)),
@@ -5311,28 +5492,41 @@ function ballOffset(rig, side) {
 function markStacks(rig, spec) {
   const pd = scaledPauldron(spec, rig.dim);
   const bx = ballOffset(rig, 'R');
+  // Outboard and leaning AWAY from the centreline. They used to be struck at
+  // 0.30 of a pauldron width off the shoulder ball and rolled -7 to -25 degrees
+  // — which on this side of the body leans them INBOARD — so over two thirds of
+  // a metre of flue the tip crossed the skull, and every fight frame of VULKAN
+  // has a tapered brass column running through its face. Nothing may cross the
+  // head; the roll is now positive (outboard) and the roots start a full
+  // pauldron width further out.
   for (let i = 0; i < 2; i++) {
-    const h = 0.66 - i * 0.17;
-    const x = -(bx + pd.w * (0.30 + i * 0.42));
+    const h = 0.58 - i * 0.15;
+    const x = -(bx + pd.w * (0.86 + i * 0.52));
+    const y0 = pd.up + pd.h * 0.30;
+    const roll = (5 + i * 6) * DEG;
+    const rot = [-16 * DEG, 0, roll];
     rig.add('clavicle_R', latheProfile([
       { r: 0.046, y: 0 }, { r: 0.046, y: h * 0.80 }, { r: 0.058, y: h * 0.86, smooth: true },
       { r: 0.058, y: h * 0.95 }, { r: 0.040, y: h }, { r: 0.034, y: h },
       { r: 0.034, y: h * 0.86 }, { r: 0.034, y: 0 },
     ], 20), 'darkMetal', {
-      p: [x, pd.up + pd.h * 0.30, -FRONT * 0.030],
-      r: [-9 * DEG, 0, -(7 + i * 9) * DEG], mirror: true, tier: TIER.PRIMARY, sprung: 'pack_R',
+      p: [x, y0, -FRONT * 0.030], r: rot, mirror: true, tier: TIER.PRIMARY, sprung: 'pack_R',
     });
     rig.add('clavicle_R', latheProfile([
-      { r: 0.050, y: 0 }, { r: 0.062, y: 0.012, smooth: true }, { r: 0.062, y: 0.032 }, { r: 0.050, y: 0.044 },
+      { r: 0.050, y: h * 0.34 }, { r: 0.062, y: h * 0.34 + 0.012, smooth: true },
+      { r: 0.062, y: h * 0.34 + 0.032 }, { r: 0.050, y: h * 0.34 + 0.044 },
     ], 20), 'trim', {
-      p: [x, pd.up + pd.h * 0.30 + h * 0.34, -FRONT * 0.030],
-      r: [-9 * DEG, 0, -(7 + i * 9) * DEG], mirror: true, tier: TIER.SECONDARY, sprung: 'pack_R',
+      p: [x, y0, -FRONT * 0.030], r: rot, mirror: true, tier: TIER.SECONDARY, sprung: 'pack_R',
     });
-    rig.glow('clavicle_R', latheProfile([{ r: 0, y: 0 }, { r: 0.032, y: 0 }, { r: 0, y: 0.010 }], 18), 'vents', {
-      p: [x - (0.11 - i * 0.02), pd.up + pd.h * 0.30 + h, -FRONT * 0.030],
-      r: [-9 * DEG, 0, -(7 + i * 9) * DEG], mirror: true, sprung: 'pack_R',
+    // Authored at the flue's own tip height rather than placed there: `p` is not
+    // rotated by `r`, so an offset written into `p` walks off the lean.
+    rig.glow('clavicle_R', latheProfile([
+      { r: 0, y: h }, { r: 0.032, y: h }, { r: 0, y: h + 0.010 },
+    ], 18), 'vents', {
+      p: [x, y0, -FRONT * 0.030], r: rot, mirror: true, sprung: 'pack_R',
     });
-    rig.emitter('exhaust', 'clavicle_R', [x, pd.up + pd.h * 0.30 + h, -FRONT * 0.030], [0, 1, -0.2 * FRONT], 0.05);
+    rig.emitter('exhaust', 'clavicle_R',
+      [x - Math.sin(roll) * h, y0 + Math.cos(roll) * h, -FRONT * 0.030], [0, 1, -0.2 * FRONT], 0.05);
   }
   // pour lip: a ladle spout clamped to the other forearm, so the two arms are
   // never the same object even before the brute gauntlet is applied
@@ -5367,31 +5561,38 @@ function markCanards(rig, spec) {
     const bx = ballOffset(rig, s);
     const at = [sign * (bx + pd.w * 0.46), pd.up + pd.h * 0.20, -FRONT * 0.010];
     const rot = [0, sign * yaw, sign * roll];
+    // A canard is a wing SECTION, not a card. 0.026 thick on 0.300 of chord is
+    // 1:12 — a piece of paper, and every capture of KESTREL shows two flat
+    // planes crossing in front of the head with no thickness anywhere in them.
+    // 0.052 on 0.190 is 1:4, which still reads as a blade in profile and has a
+    // curved upper surface for the key light to travel across. Shorter too:
+    // 0.240 instead of 0.330, so the pair stops out-reaching the skull.
     rig.add(`clavicle_${s}`, loftHull([
-      { y: 0, w: 0.036, d: 0.094, round: 0.30 },
-      { y: 0.150, w: 0.026, d: 0.300, z: -FRONT * 0.120, round: 0.20, smooth: true },
-      { y: 0.330, w: 0.013, d: 0.215, z: -FRONT * 0.300, round: 0.24 },
+      { y: 0, w: 0.052, d: 0.094, round: 0.44 },
+      { y: 0.110, w: 0.044, d: 0.190, z: -FRONT * 0.086, round: 0.36, smooth: true },
+      { y: 0.240, w: 0.022, d: 0.132, z: -FRONT * 0.208, round: 0.40 },
     ]), 'armorPrimary', {
       p: at, r: rot, order: 'YXZ', mirror, tier: TIER.PRIMARY, sprung: `pack_${s}`,
     });
     // Winglet at the tip, cranked the other way: it breaks the fin's own line so
-    // the pair does not read as two plain triangles.
+    // the pair does not read as two plain triangles. It is authored INSIDE the
+    // blade's own frame — placed in clavicle space it was 57 mm clear of the
+    // blade it belongs to, the largest floating part on this fighter.
+    const tipRoll = 30 * DEG;
     rig.add(`clavicle_${s}`, loftHull([
-      { y: 0, w: 0.020, d: 0.110, round: 0.28 },
-      { y: 0.100, w: 0.011, d: 0.056, z: FRONT * 0.044, round: 0.38 },
+      { y: 0.200, w: 0.036, d: 0.120, z: -FRONT * 0.170, round: 0.40 },
+      { y: 0.270, w: 0.020, d: 0.062, z: -FRONT * 0.130, roll: tipRoll, round: 0.44 },
     ]), 'armorAccent', {
-      p: [at[0] + sign * 0.230, at[1] + 0.220, at[2] - FRONT * 0.250],
-      r: [0, sign * yaw, sign * (roll + 30 * DEG)], order: 'YXZ',
-      mirror, tier: TIER.PRIMARY, sprung: `pack_${s}`,
+      p: at, r: rot, order: 'YXZ', mirror, tier: TIER.PRIMARY, sprung: `pack_${s}`,
     });
     rig.glow(`clavicle_${s}`, loftHull([
-      { y: 0.030, w: 0.008, d: 0.200, round: 0.5 },
-      { y: 0.290, w: 0.006, d: 0.130, z: -FRONT * 0.150, round: 0.5 },
+      { y: 0.030, w: 0.008, d: 0.130, round: 0.5 },
+      { y: 0.216, w: 0.006, d: 0.090, z: -FRONT * 0.110, round: 0.5 },
     ]), 'spine', {
       p: [at[0], at[1], at[2] - FRONT * 0.014], r: rot, order: 'YXZ', mirror, sprung: `pack_${s}`,
     });
     rig.emitter('thruster', `clavicle_${s}`,
-      [at[0] + sign * 0.200, at[1] + 0.200, at[2] - FRONT * 0.260], [0, 0.3, -FRONT], 0.035);
+      [at[0] + sign * 0.150, at[1] + 0.150, at[2] - FRONT * 0.190], [0, 0.3, -FRONT], 0.035);
   }
 }
 
@@ -5434,41 +5635,60 @@ function markHook(rig, spec) {
   });
 }
 
-/** SERAPH — a fan of six blades radiating from the upper back. */
+/**
+ * SERAPH — the `ghostframe` halo, with two swept dorsal blades under it.
+ *
+ * What was here was six blades struck from one boss at 34–88° of spread and
+ * 0.60 m long. At 88° a blade is very nearly horizontal, so from the fight
+ * camera the outermost pair reached forward PAST the head: the captures show a
+ * porcupine of pale sticks radiating in every direction with the skull lost
+ * inside it, and no halo anywhere — while the halo ring standing behind the
+ * head is the first thing anyone would name about that sheet, and the dorsal
+ * fins are four broad swept leaves lying tight against the spine, not a fan.
+ *
+ * So: the ring is built, and the fan comes down to two blades a side raked back
+ * and OUT of the head's cone, at a length that does not out-reach the arm.
+ */
 function markFan(rig, spec) {
+  const m = rig.dim;
   const t = spec.torso;
-  const zb = -FRONT * (t.chestD * 0.5 + 0.06);
-  // Wide, not tall. MANTIS's antennae also rise off the shoulders, and while
-  // SERAPH's blades pointed up the two measured 0.817 overlap. Spread from 28-88
-  // degrees rather than 28-88 vertical, and each blade three times as wide as it
-  // was, so the fan reads as one continuous disc rather than as a bundle of
-  // spikes — which is the one shape the insect chassis cannot make.
+  const zb = -FRONT * (t.chestD * 0.5 + 0.05);
+  // The halo. Struck off the skull and carried behind the nape, so it frames
+  // the head from the front and stands clear of it in profile. `shellLathe`
+  // would give a band; a lathed torus section is what the sheet has — a smooth
+  // unbroken ring, the one perfectly circular thing in the cast's outline.
+  const R = m.skull * 0.86;
+  const hy = m.collar + m.nape + m.skull * 0.46 + (rig.headLift ?? 0);
+  rig.add('chest', latheProfile([
+    { r: R * 0.86, y: -0.012 }, { r: R * 0.94, y: -0.017, smooth: true },
+    { r: R * 1.02, y: 0, smooth: true },
+    { r: R * 0.94, y: 0.017, smooth: true }, { r: R * 0.86, y: 0.012 },
+  ], 30), 'trim', { p: [0, hy, zb - FRONT * 0.010], r: [90 * DEG * FRONT, 0, 0], tier: TIER.PRIMARY });
+  rig.glow('chest', latheProfile([
+    { r: R * 0.80, y: -0.006 }, { r: R * 0.84, y: 0, smooth: true }, { r: R * 0.80, y: 0.006 },
+  ], 26), 'spine', { p: [0, hy, zb - FRONT * 0.016], r: [90 * DEG * FRONT, 0, 0] });
+  // Two blades a side. Spread 30° and 62° off vertical — both still in the rear
+  // hemisphere at any camera bearing the fight uses, which is what keeps them
+  // off the head. Length is 0.34, a little over half what it was.
   for (const { s, sign, mirror } of SIDES) {
-    for (let i = 0; i < 3; i++) {
-      const spread = (34 + i * 27) * DEG;
-      const len = 0.60 - i * 0.06;
+    for (let i = 0; i < 2; i++) {
+      const spread = (30 + i * 32) * DEG;
+      const len = 0.34 - i * 0.05;
       rig.add('chest', loftHull([
-        { y: 0, w: 0.044, d: 0.026, round: 0.30 },
-        { y: len * 0.52, w: 0.128, d: 0.017, z: -FRONT * 0.030, round: 0.16, smooth: true },
-        { y: len, w: 0.086, d: 0.010, z: -FRONT * 0.072, round: 0.22 },
-      ]), i === 1 ? 'armorAccent' : 'trim', {
-        p: [sign * t.chestW * 0.14, 0.02, zb],
-        r: [-16 * DEG, 0, sign * spread], mirror, tier: TIER.PRIMARY, sprung: `pack_${s}`,
-      });
-      rig.glow('chest', loftHull([
-        { y: 0.06, w: 0.010, d: 0.008, round: 0.5 },
-        { y: len * 0.92, w: 0.006, d: 0.006, round: 0.5 },
-      ]), 'spine', {
-        p: [sign * t.chestW * 0.14, 0.02, zb - FRONT * 0.014],
-        r: [-16 * DEG, 0, sign * spread], mirror, sprung: `pack_${s}`,
+        { y: 0, w: 0.040, d: 0.028, round: 0.36 },
+        { y: len * 0.54, w: 0.104, d: 0.020, z: -FRONT * 0.034, round: 0.24, smooth: true },
+        { y: len, w: 0.062, d: 0.012, z: -FRONT * 0.082, round: 0.30 },
+      ]), i === 0 ? 'armorAccent' : 'trim', {
+        p: [sign * t.chestW * 0.12, -0.02, zb],
+        r: [-22 * DEG, 0, sign * spread], mirror, tier: TIER.PRIMARY, sprung: `pack_${s}`,
       });
     }
   }
-  // the boss the fan springs from, so the blades have a visible root
+  // the boss the blades spring from, so they have a visible root
   rig.add('chest', latheProfile([
-    { r: 0, y: 0 }, { r: 0.070, y: 0 }, { r: 0.076, y: 0.016, smooth: true },
-    { r: 0.058, y: 0.046 }, { r: 0, y: 0.052 },
-  ], 22), 'armorSecondary', { p: [0, 0.02, zb], r: [90 * DEG * FRONT, 0, 0], tier: TIER.PRIMARY });
+    { r: 0, y: 0 }, { r: 0.062, y: 0 }, { r: 0.068, y: 0.014, smooth: true },
+    { r: 0.050, y: 0.042 }, { r: 0, y: 0.048 },
+  ], 22), 'armorSecondary', { p: [0, -0.02, zb], r: [90 * DEG * FRONT, 0, 0], tier: TIER.PRIMARY });
 }
 
 /** RONIN-07 — two sheathed blades crossed at the small of the back. */
@@ -5562,85 +5782,131 @@ function markRaptor(rig, spec) {
   }
 }
 
-/** NYX — rings that hold position without touching anything. */
+/**
+ * NYX — gold ring bezels seated on every joint axis.
+ *
+ * This used to be three rings that, by its own comment, "hold position without
+ * touching anything": a hoop struck 15 cm outboard of the pauldron with four
+ * free-floating glow bars set into it, a second hoop at 1.7 forearm widths
+ * around the wrist, and a third canted off the pelvis with five more glow bars
+ * placed on a circle in hip space. In the captures that is not a landmark, it
+ * is a bundle of coloured pegs orbiting the arms with clear air behind every
+ * one of them — the worst detached geometry in the cast after AXIOM's hoop.
+ *
+ * `vesper`, the sheet §3 assigns, does not float anything. Its entire second
+ * colour is a POLISHED GOLD RING ON EVERY JOINT PIVOT, standing proud of a
+ * gloss-black shell — which is also §1.4's rule, just turned up until it is the
+ * character. So the same three rings are struck about the hinge axes instead,
+ * seated on the outer face of the segment they belong to. Nothing here floats.
+ */
 function markRings(rig, spec) {
   const m = rig.dim;
-  const pd = scaledPauldron(spec, m);
+  const upper = spec.arms.upper * m.armK;
   const fore = spec.arms.fore * m.armK;
+  const thigh = spec.legs.thigh * m.legK;
+  // Authored about +Z and rolled onto the hinge axis (+X), which is the same
+  // frame `rig.bezel` uses — so these read as the outermost ring of the
+  // hardware already on the joint rather than as a second unrelated object.
+  const onAxis = (sign) => [0, sign * 90 * DEG, 0];
+  // Each ring GIRDLES the bezel disc that is already on that joint, so it is
+  // touching hardware from every angle. Sizing it off the limb instead — which
+  // is the obvious thing to write — puts a ring of radius 0.66 in a plane the
+  // limb's own surface never reaches, and it hangs in the air outboard of the
+  // shoulder exactly like the hoop this replaces. The three numbers below are
+  // the same ones `buildArm` and `buildLeg` hand `rig.bezel`, so they cannot
+  // drift apart: disc rim is `radius * 1.04` at `face + radius * 0.11`.
   for (const { s, sign, mirror } of SIDES) {
-    // shoulder ring, standing clear outboard of the pauldron
-    const R = 0.150;
-    rig.add(`clavicle_${s}`, segmentRing(R, 0.030, 0.026, 12), 'armorAccent', {
-      p: [sign * (pd.out + pd.w * 1.05), pd.up - 0.02, 0],
-      r: [0, sign * 22 * DEG, sign * -18 * DEG], mirror, tier: TIER.PRIMARY,
+    // Shoulder: bezel is radius `upper * 0.48` seated at `face = upper * 1.00`.
+    rig.add(`shoulder_${s}`, segmentRing(upper * 0.54, 0.020, 0.016, 18, 0.004), 'trim', {
+      p: [sign * upper * 1.03, 0, 0], r: onAxis(sign), mirror, tier: TIER.PRIMARY,
     });
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2 + 0.4;
-      rig.glow(`clavicle_${s}`, bevelBox(0.036, 0.012, 0.012, 0.003), 'core', {
-        p: [sign * (pd.out + pd.w * 1.05) + Math.cos(a) * R * 0.94, pd.up - 0.02 + Math.sin(a) * R * 0.94, 0],
-        r: [0, sign * 22 * DEG, a + Math.PI / 2], mirror,
-      });
-    }
-    // forearm ring, floating off the wrist with a visible gap all round
-    rig.add(`elbow_${s}`, segmentRing(fore * 1.70, 0.024, 0.020, 10), 'trim', {
-      p: [0, -m.fore * 0.72, 0], r: [(90 + 12) * DEG, 0, sign * 8 * DEG], mirror, tier: TIER.PRIMARY,
+    rig.glow(`shoulder_${s}`, segmentRing(upper * 0.44, 0.007, 0.006, 16, 0.002), 'spine', {
+      p: [sign * upper * 1.04, 0, 0], r: onAxis(sign), mirror,
     });
-    rig.glow(`elbow_${s}`, segmentRing(fore * 1.44, 0.010, 0.009, 8), 'spine', {
-      p: [0, -m.fore * 0.72, 0], r: [(90 + 12) * DEG, 0, sign * 8 * DEG], mirror,
+    // Elbow: bezel is `elbowR * 0.42` at `face = elbowR * 1.26`.
+    const elbowR = Math.max(fore, upper) * 0.80;
+    rig.add(`elbow_${s}`, segmentRing(elbowR * 0.48, 0.018, 0.015, 18, 0.004), 'trim', {
+      p: [sign * elbowR * 1.28, 0, 0], r: onAxis(sign), mirror, tier: TIER.PRIMARY,
     });
-  }
-  // waist ring, canted so it is never parallel to anything else on the body
-  rig.add('hips', segmentRing(spec.torso.pelvisW * 0.92, 0.028, 0.022, 16), 'armorAccent',
-    { p: [0, 0.02, 0], r: [(90 + 9) * DEG, 0, 6 * DEG], tier: TIER.PRIMARY });
-  for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * Math.PI * 2;
-    rig.glow('hips', bevelBox(0.030, 0.011, 0.011, 0.003), 'core', {
-      p: [Math.cos(a) * spec.torso.pelvisW * 0.90, 0.02 + Math.sin(a) * 0.02, Math.sin(a) * spec.torso.pelvisW * 0.90],
-      r: [0, -a, 0],
+    // Hip: bezel is `thighW * 0.30` at `face = thighW * 0.62`, and `thighW` is
+    // capped against the hip spacing in `buildLeg` — repeat the cap or the ring
+    // walks off the disc on the widest frames.
+    const thighW = Math.min(thigh * 1.40, m.hipSep * 1.16);
+    rig.add(`hip_${s}`, segmentRing(thighW * 0.34, 0.020, 0.016, 18, 0.004), 'trim', {
+      p: [sign * thighW * 0.64, 0, 0], r: onAxis(sign), mirror, tier: TIER.PRIMARY,
     });
   }
+  // Waist girdle: a ring that HUGS the pelvis rather than standing off it, so
+  // the belt line reads as one gold band round the body.
+  rig.add('hips', segmentRing(spec.torso.pelvisW * 0.54, 0.022, 0.018, 20, 0.004), 'trim',
+    { p: [0, 0.02, 0], r: [90 * DEG, 0, 0], s: [1, 1, 1], tier: TIER.PRIMARY });
 }
 
-/** BASTION — a tower shield on one forearm, taller than the torso. */
+/**
+ * BASTION — a heater shield strapped to the outside of one forearm.
+ *
+ * It was authored at `(upper + fore) * 1.34` tall on `chestW * 0.86` — three
+ * quarters of a metre of flat plate, wider than the fighter's own ribcage, and
+ * anchored at `fore * 1.55` off `elbow_L`. In the guard pose that elbow is
+ * carried in front of the sternum, so the slab parked directly over the skull:
+ * every fight frame of this fighter shows a robot with a shipping crate where
+ * its head should be, and its own head camera framed nothing but the back of
+ * the plate. A landmark is a silhouette signature, not a second body.
+ *
+ * So: half the height, half the width, hung DOWN the forearm toward the wrist
+ * and rolled outboard, which puts it beside the arm rather than across the
+ * chest. `paladin`'s shield read comes from its curvature and its rim, not from
+ * its area, so the section is dished across its width and the rolled rim stays.
+ */
 function markTowerShield(rig, spec) {
   const m = rig.dim;
   const fore = spec.arms.fore * m.armK;
-  const h = (m.upper + m.fore) * 1.34;
-  const w = spec.torso.chestW * 0.86;
-  const at = [fore * 1.55, -m.fore * 0.42, FRONT * fore * 0.30];
+  // Sized against the forearm it is strapped to, never against the torso: a
+  // shield the width of a chest cannot be carried on a wrist without hiding
+  // the body behind it from the one camera the game actually uses.
+  const h = (m.upper + m.fore) * 0.60;
+  const w = Math.min(spec.torso.chestW * 0.46, fore * 3.4);
+  // Down at the wrist end of the forearm, not level with the elbow: the head is
+  // above the elbow in every guard the animator wrote.
+  const at = [fore * 1.30, -m.fore * 0.72, FRONT * fore * 0.24];
+  const rot = [0, -8 * DEG, -5 * DEG];
+  // Dished, not planar: the two edge stations are pulled back in Z so the plate
+  // curves round the arm instead of standing off it as a board (§1.1).
   rig.add('elbow_L', loftHull([
-    { y: -h * 0.5, w: w * 0.82, d: 0.052, round: 0.14 },
-    { y: -h * 0.16, w, d: 0.062, round: 0.09, smooth: true },
-    { y: h * 0.22, w, d: 0.062, round: 0.09, smooth: true },
-    { y: h * 0.5, w: w * 0.72, d: 0.046, round: 0.16 },
-  ]), 'armorPrimary', { p: at, r: [0, -8 * DEG, -5 * DEG], tier: TIER.PRIMARY });
-  // rim: a rolled band right round the edge, the thing that catches the rim light
-  for (const sy of [-1, 1]) {
-    rig.add('elbow_L', bevelBox(w * 1.02, 0.030, 0.074, 0.007), 'trim',
-      { p: [at[0], at[1] + sy * h * 0.49, at[2]], r: [0, -8 * DEG, -5 * DEG], tier: TIER.PRIMARY });
-  }
+    { y: -h * 0.50, w: w * 0.52, d: 0.040, z: -FRONT * 0.016, round: 0.36 },
+    { y: -h * 0.14, w: w * 0.94, d: 0.052, round: 0.22, smooth: true },
+    { y: h * 0.24, w, d: 0.054, round: 0.20, smooth: true },
+    { y: h * 0.50, w: w * 0.80, d: 0.040, z: -FRONT * 0.012, round: 0.28 },
+  ]), 'armorPrimary', { p: at, r: rot, tier: TIER.PRIMARY });
+  // rim: a rolled band round the top and both edges, the thing that catches the
+  // rim light. The point at the bottom carries none — that is what makes a
+  // heater shield read as a heater shield rather than as a slab.
+  rig.add('elbow_L', bevelBox(w * 1.02, 0.022, 0.062, 0.006), 'trim',
+    { p: [at[0], at[1] + h * 0.48, at[2]], r: rot, tier: TIER.PRIMARY });
   for (const sx of [-1, 1]) {
-    rig.add('elbow_L', bevelBox(0.030, h * 0.98, 0.074, 0.007), 'trim',
-      { p: [at[0] + sx * w * 0.49, at[1], at[2] + sx * 0.006], r: [0, -8 * DEG, -5 * DEG], tier: TIER.PRIMARY });
+    rig.add('elbow_L', bevelBox(0.022, h * 0.86, 0.062, 0.006), 'trim',
+      { p: [at[0] + sx * w * 0.49, at[1] + h * 0.06, at[2] + sx * 0.005], r: rot, tier: TIER.PRIMARY });
   }
-  // central boss and two horizontal ribs
+  // central boss, scaled off the shield rather than left at the old literal
   rig.add('elbow_L', latheProfile([
-    { r: 0, y: 0 }, { r: 0.082, y: 0 }, { r: 0.088, y: 0.020, smooth: true },
-    { r: 0.062, y: 0.056 }, { r: 0, y: 0.062 },
+    { r: 0, y: 0 }, { r: w * 0.20, y: 0 }, { r: w * 0.215, y: 0.014, smooth: true },
+    { r: w * 0.15, y: 0.038 }, { r: 0, y: 0.042 },
   ], 22), 'trim', {
-    p: [at[0], at[1], at[2] + FRONT * 0.032], r: [90 * DEG * FRONT, -8 * DEG, 0], order: 'ZYX', tier: TIER.PRIMARY,
+    p: [at[0], at[1] + h * 0.08, at[2] + FRONT * 0.028], r: [90 * DEG * FRONT, -8 * DEG, 0], order: 'ZYX', tier: TIER.PRIMARY,
   });
-  for (const dy of [-0.30, 0.30]) {
-    rig.add('elbow_L', bevelBox(w * 0.94, 0.024, 0.032, 0.006), 'armorSecondary',
-      { p: [at[0], at[1] + h * dy, at[2] + FRONT * 0.020], r: [0, -8 * DEG, -5 * DEG], tier: TIER.SECONDARY });
+  rig.glow('elbow_L', bevelBox(w * 0.50, 0.012, 0.010, 0.003), 'core',
+    { p: [at[0], at[1] - h * 0.14, at[2] + FRONT * 0.024], r: rot });
+  rig.decal('elbow_L', MARKINGS.HAZARD, w * 0.62, 0.038, {
+    p: [at[0], at[1] - h * 0.32, at[2] + FRONT * 0.024], r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
+  });
+  // The strap: two bolted lugs bedded onto the back of the plate and reaching
+  // the forearm shell, so the shield is visibly CARRIED rather than floating
+  // alongside the arm.
+  for (const dy of [-0.22, 0.26]) {
+    rig.add('elbow_L', bevelBox(fore * 0.70, 0.032, 0.028, 0.006), 'darkMetal', {
+      p: [at[0] - fore * 0.34, at[1] + h * dy, at[2] - FRONT * 0.026], r: rot, tier: TIER.SECONDARY,
+    });
   }
-  rig.glow('elbow_L', bevelBox(w * 0.62, 0.014, 0.012, 0.004), 'core',
-    { p: [at[0], at[1] + h * 0.10, at[2] + FRONT * 0.026], r: [0, -8 * DEG, -5 * DEG] });
-  rig.decal('elbow_L', MARKINGS.HAZARD, w * 0.72, 0.05, {
-    p: [at[0], at[1] - h * 0.40, at[2] + FRONT * 0.026], r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
-  });
-  rig.add('elbow_L', boltRing(6, 0.100, 0.010, 0.012), 'trim',
-    { p: [at[0], at[1], at[2] - FRONT * 0.030], r: [-90 * DEG * FRONT, 0, 0], tier: TIER.GREEBLE });
 }
 
 /**
@@ -5658,43 +5924,56 @@ function markTowerShield(rig, spec) {
 function markYoke(rig, spec) {
   const m = rig.dim;
   const pd = scaledPauldron(spec, m);
-  // Wide enough to clear the pauldrons by a clear margin at every bearing —
-  // a hoop that grazes the shoulder line merges into it and is not a landmark.
-  const shoulder = Math.abs(rig.restPos.shoulder_L?.x ?? 0.155);
-  const R = Math.max(shoulder + pd.w * 0.95, pd.out + pd.w * 1.9);
+  // The radius was `pauldron.out + pauldron.w * 1.9` — a hoop nearly a metre
+  // across, struck so far outboard that its thirty blocks were separated from
+  // the body, from the head and from each other by clear air. In the capture
+  // that is not a landmark: it is a corona of loose boxes orbiting the fighter,
+  // and it was the single worst piece of detached geometry in the cast. Struck
+  // off the SKULL instead, so the hoop encircles the head the way an
+  // instrument's bezel encircles its dial, and every block has the block beside
+  // it for company. The `pd.out` floor only stops a very wide pauldron eating it.
+  const R = Math.max(m.skull * 0.82, pd.out * 0.60);
   // Carried at head height, so the ring encircles the skull rather than sitting
   // on the collar where the pauldrons are already competing for the outline.
-  const y = m.collar + m.nape + m.skull * 0.42;
+  const y = m.collar + m.nape + m.skull * 0.44 + (rig.headLift ?? 0);
   const at = [0, y, -FRONT * 0.010];
-  rig.add('chest', segmentRing(R, 0.034, 0.052, 30, 0.007), 'armorSecondary',
+  // Twenty-two blocks at this radius leave a 3 mm gap between neighbours — the
+  // facets still catch the rim light one at a time, but the ring reads as one
+  // object, which thirty blocks on a metre circle did not.
+  rig.add('chest', segmentRing(R, 0.026, 0.034, 22, 0.005), 'armorSecondary',
     { p: at, r: [90 * DEG, 0, 0], tier: TIER.PRIMARY });
   // Three struts down to the shoulder deck. Without them the hoop reads as a
   // halo hovering unattached, which belongs to the arcane chassis, not this one.
+  // Placed at the sides and directly aft: a strut at bearing 0 stands in front
+  // of the face, which is the one place on this fighter nothing may cover.
   const drop = y - (m.collar * 0.86);
-  for (const a of [0, 2.094, -2.094]) {
+  for (const a of [Math.PI, Math.PI / 2, -Math.PI / 2]) {
     rig.add('chest', loftHull([
-      { y: 0, w: 0.034, d: 0.034, round: 0.34 },
-      { y: -drop, w: 0.052, d: 0.046, round: 0.30 },
+      { y: 0, w: 0.024, d: 0.024, round: 0.36 },
+      { y: -drop, w: 0.040, d: 0.036, round: 0.32 },
     ]), 'darkMetal', {
-      p: [Math.sin(a) * R * 0.93, at[1], at[2] + Math.cos(a) * R * 0.93],
-      r: [Math.cos(a) * 7 * DEG, 0, -Math.sin(a) * 7 * DEG], tier: TIER.PRIMARY,
+      p: [Math.sin(a) * R * 0.94, at[1], at[2] + Math.cos(a) * R * 0.94],
+      r: [Math.cos(a) * 5 * DEG, 0, -Math.sin(a) * 5 * DEG], tier: TIER.PRIMARY,
     });
   }
   // Graduation ticks around the rim, the only marking on the cleanest chassis
   // in the cast, and the reason it reads as an instrument rather than a crown.
-  for (let i = 0; i < 12; i++) {
-    const a = (i / 12) * Math.PI * 2;
-    rig.add('chest', bevelBox(0.007, 0.030, 0.011, 0.0015), 'trim', {
-      p: [Math.sin(a) * R, at[1] + 0.028, at[2] + Math.cos(a) * R],
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    rig.add('chest', bevelBox(0.006, 0.020, 0.009, 0.0015), 'trim', {
+      p: [Math.sin(a) * R, at[1] + 0.020, at[2] + Math.cos(a) * R],
       r: [0, a, 0], tier: TIER.GREEBLE,
     });
   }
+  // §1.6: emissive is thin lines plus ONE hero element. The hoop used to carry
+  // a twenty-six block glow ring — twenty-six fat mint slabs, one per module,
+  // which is what the capture shows and is the opposite of the rule. Two pilot
+  // lights on the ring's own axis is the whole allowance here; AXIOM's hero
+  // emitter is the chest core.
   for (const { sign, mirror } of SIDES) {
-    rig.glow('chest', bevelBox(0.018, 0.016, 0.014, 0.003), 'joints',
-      { p: [sign * R, at[1] + 0.018, at[2]], mirror });
+    rig.glow('chest', bevelBox(0.014, 0.010, 0.009, 0.002), 'joints',
+      { p: [sign * R, at[1] + 0.014, at[2]], mirror });
   }
-  rig.glow('chest', segmentRing(R * 0.995, 0.009, 0.011, 26, 0.002), 'spine',
-    { p: [at[0], at[1] + 0.024, at[2]], r: [90 * DEG, 0, 0] });
 }
 
 /** VOLTA — copper windings around both upper arms. */
@@ -5702,14 +5981,16 @@ function markCoils(rig, spec) {
   const m = rig.dim;
   const upper = spec.arms.upper * m.armK;
   for (const { s, sign, mirror } of SIDES) {
-    // Wound well proud of the arm. Measured: at 1.7x the upper-arm radius the
-    // coils sat 2cm outside a 19cm limb and did not survive the 100-pixel test,
-    // and with the torso hidden behind the arms in every stance the game
-    // actually uses, the arm IS this fighter's outline.
+    // Wound proud of the arm, but WOUND ON IT. At 2.35 upper-arm widths the
+    // windings stood two and a half arm diameters clear of the limb they are
+    // supposed to be wrapped round: a barrel with an arm somewhere inside it,
+    // and from the fight camera a satellite dish. The deltoid shell reaches
+    // 0.96 of the same unit, so 1.24 puts a real winding a finger's width proud
+    // of the armour — visible from any bearing, attached from every one.
     const turns = 8;
     for (let i = 0; i < turns; i++) {
       const f = i / (turns - 1);
-      const r = upper * (2.35 + Math.sin(f * Math.PI) * 0.52);
+      const r = upper * (1.24 + Math.sin(f * Math.PI) * 0.24);
       rig.add(`shoulder_${s}`, latheProfile([
         { r: r - 0.013, y: 0 }, { r, y: 0.008, smooth: true }, { r: r - 0.013, y: 0.017 },
       ], 20), 'trim', {
@@ -5720,18 +6001,18 @@ function markCoils(rig, spec) {
     // terminal caps top and bottom of the winding, with the tap between them
     for (const dy of [0.10, 0.84]) {
       rig.add(`shoulder_${s}`, latheProfile([
-        { r: 0, y: 0 }, { r: upper * 2.24, y: 0 }, { r: upper * 2.34, y: 0.016, smooth: true },
-        { r: upper * 1.96, y: 0.040 }, { r: 0, y: 0.040 },
+        { r: 0, y: 0 }, { r: upper * 1.18, y: 0 }, { r: upper * 1.26, y: 0.016, smooth: true },
+        { r: upper * 1.02, y: 0.040 }, { r: 0, y: 0.040 },
       ], 22), 'darkMetal', { p: [0, -m.upper * dy, 0], mirror, tier: TIER.PRIMARY });
     }
     addPipeRun(rig, `shoulder_${s}`, [
-      [sign * upper * 2.40, -m.upper * 0.12, -FRONT * upper * 0.50],
-      [sign * upper * 3.00, -m.upper * 0.50, -FRONT * upper * 0.95],
-      [sign * upper * 2.50, -m.upper * 0.86, -FRONT * upper * 0.50],
-    ], { radius: 0.013, mirror, mat: 'trim', tier: TIER.SECONDARY });
-    rig.glow(`shoulder_${s}`, bevelBox(0.016, m.upper * 0.66, 0.016, 0.004), 'core',
-      { p: [sign * upper * 2.86, -m.upper * 0.48, 0], mirror });
-    rig.emitter('arc', `shoulder_${s}`, [sign * upper * 3.00, -m.upper * 0.50, 0], [sign, 0, 0], 0.035);
+      [sign * upper * 1.26, -m.upper * 0.12, -FRONT * upper * 0.34],
+      [sign * upper * 1.58, -m.upper * 0.50, -FRONT * upper * 0.62],
+      [sign * upper * 1.30, -m.upper * 0.86, -FRONT * upper * 0.34],
+    ], { radius: 0.011, mirror, mat: 'trim', tier: TIER.SECONDARY });
+    rig.glow(`shoulder_${s}`, bevelBox(0.014, m.upper * 0.66, 0.014, 0.004), 'core',
+      { p: [sign * upper * 1.50, -m.upper * 0.48, 0], mirror });
+    rig.emitter('arc', `shoulder_${s}`, [sign * upper * 1.58, -m.upper * 0.50, 0], [sign, 0, 0], 0.035);
   }
 }
 
@@ -5876,16 +6157,24 @@ function buildLeg(rig, spec, side, sign, mirror) {
     // lower leg swept forward off it. The previous numbers put the hock 30% of a
     // shin width behind the bone with a 1.55 depth ratio, which at silhouette
     // size is a slightly bulgy plantigrade shin — the measured overlap against
-    // the plantigrade fighters said so. These push it to 0.58 and 2.05.
+    // the plantigrade fighters said so. Those numbers went too far the other
+    // way; see the depth note below.
     rig.section(`knee_${S}`, {
       y0: -sLen * 0.46, y1: L.shin * 0.42,
-      w0: kneeW * 0.78, w1: kneeW * 1.04,
-      d0: kneeW * 1.20, d1: kneeW * 2.05,
-      mat: 'armorPrimary', z: -FRONT * L.shin * 0.58,
+      w0: kneeW * 0.82, w1: kneeW * 1.06,
+      // 2.05 deep on 1.04 wide, thrown 0.58 shin widths aft, is not a calf: it
+      // is a fin. Measured on the built mesh it came out 371 mm deep against
+      // 176 mm wide, and KESTREL's and SERAPH's lower legs photographed as flat
+      // kite-shaped cards standing edge-on to the camera. A hock is still much
+      // deeper than it is wide — that is the whole digitigrade read — but 1.34
+      // on 1.06 is a swept mass rather than a plane, and pulling the offset in
+      // to 0.30 keeps it attached to the knee it hangs off.
+      d0: kneeW * 1.10, d1: kneeW * 1.34,
+      mat: 'armorPrimary', z: -FRONT * L.shin * 0.30,
       // `round` was 0.42 here and 0.44 below, which is still four straight runs
       // with fillets. The two masses are already the right shapes; what they
       // were missing was an elliptical cross-section to swing them on.
-      shearZ: -FRONT * 0.085, round: 0.74, swell: 0.10, mirror,
+      shearZ: -FRONT * 0.070, round: 0.86, swell: 0.10, mirror,
     });
     rig.section(`knee_${S}`, {
       y0: -sLen * 0.96, y1: -sLen * 0.40,
@@ -5975,12 +6264,21 @@ function buildLeg(rig, spec, side, sign, mirror) {
   // same call would bolt a fastener row onto empty air beside the ram.
   if (!piston) {
     addPanelDetail(rig, `knee_${S}`, {
-      p: [0, -sLen * 0.46, FRONT * (L.shin * (digi ? 0.76 : 0.62) + 0.004)], r: [0, YAW_FRONT, 0],
+      // A digitigrade lower leg is a slim section thrown FORWARD off the hock,
+      // not a plantigrade shin plate: its front face sits at about 0.62 of a
+      // shin width, so a panel authored at 0.76 stood a centimetre proud of it
+      // in open air. Same face for both plans now.
+      p: [0, -sLen * 0.46, FRONT * (L.shin * 0.60 + 0.004)], r: [0, YAW_FRONT, 0],
       w: L.shin * 0.70, h: sLen * 0.44, bolts: 4, splitsY: [0.24], splitsX: [], mirror,
     });
   }
+  // The rivet strip rides at calf height, where the digitigrade hock is swept
+  // AFT: its front face is only about 0.56 of a shin width forward, and at 0.72
+  // this decal was a flat card hanging off the leg with daylight behind it —
+  // the "large flat brown quad off MANTIS's shin" the fight frames show.
   rig.decal(`knee_${S}`, MARKINGS.RIVETS, L.shin * 1.1, L.shin * 0.28, {
-    p: [0, -sLen * 0.16, FRONT * (L.shin * (piston ? 0.68 : 0.72))], r: [0, YAW_FRONT, 0], mirror, tier: TIER.GREEBLE,
+    p: [0, -sLen * 0.16, FRONT * (L.shin * (piston ? 0.68 : digi ? 0.52 : 0.72))],
+    r: [0, YAW_FRONT, 0], mirror, tier: TIER.GREEBLE,
   });
 
   // --- ankle
@@ -6017,6 +6315,24 @@ function buildLeg(rig, spec, side, sign, mirror) {
   const toeDrop = (rig.restPos[`foot_${S}`]?.y ?? 0) - (rig.restPos[`toe_${S}`]?.y ?? 0);
   const toeFwd = Math.abs((rig.restPos[`toe_${S}`]?.z ?? 0) - (rig.restPos[`foot_${S}`]?.z ?? 0));
   const toeSole = SOLE + toeDrop;
+  // Pastern: the link from the ankle joint down and FORWARD onto the foot mass.
+  //
+  // `foot_*` does not sit under `ankle_*` — the skeleton throws it 60 mm ahead
+  // as well as 60 mm down (Skeleton.js), which is what lets a digitigrade rig
+  // stand on its toes. Nothing was ever built across that offset, so on all
+  // four digitigrade fighters the leg ended at the ankle bezel and the foot
+  // began a hand's width forward and below it, with daylight in between: the
+  // "feet lying on the deck as loose capsules" the fight frames show. It is one
+  // loft, bound to `foot_*` so it can never be left behind by the animation,
+  // reaching back and up to the ankle origin measured off the rest pose rather
+  // than assumed.
+  const ankleUp = (rig.restPos[`ankle_${S}`]?.y ?? 0) - (rig.restPos[`foot_${S}`]?.y ?? 0);
+  const ankleBack = (rig.restPos[`foot_${S}`]?.z ?? 0) - (rig.restPos[`ankle_${S}`]?.z ?? 0);
+  rig.add(`foot_${S}`, loftHull([
+    { y: -0.010, w: fw * 0.62, d: fw * 0.66, round: 0.62 },
+    { y: ankleUp * 0.52, w: ankleW * 0.86, d: ankleW * 1.00, z: -FRONT * ankleBack * 0.52, round: 0.72, smooth: true },
+    { y: ankleUp * 1.06, w: ankleW * 0.74, d: ankleW * 0.84, z: -FRONT * ankleBack * 1.06, round: 0.78 },
+  ]), 'gasket', { mirror, tier: TIER.PRIMARY, role: 'frame' });
   // A boot assembled from a sole box, a toe box and a heel box reads as three
   // boxes, and it reads that way from every angle the fight camera uses because
   // the feet are the one part of a fighter never occluded by anything. So each
@@ -6194,17 +6510,32 @@ function buildVariation(rig, spec, def) {
   // instead, on studs bedded into the pauldron's leading rim: hardware that
   // lives INSIDE the outline, where sharing a form across the cast costs the
   // silhouette nothing and still says the plate was made to take a hit.
+  //
+  // The stud has to land ON the arc. It did not: the X term carried
+  // `cos(a) * R * 0.02` where the lame's own surface is at `cos(a) * R`, so the
+  // whole row was placed on the shoulder's vertical centreline — two studs deep
+  // inside the cap and the rest standing in clear air beside a plate they were
+  // supposed to be bedded into. The detached-geometry probe finds them on six
+  // of the ten fighters at 17–32 mm of daylight. A lame swept `-90°` about X
+  // lies in the clavicle's XY plane (its lathe axis becomes -Z), so a point at
+  // arc angle `a` is at `(dx + R cos a, dy + R sin a, dz ± half)` — which is
+  // what the placement below finally says.
   for (let i = 0; i < spec.spikes; i++) {
     const f = (i + 0.5) / spec.spikes;
     for (const { s, sign, mirror } of SIDES) {
       const ballX = Math.abs((rig.restPos[`shoulder_${s}`]?.x ?? 0.155)
         - (rig.restPos[`clavicle_${s}`]?.x ?? 0)) * 0.58;
       const a = lame.a0 + (lame.a1 - lame.a0) * f;
-      rig.add(`clavicle_${s}`, hexBolt(0.011, 0.014), 'trim', {
-        p: [sign * (ballX + lame.dx + Math.cos(a) * lame.R * 0.02),
-          lame.dy + Math.sin(a) * lame.R * 1.02,
-          FRONT * lame.half * 0.62 + Math.cos(a) * lame.R * 0.06],
-        r: [-90 * DEG, 0, sign * a], order: 'ZXY', mirror, tier: TIER.GREEBLE,
+      // Seated on the OUTER face of the shell, head pointing radially out. The
+      // orientation is baked into the geometry rather than composed from a
+      // second Euler at the call site, because the lame's own -90° X already
+      // owns the frame and two orders do not compose readably.
+      const rr = lame.R + lame.thick * 0.34;
+      const g = hexBolt(0.011, 0.014);
+      g.applyMatrix4(new THREE.Matrix4().makeRotationZ(a - Math.PI / 2));
+      g.translate(Math.cos(a) * rr, Math.sin(a) * rr, FRONT * lame.half * 0.30);
+      rig.add(`clavicle_${s}`, g, 'trim', {
+        p: [sign * (ballX + lame.dx), lame.dy, lame.dz], mirror, tier: TIER.GREEBLE,
       });
     }
   }
@@ -6282,16 +6613,22 @@ function buildVariation(rig, spec, def) {
   for (let i = 0; i < masts; i++) {
     const sx = i === 0 ? 0 : (i === 1 ? 1 : -1);
     const len = 0.16 + rng.range(0, 0.22);
+    // Rooted ON the backplate (0.012, not 0.03: the dorsal units below all sit
+    // within a centimetre of the chest's own depth, so a mast at three
+    // centimetres was a rod standing in mid-air behind the machine), and the
+    // tip lamp is authored at the mast's own tip height inside the same lathe
+    // rather than positioned with a hand-estimated tilt correction — `p` is not
+    // rotated by `r`, so that estimate walked the lamp off the mast on every
+    // fighter that drew one.
+    const mast = [sx * t.chestW * 0.22, 0.20, back * (t.chestD * 0.5 + 0.012)];
+    const lean = [-(10 + i * 6) * DEG, 0, sx * 9 * DEG];
     rig.add('chest', latheProfile([
       { r: 0.009, y: 0 }, { r: 0.009, y: len * 0.30 }, { r: 0.0045, y: len * 0.33 },
       { r: 0.0045, y: len }, { r: 0, y: len + 0.012 },
-    ], 10), 'trim', {
-      p: [sx * t.chestW * 0.22, 0.20, back * (t.chestD * 0.5 + 0.03)],
-      r: [-(10 + i * 6) * DEG, 0, sx * 9 * DEG], tier: TIER.SECONDARY,
-    });
-    rig.glow('chest', latheProfile([{ r: 0, y: 0 }, { r: 0.009, y: 0 }, { r: 0, y: 0.011 }], 8), 'joints', {
-      p: [sx * t.chestW * 0.22, 0.20 + len * 0.98, back * (t.chestD * 0.5 + 0.03) + len * 0.16 * FRONT],
-    });
+    ], 10), 'trim', { p: mast, r: lean, tier: TIER.SECONDARY });
+    rig.glow('chest', latheProfile([
+      { r: 0, y: len }, { r: 0.009, y: len }, { r: 0, y: len + 0.011 },
+    ], 8), 'joints', { p: mast, r: lean });
   }
 
   // 4. torso insignia plate, placed off-centre and rotated per character

@@ -2855,19 +2855,32 @@ export class Fighter {
    * vertices and more correct: the lowest point of the whole robot is only the
    * sole if nothing else hangs lower, and a scabbard chape, a cable loop or a
    * knee spur all do on some of this cast.
+   *
+   * AND THERE IS NO SHARED FLOOR PLANE. Each boot bone records the lowest point
+   * of ITS OWN geometry, rather than a point taken at the boot's global minimum
+   * and dropped under whichever bone happens to be above it. On a plantigrade
+   * foot the two are nearly the same and the distinction does not show; on a
+   * digitigrade one it is the whole answer. KESTREL's toe bone hangs BELOW the
+   * pad it carries, so a shared-plane construction either rejected the toe
+   * outright (its "sole" would be above it) or pinned the contact patch to a
+   * bone that does not move with it — and KESTREL stood 146mm through the deck
+   * on the boot that was supposed to be planted. A per-bone point cannot have
+   * that failure: whatever the boot is made of, the piece that is lowest is
+   * recorded against the bone that actually carries it.
    */
   #measureSole() {
     this.group.updateMatrixWorld(true);
     // `skinIndex` indexes `skeleton.bones`, which `createSkeleton` fills in
     // `BONES` order — so the canonical name table is the lookup, no search.
-    const tips = new Set();
+    /** @type {Map<number, {bone: THREE.Bone, y: number, p: THREE.Vector3}>} */
+    const low = new Map();
     for (const side of ['L', 'R']) {
       for (const n of [`ankle_${side}`, `foot_${side}`, `toe_${side}`]) {
         const i = BONE_NAMES.indexOf(n);
-        if (i >= 0) tips.add(i);
+        const bone = this.boneByName[n];
+        if (i >= 0 && bone) low.set(i, { bone, y: Infinity, p: new THREE.Vector3() });
       }
     }
-    let floor = Infinity;
     this.group.traverse((o) => {
       if (!o.isSkinnedMesh) return;
       const pos = o.geometry.getAttribute('position');
@@ -2876,37 +2889,27 @@ export class Fighter {
       for (let i = 0; i < pos.count; i++) {
         // Rigid binding: `skinIndex.x` is the only bone this vertex belongs to,
         // so one lookup decides whether it is boot at all.
-        if (!tips.has(si.getX(i))) continue;
+        const rec = low.get(si.getX(i));
+        if (!rec) continue;
         _v.fromBufferAttribute(pos, i);
         o.applyBoneTransform(i, _v);
         o.localToWorld(_v);
-        if (_v.y < floor) floor = _v.y;
+        if (_v.y < rec.y) { rec.y = _v.y; rec.p.copy(_v); }
       }
     });
     for (const side of ['L', 'R']) {
       const st = this.plantState[side];
       st.sole.length = 0;
-      if (!Number.isFinite(floor)) continue;
       for (const name of [`ankle_${side}`, `foot_${side}`, `toe_${side}`]) {
-        const bone = this.boneByName[name];
-        if (!bone) continue;
-        _v.setFromMatrixPosition(bone.matrixWorld);
-        const drop = _v.y - floor;
-        // A bone whose "sole" is above it, or absurdly far below, is not part of
-        // the boot; ignore it rather than plant the fighter on a bad number.
-        //
-        // The lower bound is a millimetre and not the centimetre it was. That
-        // centimetre was harmless while `floor` came from the whole robot's
-        // A-pose box, which sits well below every boot bone; against a floor
-        // measured on the boot itself the toe bone is the one that is nearly ON
-        // it, so the old window threw away the exact bone the machine stands on.
-        // Measured: all ten dropped from three sole points to two, and kestrel —
-        // whose digitigrade toe IS its contact patch — sank 146mm because the
-        // remaining points reported a sole higher than the boot's.
-        if (!(drop > -0.001 && drop < 0.45)) continue;
-        _v.y = floor;
-        _m.copy(bone.matrixWorld).invert();
-        st.sole.push({ bone, local: _v.clone().applyMatrix4(_m) });
+        const i = BONE_NAMES.indexOf(name);
+        const rec = low.get(i);
+        // A bone with no plate on it is not part of the boot. Nothing else is
+        // rejected: the old window also threw out bones whose lowest point was
+        // "too close" to or "too far" from a shared floor, and both tests were
+        // artefacts of that floor rather than statements about the boot.
+        if (!rec || !Number.isFinite(rec.y)) continue;
+        _m.copy(rec.bone.matrixWorld).invert();
+        st.sole.push({ bone: rec.bone, local: rec.p.clone().applyMatrix4(_m) });
       }
     }
   }
