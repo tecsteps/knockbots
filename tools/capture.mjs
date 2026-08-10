@@ -1680,8 +1680,12 @@ async function main() {
   takeLock(OUT);
 
   const browser = await chromium.launch({
+    // Linux CI containers ship a Chromium at a path Playwright's own registry
+    // does not know about, and its ANGLE backend is not Metal. Both are env
+    // overrides so the macOS authoring path is untouched.
+    ...(process.env.KB_CHROMIUM ? { executablePath: process.env.KB_CHROMIUM } : {}),
     args: [
-      '--use-angle=metal',
+      `--use-angle=${process.env.KB_ANGLE || 'metal'}`,
       '--enable-unsafe-swiftshader',
       '--ignore-gpu-blocklist',
       '--enable-gpu-rasterization',
