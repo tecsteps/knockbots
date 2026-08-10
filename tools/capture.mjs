@@ -1695,6 +1695,10 @@ async function main() {
     ],
   });
   const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1 });
+  // A software rasteriser needs far longer than Playwright's 30s default to
+  // composite a frame this expensive, and the failure looks like a hang rather
+  // than a slow machine. Raise it wherever KB_TIMEOUT says so.
+  page.setDefaultTimeout(Number(process.env.KB_TIMEOUT || 30000));
 
     /*
    * Write an INCOMPLETE manifest before taking a single shot.
