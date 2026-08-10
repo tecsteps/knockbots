@@ -791,8 +791,18 @@ const PAINT_ACCENT = 2;
  * stays matte, the body colour is satin, and an accent panel is finished and
  * holds a tight highlight. Handing all three the same lobe width is a large part
  * of why every plate on this roster measured as the same surface.
+ *
+ * REFERENCE ROUND: the SPREAD was right and the LEVEL was a stop and a half too
+ * matte. Every one of the eight sheets shows reflected environment on the large
+ * plates — paladin's ivory shoulder and volt-monk's chest both carry a legible
+ * image of the room, not merely a highlight. 0.57 on the secondary role is what
+ * made the navy underlayer in `03-full-body.jpg` read as unfired clay. The three
+ * roles keep their ratio (roughly 1.6 : 2.2 : 1) and all three come down, which
+ * is only safe because the clearcoat below is allowed to work in the same pass:
+ * a satin base under a real coat is glossy, a satin base under a coat that has
+ * been multiplied down three times is mud.
  */
-const ROLE_ROUGH = [0.40, 0.57, 0.29];
+const ROLE_ROUGH = [0.30, 0.42, 0.19];
 
 /**
  * Binary-splits the unit square into armour plates and gives each one a role.
@@ -805,8 +815,28 @@ const ROLE_ROUGH = [0.40, 0.57, 0.29];
  * live on small inset panels, while the big structural plates carry the body
  * colour. Rolling for them uniformly produces a chequerboard of enormous
  * orange panels, which reads as a test texture rather than a designed machine.
+ *
+ * DENSITY. `minCell 0.055 / depth 7` produced 66 rects per tile. That is
+ * sheet-metal wallpaper: count the splits on any plate in the eight reference
+ * sheets and it is two to four, deliberate, following the form. An armour plate
+ * samples a patch of this atlas roughly a sixth of it across, so 66 rects put
+ * four to eight splits on every plate on every fighter. 0.09 / 6 lands at 36,
+ * which is half that — and the analytic per-plate lattice, capped at two
+ * divisions per axis this round instead of four, supplies the splits that are
+ * actually meant to follow the form.
+ *
+ * THE SMALL-CELL THRESHOLDS MOVE WITH IT, and they have to. Accent paint,
+ * louvres and light strips are all gated on `area < 0.016`, which was five
+ * times the smallest cell the old layout could produce and is BELOW the
+ * smallest cell this one can: left alone it silently deletes the accent role,
+ * every vent and every emissive strip from the whole roster, which was measured
+ * on the first attempt at this change (0 accent, 0 vent, 0 glow out of 15).
+ * 0.035 / 0.016 keeps the same fraction of plates in each role as before.
  */
-function buildPanelLayout(rng, { minCell = 0.055, depth = 7, stopChance = 0.09 } = {}) {
+const PANEL_SMALL = 0.035;
+const PANEL_TINY = 0.016;
+
+function buildPanelLayout(rng, { minCell = 0.09, depth = 6, stopChance = 0.09 } = {}) {
   const rects = [];
 
   const emit = (x0, y0, x1, y1) => {
@@ -814,8 +844,8 @@ function buildPanelLayout(rng, { minCell = 0.055, depth = 7, stopChance = 0.09 }
     const h = rng.next();
     const variation = rng.next();
     const z = rng.next();
-    const small = area < 0.016;
-    const tiny = area < 0.0075;
+    const small = area < PANEL_SMALL;
+    const tiny = area < PANEL_TINY;
     rects.push({
       x0, y0, x1, y1, area,
       paint: small && h > 0.86 ? PAINT_ACCENT : h < 0.3 ? PAINT_SECONDARY : PAINT_PRIMARY,
@@ -1089,8 +1119,25 @@ function microGrain(size, seed, aspect = 1) {
  * 0.006 costs 8% of the torso's 1px band against 0.013 and is unambiguously the
  * better image; 0 costs a further 11% and the plates go dead. Shipped at 0.006.
  * The metric says this is a regression. The metric is not the axis.
+ *
+ * --- REFERENCE ROUND: 0.006 at aspect 3 is half of the "weave" ---------------
+ *
+ * The eight character sheets are clean automotive paint. Every one of them shows
+ * a large plate with NOTHING on its face between the panel splits — the surface
+ * incident lives in the clearcoat highlight and at the edges, not in a field of
+ * tooth. `docs/shots/03-full-body.jpg` shows the opposite: a directional corduroy
+ * over every plate on both fighters, and this constant supplies one of its two
+ * strands. `aspect: 3` is what makes it directional, and because armour plates
+ * carry per-plate box UVs the lay lands at a different angle on every plate, so
+ * forty plates read as forty scraps of woven cloth rather than as one machine.
+ *
+ * Height halves and the aspect goes nearly round: what survives is a fine
+ * isotropic cast tooth that still keeps the plate off "smooth and empty" (the
+ * 0-amplitude column above) without giving the eye a direction to latch onto.
+ * `rough` is untouched — a roughness grain at this scale is invisible as pattern
+ * and is the half of the term that was never the problem.
  */
-const GRAIN = { rough: 0.075, height: 0.006, aspect: 3 };
+const GRAIN = { rough: 0.075, height: 0.003, aspect: 1.6 };
 
 /**
  * Bake-time A/B knobs, read once from `window.__KB_MAT` before any map is built.
@@ -1295,7 +1342,12 @@ function cachedDetail(key, build) {
 function buildPlateDetail(size) {
   const rng = new Rng(0x5eed01);
   const n = size * size;
-  const gw = Math.max(2, size * 0.0036); // groove half-width in texels
+  // Groove half-width in texels. Was 0.0036 — about 3.7 texels at 1024, so a
+  // panel split rendered as a 7-8 texel dark band. The reference's splits are
+  // hairlines: a shut line on a car body is 4mm over a 2m panel, and at this
+  // atlas scale that is under three texels total. 0.0026 halves the band and is
+  // the second half of "thin, dark, sparse" (the first is the layout above).
+  const gw = Math.max(2, size * 0.0026);
 
   const panelId = new Float32Array(n);
   const groove = new Float32Array(n);
@@ -1481,7 +1533,14 @@ function buildPlateDetail(size) {
       macro[i] * 0.05 +
       casting[i] * 0.022 +
       tooth[i] * 0.012 +
-      machining[i] * 0.009 -
+      // The other strand of the "weave" the reference contract names. This is an
+      // aspect-14 fbm — parallel marks by construction — and at 0.009 it is the
+      // dominant high-frequency term in the plate normal. Rolling marks are real,
+      // but on a painted and clearcoated panel they are under the paint film and
+      // the eye should read them as a faint sheen break, not as corrugation.
+      // 0.004 keeps them in the roughness (below, at full weight) and takes them
+      // most of the way out of the normal.
+      machining[i] * 0.004 -
       microScratch[i] * 0.05 -
       heroScratch[i] * 0.1;
   }
@@ -1551,8 +1610,21 @@ function buildPlateDetail(size) {
     // of a flake.
     // The hairline of bare metal sits on the plate *lip* — just outside the
     // groove, not inside it, where it would be buried in shadow and invisible.
-    const rim = smoothstep(0.05, 0.26, bevel[i]) * (1 - smoothstep(0.36, 0.66, bevel[i]));
-    chip[i] = clamp01(Math.max(smoothstep(0.4, 0.82, jag) * gate, rim * (0.72 + casting[i] * 0.45)));
+    //
+    // REFERENCE ROUND. Both halves of this max() are wear, and the reference
+    // only wants one of them. `furnace` and `atlas-7` are the two dirty sheets
+    // in the set and even they carry bare metal as a LINE on a leading edge plus
+    // a handful of chips — never as the field of pale blotches this file's flake
+    // term lays across open plate faces. So the flake keeps its outline and its
+    // curvature gate but is cut to a sixth of its weight: enough that a corner
+    // still shows the odd break, not enough to compete with the lip.
+    //
+    // The rim window narrows with it. At (0.05,0.26)/(0.36,0.66) of the bevel
+    // ramp it was roughly twelve texels of bare metal, which at plate scale is a
+    // 2cm halo of exposed steel round every panel — the "halo, not a line" the
+    // contract calls out. (0.03,0.13)/(0.16,0.30) is three to four texels.
+    const rim = smoothstep(0.03, 0.13, bevel[i]) * (1 - smoothstep(0.16, 0.30, bevel[i]));
+    chip[i] = clamp01(Math.max(smoothstep(0.4, 0.82, jag) * gate * 0.16, rim * (0.72 + casting[i] * 0.45)));
   }
 
   const scratch = new Float32Array(n);
@@ -1564,7 +1636,16 @@ function buildPlateDetail(size) {
   for (let i = 0; i < n; i++) {
     const cavity = clamp01((1 - ao[i]) * 1.5);
     const blot = clamp01(rust[i] * 1.2 - 0.15);
-    grime[i] = clamp01(cavity * 0.68 + groove[i] * 0.5 + drips[i] * 0.95 + blot * 0.24 * (0.4 + cavity));
+    // `blot` is a full-field ridged fbm and it used to arrive through a
+    // `0.4 + cavity` gate — a 0.4 FLOOR, i.e. oxidation mottle at nearly half
+    // strength over open, unbroken plate face. That is the one term in this
+    // composition with no physical claim on where it lands, and it is most of
+    // why the plates in `03-full-body.jpg` look dipped rather than painted.
+    // Multiplying by cavity outright puts it where oxide actually blooms: the
+    // bottom of a trough, the shadow of a step, the lee of a rivet.
+    // The other three are already positional — cavity, the panel groove itself,
+    // and drips that start at a louvre lip — and they are left alone.
+    grime[i] = clamp01(cavity * 0.68 + groove[i] * 0.5 + drips[i] * 0.95 + blot * 0.30 * cavity);
     dust[i] = clamp01(up[i] * 1.9 * (0.5 + casting[i] * 0.5) * ao[i]);
   }
 
@@ -1638,12 +1719,18 @@ function buildPlateDetail(size) {
     const role = t3 < 1 ? 0 : t3 < 2 ? 1 : 2;
     const jitter = t3 - role - 0.5;
 
+    // The four structure terms summed to about +0.25 of mean roughness on top
+    // of the role base, which is the difference between "satin paint with a
+    // gloss break in it" and "everything is 0.6". They keep their relative
+    // weights — the gloss break across a panel is the point of the block — at
+    // roughly two thirds of the amplitude, so the base can come down without the
+    // plate going glassy and uniform.
     let rough =
       ROLE_ROUGH[role] + jitter * 0.10 * AB.roughStruct +
-      (patch[i] * 0.17 +      // 8cm weathering patches: the hand-sized gloss break
-       casting[i] * 0.13 +    // 8cm cast and roll mottle
-       tooth[i] * 0.11 +      // 1.6cm surface tooth
-       machining[i] * 0.12    // 5mm rolling marks in the plate stock
+      (patch[i] * 0.12 +      // 8cm weathering patches: the hand-sized gloss break
+       casting[i] * 0.09 +    // 8cm cast and roll mottle
+       tooth[i] * 0.07 +      // 1.6cm surface tooth
+       machining[i] * 0.07    // 5mm rolling marks in the plate stock
       ) * AB.roughStruct +
       grain[i] * GRAIN.rough * AB.roughGrain +  // cast tooth, 2-4 texels
       cav * 0.14;            // nothing ever wipes the bottom of a trough
@@ -1704,15 +1791,34 @@ function buildPlateDetail(size) {
   // `film` is how well the coat has held up in this patch, and it drives the
   // strength and the roughness in opposite directions, because a coat that is
   // thinning is both weaker and rougher.
+  //
+  // --- REFERENCE ROUND: the satin verdict above is right for a scrapyard and
+  // wrong for these eight sheets ----------------------------------------------
+  //
+  // The note above is a correct account of a real overshoot — 63.7% of the map
+  // under 0.10 was a show-car finish — and the correction it made was the only
+  // one available at the time, because the shader was multiplying this coat down
+  // twice more downstream (see STORY_CLEARCOAT_FRAGMENT). Three multiplicative
+  // attacks on one coat is why NO plate in `03-full-body.jpg` carries a tight
+  // highlight, and the contract's §1.6 is unambiguous: "crisp, tight specular
+  // highlights and visible reflected environment on the large plates".
+  //
+  // So the fix is applied at all three places at once rather than here alone.
+  // This one authors a coat that is mostly present and mostly smooth; the
+  // shader's patchiness terms are halved rather than removed, so the coat still
+  // varies — a dulled patch beside a glossy one — but it varies between 0.06 and
+  // 0.2 instead of between 0.15 and 1.0. The dirt terms keep the LARGEST share
+  // of what is left (grime 0.22 against patch 0.05), which is what keeps the two
+  // dirty fighters' crevices from reading as wet lacquer.
   const ccPx = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
     const film = clamp01(0.5 + macro[i] * 0.5 + casting[i] * 0.4 + patch[i] * 0.55);
     const strength = clamp01(
-      (0.50 + film * 0.55) * (1 - chip[i]) * (1 - scratch[i] * 0.9) * (1 - grime[i] * 0.9),
+      (0.80 + film * 0.30) * (1 - chip[i]) * (1 - scratch[i] * 0.9) * (1 - grime[i] * 0.55),
     );
     const ccRough = clamp01(
-      0.15 + (1 - film) * 0.17 + patch[i] * 0.10 +
-      grime[i] * 0.45 + scratch[i] * 0.25 + dust[i] * 0.3,
+      0.055 + (1 - film) * 0.09 + patch[i] * 0.05 +
+      grime[i] * 0.22 + scratch[i] * 0.12 + dust[i] * 0.15,
     );
     const o = i * 4;
     ccPx[o] = strength * 255;
@@ -1722,6 +1828,12 @@ function buildPlateDetail(size) {
   }
 
   // --- emissive: light strips in selected grooves and every vent slat ----
+  // The strip half rides the groove mask, so it narrowed with `gw` above: a lit
+  // seam is now about five texels across where it was eight, which is the
+  // "emissive is thin and linear" half of contract §1.6. The squaring is what
+  // keeps the falloff inside that width rather than blooming across the plate,
+  // and the vent half is deliberately left broad — `furnace`'s glowing rib vents
+  // ARE wide bands, and they are the one hero element on that sheet.
   const emPx = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
     const v = clamp01(glow[i] * (1 - grime[i] * 0.7) * (1 - chip[i] * 0.5));
@@ -2077,7 +2189,12 @@ const V_PAINT = [0.85, 0.46, 0.64];  // by plate role: primary, secondary, accen
 // The secondary step is deliberately not darker than this: on an already very
 // dark palette a lower value collapses those plates to black and the panel
 // layout stops reading at all.
-const V_STRUCTURE = 0.05;            // unpainted frame seen down a panel gap
+// Raised from 0.05. At that value a panel split converged on very nearly black,
+// so a plate boundary read as a HOLE punched through the armour rather than as a
+// shut line with structure at the bottom of it. Every reference sheet shows the
+// same thing at a split: a dark line whose floor is still a lit surface, one or
+// two stops under the plate beside it, never a void. 0.14 is that.
+const V_STRUCTURE = 0.14;            // unpainted frame seen down a panel gap
 const V_BARE = 1.0;                  // cast steel where the paint has failed
 const V_CUT = 1.0;                   // freshly cut metal in a scratch
 const V_GRIME = 0.09;                // oil and carbon soot
@@ -2143,7 +2260,14 @@ function composePlateAlbedo(detail, wear, wearFloor = 0) {
     v = lerp(v, v * 0.42, primer * 0.9);
 
     v = lerp(v, V_CUT, clamp01(scr * (0.34 + wear * 0.34)));
-    v = lerp(v, v * 0.25 + V_GRIME, clamp01(grm * 0.9));
+    // Grime at 0.9 made dirt a COLOUR event — a soot-toned smear painted into
+    // the diffuse. On the two dirty sheets (`furnace`, `atlas-7`) grime is
+    // overwhelmingly a gloss event: the crevices are the same iron as the plate,
+    // they are simply dead where the plate is wet. Halving the albedo coupling
+    // leaves the roughness and clearcoat coupling (which is where dirt belongs)
+    // at full strength and stops the whole cast reading as though it had been
+    // dipped in a bucket.
+    v = lerp(v, v * 0.25 + V_GRIME, clamp01(grm * 0.55));
     v = lerp(v, V_DUST, dst * 0.6);
 
     // A touch of the baked cavity term in the diffuse keeps plates reading as
@@ -2219,9 +2343,23 @@ function getShared(sizes, maxAniso) {
 
   s = {
     detail: { plate, metal, soft, carbon },
-    plateAlbedo: t(composePlateAlbedo(plate, 1.35, 0.06), plate.size, 1, { srgb: true }),
-    plateAlbedoTrim: t(composePlateAlbedo(plate, 1.0), plate.size, 2, { srgb: true }),
-    plateAlbedoWorn: t(composePlateAlbedo(plate, 2.4, 0.45), plate.size, 2, { srgb: true }),
+    // `wearFloor` is baseline wear applied to EVERY texel by construction, so it
+    // is the one parameter in this file that cannot produce edge-only damage: at
+    // 0.06 the primary armour of every fighter in the cast carried a uniform
+    // 6% of stripped paint before a single edge was consulted. It goes to zero
+    // on the clean paints, and the wear multiplier comes down with it — the
+    // bright metal line the reference actually shows is drawn analytically by
+    // kbLip and the specular chamfer, not by this mask.
+    //
+    // `worn` keeps a real floor because it IS the stripped-plate material and it
+    // is what `furnace`'s scorched iron and `atlas-7`'s chipped olive map to —
+    // but 0.45 is half a plate's worth of bare steel and even those two sheets
+    // are not that far gone. 0.18 is a hard-used machine; 0.45 was a wreck.
+    plateAlbedo: t(composePlateAlbedo(plate, 0.7, 0), plate.size, 1, { srgb: true }),
+    // The accent panel is the best-finished paint on the machine and the one the
+    // eye is meant to go to, so it is also the least worn of the three.
+    plateAlbedoTrim: t(composePlateAlbedo(plate, 0.5), plate.size, 2, { srgb: true }),
+    plateAlbedoWorn: t(composePlateAlbedo(plate, 2.0, 0.18), plate.size, 2, { srgb: true }),
     plateNormal: t(plate.normalPx, plate.size, 1),
     plateOrmPainted: t(plate.ormPainted, plate.size, 1),
     plateOrmWorn: t(plate.ormWorn, plate.size, 2),
@@ -2402,19 +2540,41 @@ diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * ( 0.3 + 1.5 * kbLum ), 
 // needs comes from grime, oxidation and the markings, not from this. So the
 // value swing is tightened to something a fading topcoat really does and the
 // gloss swing, which is the half that was doing the work, is opened up.
-diffuseColor.rgb *= mix( 1.0, 0.74 + 0.44 * kbG.r, kbStory.z );
-roughnessFactor = clamp( roughnessFactor + ( 0.52 - kbG.r ) * 0.86 * kbStory.z, 0.04, 1.0 );
+//
+// REFERENCE ROUND: both swings come down again. This term is UNGATED — it runs
+// over every texel of every plate at the grunge tile's 10-30cm wavelength — so
+// whatever it is set to is, by definition, all-over noise, and the contract's
+// §1.6 asks for none of that on the primary plates. What a fading topcoat
+// really does at that scale is +-7% of value and a modest gloss break, which is
+// what is left here. The gloss half stays the larger of the two for the reason
+// the note above gives; it is simply no longer half a roughness unit wide.
+diffuseColor.rgb *= mix( 1.0, 0.92 + 0.14 * kbG.r, kbStory.z );
+roughnessFactor = clamp( roughnessFactor + ( 0.52 - kbG.r ) * 0.34 * kbStory.z, 0.04, 1.0 );
 
 // Oxidation, gated on proximity to a panel gap: rust starts at an edge where
 // water sits, never in the middle of an unbroken plate.
-float kbOx = smoothstep( 0.26, 0.78, kbG.b * ( 0.35 + 1.3 * kbEdge ) ) * kbStory.y;
+//
+// That is what the comment said and the arithmetic did not: 0.35 + 1.3*kbEdge
+// is a FLOOR: with kbEdge at zero — mid-plate, as far from a gap as a texel can
+// be — oxide still fired at 35% of its gated strength, which is exactly the
+// smeared oxide over open faces the contract names. 0.05 leaves a trace so the
+// transition is not a hard cut and hands the rest of the range to the gate.
+float kbOx = smoothstep( 0.26, 0.78, kbG.b * ( 0.05 + 1.35 * kbEdge ) ) * kbStory.y;
 diffuseColor.rgb = mix( diffuseColor.rgb, kbOxideColor * ( 0.5 + 0.9 * kbG.r ), kbOx );
 roughnessFactor = mix( roughnessFactor, 0.94, kbOx * 0.85 );
 metalnessFactor = mix( metalnessFactor, 0.08, kbOx * 0.8 );
 
 // Grime: pooled in the cavities, run down the vertical faces under gravity,
 // settled thickest where a seam has been leaking, sooty on the undersides.
-float kbRun = kbG.g * kbSide * ( 0.45 + 1.1 * kbEdge );
+//
+// Same floor, same consequence as the oxide above, and worse here because
+// kbSide is 1 - abs( n.y ), which is ~1 over almost the whole of a standing
+// figure: the run term was kbG.g * 1.0 * 0.45 — nearly half strength — wherever
+// the surface was not horizontal. Dropping the floor to 0.05 leaves the run on
+// the panel-gap field it was always documented to be gated on, and leaves
+// kbCavity (the baked crevice mask) as the term that carries dirt into the
+// crevices, which is where the reference keeps it.
+float kbRun = kbG.g * kbSide * ( 0.05 + 1.2 * kbEdge );
 float kbGrime = clamp( kbCavity * 1.1 + kbRun + kbDown * kbG.r * 0.6, 0.0, 1.0 ) * kbStory.x;
 diffuseColor.rgb = mix( diffuseColor.rgb, kbSootColor * ( 0.45 + 0.8 * kbG.r ), kbGrime * 0.9 );
 roughnessFactor = mix( roughnessFactor, 0.92, kbGrime * 0.78 );
@@ -2585,9 +2745,25 @@ if ( kbDetail.x > 0.0 ) {
 	// {@link GRAIN} hit at 0.020, from the other direction, and it is the eye that
 	// finds it, not the number, which is monotone all the way past the point where
 	// the surface stops being metal.
+	//
+	// REFERENCE ROUND: the chatter term is what turned a lay into a PLAID.
+	//
+	// kbSlope is a carrier ACROSS the lay axis. kbChat modulates its amplitude
+	// ALONG the same axis at ~30mm. An across-carrier times an along-modulator is
+	// a cross-hatch by construction, and because the axis is per-plate-hashed and
+	// skewed by up to +-8.5 degrees it lands DIAGONAL on most plates — which is
+	// precisely the "all-over diagonal hatch" covering both fighters in
+	// docs/shots/03-full-body.jpg, and the first item this round was given.
+	//
+	// Machining chatter is real, but on a plate that has since been primed,
+	// sprayed and clearcoated it is under a film and is not a second pattern
+	// crossing the first. Taking the swing from +-0.38 to +-0.10 leaves the mean
+	// nearly unchanged and removes the cross-modulation, so what survives is a
+	// single-direction lay — which is what STORY_DEFAULTS.detail then holds at a
+	// quarter of its old strength for the painted plates.
 	float kbWF = 6.2831853 / kbLamF;
 	float kbWC = 6.2831853 / kbLamC;
-	float kbChat = 0.62 + 0.38 * sin( kbAlong * ( 2.3271 / kbLamC ) + kbPhase );
+	float kbChat = 0.90 + 0.10 * sin( kbAlong * ( 2.3271 / kbLamC ) + kbPhase );
 	float kbSlope = kbFadeF * kbChat * 0.1768 * (
 			sin( kbAcross * kbWF + kbPhase )
 			+ 0.5 * sin( kbAcross * kbWF * 1.87 + kbPhase * 2.3 ) )
@@ -2862,9 +3038,14 @@ if ( kbChamfer.x > 0.0 && kbEdgeD < 1e2 ) {
 
 diffuseColor.rgb *= 1.0 - 0.34 * kbJoint - 0.13 * kbHaloJ;
 float kbLipLum = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
-diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * ( 0.34 + 1.25 * kbLipLum ), kbLip * 0.62 * ( 1.0 - kbGrime * 0.6 ) );
-roughnessFactor = clamp( roughnessFactor + 0.18 * kbJoint + 0.06 * kbHaloJ - 0.28 * kbLip, 0.06, 1.0 );
-metalnessFactor = mix( metalnessFactor, 1.0, kbLip * 0.55 );
+// This is the reference's edge wear, and once the flake half of the baked chip
+// mask is gone (see the chip loop in buildPlateDetail) it is carrying the read
+// on its own — so it is pushed up rather than left where it was. It is the right
+// term to spend on: it is a LINE on a free ground edge, it is analytic so it
+// band-limits itself, and it costs nothing per plate.
+diffuseColor.rgb = mix( diffuseColor.rgb, kbSteelColor * ( 0.34 + 1.25 * kbLipLum ), kbLip * 0.74 * ( 1.0 - kbGrime * 0.6 ) );
+roughnessFactor = clamp( roughnessFactor + 0.18 * kbJoint + 0.06 * kbHaloJ - 0.34 * kbLip, 0.06, 1.0 );
+metalnessFactor = mix( metalnessFactor, 1.0, kbLip * 0.68 );
 
 // Panel lattice.
 //
@@ -2887,7 +3068,12 @@ float kbChLat = 0.0;
 float kbBolt = 0.0;
 if ( kbLattice.x > 0.0 && kbPitch > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 ) {
 	vec2 kbSpan = vKbFrame.zw * 2.0;
-	vec2 kbCells = min( floor( kbSpan / ( kbPitch * kbLattice.w ) ), vec2( 4.0 ) );
+	// Cap: was 4, i.e. up to sixteen panels on one plate face. Count the splits
+	// on any plate in the eight reference sheets and it is one or two per axis —
+	// a deliberate division, not a grid. 2 is that, and it also halves the number
+	// of dark lines competing with the plate's own perimeter, which is the line
+	// the eye is meant to read.
+	vec2 kbCells = min( floor( kbSpan / ( kbPitch * kbLattice.w ) ), vec2( 2.0 ) );
 	vec2 kbT = vKbFrame.xy / vKbFrame.zw * 0.5 + 0.5;
 	vec2 kbF = fract( kbT * kbCells + vKbSeed.xy * 0.5 );
 	vec2 kbD = ( 0.5 - abs( kbF - 0.5 ) ) * kbSpan / max( kbCells, vec2( 1.0 ) );
@@ -2942,7 +3128,11 @@ if ( kbLattice.x > 0.0 && kbPitch > 0.0 && vKbFrame.z > 0.0 && vKbFrame.w > 0.0 
 	// slightly lighter band. Measured: at -0.24 roughness the lip/plate ratio at
 	// real panel gaps moves 1.14 -> 1.15; taken to 0.09 it moves to 1.2+.
 	float kbChG = clamp( kbChLat * kbChamfer.w, 0.0, 1.0 ) * ( 1.0 - kbGrime * 0.6 );
-	diffuseColor.rgb *= 1.0 - 0.58 * kbLat - 0.17 * kbLatH;
+	// The gap darkens; the plate BESIDE it does not. 0.58/0.17 took the split to
+	// near-black and then shadowed a band either side of it, so a divided plate
+	// read as two plates with a trench between them. The reference's splits are
+	// thin and dark and the paint runs right up to them.
+	diffuseColor.rgb *= 1.0 - 0.42 * kbLat - 0.10 * kbLatH;
 	roughnessFactor = clamp( mix( roughnessFactor, sqrt( 0.0081 + 2.0 * kbChSig * kbChSig ), kbChG * 0.85 )
 		+ 0.30 * kbLat + 0.09 * kbLatH - 0.13 * kbLatL + 0.09 * kbChRough, 0.05, 1.0 );
 	metalnessFactor *= 1.0 - 0.35 * kbLat;
@@ -3108,8 +3298,19 @@ const STORY_CLEARCOAT_FRAGMENT = /* glsl */`
 	// survive evenly, and the patchiness of the coat is most of what reads: a
 	// dulled patch next to a glossy one says "weathered" louder than any amount
 	// of albedo variation can, because the specular carries far more energy.
-	material.clearcoat = saturate( material.clearcoat * ( 0.34 + 0.78 * kbG.r ) * ( 1.0 - kbGrime * 0.82 ) * ( 1.0 - kbOx * 0.95 ) * ( 1.0 - kbMark * 0.55 ) );
-	material.clearcoatRoughness = clamp( material.clearcoatRoughness + ( 0.55 - kbG.r ) * 0.45 + kbGrime * 0.35 + kbOx * 0.45 + kbDust * 0.3, 0.0525, 1.0 );
+	//
+	// This is the THIRD place one coat is attacked — the bake authors it, the
+	// map is bound as both clearcoatMap and clearcoatRoughnessMap, and then this
+	// runs. Three multiplicative knock-downs is why no plate on the roster
+	// carried a tight highlight, and it is the mechanism behind contract item 6,
+	// "large plates show a clean clearcoat highlight". The patchiness survives —
+	// it is the half of this block that is doing real work — at roughly a third
+	// of its old authority, so a dulled patch still sits beside a glossy one but
+	// the glossy one is now genuinely glossy. The dirt coefficients are halved
+	// rather than removed: dirt killing lacquer is correct, and after the gating
+	// fixes upstream kbGrime and kbOx only reach crevices anyway.
+	material.clearcoat = saturate( material.clearcoat * ( 0.72 + 0.34 * kbG.r ) * ( 1.0 - kbGrime * 0.55 ) * ( 1.0 - kbOx * 0.8 ) * ( 1.0 - kbMark * 0.4 ) );
+	material.clearcoatRoughness = clamp( material.clearcoatRoughness + ( 0.55 - kbG.r ) * 0.18 + kbGrime * 0.18 + kbOx * 0.25 + kbDust * 0.15, 0.0525, 1.0 );
 	// The coat follows the form for the same reason the paint under it does: a
 	// rolled edge gets polished and a panel gap never gets waxed. Keeping the two
 	// lobes in agreement is what stops the chamfer highlight reading as two
@@ -3272,8 +3473,23 @@ const STORY_DEFAULTS = {
   // four screen pixels at the 1.35m closeup and correctly disappears at fighting
   // range, 11mm is four pixels at fighting range and a broad brush at closeup.
   // `detailWear` is the curvature-gated abrasion that rides on the same axis.
-  detail: 1,
-  detailFine: 0.0030,
+  //
+  // REFERENCE ROUND. `detail` reaches exactly two materials — `armor` and
+  // `trim`, the two painted plate materials — because every other Story material
+  // in the library overrides it. Those two are the ones the contract's item A
+  // names: "kill the all-over diagonal hatch on the primary armour materials, it
+  // is the loudest wrong thing in 03-full-body.jpg". A quarter of the old
+  // strength, over a lay whose cross-modulation has been removed at kbChat, is a
+  // faint single-direction sheen break instead of corduroy. It is NOT taken to
+  // zero: the roughness handoff at the bottom of that block is scaled by this
+  // same uniform and is what keeps the plates from going glassy at range.
+  //
+  // `detailFine` follows it down from 3.0mm to 1.8mm for a different reason —
+  // 1.8mm is about two screen pixels at fight framing, so the surviving octave
+  // now falls under its own Nyquist fade at the distance the game is actually
+  // played at, and its energy is handed to roughness rather than drawn.
+  detail: 0.25,
+  detailFine: 0.0018,
   detailCoarse: 0.011,
   detailWear: 0.8,
   // Specular chamfer. `chamfer` is the master strength and 0 disables the whole
@@ -3284,10 +3500,17 @@ const STORY_DEFAULTS = {
   // closeup, which is what the critic's 6-14px lip window is asking for, and
   // under one pixel at fighting range where the term correctly fades out.
   // 0.84 is tan(40 deg), the PEAK slope of the profile rather than its average.
+  // REFERENCE ROUND: narrowed and brightened. 2.8mm is a five-pixel band at
+  // closeup, which reads as a lit STRIP; the reference's edge break is a line.
+  // 2.1mm is three pixels, and `chamferGloss` above 1 saturates the clamp on the
+  // core of the facet sooner, so the middle of the break goes to bare polished
+  // alloy while the ramp either side of it still falls off. That pair — thinner,
+  // harder — is the contract's "thin bright line of exposed polished metal on
+  // leading edges", and with the flake wear gone it is the whole of item C.
   chamfer: 1,
-  chamferWidth: 0.0028,
+  chamferWidth: 0.0021,
   chamferSlope: 0.84,
-  chamferGloss: 1,
+  chamferGloss: 1.25,
 };
 
 /**
@@ -3447,10 +3670,11 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
  * @property {THREE.MeshPhysicalMaterial} worn       battle-stripped plate, mostly bare steel
  * @property {THREE.MeshPhysicalMaterial} darkMetal  structural frame, anisotropic gunmetal
  * @property {THREE.MeshPhysicalMaterial} piston     polished hydraulic rod
- * @property {THREE.MeshPhysicalMaterial} chrome     mirror accent metal
+ * @property {THREE.MeshPhysicalMaterial} chrome     polished bright-work in `palette.trim` — rings, bezels, rims, fasteners
  * @property {THREE.MeshPhysicalMaterial} carbon     2x2 twill carbon fibre under lacquer
  * @property {THREE.MeshPhysicalMaterial} rubber     matte elastomer boot / grip
  * @property {THREE.MeshPhysicalMaterial} gasket     matte moulded composite — joint boots, bellows, hose
+ * @property {THREE.MeshPhysicalMaterial} underskin  dark ribbed mechanism under the armour — neck, waist, inner joints
  * @property {THREE.MeshPhysicalMaterial} bezel      dark anodised optic surround, mirror-tight lobe
  * @property {THREE.MeshPhysicalMaterial} cable      ribbed sheathing with sheen
  * @property {THREE.MeshPhysicalMaterial} glass      transmissive visor glass
@@ -4211,7 +4435,28 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
   // gets to tilt the hue, otherwise a dark character produces black "metal".
   const gunmetal = linearColor(alloy([0.115, 0.122, 0.135], secondary, 0.5));
   const honedSteel = linearColor([0.55, 0.555, 0.565]);
-  const chromeAlloy = linearColor(alloy([0.76, 0.765, 0.78], accent, 0.13));
+  // Was `accent, 0.13` — a near-neutral chrome tinted a little by the paint
+  // accent. But `palette.trim` is the field that NAMES the roster's bright-work
+  // ("hot brass", "polished nickel", "aged temple gold") and it was reaching
+  // nothing except a `sheenColor` on the cable loom. Every reference sheet uses
+  // that metal as its SECOND colour — vesper's gold ring bezels, volt-monk's
+  // brass spine, atlas-7's brass hubs — so this material now takes its hue, and
+  // takes far more of it: at 0.13 a brass and a nickel are the same grey.
+  // `alloy` renormalises to the neutral's luma, so a dark trim entry still comes
+  // out as a bright metal; only the hue crosses over.
+  //
+  // 0.62 rather than something safer, and clamped rather than left alone,
+  // because a conductor's F0 is a SATURATED number and this is the one material
+  // where that matters. At 0.38 the brass entries came back at (0.94, 0.73,
+  // 0.56) — a pale champagne — where real polished brass is (0.91, 0.75, 0.35)
+  // and gold is (1.00, 0.71, 0.29). At 0.62 NYX's gold lands on (1.00, 0.73,
+  // 0.34), i.e. the textbook value, and the nickel entries land on a neutral
+  // (0.74, 0.77, 0.83) because a desaturated `trim` has nothing to push with.
+  // The clamp is what makes 0.62 safe: renormalising a dark saturated hue to the
+  // neutral's luma can drive one channel past 1, and a reflectance over unity is
+  // energy the surface does not have.
+  const trimMetal = hexToLinear(p.trim);
+  const chromeAlloy = linearColor(alloy([0.76, 0.765, 0.78], trimMetal, 0.62).map((v) => Math.min(1, v)));
   const wornSteel = linearColor(alloy([0.30, 0.305, 0.315], secondary, 0.28));
   const rubberBase = linearColor(alloy([0.021, 0.022, 0.024], secondary, 0.35));
   const cableBase = linearColor(alloy([0.017, 0.017, 0.019], accent, 0.3));
@@ -4224,11 +4469,23 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
 
   const armor = new StoryPhysicalMaterial({
     name: 'kb.armor',
-    story: story({}),
+    // Was `story({})`, i.e. every ink at full strength on the material that
+    // covers most of every fighter. The gating fixes upstream mean these terms
+    // now land in crevices and at panel gaps rather than over open field, so
+    // they are worth keeping — but the reference's primary plates are CLEAN
+    // painted panels and the right weight for a history layer on them is a
+    // fraction, not unity. `kb.worn` keeps the full dose and is where the two
+    // dirty sheets (`furnace`, `atlas-7`) get their character from.
+    story: story({ grime: 0.55, oxide: 0.25, fade: 0.5, dust: 0.35 }),
     color: paintPrimary,
     map: armorAlbedo,
     normalMap: shared.plateNormal,
-    normalScale: new THREE.Vector2(1.0, 1.0),
+    // Was 1.0. The plate normal carries the panel relief, the rivet crowns and
+    // the oil-canning, all of which must survive — but it also carries the
+    // residue of the machining/grain weave, and pulling the whole map back a
+    // third is the cheapest way to take the last of that off the primary plates
+    // without unpicking a bake the rest of the library shares.
+    normalScale: new THREE.Vector2(0.7, 0.7),
     aoMap: shared.plateOrmPainted,
     roughnessMap: shared.plateOrmPainted,
     metalnessMap: shared.plateOrmPainted,
@@ -4248,7 +4505,10 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // character — so it is the one most worth checking first against the
     // capture; if primary reads more glossy than intended, revert this to 1
     // and the secondary spread goes back to zero rather than negative.
-    roughness: 0.90,
+    // 0.90 -> 0.84 in the same pass that took ROLE_ROUGH down, and for the same
+    // reason; the +0.12 secondary offset RobotBuilder applies still lands clear
+    // of the clamp at 0.96, so the spread this number exists to unlock survives.
+    roughness: 0.84,
     metalness: 1,
     aoMapIntensity: 1,
     // See {@link PLATE_ANISOTROPY}. Rotation 0 is the U axis of the plate's own
@@ -4260,45 +4520,75 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     clearcoatMap: shared.plateCc,
     clearcoatRoughnessMap: shared.plateCc,
     clearcoatNormalMap: shared.peelNormal,
-    clearcoatNormalScale: new THREE.Vector2(0.35, 0.35),
+    // Was 0.35. The note at PEEL_REPEAT already establishes that a clearcoat
+    // normal cannot buy fine scale here — the coat is a 4% reflector with a
+    // broad lobe, so perturbing it SPREADS the highlight. Spreading the highlight
+    // is precisely the thing this pass exists to stop, so the peel is held to a
+    // trace: enough that the coat is not a perfect optical flat, not enough to
+    // widen the reflection of the key.
+    clearcoatNormalScale: new THREE.Vector2(0.18, 0.18),
     emissive: emissiveColor,
     emissiveMap: shared.plateEmissive,
-    emissiveIntensity: 2.2,
+    // Raised with the groove narrowing in `buildPlateDetail`: the lit area went
+    // down by roughly a third, so the intensity goes up by roughly a half to
+    // keep the same amount of light in the frame. Thin and bright is the
+    // reference's emissive; broad and dim is the current build's.
+    emissiveIntensity: 3.4,
     specularIntensity: 1,
     ior: 1.48,
     envMapIntensity: 1,
   });
 
   const trimMat = new StoryPhysicalMaterial({
+    // NOTE ON THE NAME: this is the ACCENT PAINT, not the polished bright-work.
+    // The reference's trim metal is `kb.chrome`, which now takes `palette.trim`
+    // as its hue; this material is the accent-coloured panel — paladin's red
+    // stripe, aegis's orange band — and is finished to the same standard as the
+    // primary because it came out of the same booth.
     name: 'kb.trim',
-    story: story({ marking: 0.55, oxide: 0.8, fade: 1.1 }),
+    story: story({ marking: 0.4, oxide: 0.2, fade: 0.5, grime: 0.5, dust: 0.3 }),
     color: paintAccent,
     map: trimAlbedo,
     normalMap: shared.plateNormal,
-    normalScale: new THREE.Vector2(0.9, 0.9),
+    normalScale: new THREE.Vector2(0.6, 0.6),
     aoMap: shared.plateOrmPainted,
     roughnessMap: shared.plateOrmPainted,
     metalnessMap: shared.plateOrmPainted,
-    roughness: 0.92,
+    roughness: 0.85,
     metalness: 1,
     anisotropy: PLATE_ANISOTROPY,
     anisotropyRotation: 0,
     clearcoat: 1,
-    clearcoatRoughness: 0.8,
+    // An accent panel is the best-finished paint on the machine — it is the one
+    // the eye is meant to go to — so it holds the tightest coat of the three
+    // painted materials. 0.8 was already the tightest; 0.62 keeps the ordering
+    // and moves with the bake, which now authors coat roughness an octave lower.
+    clearcoatRoughness: 0.62,
     clearcoatMap: shared.plateCc,
     clearcoatRoughnessMap: shared.plateCc,
     clearcoatNormalMap: shared.peelNormal,
-    clearcoatNormalScale: new THREE.Vector2(0.3, 0.3),
+    clearcoatNormalScale: new THREE.Vector2(0.16, 0.16),
     emissive: emissiveColor,
     emissiveMap: shared.plateEmissive,
-    emissiveIntensity: 2.6,
+    emissiveIntensity: 3.8,
     ior: 1.5,
     envMapIntensity: 1.05,
   });
 
   const worn = new StoryPhysicalMaterial({
     name: 'kb.worn',
-    story: story({ grime: 1.25, oxide: 1.4, bare: 0.3, marking: 0.4, dust: 0.8, burnish: 0.9, detail: 1.15 }),
+    // The dirty-fighter path, and it stays dirty: VULKAN maps to `furnace` and
+    // ANVIL to `atlas-7`, the two weathered sheets in the set, and this is the
+    // material that gives them that. Grime and oxide keep their full dose —
+    // what changed is that the gates upstream now put that dose in the crevices
+    // instead of over the faces, which is what those two sheets actually show.
+    //
+    // `detail` comes off 1.15 all the same. A directional lay is physically
+    // right on bare rolled steel, but this material also serves RobotBuilder's
+    // `trim` batch on all ten fighters, so at 1.15 the lay was landing on every
+    // rim and fastener in the cast at more than four times what the painted
+    // plates now carry. 0.7 still reads as rolled stock at closeup.
+    story: story({ grime: 1.25, oxide: 1.4, bare: 0.3, marking: 0.4, dust: 0.8, burnish: 0.9, detail: 0.7 }),
     color: wornSteel,
     map: wornAlbedo,
     // Retiled clone of the same weave armour reads — see WORN_REPEAT. This is
@@ -4306,6 +4596,10 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // `trim` batches) a materially different surface from `kb.armor` instead
     // of the same GPU texture at the same scale under a different tint.
     normalMap: shared.plateNormalWorn,
+    // Left where it was, unlike the armour's. `kb.worn` is the one plate
+    // material the reference wants rough — it is bare, unpainted, corroded steel
+    // and the weave that reads as a fabric under clearcoat reads as pitting
+    // here — and at WORN_REPEAT 0.5 it is already twice the wavelength.
     normalScale: new THREE.Vector2(1.15, 1.15),
     aoMap: shared.plateOrmWornTiled,
     roughnessMap: shared.plateOrmWornTiled,
@@ -4392,21 +4686,46 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     envMapIntensity: 1.25,
   });
 
+  // THE SECOND COLOUR OF THE WHOLE DESIGN.
+  //
+  // Contract §1.4 and §1.6: every joint on every one of the eight sheets carries
+  // a disc or bezel in polished metal, and rings, rims, fasteners and edge
+  // breaks are the only places that metal appears. On `vesper`, `atlas-7` and
+  // `volt-monk` it is brass or gold and it is the character's second colour. It
+  // is the most-looked-at material on those sheets and this library was using it
+  // for almost nothing.
+  //
+  // Three changes make it that metal rather than a slightly shiny grey:
+  // `palette.trim` supplies the hue (see `chromeAlloy` above), roughness comes
+  // down to where a lobe is narrower than a bezel is wide, and the environment
+  // term goes up — a polished ring reads by what it REFLECTS, and against a
+  // clearcoated plate at envMapIntensity 1.0 a 1.4 metal is not obviously a
+  // different substance.
+  //
+  // If RobotBuilder's `trim` batch is still `tint(pick('worn'), palette.trim)`,
+  // this is the material it wants instead: oxidised plate is the wrong source
+  // for polished bright-work, and `pick('chrome')` is a one-word change there.
   const chrome = new StoryPhysicalMaterial({
     name: 'kb.chrome',
-    story: story({ ...bareSteel, grime: 0.25, dust: 0.1, seam: 0.3, burnish: 0.3, hollow: 0.5, lattice: 0.3, detail: 0.3, detailWear: 0.2 }),
+    // A polished ring carries no machining lay at all — the lay is what
+    // polishing removes — so `detail` is nearly off, where every other metal in
+    // the library keeps some.
+    story: story({ ...bareSteel, grime: 0.25, dust: 0.1, seam: 0.3, burnish: 0.35, hollow: 0.5, lattice: 0.3, detail: 0.1, detailWear: 0.15 }),
     color: chromeAlloy,
     map: shared.metalMod,
     normalMap: shared.metalNormal,
-    normalScale: new THREE.Vector2(0.3, 0.3),
+    normalScale: new THREE.Vector2(0.22, 0.22),
     aoMap: shared.metalOrm,
     roughnessMap: shared.metalOrm,
     metalnessMap: shared.metalOrm,
-    roughness: 0.28,
+    roughness: 0.16,
     metalness: 1,
-    anisotropy: 0.3,
+    // Kept, but low: real brass bezels are turned, so there is a faint circular
+    // lay left in them. Above about 0.3 the highlight smears into a streak and
+    // the ring stops reading as a ring.
+    anisotropy: 0.22,
     anisotropyMap: shared.metalAniso,
-    envMapIntensity: 1.4,
+    envMapIntensity: 1.7,
   });
 
   const carbon = new StoryPhysicalMaterial({
@@ -4533,6 +4852,66 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     envMapIntensity: 0.45,
   });
 
+  // THE DARK UNDERSKIN. Contract §1.3, and the single biggest reason the eight
+  // reference sheets read as MACHINES rather than as armour suits: under the
+  // painted shells there is a second, darker body — ribbed segments, braided
+  // bundles, stacked discs — and it is exposed in the same places on all eight
+  // (neck, armpit, waist ring stack, inner elbow, back of knee, inner thigh,
+  // behind the ankle, finger and toe joints). The eye sees armour, then a gap,
+  // then mechanism, at every joint, which is also what makes the joints look
+  // like they can move.
+  //
+  // Nothing in the library was this. `kb.gasket` is the closest and is wrong in
+  // kind: it is a dielectric bellows boot, matte and light-scattering, where the
+  // sheets show dark graphite METAL with a hard specular rim on every rib. So:
+  //
+  //   metalness 0.62   a conductor, but not a clean one — a dark machined
+  //                    graphite composite, which is what puts a rim on the ribs
+  //                    without letting the whole segment take the palette hue
+  //   roughness 0.78   a SCALAR over the soft ORM, which sits around 0.78 of its
+  //                    own, so the surface lands near 0.6 — well under the
+  //                    coated plate above it and nowhere near the polished ring
+  //                    beside it. This zone must never compete for the eye
+  //   clearcoat 0      no paint, therefore no lacquer
+  //   sheen     0.3    the grazing rim that separates a rib from its neighbour
+  //                    when the key is doing nothing to help
+  //
+  // It costs ONE material object and ZERO texture memory: `buildSoftDetail`
+  // already bakes moulding ribs into shared.softNormal/softOrm/softMod at
+  // `ribFreq = max(8, size >> 5)`, and this binds the same three maps the gasket
+  // and the cable loom already bind. The normal scale is harder than the
+  // gasket's 1.35 because the ribs are the whole read here — with the specular
+  // gone flat this surface is relief and nothing else.
+  //
+  // The story layer is off in every term that describes PAINT. An extruded rib
+  // stack has no panel lines, no fastener rows, no machining lay and no stencil:
+  // leaving `lattice` and `detail` alive here would print a panel grid across
+  // the one part of the fighter whose whole job is to look extruded.
+  const underskin = new StoryPhysicalMaterial({
+    name: 'kb.underskin',
+    story: story({ ...bareSteel, grime: 0.6, dust: 0.3, seam: 0, lattice: 0, detail: 0, burnish: 0.35, hollow: 0.8 }),
+    color: linearColor(alloy([0.028, 0.029, 0.032], secondary, 0.2)),
+    map: shared.softMod,
+    normalMap: shared.softNormal,
+    normalScale: new THREE.Vector2(1.6, 1.6),
+    aoMap: shared.softOrm,
+    roughnessMap: shared.softOrm,
+    // No metalnessMap, deliberately, where `kb.rubber` binds one: the soft ORM
+    // carries ZERO in its blue channel because it was baked for an elastomer, so
+    // binding it here would multiply this material's metalness straight to nil
+    // and hand back the dielectric boot the zone already has.
+    roughness: 0.78,
+    metalness: 0.62,
+    clearcoat: 0,
+    sheen: 0.3,
+    sheenColor: new THREE.Color(0x7d848d),
+    sheenRoughness: 1,
+    sheenRoughnessMap: shared.softOrm,
+    specularIntensity: 0.85,
+    ior: 1.5,
+    envMapIntensity: 0.8,
+  });
+
   // Anodised optic surround. The one surface on the fighter allowed a mirror
   // lobe: a coat at 0.035 roughness over a near-black substrate, which is what
   // puts a small, hard, high-frequency highlight on the face instead of the
@@ -4618,11 +4997,35 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     envMapIntensity: 1.6,
   });
 
+  // WHY THIS ONE BINDS NO emissiveMap, AND WHAT THAT COSTS.
+  //
+  // `kb.armor` and `kb.trim` emit through `shared.plateEmissive`, so on those two
+  // the light lives in the groove and nowhere else — thin and linear, which is
+  // what contract §1.6 asks for. This material has no map, so anything handed to
+  // it glows edge to edge, and RobotBuilder's `rig.glow()` hands it whole PLATES.
+  // That is contract item 8, "emissive is broad panels rather than thin grooves",
+  // and the remaining half of the fix is not in this file: it is replacing broad
+  // glow faces with `channelStrip` grooves at the call sites, so the light
+  // physically lives between plates.
+  //
+  // Binding plateEmissive here was tried and is WRONG: this material is also
+  // what the visor, the chest core and the joint pips are made of, and those are
+  // small dedicated lenses whose UVs have no reason to land on a lit groove of a
+  // shared atlas — they would simply go dark. An unmapped emissive is correct
+  // for a lens and incorrect for a plate, and the library cannot tell which it
+  // has been given.
+  //
+  // What this file CAN do is stop paying for area with intensity. 6.5 was set
+  // when a "glow" was a whole panel; the per-group overrides in RobotBuilder
+  // (visor 12, core 4.4, spine 3.0) are the numbers that actually ship, and this
+  // base only reaches a group nobody overrode. At 4.8 an unnamed glow is bright
+  // enough to bloom and no longer bright enough to read as a lit surface the
+  // size of a chest plate.
   const emissive = new THREE.MeshPhysicalMaterial({
     name: 'kb.emissive',
     color: new THREE.Color(0x05070a),
     emissive: emissiveColor,
-    emissiveIntensity: 6.5,
+    emissiveIntensity: 4.8,
     roughness: 0.35,
     metalness: 0,
     clearcoat: 1,
@@ -4634,7 +5037,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
   /** @type {MaterialLibrary} */
   const lib = {
     armor, trim: trimMat, worn, darkMetal, piston, chrome,
-    carbon, rubber, gasket, bezel, cable, glass, visor, emissive,
+    carbon, rubber, gasket, underskin, bezel, cable, glass, visor, emissive,
   };
 
   // `ownsTextures` is empty by design: a library owns only its materials, and

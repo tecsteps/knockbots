@@ -19,8 +19,13 @@
  *  - `emissive` is a *different hue for every character*, spread around the
  *    wheel, so the two fighters on screen never share a glow colour and the
  *    bloom pass separates them.
- *  - `trim` is the metal the edge-wear mask exposes: brass, chrome, oxide or
- *    bone. It is what makes the panel breaks read.
+ *  - `trim` is the character's POLISHED BRIGHT-WORK: brass, gold or nickel. It
+ *    is the hue of `kb.chrome` (Materials.js), which is the metal on every ring
+ *    bezel, rim, fastener and edge break — and on the reference sheets that
+ *    metal is the design's *second colour*, not a detail. It follows that a
+ *    `trim` entry has to be a real metal: an iridescent cyan or a greasy oxide
+ *    reads as neither brass nor nickel once it is handed a mirror lobe, which
+ *    is why two of them changed in the reference round.
  *
  * Proportion multipliers stay inside 0.9..1.15 as the rig requires; the real
  * silhouette differentiation comes from `silhouette` and `build`, which change
@@ -213,10 +218,20 @@ export const ROSTER = [
     chassis: 'heavy',
     proportions: { height: 1.12, torso: 1.14, arms: 1.1, legs: 0.94, head: 0.9 },
     palette: {
-      primary: '#4A2B1E',   // scorched iron, oxidised warm
-      secondary: '#1B1310', // soot black
+      // Sheet: `furnace` — and per contract §3 this palette was already the
+      // sheet's, so only two values move. The plates come up from #4A2B1E: on
+      // that sheet they are clearly oxide RED over dark steel, and at the old
+      // value, with the grime no longer smeared over the faces to lift them,
+      // the primary was collapsing toward the secondary. The soot black gains a
+      // little steel for the same reason — it is the underlayer, and an
+      // underlayer that is nearly zero is a hole rather than a surface.
+      primary: '#5C3226',   // scorched iron, oxidised warm
+      secondary: '#242220', // soot-blackened steel
       accent: '#FF6A1A',    // molten orange hazard bands
-      emissive: '#FF2E00',  // furnace red-orange
+      // Pushed off 11° to 17°: RONIN's crimson sits at 350° and the two were
+      // the closest pair on the wheel, which the "distinct hue per character"
+      // rule above exists to prevent.
+      emissive: '#FF4A08',  // furnace red-orange
       trim: '#C7752E',      // hot brass
     },
     stats: { power: 10, speed: 3, reach: 7, weight: 9, defense: 5 },
@@ -245,11 +260,15 @@ export const ROSTER = [
     chassis: 'agile',
     proportions: { height: 0.94, torso: 0.93, arms: 1.0, legs: 1.12, head: 1.0 },
     palette: {
+      // Derived — `ghostframe` frame with `volt-monk` surfacing (contract §3),
+      // which asks for arctic white / cobalt / cyan and gets it unchanged. The
+      // only move is the trim, which brightens to a real polished aluminium now
+      // that it drives a mirror lobe rather than a wear tint.
       primary: '#E8EEF5',   // arctic enamel
       secondary: '#1E2A38', // deep slate underskin
       accent: '#00A8FF',    // cobalt racing stripe
       emissive: '#31E8FF',  // cyan coolant glow
-      trim: '#9FB4C7',      // brushed aluminium
+      trim: '#BCCBD9',      // polished aluminium
     },
     stats: { power: 4, speed: 10, reach: 6, weight: 3, defense: 5 },
     moveSet: 'kestrel',
@@ -275,11 +294,18 @@ export const ROSTER = [
     chassis: 'brute',
     proportions: { height: 0.98, torso: 1.15, arms: 1.15, legs: 0.9, head: 0.9 },
     palette: {
+      // Sheet: `atlas-7` — "olive → safety yellow, BRASS TRIM STAYS" (§3), and
+      // the trim was the one thing that had not: greasy oxide steel is what a
+      // wear mask exposes, not what a diving-suit's hub rings and rivet collars
+      // are made of. Every close-up tile on that sheet is dominated by warm
+      // brass hardware over olive plate, and this is now the material that
+      // carries it. The oil black warms toward the sheet's olive-black so the
+      // exposed frame belongs to the same machine as the plates.
       primary: '#D6A017',   // safety yellow, chipped
-      secondary: '#20211C', // oil black
+      secondary: '#2B2820', // olive-black oil film
       accent: '#FFC53D',    // hazard chevrons
       emissive: '#FFD21A',  // amber warning strobes
-      trim: '#6E6252',      // greasy oxide steel
+      trim: '#B0873C',      // aged brass hubs and collars
     },
     stats: { power: 9, speed: 4, reach: 5, weight: 10, defense: 7 },
     moveSet: 'anvil',
@@ -305,11 +331,17 @@ export const ROSTER = [
     chassis: 'arcane',
     proportions: { height: 1.06, torso: 0.96, arms: 1.13, legs: 1.06, head: 0.95 },
     palette: {
+      // Sheet: `ghostframe` — "pearl → porcelain, halo/fins tinted violet" (§3).
+      // Two corrections against the sheet: its dark is a GRAPHITE ribbed spine,
+      // not a dyed indigo, and its metal is bright nickel throughout — there is
+      // no gold anywhere on that character. Aged temple gold against porcelain
+      // and violet was a third colour story fighting the other two, and it was
+      // the more visible for being handed a mirror lobe this round.
       primary: '#EDE9F5',   // porcelain
-      secondary: '#241B3D', // deep indigo
+      secondary: '#2A2836', // graphite spine, faintly indigo
       accent: '#B49CFF',    // lilac inlay
       emissive: '#8A5CFF',  // violet field glow
-      trim: '#D8C48A',      // aged temple gold
+      trim: '#C3CBD8',      // bright nickel
     },
     stats: { power: 6, speed: 6, reach: 9, weight: 4, defense: 4 },
     moveSet: 'seraph',
@@ -335,8 +367,14 @@ export const ROSTER = [
     chassis: 'precision',
     proportions: { height: 1.0, torso: 1.0, arms: 1.03, legs: 1.03, head: 0.97 },
     palette: {
+      // Sheet: `neon-ronin` — "teal/magenta → lacquer black / crimson" (§3).
+      // The bone shoulder plates are NOT on that sheet and they stay anyway:
+      // §3 also makes NYX a black-and-magenta glossy slim frame, so without a
+      // pale mass on the shoulder stack the two are one silhouette at the 40px
+      // the acceptance criteria measure at. Warmed and greyed off pure white so
+      // it reads as lacquered bone rather than as a second highlight.
       primary: '#141418',   // lacquer black
-      secondary: '#E6E1D6', // bone white shoulder plates
+      secondary: '#CFC9BC', // bone shoulder plates
       accent: '#FF2B45',    // crimson cord wrap
       emissive: '#FF1A3C',  // crimson blade-edge glow
       trim: '#8C8F97',      // polished nickel
@@ -365,11 +403,15 @@ export const ROSTER = [
     chassis: 'agile',
     proportions: { height: 1.02, torso: 0.94, arms: 1.15, legs: 1.05, head: 0.9 },
     palette: {
+      // Derived — the `neon-ronin` language (§3): bladed carapace, carbon
+      // underskin, neon grooves, acid green. Unchanged apart from the underside,
+      // which comes up off near-zero: it is the colour the exposed frame and the
+      // underskin are alloyed from, and at 0.055 luma both came out as holes.
       primary: '#232E1C',   // carapace olive-black
-      secondary: '#0E120C', // matte void underside
+      secondary: '#161B14', // matte void underside
       accent: '#9DFF3C',    // acid green wing flash
       emissive: '#7CFF00',  // bio-luminous acid glow
-      trim: '#C9D2C0',      // chrome mandible edge
+      trim: '#C9D2C0',      // nickel mandible edge
     },
     stats: { power: 5, speed: 9, reach: 8, weight: 4, defense: 3 },
     moveSet: 'mantis',
@@ -395,11 +437,22 @@ export const ROSTER = [
     chassis: 'arcane',
     proportions: { height: 0.97, torso: 1.04, arms: 0.93, legs: 1.08, head: 1.12 },
     palette: {
+      // Sheet: `vesper` — "violet → magenta, adds lantern-head lens" (§3).
+      // THE GOLD IS THE POINT. Every joint on that sheet carries a brass ring
+      // bezel and they are the character's entire second colour against the
+      // gloss black; an iridescent cyan trim was a fourth hue on a character
+      // whose whole design is black + gold + one glow, and it read as a smear
+      // of the emissive rather than as hardware.
       primary: '#12101A',   // void black, oil-slick clearcoat
       secondary: '#2E1B3A', // bruised violet
       accent: '#FF2E88',    // magenta neon piping
-      emissive: '#FF3FA4',  // magenta core glow
-      trim: '#7BE6FF',      // iridescent cyan edge break
+      // Three fighters own the red half of the wheel — VULKAN's furnace orange,
+      // RONIN's crimson and this — and the three were bunched at 11°/350°/328°,
+      // two of them 17° apart, which the bloom pass cannot separate. Spread to
+      // 16°/350°/322° they sit about 27° apart each, which is the widest the
+      // three can be without one of them ceasing to be its character's colour.
+      emissive: '#FF34B4',  // magenta core glow
+      trim: '#D2A63F',      // polished gold ring bezels
     },
     stats: { power: 6, speed: 8, reach: 5, weight: 4, defense: 6 },
     moveSet: 'nyx',
@@ -425,11 +478,17 @@ export const ROSTER = [
     chassis: 'heavy',
     proportions: { height: 1.05, torso: 1.12, arms: 1.06, legs: 0.97, head: 0.94 },
     palette: {
+      // Sheet: `paladin` — "ivory → gunmetal blue primary, red accents → sector
+      // blue" (§3), which this palette already was. What moves is the riot
+      // black: the paladin sheet is layered plates over a NAVY under-suit, and
+      // that navy is the sheet's second-largest area. It also feeds the alloy
+      // the structural frame is tinted from, so a near-neutral black there gave
+      // BASTION a colourless skeleton under a blue skin.
       primary: '#2E3946',   // gunmetal blue
-      secondary: '#171C24', // riot black
+      secondary: '#1C2740', // navy underlayer
       accent: '#3A7BFF',    // sector blue stripe
       emissive: '#2F6BFF',  // shield field blue
-      trim: '#A8B6C6',      // scuffed chrome
+      trim: '#A8B6C6',      // polished nickel
     },
     stats: { power: 7, speed: 4, reach: 5, weight: 9, defense: 10 },
     moveSet: 'bastion',
@@ -457,8 +516,12 @@ export const ROSTER = [
     chassis: 'precision',
     proportions: { height: 1.0, torso: 1.0, arms: 1.0, legs: 1.0, head: 1.0 },
     palette: {
+      // Sheet: `volt-monk` — "brass → anodised grey-green, cyan → mint" (§3),
+      // both already here. The underlayer darkens: on that sheet the exposed
+      // spine and joint mechanism is the darkest thing on the character by a
+      // wide margin, and #26403F was light enough to read as a third paint.
       primary: '#F2F5F3',   // clinical white composite
-      secondary: '#26403F', // teal slate underlayer
+      secondary: '#1C2E2D', // dark teal slate underlayer
       accent: '#00C79A',    // calibration green
       emissive: '#28FFC8',  // mint diagnostic glow
       trim: '#8FA5A2',      // anodised grey-green
@@ -490,11 +553,18 @@ export const ROSTER = [
     chassis: 'precision',
     proportions: { height: 1.03, torso: 1.06, arms: 1.08, legs: 0.98, head: 0.93 },
     palette: {
-      primary: '#8C5A2B',   // burnished copper
-      secondary: '#241A12', // tar-dipped insulation
+      // Sheet: `aegis-01` — "blue/orange → burnished copper / brass, arc-white
+      // emissive" (§3). The copper comes up a step: aegis's primary is a
+      // saturated mid-value blue over most of the body, and its copper
+      // counterpart has to hold the same place in the value range or the
+      // heavyweight reads as a brown mass. The trim goes from patinated to
+      // POLISHED — the sheet's shoulder hubs and knuckle collars are bright,
+      // and patina is exactly the surface a mirror lobe cannot represent.
+      primary: '#9A6331',   // burnished copper
+      secondary: '#2A2119', // tar-dipped insulation
       accent: '#E4B266',    // polished brass collars
       emissive: '#F2F7FF',  // arc-white discharge
-      trim: '#5E4630',      // patinated bronze
+      trim: '#B98C4E',      // polished brass
     },
     stats: { power: 8, speed: 6, reach: 5, weight: 7, defense: 6 },
     moveSet: 'volta',

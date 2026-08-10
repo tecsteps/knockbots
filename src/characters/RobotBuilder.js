@@ -1138,6 +1138,72 @@ function actuatorRodGeo(segments) {
 }
 
 // ---------------------------------------------------------------------------
+// Limb anatomy
+//
+// One table, read off the front-facing panels of the eight reference sheets.
+// Every one of them is an anatomical humanoid whose limb segments change width
+// along their length: a deltoid ball necking to a narrow elbow, a forearm that
+// swells at the brachioradialis and necks hard to the wrist, a thigh widest
+// just below the hip, a calf belly high on the shank over a thin ankle.
+//
+// Before this the four limb segments were authored as two literal widths each,
+// and the two were within 12–23% of one another — on a gauntleted heavy the
+// forearm was actually WIDER at the wrist than at the elbow. A constant-width
+// prism is what `03-full-body.jpg` shows and no surfacing rescues it, so the
+// numbers below are held to at least a 1.6:1 ratio between the widest and the
+// narrowest station of every segment. That ratio is the whole point; it is
+// cheaper to check than "does it look like an arm".
+//
+// `t` runs 0 at the DISTAL end of the segment (the end nearer the hand or the
+// foot, which is where the section's `y0` sits) to 1 at the proximal end.
+// `k` multiplies the segment's nominal width.
+// ---------------------------------------------------------------------------
+
+const LIMB_PROFILES = {
+  //          elbow ......................................... shoulder
+  upperArm: [[0, 0.62], [0.12, 0.71], [0.55, 0.92], [0.86, 1.10], [1, 0.98]],
+  //          wrist ........................................... elbow
+  forearm: [[0, 0.55], [0.14, 0.63], [0.68, 1.02], [0.90, 1.00], [1, 0.88]],
+  //          knee ............................................ hip
+  thigh: [[0, 0.60], [0.18, 0.72], [0.62, 0.96], [0.82, 1.06], [1, 0.94]],
+  //          ankle ........................................... knee
+  shank: [[0, 0.48], [0.14, 0.56], [0.66, 1.00], [0.88, 1.02], [1, 0.92]],
+};
+
+/**
+ * Absolute cross-sections for one anatomical limb segment.
+ *
+ * `round` is deliberately near 1 rather than the 0.34 every limb used to pass.
+ * `roundedRectRing` treats `round` as a corner radius fraction, so 0.34 leaves
+ * four straight runs each shading as one plane — a machined box wearing small
+ * fillets. At 0.90 the ring is an ellipse and the segment reads as a capsule,
+ * which is what every reference sheet's limbs are.
+ *
+ * @param {keyof LIMB_PROFILES} kind
+ * @param {number} w nominal width, hit at k = 1
+ * @param {number} deep depth as a multiple of width — a limb is boxed in
+ *   sideways by the pelvis or the ribcage and by nothing fore-and-aft, so a
+ *   real one is markedly deeper than it is wide
+ * @param {number} [round=0.90]
+ */
+function limbKnots(kind, w, deep, round = 0.90) {
+  return LIMB_PROFILES[kind].map(([t, k]) => ({ t, w: w * k, d: w * k * deep, round }));
+}
+
+/** Piecewise-linear width multiplier of a limb profile at parameter `t`. */
+function limbK(kind, t) {
+  const p = LIMB_PROFILES[kind];
+  for (let i = 1; i < p.length; i++) {
+    if (t <= p[i][0] || i === p.length - 1) {
+      const [t0, k0] = p[i - 1], [t1, k1] = p[i];
+      const f = t1 - t0 < 1e-6 ? 0 : (t - t0) / (t1 - t0);
+      return k0 + (k1 - k0) * f;
+    }
+  }
+  return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Rig — the part accumulator
 // ---------------------------------------------------------------------------
 
@@ -1357,23 +1423,42 @@ class Rig {
    * from a truncated pyramid into a *volume*. `swell` pushes the waist of the
    * loft out (or in) so a thigh bulges at the quadriceps and a waist pinches,
    * which is the read a stack of tapered boxes can never produce.
+   *
+   * Three stations and one shared corner radius is as far as that model goes,
+   * and it is not far enough for a limb. A three-station loft with `round` in
+   * the 0.34 band is a machined box by construction — `roundedRectRing` returns
+   * four straight runs each carrying one shared normal — and the ends of every
+   * limb section in the cast were within 12–23% of each other, so the box did
+   * not even taper. `knots` is the way out: an explicit list of absolute
+   * cross-sections along the run, so one call can carry a deltoid ball, a mid
+   * taper, a brachioradialis belly and a necked wrist, each with its own corner
+   * radius. `limbKnots()` authors them by anatomy rather than by literal.
    */
   stations(o, cy = 0) {
-    const e0 = o.d0 ?? o.w0, e1 = o.d1 ?? o.w1;
     const sx = o.shearX ?? 0, sz = o.shearZ ?? 0;
     const round = o.round ?? 0.34;
-    const at = (t, extra = 1) => ({
+    const at = (t, w, d, r, smooth) => ({
       y: o.y0 + (o.y1 - o.y0) * t - cy,
-      w: (o.w0 + (o.w1 - o.w0) * t) * extra,
-      d: (e0 + (e1 - e0) * t) * extra,
+      w,
+      d,
       x: sx * (t * 2 - 1),
       z: sz * (t * 2 - 1),
-      round,
-      smooth: true,
+      round: r,
+      smooth,
     });
+    if (o.knots) {
+      return o.knots.map((k) => at(k.t, k.w, k.d ?? k.w, k.round ?? round, k.smooth !== false));
+    }
+    const e0 = o.d0 ?? o.w0, e1 = o.d1 ?? o.w1;
+    const lin = (t, extra = 1) => at(
+      t,
+      (o.w0 + (o.w1 - o.w0) * t) * extra,
+      (e0 + (e1 - e0) * t) * extra,
+      round, true,
+    );
     const swell = o.swell ?? 0;
-    if (Math.abs(swell) < 1e-4) return [at(0), at(0.5), at(1)];
-    return [at(0), at(o.swellAt ?? 0.42, 1 + swell), at(1)];
+    if (Math.abs(swell) < 1e-4) return [lin(0), lin(0.5), lin(1)];
+    return [lin(0), lin(o.swellAt ?? 0.42, 1 + swell), lin(1)];
   }
 
   /**
@@ -1441,6 +1526,228 @@ class Rig {
         d0: lerp(d0, d1, a), d1: lerp(d0, d1, b),
       });
     }
+    return this;
+  }
+
+  /**
+   * Anatomical limb segment — the construction that replaces `plated()` on the
+   * four limb bones.
+   *
+   * `plated()` builds a painted tube over a slightly smaller tube. That is a
+   * closed column: it encloses the limb, so there is nothing to see between the
+   * armour and the machine, and every one of the eight reference sheets is
+   * built the opposite way round. There, armour is a set of SHELLS that wrap the
+   * outer 200–260° of a segment and stop, and the inner face is left open onto
+   * a dark ribbed core. The eye then reads armour, gap, mechanism at every
+   * joint, which is the single biggest reason the sheets look like machines
+   * rather than like painted suits.
+   *
+   * So this emits three things, all sharing one placement frame so that `r`
+   * tilts the whole assembly about one pivot instead of bending it:
+   *
+   *   1. the CORE — an ovoid loft on the anatomy curve, at `coreK` of the
+   *      armour's cross-section, in a dark matte material;
+   *   2. the RIBS — short stacked rings on the core, sitting in the gaps the
+   *      shells leave at the joints and at the mid-run break;
+   *   3. the SHELLS — `bands` swept plates over the outer arc, each following
+   *      the same anatomy curve, each with a real rim the light can catch.
+   *
+   * @param {string} bone
+   * @param {Object} o
+   *   `kind` key into LIMB_PROFILES; `w` nominal width (the k = 1 station);
+   *   `deep` depth as a multiple of width; `y0`/`y1` span on the bone axis with
+   *   `y0` at the distal end; `mat` shell material; `coreMat` core material;
+   *   `arc`/`phase` shell wrap in radians; `bands`; `gap` exposed fraction of
+   *   the run at each end and between bands; `ribAt` rib positions in t.
+   */
+  limb(bone, o) {
+    const kind = o.kind;
+    const deep = o.deep ?? 1;
+    const coreK = o.coreK ?? 0.74;
+    const knots = limbKnots(kind, o.w, deep, o.round ?? 0.95);
+    const cy = (o.y0 + o.y1) * 0.5;
+    const span = o.y1 - o.y0;
+    const yAt = (t) => o.y0 + span * t - cy;
+    const wAt = (t) => o.w * limbK(kind, t);
+    // Every part of the limb is authored about the segment centre and placed
+    // with the SAME p and r. `plated()` rotated each band about its own centre,
+    // which at 2° of hip splay is invisible and at anything more would hinge
+    // the limb rather than tilt it.
+    const base = { p: [o.x ?? 0, cy, o.z ?? 0], r: o.r, mirror: o.mirror };
+    const seg = this.maxTier >= 2 ? 16 : 10;
+
+    this.add(bone, loftHull(knots.map((k) => ({
+      y: yAt(k.t), w: k.w * coreK, d: k.d * coreK, round: k.round, smooth: true,
+    })), { perQuad: 3 }), o.coreMat ?? 'gasket',
+    { ...base, tier: TIER.PRIMARY, role: 'frame' });
+
+    // The ribs are the underskin. They are cheap — four profile points on a
+    // 14-gon — and they are the difference between a gap that reads as a gap
+    // and a gap that reads as a hole, so they go wherever a shell ends.
+    const ribs = o.ribAt ?? [0.07, 0.5, 0.93];
+    const ribH = Math.abs(span) * 0.030;
+    for (const t of ribs) {
+      const rc = wAt(t) * coreK * 0.5;
+      const g = latheProfile([
+        { r: rc * 0.98, y: -ribH },
+        { r: rc * 1.17, y: -ribH * 0.42, smooth: true },
+        { r: rc * 1.17, y: ribH * 0.42 },
+        { r: rc * 0.98, y: ribH },
+      ], this.maxTier >= 2 ? 14 : 10);
+      // The depth ratio is baked into the geometry rather than passed as a
+      // placement scale: `add` derives the plate frame from a single
+      // `getMaxScaleOnAxis`, so a non-uniform placement scale would report the
+      // ring 26% wider than it is and put the rim band in the wrong place.
+      g.translate(0, yAt(t), 0);
+      g.scale(1, 1, deep);
+      this.add(bone, g, o.ribMat ?? 'darkMetal',
+        { ...base, tier: TIER.SECONDARY, role: 'frame' });
+    }
+
+    const bands = Math.max(1, Math.round(o.bands ?? 2));
+    const gap = o.gap ?? 0.07;
+    const step = (1 - gap * (bands + 1)) / bands;
+    const arc = o.arc ?? 232 * DEG;
+    const phase = (o.phase ?? 0) - arc * 0.5;
+    for (let i = 0; i < bands; i++) {
+      const a = gap + i * (step + gap);
+      const b = a + step;
+      // Four samples per band, drawn off the same anatomy curve as the core, so
+      // the plate necks where the limb necks instead of sleeving a taper in a
+      // constant-radius tube. The two end samples are pulled in slightly: that
+      // is the rolled edge of a pressing, and it is the only part of a wrapped
+      // shell that reliably catches a rim light.
+      const prof = [0, 0.3, 0.7, 1].map((f, j) => {
+        const t = a + (b - a) * f;
+        const r = wAt(t) * 0.5;
+        const end = j === 0 || j === 3;
+        return { r: end ? r * 0.93 : r, y: yAt(t), smooth: !end };
+      });
+      const shell = shellLathe(prof, wAt((a + b) * 0.5) * 0.5 * 0.17, seg, { arc, phase });
+      shell.scale(1, 1, deep);
+      this.add(bone, shell, o.mat, {
+        ...base, tier: TIER.PRIMARY,
+        // A wrapped shell is one pressing with a free ground rim the whole way
+        // round, not a band butted against the plate above it.
+        role: 'lame',
+      });
+    }
+    return this;
+  }
+
+  /**
+   * Ribbed underskin stack on a bone axis, for the limb branches that keep
+   * their own bespoke masses (digitigrade calf, piston column) and so cannot go
+   * through `limb()`. Same rings, same reason.
+   */
+  ribStack(bone, o) {
+    const n = Math.max(1, o.count ?? 3);
+    const h = o.h ?? 0.018;
+    for (let i = 0; i < n; i++) {
+      const f = n === 1 ? 0.5 : i / (n - 1);
+      const r = o.r0 + (o.r1 - o.r0) * f;
+      const g = latheProfile([
+        { r: r * 0.98, y: -h },
+        { r: r * 1.18, y: -h * 0.40, smooth: true },
+        { r: r * 1.18, y: h * 0.40 },
+        { r: r * 0.98, y: h },
+      ], this.maxTier >= 2 ? 14 : 10);
+      g.translate(0, o.y0 + (o.y1 - o.y0) * f, 0);
+      if (o.deep) g.scale(1, 1, o.deep);
+      this.add(bone, g, o.mat ?? 'darkMetal', {
+        p: o.p, r: o.rot, mirror: o.mirror,
+        tier: o.tier ?? TIER.SECONDARY, role: 'frame',
+      });
+    }
+    return this;
+  }
+
+  /**
+   * Rotary joint hardware on a hinge axis: the boot that fills the gap between
+   * the two segments, a bezel ring standing proud of both of them, and a
+   * recessed hub in the middle of it.
+   *
+   * §1.4 of the visual target: every major joint on every reference sheet
+   * carries a visible disc on its pivot, and the disc is LARGER than half the
+   * limb width so it is still the read at any flex angle. The build had four
+   * ad-hoc lathe barrels — shoulder, elbow, knee, ankle — that were flush
+   * gasket boots with a ring of bolt heads on them, no hip disc at all, and a
+   * wrist cuff. Flush hardware disappears the moment the joint bends. One
+   * construction, used six times a side, replaces all of it.
+   *
+   * Authored about +Y and rolled onto the hinge axis, world-aligned by default
+   * so the barrel stays horizontal however the bone happens to be posed.
+   *
+   * `face` is the whole reason this takes four numbers instead of two. The
+   * barrels it replaces put their end caps at ±0.30 of a segment width while
+   * the segment itself was 0.77 wide, so the "joint hardware" was entirely
+   * inside the limb and the seam read as a hole. Every call site now passes the
+   * limb's own half-width at that joint, and the disc seats there.
+   *
+   * @param {string} bone
+   * @param {Object} o
+   *   `radius` disc radius — around 0.6 of the limb's half-width at that joint,
+   *   which puts the disc DIAMETER comfortably past §1.4's "larger than half the
+   *   limb width" while still reading as a hub set into the joint rather than as
+   *   a hoop around it; `face` distance along the hinge axis to the disc's
+   *   seating plane, which has to clear the OUTERMOST armour at that joint (the
+   *   deltoid shell, the elbow cap, the knee cap), not just the segment;
+   *   `boot` barrel radius, or false for joints that already have one; `half`
+   *   boot half-length; `sign` side; `p` offset in the world-aligned frame.
+   */
+  bezel(bone, o) {
+    const R = o.radius;
+    const face = o.face ?? R;
+    const sign = o.sign ?? 1;
+    const seg = this.maxTier >= 2 ? 20 : 12;
+    const put = (geo, mat, tier) => this.add(bone, geo, mat, {
+      world: o.world !== false, p: o.p ?? [0, 0, 0],
+      r: [0, 0, sign * -90 * DEG], mirror: o.mirror, tier, role: 'frame',
+    });
+
+    // The boot. A rotary barrel is a moulding, not a billet — it was the largest
+    // single block of `darkMetal` in the scored frame and read as polished steel.
+    // Its radius has to beat the segment's half-DEPTH, not its half-width, or it
+    // vanishes the moment the limb becomes deeper than it is wide.
+    if (o.boot) {
+      const B = o.boot, half = o.half ?? B * 0.42;
+      put(latheProfile([
+        { r: 0, y: -half }, { r: B * 0.92, y: -half },
+        { r: B, y: -half * 0.70, smooth: true },
+        { r: B, y: half * 0.70 }, { r: B * 0.88, y: half },
+        { r: 0, y: half },
+      ], seg), 'gasket', TIER.PRIMARY);
+    }
+
+    // Outer face: the disc that has to survive the silhouette, so PRIMARY.
+    // It is deliberately a THIN concentric assembly rather than a thick puck.
+    // At R*0.21 proud it read as a road wheel bolted to the side of the leg,
+    // which is not what any of the eight sheets has at a knee.
+    put(latheProfile([
+      { r: R * 0.46, y: face },
+      { r: R * 1.00, y: face + R * 0.04, smooth: true },
+      { r: R * 1.04, y: face + R * 0.11 },
+      { r: R * 0.84, y: face + R * 0.15 },
+      { r: R * 0.38, y: face + R * 0.12 },
+    ], seg), 'trim', TIER.PRIMARY);
+    // The hub has to be WIDER than the ring's bore (0.38–0.46 R), not narrower.
+    // At 0.30 R it left an annular hole you could see the background through,
+    // which on the shoulder disc read as a punched-out washer.
+    put(latheProfile([
+      { r: 0, y: face + R * 0.02 }, { r: R * 0.48, y: face + R * 0.02 },
+      { r: R * 0.44, y: face + R * 0.13 }, { r: 0, y: face + R * 0.15 },
+    ], Math.max(10, Math.round(seg * 0.6))), 'darkMetal', TIER.PRIMARY);
+
+    // Inner face: the same ring, thinner and one tier down. It is only ever seen
+    // through the gap between the limb and the body, but with nothing there the
+    // joint reads as a plate that stops in mid-air from the far camera angle.
+    const inner = o.faceIn ?? face * 0.86;
+    put(latheProfile([
+      { r: R * 0.40, y: -inner - R * 0.12 },
+      { r: R * 0.90, y: -inner - R * 0.07, smooth: true },
+      { r: R * 0.90, y: -inner + R * 0.02 },
+      { r: R * 0.40, y: -inner + R * 0.07 },
+    ], Math.max(10, Math.round(seg * 0.7))), 'trim', TIER.SECONDARY);
     return this;
   }
 
@@ -1544,8 +1851,11 @@ class Rig {
       housingLength: restLength * (o.housing ?? 0.48),
     });
 
-    // clevis brackets, rigid to their own bone
-    const cw = radius * 2.6, ch = radius * 1.5, cd = radius * 2.1;
+    // Clevis brackets, rigid to their own bone. They are boxes bedded onto what
+    // is now a curved shell, so they are deliberately small: at the old 2.6x
+    // radius the corners tented 8 mm clear of an ovoid limb and the bracket read
+    // as a separate object floating beside the ram.
+    const cw = radius * 2.0, ch = radius * 1.25, cd = radius * 1.6;
     this.add(boneA, bevelBox(cw, ch, cd, radius * 0.28), 'darkMetal',
       { p: [aLocal[0], aLocal[1], aLocal[2]], tier: TIER.SECONDARY });
     this.add(boneB, bevelBox(cw * 0.85, ch, cd * 0.85, radius * 0.26), 'darkMetal',
@@ -1927,6 +2237,30 @@ const SIDES = [
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const LEG_PLANS = ['plantigrade', 'digitigrade', 'splayed', 'piston'];
+
+/**
+ * Footprint trim, by leg plan.
+ *
+ * The chassis table's `foot` and `footW` were authored against a boot assembled
+ * from a sole box, a toe box and a heel box, and they were sized to make that
+ * assembly look substantial. Measured on the build these replace, the finished
+ * plantigrade footprint ran 0.39–0.47 of hip-to-ankle and up to 1.7 head
+ * lengths, at 0.81 as wide as it was long — a ski, and one of the three things
+ * §2 of the visual target names outright. A human foot is about a third of the
+ * leg and a little over half as wide as it is long, and every reference sheet
+ * agrees with that even on the two super-heavies.
+ *
+ * A raptor foot is genuinely long — it is a whole extra limb segment, not a
+ * boot — so the digitigrade plan is trimmed less, and the piston plan's pad is
+ * a circle whose width IS its length and so takes the length trim on both axes.
+ *
+ * They live here rather than inside `buildLeg` because `buildMechanism` anchors
+ * the ankle ram and the ankle loom on the same two numbers, and a boot that
+ * shrinks without its hydraulics leaves a ram hanging in clear air.
+ */
+const BOOT_TRIM = { plantigrade: 0.78, splayed: 0.78, piston: 0.82, digitigrade: 0.74 };
+const BOOT_WIDTH_TRIM = 0.82;
+const bootTrim = (plan) => BOOT_TRIM[plan] ?? BOOT_TRIM.plantigrade;
 
 /**
  * The ten body masses.
@@ -4037,6 +4371,90 @@ const HEAD_BUILDERS = {
 // Arms
 // ---------------------------------------------------------------------------
 
+/**
+ * One articulated digit: a chain of tapered capsules with a dark hinge barrel in
+ * the gap between them, the whole chain rigid to a SINGLE bone.
+ *
+ * The skeleton has one `fingers_*` bone per hand and one `thumb_*`, not fifteen,
+ * and that is not negotiable — every clip in the game is authored against the
+ * current bone list, so adding phalanges would invalidate all of them. It is
+ * also much less of a limitation than it sounds. A hand curls its four fingers
+ * as a unit; four rigid chains posed in a half-fist on the one bone read exactly
+ * as a fist reads, and what the reference's hand tiles are actually selling —
+ * three visible segments per finger, a dark joint between them, and daylight
+ * between the fingers — survives being rigid intact.
+ *
+ * The chain is WALKED rather than authored: each segment is placed at a running
+ * cursor, rotated onto a running curl angle, and the cursor advanced along that
+ * segment's own axis. So `segs` and `curl` describe an anatomy, and changing one
+ * number does not require re-deriving the offsets of everything after it — which
+ * is exactly the mistake the four hand-placed knuckle studs this replaces made.
+ *
+ * @param {Rig} rig
+ * @param {string} bone the one bone the whole digit binds to
+ * @param {Object} o
+ *   `base` chain origin in bone-local metres, x already multiplied by `sign`;
+ *   `segs` segment lengths, proximal first; `curl` per-segment turn toward the
+ *   fighter's front, in radians, applied cumulatively; `r0`/`r1` segment
+ *   half-width at the base and at the tip; `splay` fan angle about the bone's Z,
+ *   already multiplied by `sign`; `deep` depth as a multiple of width; `gap`
+ *   fraction of each segment given over to the hinge; `mat` shell material.
+ */
+function digit(rig, bone, o) {
+  const segs = o.segs;
+  const n = segs.length;
+  const splay = o.splay ?? 0;
+  const deep = o.deep ?? 0.94;
+  const gap = o.gap ?? 0.17;
+  const cs = Math.cos(splay), ss = Math.sin(splay);
+  const hingeSeg = rig.maxTier >= 2 ? 10 : 8;
+  let [px, py, pz] = o.base;
+  let ang = 0;
+  for (let i = 0; i < n; i++) {
+    ang += o.curl[i];
+    const L = segs[i];
+    // `frame()` composes Rx * Ry * Rz, so a part placed with
+    // r = [PI - curl, 0, splay] carries its own +Y onto
+    // (-sin splay, -cos splay * cos curl, cos splay * sin curl): straight down
+    // the hand at curl 0, swinging toward the fighter's front as the hand
+    // closes. Both the splay and the base x arrive pre-signed, which is what
+    // makes the right hand come out as the left hand's mirror rather than as a
+    // copy of it — `add`'s MIRROR_X reflects the geometry, not the placement.
+    const rot = [Math.PI - ang * FRONT, 0, splay];
+    const dx = -ss, dy = -cs * Math.cos(ang), dz = cs * Math.sin(ang) * FRONT;
+    const rA = o.r0 + (o.r1 - o.r0) * (i / n);
+    const rB = o.r0 + (o.r1 - o.r0) * ((i + 1) / n);
+    const body = L * (1 - gap);
+    rig.add(bone, loftHull([
+      { y: 0, w: rA * 2, d: rA * 2 * deep, round: 0.94 },
+      { y: body * 0.44, w: rA + rB, d: (rA + rB) * deep, round: 0.96, smooth: true },
+      { y: body, w: rB * 2, d: rB * 2 * deep, round: 0.94 },
+    ], { perQuad: rig.maxTier >= 2 ? 3 : 2 }), o.mat, {
+      p: [px, py, pz], r: rot, mirror: o.mirror, tier: TIER.PRIMARY,
+      // A phalanx is one pressing with a free rim all the way round. Calling it
+      // a band would butt it against its neighbour and fill the very gap the
+      // digit exists to show.
+      role: 'lame',
+    });
+    // The hinge is PRIMARY, not decoration: it is the structure that stops the
+    // gap between two capsules being a hole you can see the background through
+    // at LOD1, and it is the dark knuckle break §1.3 asks for. Authored about
+    // its own Y and rolled a quarter turn so the barrel lies across the digit.
+    if (i < n - 1) {
+      const rh = rB * 0.66, hh = rB * deep * 0.94;
+      const h = latheProfile([
+        { r: 0, y: -hh }, { r: rh, y: -hh }, { r: rh, y: hh }, { r: 0, y: hh },
+      ], hingeSeg);
+      h.rotateZ(Math.PI * 0.5);
+      h.translate(0, body + L * gap * 0.5, 0);
+      rig.add(bone, h, o.hingeMat ?? 'darkMetal',
+        { p: [px, py, pz], r: rot, mirror: o.mirror, tier: TIER.PRIMARY, role: 'frame' });
+    }
+    px += dx * L; py += dy * L; pz += dz * L;
+  }
+  return rig;
+}
+
 function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   const a = spec.arms;
   const m = rig.dim;
@@ -4149,144 +4567,223 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     r: FACE_FRONT, mirror, tier: TIER.GREEBLE,
   });
 
-  // --- rotary shoulder housing, world-aligned so its axis is horizontal
-  rig.add(`shoulder_${S}`, latheProfile([
-    { r: 0, y: -upper * 0.30 }, { r: upper * 0.74, y: -upper * 0.30 }, { r: upper * 0.84, y: -upper * 0.16, smooth: true },
-    { r: upper * 0.84, y: upper * 0.16 }, { r: upper * 0.66, y: upper * 0.28 }, { r: 0, y: upper * 0.28 },
-    // ZONE 2. Every rotary barrel in the rig — shoulder, elbow, wrist, hip,
-    // knee, ankle — is a boot, not a billet. They were the largest single block
-    // of `darkMetal` in the scored frame and they sat at metalness 1 with the
-    // same anisotropic streak as the plate covering them.
-  ], 22), 'gasket', { world: true, p: [sign * 0.012, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
-  rig.add(`shoulder_${S}`, boltRing(6, upper * 0.52, 0.008, 0.010), 'trim',
-    { world: true, p: [sign * 0.056, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.GREEBLE });
-  rig.glow(`shoulder_${S}`, latheProfile([
-    { r: 0, y: 0 }, { r: upper * 0.115, y: 0 }, { r: upper * 0.10, y: 0.008 }, { r: 0, y: 0.010 },
-  ], 14), 'joints', { world: true, p: [sign * 0.062, 0, 0], r: [0, 0, sign * -90 * DEG], mirror });
+  const shellSeg = rig.maxTier >= 2 ? 16 : 10;
 
-  // --- upper arm: one section running from inside the shoulder housing down to
-  // just short of the elbow pivot, sized at each end to match its neighbour
-  const elbowW = fore * 1.52;
+  // Nominal (k = 1) cross-sections. Everything below is a multiple of these
+  // through LIMB_PROFILES rather than a pair of end literals, which is what
+  // stops the arm being a constant-width prism: the elbow comes out at 0.62 of
+  // the deltoid and the wrist at 0.55 of the brachioradialis.
+  const upperW = upper * 1.46;
+  const foreW = fore * 1.50;
 
-  // Deltoid shell, on the shoulder so it swings with the arm. The pauldron
-  // hanging above needs something to overlap; without it the shoulder armour
-  // stops in mid-air and the arm reads as a separate object bolted on nearby.
-  rig.add(`shoulder_${S}`, shellLathe([
-    { r: upper * 0.80, y: -uLen * 0.66 },
-    { r: upper * 0.90, y: -uLen * 0.46, smooth: true },
-    { r: upper * 0.94, y: -uLen * 0.08, smooth: true },
-    { r: upper * 0.86, y: upper * 0.24 },
-  ], upper * 0.17, rig.maxTier >= 2 ? 16 : 10, { arc: 186 * DEG, phase: -93 * DEG }),
-  'armorSecondary', { mirror, tier: TIER.PRIMARY });
-  rig.plated(`shoulder_${S}`, {
-    y0: -uLen * 0.90, y1: upper * 0.40,
-    w0: elbowW * 0.94, w1: upper * 1.52,
-    d0: elbowW * 0.96, d1: upper * 1.56,
-    mat: 'armorPrimary', gap: 0.015, inset: 0.86, round: 0.36, swell: 0.05, bands: 2, mirror,
+  // --- shoulder: boot, bezel disc and pilot light on the hinge axis. The disc
+  // seats at 0.80 of the upper arm's nominal width — i.e. on the OUTER SURFACE
+  // of the deltoid, not 0.30 of the way in where the old barrel's end cap was
+  // and where nothing is ever visible.
+  rig.bezel(`shoulder_${S}`, {
+    radius: upper * 0.48, face: upper * 1.00, boot: upper * 0.86, half: upper * 0.30,
+    sign, mirror, p: [sign * 0.012, 0, 0],
   });
-  rig.add(`shoulder_${S}`, bevelBox(upper * 1.1, uLen * 0.40, upper * 0.5, 0.008, { topX: 0.9, botX: 0.7 }), 'armorSecondary',
-    { p: [0, -uLen * 0.52, FRONT * upper * 0.82], r: [0, 0, 0], mirror, tier: TIER.SECONDARY });
-  rig.add(`shoulder_${S}`, channelStrip(upper * 0.42, uLen * 0.56, 0.009), 'darkMetal',
-    { p: [0, -uLen * 0.44, -FRONT * upper * 0.78], r: FACE_BACK, mirror, tier: TIER.SECONDARY });
+  rig.glow(`shoulder_${S}`, latheProfile([
+    { r: 0, y: 0 }, { r: upper * 0.10, y: 0 }, { r: upper * 0.086, y: 0.008 }, { r: 0, y: 0.010 },
+  ], 14), 'joints', {
+    world: true, p: [sign * (0.012 + upper * 1.078), 0, 0], r: [0, 0, sign * -90 * DEG], mirror,
+  });
+
+  // Deltoid shell, on the shoulder so it swings with the arm. It wraps 232° and
+  // sits proud of the upper-arm shells below it rather than running their whole
+  // length: on every reference sheet the deltoid cap floats CLEAR of the armpit
+  // and the dark core shows in the gap it leaves.
+  rig.add(`shoulder_${S}`, shellLathe([
+    { r: upper * 0.80, y: -uLen * 0.34 },
+    { r: upper * 0.94, y: -uLen * 0.12, smooth: true },
+    { r: upper * 0.96, y: upper * 0.06, smooth: true },
+    { r: upper * 0.84, y: upper * 0.30 },
+  ], upper * 0.17, shellSeg, { arc: 232 * DEG, phase: -116 * DEG }),
+  'armorSecondary', { mirror, tier: TIER.PRIMARY });
+
+  // --- upper arm: deltoid ball at the top, necking to a narrow elbow, with the
+  // painted shells covering the outer arc only.
+  rig.limb(`shoulder_${S}`, {
+    kind: 'upperArm', w: upperW, deep: 1.02,
+    y0: -uLen * 0.90, y1: upper * 0.40,
+    mat: 'armorPrimary', bands: 2, gap: 0.075,
+    // Gap centred on 174°, i.e. just forward of straight medial: that is where
+    // the inner-elbow crease opens and where the underskin most needs to show.
+    arc: 228 * DEG, phase: -6 * DEG, mirror,
+  });
+  // Collar ring where the upper arm necks into the elbow barrel. It reads as the
+  // clamp holding the two shells on, and it is the only trim on the segment.
   rig.add(`shoulder_${S}`, latheProfile([
-    { r: upper * 0.55, y: 0 }, { r: upper * 0.62, y: 0.012, smooth: true }, { r: upper * 0.62, y: 0.03 },
-    { r: upper * 0.55, y: 0.042 },
+    { r: upper * 0.52, y: 0 }, { r: upper * 0.60, y: 0.012, smooth: true }, { r: upper * 0.60, y: 0.03 },
+    { r: upper * 0.52, y: 0.042 },
   ], 20), 'trim', { p: [0, -uLen * 0.80, 0], mirror, tier: TIER.SECONDARY });
 
-  // --- elbow: rotary housing + floating cap. The housing radius is deliberately
-  // larger than half the arm width, so the barrel of the joint is what the eye
-  // sees at the seam no matter how far the elbow is flexed.
+  // --- elbow: bezel on the hinge axis plus a floating cap plate that overlaps
+  // the segment ABOVE it (§1.4). The old cap was a bevelBox and it was one of
+  // the four boxes that made the arm read as orthogonal from every angle.
   const elbowR = Math.max(fore, upper) * 0.80;
-  rig.add(`elbow_${S}`, latheProfile([
-    { r: 0, y: -elbowW * 0.34 }, { r: elbowR * 0.90, y: -elbowW * 0.34 }, { r: elbowR, y: -elbowW * 0.24, smooth: true },
-    { r: elbowR, y: elbowW * 0.24 }, { r: elbowR * 0.82, y: elbowW * 0.34 }, { r: 0, y: elbowW * 0.34 },
-  ], 22), 'gasket', { world: true, p: [0, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
-  rig.add(`elbow_${S}`, bevelBox(fore * 1.35, fore * 1.1, fore * 0.75, 0.010, { topX: 0.85, botX: 0.9 }), 'armorSecondary',
-    { p: [0, -fore * 0.10, -FRONT * fore * 0.85], r: [10 * DEG, 0, 0], mirror, tier: TIER.PRIMARY });
-
-  // --- forearm: from inside the elbow barrel down to the wrist cuff
-  const cuffW = fore * 1.36 * (1 + gaunt * 0.18);
-  rig.plated(`elbow_${S}`, {
-    y0: -fLen * 0.90, y1: fore * 0.34,
-    w0: cuffW, w1: fore * 1.55,
-    d0: cuffW * 0.98, d1: fore * 1.55,
-    mat: 'armorPrimary', gap: 0.014, inset: 0.86, round: 0.34, swell: 0.04, bands: 2, mirror,
+  // The forearm's own half-width at the elbow station is 0.44 of `foreW`; the
+  // disc seats just outside it and the boot barrel beats the half-DEPTH.
+  rig.bezel(`elbow_${S}`, {
+    radius: elbowR * 0.42, face: elbowR * 1.26, boot: elbowR, half: elbowR * 0.44,
+    sign, mirror,
   });
-  // forearm panel with fasteners
-  rig.add(`elbow_${S}`, bevelBox(fore * 1.0, fLen * 0.44, 0.012, 0.005), 'carbon',
-    { p: [0, -fLen * 0.44, FRONT * fore * 0.82], mirror, tier: TIER.SECONDARY });
+  rig.add(`elbow_${S}`, shellLathe([
+    { r: elbowR * 0.80, y: -fore * 0.62 },
+    { r: elbowR * 1.10, y: -fore * 0.24, smooth: true },
+    { r: elbowR * 1.06, y: fore * 0.30, smooth: true },
+    { r: elbowR * 0.74, y: fore * 0.62 },
+    // Centred on the back of the joint (-Z is 270°), which is where an olecranon
+    // guard belongs and where elbow flexion carries it clear of the upper arm.
+  ], elbowR * 0.15, shellSeg, { arc: 140 * DEG, phase: -160 * DEG }),
+  'armorSecondary', { mirror, tier: TIER.PRIMARY });
+
+  // --- forearm: widest a third of the way down from the elbow, necking hard to
+  // the wrist. The old authoring had `w0` (the cuff end) EXCEED `w1` (the elbow
+  // end) as soon as `gauntlet` passed ~0.15, so every heavy in the cast had a
+  // forearm that grew toward the hand.
+  rig.limb(`elbow_${S}`, {
+    kind: 'forearm', w: foreW, deep: 1.12,
+    y0: -fLen * 0.90, y1: fore * 0.34,
+    mat: 'armorPrimary', bands: 2, gap: 0.07,
+    arc: 236 * DEG, phase: 8 * DEG, mirror,
+  });
+  // forearm panel with fasteners, bedded onto the front of the outer shell
+  rig.add(`elbow_${S}`, bevelBox(fore * 0.66, fLen * 0.42, 0.012, 0.005), 'carbon',
+    { p: [0, -fLen * 0.44, FRONT * fore * 0.72], mirror, tier: TIER.SECONDARY });
   rig.add(`elbow_${S}`, boltRing(4, fore * 0.42, 0.007, 0.009), 'trim',
-    { p: [0, -fLen * 0.44, FRONT * (fore * 0.84)], r: FACE_FRONT, mirror, tier: TIER.GREEBLE });
+    { p: [0, -fLen * 0.44, FRONT * (fore * 0.74)], r: FACE_FRONT, mirror, tier: TIER.GREEBLE });
   addPanelDetail(rig, `elbow_${S}`, {
-    p: [0, -fLen * 0.44, FRONT * (fore * 0.82 + 0.004)], r: [0, YAW_FRONT, 0],
-    w: fore * 1.10, h: fLen * 0.56, bolts: 3, splitsY: [0.20], splitsX: [], mirror,
+    p: [0, -fLen * 0.44, FRONT * (fore * 0.72 + 0.004)], r: [0, YAW_FRONT, 0],
+    w: fore * 0.72, h: fLen * 0.52, bolts: 3, splitsY: [0.20], splitsX: [], mirror,
   });
   addPipeRun(rig, `elbow_${S}`, [
-    [sign * fore * 0.70, -0.03, -FRONT * fore * 0.55],
-    [sign * fore * 0.86, -0.13, -FRONT * fore * 0.40],
-    [sign * fore * 0.76, -0.23, -FRONT * fore * 0.20],
+    [sign * fore * 0.64, -0.03, -FRONT * fore * 0.50],
+    [sign * fore * 0.78, -0.13, -FRONT * fore * 0.36],
+    [sign * fore * 0.68, -0.23, -FRONT * fore * 0.18],
   ], { radius: 0.008, mirror });
   rig.decal(`elbow_${S}`, MARKINGS.SERIAL, fore * 1.1, fore * 1.1, {
-    p: [sign * fore * 0.86, -fLen * 0.45, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
+    p: [sign * fore * 0.68, -fLen * 0.45, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
   });
 
-  // --- wrist cuff: sleeves the forearm bottom and the back of the fist
+  // --- wrist: the cuff boot over the necked wrist, and the polished bracelet
+  // that is this joint's share of §1.4. Every hand close-up in the reference has
+  // one and it is always wider than the wrist inside it.
+  const wristW = foreW * LIMB_PROFILES.forearm[0][1];
+  const cuffW = wristW * (1.10 + gaunt * 0.20);
   rig.add(`wrist_${S}`, latheProfile([
     { r: cuffW * 0.50, y: m.palm * 0.34 }, { r: cuffW * 0.56, y: m.palm * 0.14, smooth: true },
     { r: cuffW * 0.56, y: -m.palm * 0.28 }, { r: cuffW * 0.46, y: -m.palm * 0.44 },
   ], 20), 'gasket', { mirror, tier: TIER.PRIMARY });
+  rig.add(`wrist_${S}`, latheProfile([
+    { r: cuffW * 0.52, y: m.palm * 0.30 }, { r: cuffW * 0.70, y: m.palm * 0.22, smooth: true },
+    { r: cuffW * 0.70, y: m.palm * 0.02 }, { r: cuffW * 0.52, y: -m.palm * 0.06 },
+  ], 20), 'trim', { mirror, tier: TIER.PRIMARY });
   rig.glow(`wrist_${S}`, latheProfile([
     { r: cuffW * 0.51, y: 0 }, { r: cuffW * 0.54, y: 0.003 }, { r: cuffW * 0.54, y: 0.009 }, { r: cuffW * 0.51, y: 0.012 },
   ], 20), 'joints', { p: [0, -0.006, 0], mirror });
 
-  // --- hand: fist block, knuckle plates, thumb. The block reaches back up to
-  // the cuff so the wrist never shows daylight.
-  const hw = fore * (1.55 + gaunt * 0.85);
-  rig.section(`hand_${S}`, {
-    y0: -m.grip * 0.34, y1: m.palm * 0.62,
-    w0: hw * 0.64, w1: hw * 0.72, d0: hw * 0.86, d1: hw * 0.95,
-    mat: 'armorPrimary', mirror,
-  });
-  rig.section(`fingers_${S}`, {
-    y0: -m.grip * 0.58, y1: m.grip * 0.42,
-    w0: hw * 0.58, w1: hw * 0.70, d0: hw * 0.76, d1: hw * 0.90,
-    mat: 'armorSecondary', mirror,
-  });
-  for (let i = 0; i < 4; i++) {
-    rig.add(`fingers_${S}`, latheProfile([
-      { r: 0, y: 0 }, { r: hw * 0.11, y: 0 }, { r: hw * 0.115, y: 0.012, smooth: true }, { r: hw * 0.08, y: 0.028 }, { r: 0, y: 0.030 },
-    ], 14), 'trim', {
-      p: [sign * hw * (0.24 - i * 0.16), 0.008, FRONT * (hw * 0.30 - Math.abs(i - 1.5) * hw * 0.06)],
-      r: [-90 * DEG * -FRONT, 0, 0], mirror, tier: TIER.SECONDARY,
+  // --- hand: a palm, a bright knuckle bar, four three-segment fingers and an
+  // opposed thumb. What was here was two lofted blocks and four stud caps — a
+  // mitten, and the single most obvious tell in `03-full-body.jpg` that these
+  // are procedural robots rather than characters. Five of the eight reference
+  // sheets give the hand a whole close-up tile; it is a hero element.
+  //
+  // `hw` is the palm width and everything else is a fraction of it. The old
+  // factor put the finished hand at 0.57–1.39 head widths against a contract
+  // that asks for about one, and the heavies were the worst of it because
+  // `gauntlet` scaled the block twice as hard as the forearm it hangs off.
+  // 1.02 + 0.30 gaunt keeps a brute's fist visibly heavier without letting it
+  // become a boxing glove on the end of a wrist that now necks to 0.55.
+  const hw = fore * (1.02 + gaunt * 0.30);
+  // Palm: widest at the knuckle line and thinner front-to-back than it is
+  // across, because that is the one proportion that separates a hand from a
+  // mitten before any finger is drawn. It reaches up to `m.palm * 0.60` so the
+  // wrist cuff above still overlaps it and no daylight opens at the joint.
+  rig.add(`hand_${S}`, loftHull([
+    { y: m.palm * 0.60, w: hw * 0.74, d: hw * 0.58, round: 0.62 },
+    { y: -m.grip * 0.08, w: hw * 1.00, d: hw * 0.70, round: 0.58, smooth: true },
+    { y: -m.grip * 0.60, w: hw * 0.94, d: hw * 0.64, round: 0.54 },
+  ]), 'armorPrimary', { mirror, tier: TIER.PRIMARY, role: 'shell' });
+  // Knuckle bar. §1.5: "the knuckle row is a hard bright edge" — so it is trim,
+  // it spans the full palm width, and it sits on `hand_*` rather than on
+  // `fingers_*` because the metacarpal heads are the PIVOT the fingers turn
+  // about, not part of what turns.
+  rig.add(`hand_${S}`, loftHull([
+    { y: -m.grip * 0.66, w: hw * 0.98, d: hw * 0.60, round: 0.66 },
+    { y: -m.grip * 0.90, w: hw * 1.02, d: hw * 0.66, round: 0.78, smooth: true },
+    { y: -m.grip * 1.06, w: hw * 0.92, d: hw * 0.58, round: 0.80 },
+  ]), 'trim', { mirror, tier: TIER.PRIMARY, role: 'shell' });
+  // Four fingers on the one `fingers_*` bone, curled 95° in total across three
+  // segments. A tighter curl reads as a fist from the front and as nothing at
+  // all from the side; 95° leaves every segment break visible in profile, which
+  // is where the fight camera spends most of a round.
+  //
+  // The four are deliberately NOT identical: the outer two are shorter and fan
+  // outward. A row of four matched sticks reads as a comb, and the reference's
+  // hands never do.
+  const fl = m.grip * 1.15;
+  const FINGERS = [
+    { x: 0.352, len: 0.98, splay: -6 },
+    { x: 0.117, len: 1.06, splay: -2 },
+    { x: -0.117, len: 1.00, splay: 2 },
+    { x: -0.352, len: 0.86, splay: 6 },
+  ];
+  for (const f of FINGERS) {
+    const L = fl * f.len;
+    digit(rig, `fingers_${S}`, {
+      base: [sign * hw * f.x, m.grip * 0.06, FRONT * hw * 0.06],
+      segs: [L * 0.42, L * 0.33, L * 0.25],
+      curl: [30 * DEG, 38 * DEG, 27 * DEG],
+      r0: hw * 0.114, r1: hw * 0.086,
+      splay: sign * f.splay * DEG,
+      mat: 'armorSecondary', mirror,
     });
   }
-  rig.add(`thumb_${S}`, bevelBox(hw * 0.34, 0.075, hw * 0.34, 0.008, { topX: 0.8 }), 'armorSecondary',
-    { p: [0, -0.02, 0], r: [0, 0, sign * -22 * DEG], mirror, tier: TIER.SECONDARY });
+  // Opposed thumb on its own bone, two segments, swung out of the palm plane by
+  // 38° so it reads as opposed from every angle instead of as a fifth finger.
+  digit(rig, `thumb_${S}`, {
+    base: [0, 0, 0],
+    segs: [fl * 0.52, fl * 0.40],
+    curl: [26 * DEG, 40 * DEG],
+    r0: hw * 0.118, r1: hw * 0.086,
+    splay: sign * -24 * DEG,
+    mat: 'armorSecondary', mirror,
+  });
 
   if (gaunt > 0.9) {
-    // Siege gauntlet: a flared cuff shell over the wrist. Width is capped well
-    // short of `gaunt` scaling linearly, or a brute ends up swinging a billboard.
-    const gw = fore * (1.30 + gaunt * 0.42);
-    rig.add(`elbow_${S}`, bevelBox(gw, fLen * 0.56, gw * 0.94, 0.016,
-      { topX: 0.74, topZ: 0.78, botX: 0.96, botZ: 0.96 }), 'armorAccent',
-    { p: [0, -fLen * 0.74, 0], mirror, tier: TIER.PRIMARY });
+    // Siege gauntlet: a flared cuff shell over the wrist. It used to be a
+    // bevelBox, which put a rectangular prism back onto the one arm in the cast
+    // that most needed to read as heavy rather than as boxy — so it is now the
+    // same wrapped shell as the segment it sits on, just flared toward the fist
+    // and left open on the inner face like everything else. Width is capped well
+    // short of `gaunt` scaling linearly, or a brute swings a billboard.
+    const gw = fore * (1.22 + gaunt * 0.40);
+    rig.add(`elbow_${S}`, shellLathe([
+      { r: gw * 0.52, y: -fLen * 1.02 },
+      { r: gw * 0.64, y: -fLen * 0.90, smooth: true },
+      { r: gw * 0.62, y: -fLen * 0.64, smooth: true },
+      { r: gw * 0.44, y: -fLen * 0.46 },
+    ], gw * 0.11, shellSeg, { arc: 236 * DEG, phase: -118 * DEG }), 'armorAccent',
+    { mirror, tier: TIER.PRIMARY });
     addPanelDetail(rig, `elbow_${S}`, {
-      p: [0, -fLen * 0.74, FRONT * (gw * 0.48 + 0.004)], r: [0, YAW_FRONT, 0],
-      w: gw * 0.72, h: fLen * 0.40, bolts: 3, splitsY: [0.2], splitsX: [], mirror,
+      p: [0, -fLen * 0.78, FRONT * (gw * 0.58 + 0.004)], r: [0, YAW_FRONT, 0],
+      w: gw * 0.62, h: fLen * 0.34, bolts: 3, splitsY: [0.2], splitsX: [], mirror,
     });
     addPanelDetail(rig, `elbow_${S}`, {
-      p: [sign * (gw * 0.48 + 0.004), -fLen * 0.74, 0], r: [0, sign * 90 * DEG, 0],
-      w: gw * 0.72, h: fLen * 0.40, bolts: 3, splitsY: [0.2], splitsX: [], mirror,
+      p: [sign * (gw * 0.58 + 0.004), -fLen * 0.78, 0], r: [0, sign * 90 * DEG, 0],
+      w: gw * 0.62, h: fLen * 0.34, bolts: 3, splitsY: [0.2], splitsX: [], mirror,
     });
-    rig.add(`elbow_${S}`, boltRing(8, gw * 0.40, 0.009, 0.011), 'trim',
-      { p: [0, -fLen * 1.02, 0], r: [180 * DEG, 0, 0], mirror, tier: TIER.GREEBLE });
-    // knuckle-duster ridge along the striking face
+    rig.add(`elbow_${S}`, boltRing(8, gw * 0.46, 0.009, 0.011), 'trim',
+      { p: [0, -fLen * 1.00, 0], r: [180 * DEG, 0, 0], mirror, tier: TIER.GREEBLE });
+    // knuckle-duster ridge along the striking face, following the flare
     for (let i = -1; i <= 1; i++) {
       rig.add(`elbow_${S}`, bevelBox(gw * 0.20, 0.05, gw * 0.22, 0.006, { topX: 0.5, topZ: 0.5 }), 'trim',
-        { p: [i * gw * 0.28, -fLen * 0.52, FRONT * gw * 0.50], r: [-14 * DEG, 0, 0], mirror, tier: TIER.SECONDARY });
+        { p: [i * gw * 0.26, -fLen * 0.60, FRONT * gw * 0.56], r: [-14 * DEG, 0, 0], mirror, tier: TIER.SECONDARY });
     }
-    rig.glow(`elbow_${S}`, bevelBox(gw * 0.62, 0.014, 0.012, 0.004), 'vents',
-      { p: [0, -fLen * 0.62, FRONT * (gw * 0.50 + 0.004)], mirror });
+    rig.glow(`elbow_${S}`, bevelBox(gw * 0.58, 0.014, 0.012, 0.004), 'vents',
+      { p: [0, -fLen * 0.70, FRONT * (gw * 0.58 + 0.004)], mirror });
   }
 }
 
@@ -4809,8 +5306,10 @@ function buildLeg(rig, spec, side, sign, mirror) {
     ...Lsrc,
     thigh: Lsrc.thigh * m.legK,
     shin: Lsrc.shin * m.legK,
-    foot: Lsrc.foot * m.legS,
-    footW: Math.min(Lsrc.footW * m.legK, m.hipSep * 0.86),
+    // See BOOT_TRIM: the chassis numbers were authored for a three-box boot and
+    // produced a footprint half the length of the leg it hangs off.
+    foot: Lsrc.foot * m.legS * bootTrim(Lsrc.plan),
+    footW: Math.min(Lsrc.footW * m.legK, m.hipSep * 0.86) * BOOT_WIDTH_TRIM,
   };
   // Thighs may just touch at the top — that is what a heavy is supposed to look
   // like — but the knee has to come back inside the hip spacing or the two lower
@@ -4825,51 +5324,83 @@ function buildLeg(rig, spec, side, sign, mirror) {
   // thigh runs wider and its knee narrower than any other plan; a digitigrade
   // leg is the opposite at the ankle, which is what makes the lower limb read as
   // a bird's rather than as a thinner version of a boot.
+  const shellSeg = rig.maxTier >= 2 ? 16 : 10;
   const thighW = Math.min(L.thigh * (piston ? 1.62 : 1.40), m.hipSep * (piston ? 1.30 : 1.16));
   const kneeW = Math.min(L.shin * (piston ? 1.06 : 1.30), m.hipSep * 0.90);
-  const ankleW = kneeW * (digi ? 0.62 : 0.78);
-  const DEEP = 1.30;
+  // Nominal shank width, chosen so the anatomy curve's knee station (k = 0.92)
+  // lands exactly on `kneeW` and the two lower-leg plans still meet the same
+  // knee barrel.
+  const shankW = kneeW / 0.92;
+  // The ankle used to be a flat 0.78 of the knee, which is a tube, not an
+  // ankle. The contract puts it at 0.35–0.55 of a head against a 0.9–1.5 head
+  // thigh; sizing it off the shank's own narrowest station gets there and keeps
+  // the boot collar sleeving the shin rather than floating around it.
+  const ankleW = digi ? kneeW * 0.62 : shankW * 0.60;
 
-  // --- thigh: one section from inside the hip ball down to the knee barrel
-  rig.plated(`hip_${S}`, {
+  // --- thigh: the widest mass on the body, belly just below the hip, necking to
+  // a knee narrow enough that the barrel reads as a hinge.
+  rig.limb(`hip_${S}`, {
+    kind: 'thigh', w: thighW, deep: 1.26,
     y0: -tLen * (piston ? 0.72 : 0.90), y1: L.thigh * 0.42,
-    w0: kneeW * (piston ? 1.30 : 0.96), w1: thighW,
-    d0: kneeW * (piston ? 1.44 : 1.10), d1: thighW * DEEP,
-    mat: 'armorPrimary', gap: 0.019, inset: 0.84, round: piston ? 0.48 : 0.36,
-    swell: piston ? 0.13 : 0.07, swellAt: 0.62, bands: piston ? 1 : 2,
+    mat: 'armorPrimary', bands: piston ? 1 : 2, gap: 0.075,
+    // Wrap centred between outer and front, so the gap opens on the back-inner
+    // quadrant — the inner thigh and the back of the knee, which is exactly
+    // where §1.3 puts the underskin.
+    arc: 226 * DEG, phase: 30 * DEG,
     r: [0, 0, sign * (splay ? 4 : 2) * DEG], mirror,
   });
-  // outer thigh panel + channel
-  rig.add(`hip_${S}`, bevelBox(0.026, tLen * 0.52, L.thigh * 1.0, 0.006, { topX: 0.8 }), 'carbon',
-    { p: [sign * L.thigh * 0.76, -tLen * 0.42, 0], mirror, tier: TIER.SECONDARY });
-  rig.add(`hip_${S}`, channelStrip(L.thigh * 0.30, tLen * 0.60, 0.011), 'darkMetal',
-    { p: [0, -tLen * 0.40, FRONT * L.thigh * 0.78], r: FACE_FRONT, mirror, tier: TIER.SECONDARY });
+  // The outer thigh used to carry a 26 mm carbon slab standing off a flat face.
+  // On an ovoid its corners lift 17 mm clear of the shell and it reads as a
+  // plate hovering beside the leg, so it is gone: the shell's own curvature and
+  // the panel strips below do the breakup, and the triangles pay for the ribs.
+  rig.add(`hip_${S}`, channelStrip(L.thigh * 0.24, tLen * 0.56, 0.011), 'darkMetal',
+    { p: [0, -tLen * 0.40, FRONT * L.thigh * 0.66], r: FACE_FRONT, mirror, tier: TIER.SECONDARY });
   addPanelDetail(rig, `hip_${S}`, {
-    p: [sign * (L.thigh * 0.76), -tLen * 0.40, 0], r: [0, sign * 90 * DEG, 0],
-    w: L.thigh * 1.05, h: tLen * 0.58, bolts: 4, mirror,
+    p: [sign * (L.thigh * 0.50), -tLen * 0.40, 0], r: [0, sign * 90 * DEG, 0],
+    w: L.thigh * 0.54, h: tLen * 0.48, bolts: 4, mirror,
   });
   rig.decal(`hip_${S}`, MARKINGS.ARROW, L.thigh * 0.7, L.thigh * 0.7, {
-    p: [sign * L.thigh * 0.80, -tLen * 0.6, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
+    p: [sign * L.thigh * 0.54, -tLen * 0.6, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
   });
-  // hip collar
+  // hip collar — the boot the bezel below sits on, so the bezel brings only the
+  // disc and the hub
   rig.add(`hip_${S}`, latheProfile([
     { r: thighW * 0.50, y: L.thigh * 0.20 }, { r: thighW * 0.56, y: 0.0, smooth: true },
     { r: thighW * 0.56, y: -L.thigh * 0.20 }, { r: thighW * 0.48, y: -L.thigh * 0.32 },
   ], 20), 'gasket', { mirror, tier: TIER.PRIMARY });
+  // The hip is the one major joint that had no disc at all — only the gasket
+  // collar, which stays and serves as its boot. Seating face is the thigh's own
+  // half-width at the hip station (0.94 of `thighW`, halved).
+  rig.bezel(`hip_${S}`, {
+    radius: thighW * 0.30, face: thighW * 0.62, sign, mirror,
+  });
 
   // --- knee assembly (knee_L is the SHIN bone; the cap rides with the shin).
   // The barrel is wider than either plate it joins, so the seam always reads as
   // a hinge rather than a hole, through the whole flexion range.
   const kneeR = Math.max(thighW, kneeW) * 0.60;
-  rig.add(`knee_${S}`, latheProfile([
-    { r: 0, y: -kneeW * 0.36 }, { r: kneeR * 0.90, y: -kneeW * 0.36 }, { r: kneeR, y: -kneeW * 0.24, smooth: true },
-    { r: kneeR, y: kneeW * 0.24 }, { r: kneeR * 0.80, y: kneeW * 0.36 }, { r: 0, y: kneeW * 0.36 },
-  ], 22), 'gasket', { world: true, p: [0, 0, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
-  rig.add(`knee_${S}`, bevelBox(L.shin * 1.35, L.shin * 1.25, L.shin * 0.85, 0.012,
-    { topX: 0.86, botX: 0.72, shearZ: FRONT * 0.02 }), 'armorAccent',
-  { p: [0, -L.shin * 0.14, FRONT * L.shin * 0.85], r: [-8 * DEG, 0, 0], mirror, tier: TIER.PRIMARY });
+  rig.bezel(`knee_${S}`, {
+    radius: kneeW * 0.32, face: kneeW * 0.70, boot: kneeR, half: kneeW * 0.34,
+    sign, mirror,
+  });
+  // Floating knee cap. This was a bevelBox and it was the single most visible
+  // flat facet on the lower body; §1.4 asks for a cap plate that OVERLAPS the
+  // segment above, which a box bolted to the shin cannot do.
+  //
+  // Its radius is sized off the SHIN, not off `kneeR` (which follows the thigh):
+  // a cap struck at thigh radius wraps 1.75 shin half-widths around the joint
+  // and swallows the bezel disc from every three-quarter angle, which the
+  // proud/buried census caught.
+  const capR = kneeW * 0.63;
+  rig.add(`knee_${S}`, shellLathe([
+    { r: capR * 0.80, y: -L.shin * 0.72 },
+    { r: capR * 1.14, y: -L.shin * 0.28, smooth: true },
+    { r: capR * 1.10, y: L.shin * 0.34, smooth: true },
+    { r: capR * 0.76, y: L.shin * 0.72 },
+  ], capR * 0.17, shellSeg, { arc: 124 * DEG, phase: 28 * DEG }), 'armorAccent',
+  { mirror, tier: TIER.PRIMARY });
   rig.glow(`knee_${S}`, bevelBox(L.shin * 0.55, 0.012, 0.010, 0.003), 'joints',
-    { p: [0, -L.shin * 0.40, FRONT * L.shin * 1.05], mirror });
+    { p: [0, -L.shin * 0.40, FRONT * (capR * 1.14 + 0.006)], mirror });
 
   // --- shin
   if (digi) {
@@ -4884,21 +5415,31 @@ function buildLeg(rig, spec, side, sign, mirror) {
       w0: kneeW * 0.78, w1: kneeW * 1.04,
       d0: kneeW * 1.20, d1: kneeW * 2.05,
       mat: 'armorPrimary', z: -FRONT * L.shin * 0.58,
-      shearZ: -FRONT * 0.085, round: 0.42, swell: 0.10, mirror,
+      // `round` was 0.42 here and 0.44 below, which is still four straight runs
+      // with fillets. The two masses are already the right shapes; what they
+      // were missing was an elliptical cross-section to swing them on.
+      shearZ: -FRONT * 0.085, round: 0.74, swell: 0.10, mirror,
     });
     rig.section(`knee_${S}`, {
       y0: -sLen * 0.96, y1: -sLen * 0.40,
       w0: ankleW * 0.88, w1: kneeW * 0.74,
       d0: ankleW * 1.10, d1: kneeW * 0.96,
       mat: 'armorPrimary', z: FRONT * L.shin * 0.06,
-      shearZ: FRONT * 0.075, round: 0.44, mirror,
+      shearZ: FRONT * 0.075, round: 0.76, mirror,
     });
     // Achilles tendon: a bare cable-and-frame run down the back of the slim
-    // section, which is what tells the eye the mass above it is a calf.
+    // section, which is what tells the eye the mass above it is a calf. The
+    // rings on it are this leg plan's share of the §1.3 underskin — a smooth
+    // dark bar reads as a strut, a ribbed one reads as mechanism.
     rig.add(`knee_${S}`, loftHull([
-      { y: -sLen * 0.90, w: ankleW * 0.40, d: ankleW * 0.34, round: 0.46 },
-      { y: -sLen * 0.44, w: ankleW * 0.46, d: ankleW * 0.40, round: 0.46 },
+      { y: -sLen * 0.90, w: ankleW * 0.40, d: ankleW * 0.34, round: 0.80 },
+      { y: -sLen * 0.44, w: ankleW * 0.46, d: ankleW * 0.40, round: 0.80 },
     ]), 'darkMetal', { p: [0, 0, -FRONT * L.shin * 0.34], mirror, tier: TIER.PRIMARY });
+    rig.ribStack(`knee_${S}`, {
+      count: 4, r0: ankleW * 0.24, r1: ankleW * 0.27,
+      y0: -sLen * 0.84, y1: -sLen * 0.50, h: sLen * 0.018,
+      p: [0, 0, -FRONT * L.shin * 0.34], deep: 0.86, mirror,
+    });
     // calf thruster
     rig.add(`knee_${S}`, latheProfile([
       { r: L.shin * 0.30, y: 0 }, { r: L.shin * 0.30, y: 0.05 }, { r: L.shin * 0.42, y: 0.085, smooth: true },
@@ -4916,9 +5457,15 @@ function buildLeg(rig, spec, side, sign, mirror) {
       y0: -sLen * 0.30, y1: L.shin * 0.46,
       w0: kneeW * 1.14, w1: kneeW * 1.30,
       d0: kneeW * 1.26, d1: kneeW * 1.44,
-      mat: 'armorPrimary', round: 0.46, swell: 0.06, mirror,
+      mat: 'armorPrimary', round: 0.78, swell: 0.06, mirror,
     });
     const cr = kneeW * 0.52;
+    // The column's own underskin, in the free run between the first gland nut
+    // (0.36) and the second (0.70).
+    rig.ribStack(`knee_${S}`, {
+      count: 3, r0: cr * 1.06, r1: cr * 1.04,
+      y0: -sLen * 0.44, y1: -sLen * 0.58, h: sLen * 0.014, mirror,
+    });
     rig.add(`knee_${S}`, latheProfile([
       { r: cr * 1.20, y: -sLen * 0.30 }, { r: cr, y: -sLen * 0.36, smooth: true },
       { r: cr, y: -sLen * 0.70 }, { r: cr * 0.78, y: -sLen * 0.74 },
@@ -4941,43 +5488,68 @@ function buildLeg(rig, spec, side, sign, mirror) {
       { r: cr * 0.84, y: 0 }, { r: cr * 0.90, y: 0.004 }, { r: cr * 0.90, y: 0.012 }, { r: cr * 0.84, y: 0.016 },
     ], 20), 'joints', { p: [0, -sLen * 0.52, 0], mirror });
   } else {
-    rig.plated(`knee_${S}`, {
+    // Calf belly high on the shank over a genuinely thin ankle. The old pair of
+    // literals ran the ankle at 0.78 of the knee with a 0.08 swell — a slightly
+    // dented tube, and the reason every plantigrade fighter stood on posts.
+    rig.limb(`knee_${S}`, {
+      kind: 'shank', w: shankW, deep: 1.20,
       y0: -sLen * 0.92, y1: L.shin * 0.44,
-      w0: ankleW, w1: kneeW,
-      d0: ankleW * 1.20, d1: kneeW * DEEP,
-      mat: 'armorPrimary', gap: 0.018, inset: 0.84, round: 0.34, swell: 0.08, swellAt: 0.66, bands: 2, mirror,
+      mat: 'armorPrimary', bands: 2, gap: 0.07,
+      arc: 232 * DEG, phase: 22 * DEG, mirror,
     });
-    // calf vent stack
+    // calf vent stack, sitting on the shell rather than the old slab face
     addLouvres(rig, `knee_${S}`, {
-      p: [0, -sLen * 0.42, -FRONT * (L.shin * 0.78)], r: [0, YAW_BACK, 0],
-      w: L.shin * 0.9, h: sLen * 0.36, n: ventFins(spec, 0.6), depth: 0.016, mirror, glow: 'vents',
+      p: [0, -sLen * 0.42, -FRONT * (L.shin * 0.62)], r: [0, YAW_BACK, 0],
+      w: L.shin * 0.66, h: sLen * 0.34, n: ventFins(spec, 0.6), depth: 0.016, mirror, glow: 'vents',
     });
-    rig.add(`knee_${S}`, bevelBox(0.024, sLen * 0.5, L.shin * 0.9, 0.006, { topX: 0.8 }), 'carbon',
-      { p: [sign * L.shin * 0.76, -sLen * 0.42, 0], mirror, tier: TIER.SECONDARY });
+    // The matching shin slab is gone for the same reason as the thigh's.
   }
   // Panel breakup belongs on a shin that has a shin plate. On a piston leg the
   // same call would bolt a fastener row onto empty air beside the ram.
   if (!piston) {
     addPanelDetail(rig, `knee_${S}`, {
-      p: [0, -sLen * 0.46, FRONT * (L.shin * 0.76 + 0.004)], r: [0, YAW_FRONT, 0],
-      w: L.shin * 1.08, h: sLen * 0.46, bolts: 4, splitsY: [0.24], splitsX: [], mirror,
+      p: [0, -sLen * 0.46, FRONT * (L.shin * (digi ? 0.76 : 0.62) + 0.004)], r: [0, YAW_FRONT, 0],
+      w: L.shin * 0.70, h: sLen * 0.44, bolts: 4, splitsY: [0.24], splitsX: [], mirror,
     });
   }
   rig.decal(`knee_${S}`, MARKINGS.RIVETS, L.shin * 1.1, L.shin * 0.28, {
-    p: [0, -sLen * 0.16, FRONT * (L.shin * (piston ? 0.68 : 0.80))], r: [0, YAW_FRONT, 0], mirror, tier: TIER.GREEBLE,
+    p: [0, -sLen * 0.16, FRONT * (L.shin * (piston ? 0.68 : 0.72))], r: [0, YAW_FRONT, 0], mirror, tier: TIER.GREEBLE,
   });
 
   // --- ankle
   // Radius stays under the ankle's height above the floor plane, or the joint
-  // housing would clip through the ground on a flat-footed stance.
-  const ankleR = Math.min(ankleW * 0.44, m.ankle * 0.62);
-  rig.add(`ankle_${S}`, latheProfile([
-    { r: 0, y: -ankleW * 0.24 }, { r: ankleR * 0.88, y: -ankleW * 0.24 }, { r: ankleR, y: -ankleW * 0.14, smooth: true },
-    { r: ankleR, y: ankleW * 0.14 }, { r: ankleR * 0.78, y: ankleW * 0.24 }, { r: 0, y: ankleW * 0.24 },
-  ], 20), 'gasket', { world: true, p: [0, 0.006, 0], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY });
+  // housing would clip through the ground on a flat-footed stance. It also has
+  // to clear half the shank, or the bezel disappears inside the leg it is
+  // supposed to hinge — which is what the old 0.44 factor did once the shank
+  // stopped being a tube.
+  const ankleR = Math.min(ankleW * 0.58, m.ankle * 0.78);
+  rig.bezel(`ankle_${S}`, {
+    radius: ankleW * 0.26, face: ankleW * 0.58, boot: ankleR, half: ankleW * 0.22,
+    sign, mirror, p: [0, 0.006, 0],
+  });
 
   // --- foot
   const fw = L.footW, fl = L.foot;
+  // The boot plan's sole plane, in foot-bone-local metres. It is the depth the
+  // rubber pad has always sat at, and it is quoted here rather than spelled out
+  // per part because every mass in the boot branch below now bottoms out ON it,
+  // with only the cleats going 2 mm under — exactly as before. That matters more
+  // than it looks: `Fighter.#measureSole` learns how thick a boot is by taking
+  // the lowest point of the BUILT mesh, so a boot rebuilt at a different depth
+  // silently raises or lowers every stance in the game by the difference.
+  // Measured across the roster after this rewrite, the largest move is 2.3 mm.
+  // (The raptor and pad plans stand on their claws and their disc respectively,
+  // both of which keep their own authored depths for the same reason.)
+  const SOLE = -0.030;
+  // The toe bone hangs `0.045 * legs` below the foot bone and sits `0.14 * legs`
+  // ahead of it — both scaled by the roster, neither available as a literal. A
+  // toe plate authored at a fixed local Y therefore lands on a different plane
+  // for every fighter whose `legs` multiplier is not 1, and an instep authored
+  // at a fixed depth leaves a slot you can see the floor through. Measure both
+  // off the rest pose instead of assuming them.
+  const toeDrop = (rig.restPos[`foot_${S}`]?.y ?? 0) - (rig.restPos[`toe_${S}`]?.y ?? 0);
+  const toeFwd = Math.abs((rig.restPos[`toe_${S}`]?.z ?? 0) - (rig.restPos[`foot_${S}`]?.z ?? 0));
+  const toeSole = SOLE + toeDrop;
   // A boot assembled from a sole box, a toe box and a heel box reads as three
   // boxes, and it reads that way from every angle the fight camera uses because
   // the feet are the one part of a fighter never occluded by anything. So each
@@ -5038,46 +5610,80 @@ function buildLeg(rig, spec, side, sign, mirror) {
     rig.glow(`foot_${S}`, bevelBox(pr * 1.0, 0.012, 0.012, 0.003), 'joints',
       { p: [0, 0.008, FRONT * (fl * 0.06 + pr * 0.92)], mirror });
   } else {
-    // heavy boot: one swept shell from the sole up into the ankle collar
+    // Boot, in three parts: a heel block, an instep plate and separate toe
+    // plates. That is the break §1.5 asks for, and it is precisely what the
+    // single swept shell it replaces could not give — that shell was one deep
+    // drawing running from the sole up into the ankle collar, and with a rubber
+    // slab under it and a 1.28 width multiplier on top of an already generous
+    // chassis number it read as a ski. Measured: 0.39–0.47 of hip-to-ankle,
+    // 0.81 as wide as it was long.
+    //
+    // The instep's DEPTH is not a free number. The toe bone sits `toeFwd` ahead
+    // of the foot bone whatever the boot does, so the instep has to reach it or
+    // a slot opens between the two; `toeFwd + fl * 0.04` is that reach plus the
+    // overlap the toe plates need to hide their own back edges.
+    const instepD = toeFwd + fl * 0.04;
+    const instepZ = FRONT * (toeFwd - fl * 0.36) * 0.5;
     rig.add(`foot_${S}`, loftHull([
-      { y: -0.019, w: fw * 1.25, d: fl * 0.86, round: 0.30 },
-      { y: 0.028, w: fw * 1.30, d: fl * 0.90, round: 0.24, smooth: true },
-      { y: 0.066, w: fw * 1.14, d: fl * 0.78, z: -FRONT * fl * 0.03, round: 0.28, smooth: true },
-      { y: 0.091, w: fw * 0.98, d: fl * 0.58, z: -FRONT * fl * 0.06, round: 0.38 },
+      { y: SOLE, w: fw * 0.96, d: instepD * 0.92, round: 0.36 },
+      { y: SOLE + 0.046, w: fw * 1.00, d: instepD, round: 0.42, smooth: true },
+      { y: SOLE + 0.094, w: fw * 0.84, d: instepD * 0.80, z: -FRONT * fl * 0.05, round: 0.48, smooth: true },
+      { y: SOLE + 0.126, w: fw * 0.62, d: instepD * 0.54, z: -FRONT * fl * 0.10, round: 0.52 },
       // A boot shell is one deep drawing: very few, very large panels and no
       // fastener anywhere a kerb could reach. It is also the part of the machine
       // that gets scuffed hardest, so its rim wants to read as ground metal.
-    ]), 'armorPrimary', { mirror, tier: TIER.PRIMARY, role: 'boot' });
-    rig.add(`foot_${S}`, bevelBox(fw * 1.28, 0.030, fl * 0.90, 0.006), 'rubber',
-      { p: [0, -0.015, 0], mirror, tier: TIER.PRIMARY });
-    rig.add(`toe_${S}`, loftHull([
-      { y: 0.018, w: fw * 1.10, d: fl * 0.42, round: 0.32 },
-      { y: 0.058, w: fw * 1.04, d: fl * 0.40, z: FRONT * fl * 0.02, round: 0.26, smooth: true },
-      { y: 0.100, w: fw * 0.78, d: fl * 0.26, z: FRONT * fl * 0.05, round: 0.42 },
-    ]), 'armorAccent', {
-      p: [0, 0, FRONT * fl * 0.06], r: [-6 * DEG, 0, 0], mirror, tier: TIER.PRIMARY,
-    });
-    rig.add(`toe_${S}`, bevelBox(fw * 1.12, 0.022, fl * 0.44, 0.005), 'rubber',
-      { p: [0, 0.026, FRONT * fl * 0.06], mirror, tier: TIER.SECONDARY });
-    // heel counter, tapering up and back into the ankle joint
+    ]), 'armorPrimary', { p: [0, 0, instepZ], mirror, tier: TIER.PRIMARY, role: 'boot' });
+    rig.add(`foot_${S}`, bevelBox(fw * 0.94, 0.016, instepD * 0.90, 0.005), 'rubber',
+      { p: [0, SOLE + 0.008, instepZ], mirror, tier: TIER.PRIMARY });
+    // Heel block, standing behind and above the instep and sweeping up into the
+    // ankle. It is the counter of a boot, not a wedge under one, so it carries
+    // its own sole pad and its own top surface.
     rig.add(`foot_${S}`, loftHull([
-      { y: 0.004, w: fw * 0.94, d: fl * 0.30, round: 0.34 },
-      { y: 0.056, w: fw * 0.84, d: fl * 0.25, z: -FRONT * fl * 0.02, round: 0.30, smooth: true },
-      { y: 0.096, w: fw * 0.58, d: fl * 0.16, z: -FRONT * fl * 0.04, round: 0.44 },
-    ]), 'armorSecondary', { p: [0, 0, -FRONT * fl * 0.40], mirror, tier: TIER.PRIMARY });
-    // cleats
-    for (let i = 0; i < 3; i++) {
-      rig.add(`foot_${S}`, bevelBox(fw * 1.1, 0.012, 0.022, 0.004), 'darkMetal',
-        { p: [0, -0.026, FRONT * (fl * 0.26 - i * fl * 0.26)], mirror, tier: TIER.GREEBLE });
+      { y: SOLE, w: fw * 0.86, d: fl * 0.40, round: 0.38 },
+      { y: SOLE + 0.054, w: fw * 0.90, d: fl * 0.44, z: -FRONT * fl * 0.02, round: 0.44, smooth: true },
+      { y: SOLE + 0.116, w: fw * 0.60, d: fl * 0.28, z: -FRONT * fl * 0.06, round: 0.52 },
+    ]), 'armorSecondary', {
+      p: [0, 0, -FRONT * fl * 0.34], mirror, tier: TIER.PRIMARY, role: 'boot',
+    });
+    rig.add(`foot_${S}`, bevelBox(fw * 0.84, 0.016, fl * 0.38, 0.005), 'rubber',
+      { p: [0, SOLE + 0.008, -FRONT * fl * 0.34], mirror, tier: TIER.SECONDARY });
+    // Three toe plates with real gaps between them, each with its own pad, so
+    // the splits run all the way to the floor. This is the cheapest separation
+    // anywhere on the model — three small lofts in place of one big one — and it
+    // is the whole difference between a boot and a slipper at silhouette size.
+    // The middle plate takes the accent so the break reads even in shadow.
+    for (let i = -1; i <= 1; i++) {
+      rig.add(`toe_${S}`, loftHull([
+        { y: toeSole, w: fw * 0.26, d: fl * 0.50, round: 0.44 },
+        { y: toeSole + 0.034, w: fw * 0.28, d: fl * 0.52, z: FRONT * fl * 0.01, round: 0.48, smooth: true },
+        { y: toeSole + 0.062, w: fw * 0.19, d: fl * 0.34, z: FRONT * fl * 0.05, round: 0.54 },
+      ]), i === 0 ? 'armorAccent' : 'armorPrimary', {
+        p: [i * fw * 0.33, 0, FRONT * fl * 0.02], r: [0, i * -7 * DEG, 0], mirror,
+        tier: TIER.PRIMARY, role: 'boot',
+      });
+      rig.add(`toe_${S}`, bevelBox(fw * 0.26, 0.014, fl * 0.48, 0.004), 'rubber',
+        { p: [i * fw * 0.33, toeSole + 0.007, FRONT * fl * 0.02], mirror, tier: TIER.SECONDARY });
+    }
+    // Cleats, at the depth they have always been: 2 mm under the sole plane, so
+    // the lowest point of the built mesh — which is what the runtime grounds the
+    // fighter on — is exactly where it was before the boot was rebuilt.
+    for (let i = 0; i < 2; i++) {
+      rig.add(`foot_${S}`, bevelBox(fw * 0.86, 0.012, 0.020, 0.004), 'darkMetal',
+        { p: [0, SOLE + 0.004, instepZ - FRONT * (instepD * 0.24 - i * instepD * 0.48)], mirror, tier: TIER.GREEBLE });
     }
     if (splay) {
+      // Outriggers, one either side of the instep. 0.60 rather than the old
+      // 0.72: the inboard one is thrown toward the fighter's centreline, and at
+      // 0.72 of a boot width it crossed x = 0 in the rest pose — two of them,
+      // one per foot, 14 mm apart and closing on any stance narrower than the
+      // hip spacing.
       for (const o of [-1, 1]) {
         rig.add(`foot_${S}`, loftHull([
-          { y: -0.014, w: fw * 0.34, d: fl * 0.50, round: 0.36 },
-          { y: 0.020, w: fw * 0.30, d: fl * 0.44, round: 0.32, smooth: true },
-          { y: 0.046, w: fw * 0.18, d: fl * 0.28, round: 0.44 },
+          { y: SOLE + 0.012, w: fw * 0.32, d: fl * 0.44, round: 0.38 },
+          { y: SOLE + 0.046, w: fw * 0.28, d: fl * 0.40, round: 0.34, smooth: true },
+          { y: SOLE + 0.072, w: fw * 0.17, d: fl * 0.25, round: 0.46 },
         ]), 'armorSecondary', {
-          p: [o * fw * 0.72, 0.040, -FRONT * fl * 0.05], r: [0, 0, o * 14 * DEG], mirror, tier: TIER.SECONDARY,
+          p: [o * fw * 0.60, 0, instepZ], r: [0, 0, o * 14 * DEG], mirror, tier: TIER.SECONDARY,
         });
       }
     }
@@ -5086,8 +5692,8 @@ function buildLeg(rig, spec, side, sign, mirror) {
     { r: ankleW * 0.44, y: 0.02 }, { r: ankleW * 0.50, y: 0.0, smooth: true }, { r: ankleW * 0.50, y: -0.028 },
     { r: ankleW * 0.41, y: -0.044 },
   ], 20), 'trim', { p: [0, -0.01, 0], mirror, tier: TIER.SECONDARY });
-  rig.decal(`foot_${S}`, MARKINGS.HAZARD, fw * 0.9, 0.028, {
-    p: [0, 0.045, FRONT * (fl * 0.44)], r: [0, YAW_FRONT, 0], mirror, tier: TIER.GREEBLE,
+  rig.decal(`foot_${S}`, MARKINGS.HAZARD, fw * 0.8, 0.026, {
+    p: [0, SOLE + 0.070, FRONT * (fl * 0.30 + toeFwd * 0.30)], r: [0, YAW_FRONT, 0], mirror, tier: TIER.GREEBLE,
   });
 }
 
@@ -5259,14 +5865,23 @@ function buildMechanism(rig, spec) {
   const L = {
     thigh: Math.min(spec.legs.thigh * m.legK, m.hipSep * 0.92),
     shin: Math.min(spec.legs.shin * m.legK, m.hipSep * 0.80),
-    foot: spec.legs.foot * m.legS,
-    footW: Math.min(spec.legs.footW * m.legK, m.hipSep * 0.80),
+    // Same trim as `buildLeg` applies, and for the same reason it lives at
+    // module scope: the ankle ram and the ankle loom both anchor on the boot.
+    foot: spec.legs.foot * m.legS * bootTrim(spec.legs.plan),
+    footW: Math.min(spec.legs.footW * m.legK, m.hipSep * 0.80) * BOOT_WIDTH_TRIM,
   };
   const back = -FRONT; // +1 toward the robot's back in local Z terms
   const k = spec.bulk; // a brute's hydraulics are visibly fatter than a scout's
 
   // Every anchor below is a fraction of a measured segment, never a literal
   // metre value — a ram that does not follow its bone is a ram that floats.
+  //
+  // The limb-side fractions were tuned against constant-width prisms whose
+  // surface sat at ~0.75 of the segment dimension everywhere. The limbs are now
+  // anatomical ovoids that neck to 0.48–0.62 near the joints, so an anchor that
+  // used to sit just proud of the armour ends up 4 cm out in clear air with its
+  // clevis bracket hanging off nothing. Each one below has been re-solved
+  // against the station the anchor's own y lands on.
 
   // waist actuators (twin, either side of the spine)
   for (const { sign } of SIDES) {
@@ -5281,23 +5896,23 @@ function buildMechanism(rig, spec) {
     // shoulder — anchored on the clavicle just above and behind the ball joint,
     // so the ram sweeps with the arm instead of collapsing across the pivot
     rig.actuator(`clavicle_${s}`, [sign * 0.155 * m.armS, 0.105 * m.armS, back * 0.10],
-      `shoulder_${s}`, [0, -m.upper * 0.55, back * a.upper * 1.0], { radius: 0.020 * k });
+      `shoulder_${s}`, [0, -m.upper * 0.55, back * a.upper * 0.74], { radius: 0.020 * k });
     // elbow
-    rig.actuator(`shoulder_${s}`, [sign * a.upper * 0.40, -m.upper * 0.69, back * a.upper * 0.80],
-      `elbow_${s}`, [sign * a.fore * 0.40, -m.fore * 0.31, back * a.fore * 0.80], { radius: 0.018 * k });
+    rig.actuator(`shoulder_${s}`, [sign * a.upper * 0.34, -m.upper * 0.69, back * a.upper * 0.56],
+      `elbow_${s}`, [sign * a.fore * 0.34, -m.fore * 0.31, back * a.fore * 0.62], { radius: 0.018 * k });
     // wrist
-    rig.actuator(`elbow_${s}`, [sign * a.fore * 0.55, -m.fore * 0.63, back * a.fore * 0.60],
-      `wrist_${s}`, [sign * a.fore * 0.42, 0.0, back * a.fore * 0.55], { radius: 0.012 * k, rodRatio: 0.5 });
+    rig.actuator(`elbow_${s}`, [sign * a.fore * 0.40, -m.fore * 0.63, back * a.fore * 0.46],
+      `wrist_${s}`, [sign * a.fore * 0.34, 0.0, back * a.fore * 0.44], { radius: 0.012 * k, rodRatio: 0.5 });
     // hip
     rig.actuator('hips', [sign * t.pelvisW * 0.50, m.lumbar * 0.14, back * t.waistD * 0.44],
-      `hip_${s}`, [sign * L.thigh * 0.78, -m.thigh * 0.34, back * L.thigh * 0.62], { radius: 0.022 * k });
+      `hip_${s}`, [sign * L.thigh * 0.64, -m.thigh * 0.34, back * L.thigh * 0.62], { radius: 0.022 * k });
     // knee
     // front-mounted so flexion EXTENDS it: the knee folds backwards, so a rear
     // ram would collapse into its own housing
-    rig.actuator(`hip_${s}`, [sign * L.thigh * 0.80, -m.thigh * 0.57, -back * L.thigh * 0.60],
-      `knee_${s}`, [sign * L.shin * 0.80, -m.shin * 0.31, -back * L.shin * 0.62], { radius: 0.022 * k });
+    rig.actuator(`hip_${s}`, [sign * L.thigh * 0.60, -m.thigh * 0.57, -back * L.thigh * 0.60],
+      `knee_${s}`, [sign * L.shin * 0.62, -m.shin * 0.31, -back * L.shin * 0.62], { radius: 0.022 * k });
     // ankle
-    rig.actuator(`knee_${s}`, [sign * L.shin * 0.60, -m.shin * 0.64, back * L.shin * 0.74],
+    rig.actuator(`knee_${s}`, [sign * L.shin * 0.46, -m.shin * 0.64, back * L.shin * 0.56],
       `foot_${s}`, [sign * L.footW * 0.52, 0.04, back * L.foot * 0.34], { radius: 0.016 * k, rodRatio: 0.5 });
   }
 
@@ -5326,16 +5941,16 @@ function buildMechanism(rig, spec) {
     }
     rig.cable('chest', [sign * t.chestW * 0.26, m.collar * 0.10, back * t.chestD * 0.44],
       `shoulder_${s}`, [0, -m.upper * 0.48, back * a.upper * 0.55], { sag: 0.020, radius: 0.0072 * k * fat, strands: braid });
-    rig.cable(`shoulder_${s}`, [sign * a.upper * 0.5, -m.upper * 0.76, back * a.upper * 0.7],
+    rig.cable(`shoulder_${s}`, [sign * a.upper * 0.42, -m.upper * 0.76, back * a.upper * 0.50],
       `elbow_${s}`, [sign * a.fore * 0.5, -m.fore * 0.22, back * a.fore * 0.7], { sag: 0.022, radius: 0.0065 * k * fat, strands: braid });
     rig.cable('hips', [sign * t.pelvisW * 0.34, -0.02, back * t.waistD * 0.55],
-      `hip_${s}`, [sign * L.thigh * 0.5, -m.thigh * 0.41, back * L.thigh * 0.85], { sag: 0.025, radius: 0.0072 * k * fat, strands: braid });
+      `hip_${s}`, [sign * L.thigh * 0.5, -m.thigh * 0.41, back * L.thigh * 0.72], { sag: 0.025, radius: 0.0072 * k * fat, strands: braid });
     if (loom >= 3) {
-      rig.cable(`hip_${s}`, [sign * L.thigh * 0.55, -m.thigh * 0.68, back * L.thigh * 0.9],
-        `knee_${s}`, [sign * L.shin * 0.55, -m.shin * 0.24, back * L.shin * 0.9], { sag: 0.022, radius: 0.0065 * k * fat, strands: braid });
+      rig.cable(`hip_${s}`, [sign * L.thigh * 0.48, -m.thigh * 0.68, back * L.thigh * 0.62],
+        `knee_${s}`, [sign * L.shin * 0.50, -m.shin * 0.24, back * L.shin * 0.74], { sag: 0.022, radius: 0.0065 * k * fat, strands: braid });
     }
     if (loom >= 5) {
-      rig.cable(`knee_${s}`, [sign * L.shin * 0.45, -m.shin * 0.79, back * L.shin * 0.75],
+      rig.cable(`knee_${s}`, [sign * L.shin * 0.32, -m.shin * 0.79, back * L.shin * 0.40],
         `foot_${s}`, [sign * L.footW * 0.40, 0.03, back * L.foot * 0.25], { sag: 0.015, radius: 0.0058 * k, strands: 2 });
     }
     // neck loom
