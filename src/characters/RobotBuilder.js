@@ -2752,12 +2752,18 @@ function buildTorso(rig, spec, def) {
     });
   }
 
-  // gorget / collar ring — bridges the deck to the neck column
+  // gorget / collar ring — bridges the deck to the neck column, and stops at
+  // `GORGET_TOP` so the ribbed column above it is visible rather than sleeved.
+  // See the constant: this ring and the head's clearance solve are the two ends
+  // of one gap and are authored against the same number.
   const gr = P.yoke.w * 0.26;
+  const gh = m.collar * 0.30;
   rig.add('chest', latheProfile([
-    { r: gr * 0.86, y: 0.0 }, { r: gr, y: 0.018, smooth: true }, { r: gr, y: m.collar * 0.26 },
-    { r: gr * 0.86, y: m.collar * 0.33 }, { r: gr * 0.74, y: m.collar * 0.33 }, { r: gr * 0.74, y: 0.0 },
-  ], 20), 'darkMetal', { p: [0, m.collar * 0.62, 0.005 + rz(m.collar * 0.62)], tier: TIER.PRIMARY });
+    { r: gr * 0.86, y: 0.0 }, { r: gr, y: 0.018, smooth: true }, { r: gr, y: gh * 0.78 },
+    { r: gr * 0.84, y: gh }, { r: gr * 0.70, y: gh }, { r: gr * 0.70, y: 0.0 },
+  ], 20), 'darkMetal', {
+    p: [0, m.collar * GORGET_TOP - gh, 0.005 + rz(m.collar * GORGET_TOP - gh)], tier: TIER.PRIMARY,
+  });
 
   // clavicle yokes
   for (const { s, sign, mirror } of SIDES) {
@@ -3688,68 +3694,267 @@ function shoulderLineY(rig, spec) {
 
 /** Head-local Y of the lowest point of every skull authored below. */
 const HEAD_JAW = -0.05;
+/** Head-local Y of the crown of every skull authored below; crests go above. */
+const HEAD_CROWN = 0.15;
+
+/**
+ * Top of the chest's gorget ring, as a fraction of the neck bone's length.
+ *
+ * Shared with `buildTorso`, which draws the ring, because the two ends of the
+ * same gap cannot be authored independently. It used to stop at 0.95 — five
+ * millimetres short of the neck joint — which meant the collar reached the jaw
+ * and there was nothing between them to see. §1.7 makes the exposed neck a
+ * defining element of all eight sheets, so the ring gives back a sixth of its
+ * height and the head clearance solve holds the rest of the gap open.
+ */
+const GORGET_TOP = 0.86;
+/** Column that must stay exposed above the gorget, in neck-bone lengths. */
+const NECK_SHOW = 0.30;
+
+/**
+ * The canonical skull envelope, in authoring units before the head scale.
+ *
+ * Every one of the ten styles is authored inside this box. That is the whole
+ * mechanism behind §1.2's "the head is small": a style cannot quietly grow by
+ * writing bigger literals, because the literals it writes are fractions of
+ * these three numbers.
+ *
+ * The proportions are read off the sheets rather than chosen: a head is TALLER
+ * than it is wide and DEEPER than it is wide. Measured on the build before this
+ * change, five of the ten were the other way round — bastion 0.348 wide against
+ * 0.179 tall, ronin 0.396 against 0.222 — which is exactly why §2.4 calls the
+ * heads cubes. w/h 0.69 and d/h 0.86 is an egg; 1.94 is a brick.
+ */
+const SKULL = { h: HEAD_CROWN - HEAD_JAW, w: 0.138, d: 0.172 };
+
+/**
+ * Body heights per head height, by chassis.
+ *
+ * §1.2 puts the reference cast between 5.5 and 8 heads and the head at "~1/6 of
+ * total height even on the heavies". Measured on the built mesh before this
+ * change, the cast ran 4.98 (nyx) to 7.75 (vulkan) body-heights per head's
+ * LARGEST dimension — five fighters carrying a head bigger than a sixth of
+ * themselves. Nothing here is allowed above 1/7 now, and the heavies sit at the
+ * large end of the band because that is what reads as mass: a small head on a
+ * wide chassis is the oldest trick there is for making a machine look big.
+ */
+const HEADS_TALL = { brute: 7.0, heavy: 7.3, precision: 7.5, agile: 7.9, arcane: 7.9 };
+
+/**
+ * Uniform author-space scale for the skull.
+ *
+ * Deliberately NOT `proportions.head * constant`, which is what it used to be.
+ * That multiplier scales the head BONE CHAIN, and the roster's values run the
+ * wrong way for stature — 1.12 on nyx, the tallest slim frame, against 0.9 on
+ * vulkan at 2.02 m — so applying it raw made the smallest fighters wear the
+ * biggest skulls. Sizing off `headTop`'s rest height instead makes the head a
+ * fraction of the body, which is what a proportion is. The roster multiplier is
+ * still in there: it moves `headTop` too, so a 1.12 head is about 2% larger
+ * than a 0.9 one on the same frame instead of 24% larger.
+ */
+function headScale(rig, def) {
+  const stature = rig.restPos.headTop?.y ?? 1.91;
+  return stature / ((HEADS_TALL[def?.chassis] ?? HEADS_TALL.precision) * SKULL.h);
+}
+
+/**
+ * The exposed neck: a dark ribbed column with a cable pair on it, standing in
+ * clear air between the gorget and the jaw.
+ *
+ * §1.3 makes this the first item on the underskin list — "the neck: always
+ * exposed, always ribbed or cabled, never covered" — and §1.7 makes it part of
+ * the head plan. What was here was a smooth `gasket` cylinder with two blade
+ * guards: a column, but a turned one, and at fighting distance a smooth dark
+ * cylinder under a jaw reads as shadow rather than as mechanism. Rings read.
+ * They draw their own horizontal lines, they survive being four pixels wide,
+ * and they are what says the joint can pitch.
+ *
+ * Built in two halves because the head is LIFTED off its bone by the clearance
+ * solve: the lower half is on `neck` and stays with the shoulders, the upper
+ * half is on `head` and rises with the skull, and they overlap so no amount of
+ * lift can open a hole between them.
+ *
+ * @param {Rig} rig
+ * @param {number} lift metres the skull is raised by the clearance solve
+ * @param {number} k skull author scale, for the jaw the riser has to reach
+ */
+function buildNeck(rig, lift, k) {
+  const m = rig.dim;
+  const seg = rig.maxTier >= 2 ? 18 : 12;
+  // Slimmer than the 0.048 it replaces. The old column was thick enough to fill
+  // the gorget bore, so shortening the gorget would have revealed nothing but
+  // more of the same diameter; a neck has to be visibly narrower than the throat
+  // it comes out of or the taper never registers.
+  const nr = 0.042 * m.torsoK;
+
+  // ZONE 2 (matte composite). The core the rings are stacked on. A mirror here
+  // put a second bright brushed streak directly under the jaw and flattened the
+  // whole head into the shoulder — see the zone note in Materials.js.
+  const bot = -m.collar * 0.26;
+  const top = m.nape * 1.04;
+  rig.add('neck', latheProfile([
+    { r: nr * 0.84, y: bot },
+    { r: nr * 0.94, y: bot * 0.35, smooth: true },
+    { r: nr * 0.90, y: top * 0.55, smooth: true },
+    { r: nr * 0.82, y: top },
+  ], seg), 'gasket', { tier: TIER.PRIMARY });
+  // PRIMARY, not SECONDARY: the ribs are the silhouette of the neck, and a neck
+  // that loses them at LOD1 goes back to being the smooth cylinder this replaces.
+  rig.ribStack('neck', {
+    count: 4, r0: nr * 0.97, r1: nr * 0.88,
+    y0: bot + m.collar * 0.06, y1: top - m.nape * 0.14,
+    h: 0.010 * m.torsoK, deep: 1.05, mat: 'darkMetal', tier: TIER.PRIMARY,
+  });
+
+  // Riser: the half of the column that follows the skull. Authored OUTSIDE the
+  // lift (it is placed on the unlifted bone) but reaching UP TO the lifted jaw,
+  // so its length absorbs the clearance solve instead of a gap doing it.
+  const rr = (0.044 + lift * 0.14) * m.torsoK;
+  const jaw = lift + HEAD_JAW * k + 0.012;
+  rig.add('head', latheProfile([
+    { r: rr * 0.84, y: -m.nape * 0.72 },
+    { r: rr * 0.92, y: -m.nape * 0.30, smooth: true },
+    { r: rr * 0.80, y: jaw - 0.030, smooth: true },
+    { r: rr * 0.96, y: jaw - 0.014, smooth: true },
+    { r: rr * 0.90, y: jaw },
+  ], seg), 'gasket', { tier: TIER.PRIMARY });
+  rig.ribStack('head', {
+    count: 3, r0: rr * 0.96, r1: rr * 0.84,
+    y0: -m.nape * 0.52, y1: jaw - 0.034,
+    h: 0.010 * m.torsoK, deep: 1.05, mat: 'darkMetal', tier: TIER.PRIMARY,
+  });
+
+  // The cable pair. Rigid conduits rather than the soft loom in
+  // `buildMechanism`, because these two have to be there at every LOD and from
+  // every angle: they are half of what "cabled neck" means in §1.7. They run up
+  // the back quarters, which is where every sheet puts them and where a head
+  // turn hides them least.
+  for (const { sign, mirror } of SIDES) {
+    rig.add('head', latheProfile([
+      { r: 0.0090, y: -m.nape * 0.62 },
+      { r: 0.0105, y: -m.nape * 0.10, smooth: true },
+      { r: 0.0085, y: jaw - 0.006 },
+    ], rig.maxTier >= 2 ? 9 : 6), 'rubber', {
+      p: [sign * rr * 0.82, 0, -FRONT * rr * 0.62], r: [0, 0, sign * -4 * DEG],
+      mirror, tier: TIER.PRIMARY, role: 'frame',
+    });
+  }
+  rig.glow('head', loftHull([
+    { y: -m.nape * 0.34, w: 0.011, d: 0.009, round: 0.5 },
+    { y: jaw - 0.022, w: 0.009, d: 0.007, round: 0.5 },
+  ]), 'spine', { p: [0, 0, -FRONT * (rr * 0.86)] });
+}
 
 function buildHead(rig, spec, def) {
   const m = rig.dim;
-  // Neck column: spans from inside the gorget up into the riser, so however far
-  // the `torso` multiplier pushes the head there is never bare air at the collar.
-  const nr = 0.048 * m.torsoK;
-  rig.add('neck', latheProfile([
-    { r: nr * 0.96, y: -m.collar * 0.22 }, { r: nr * 1.06, y: -m.collar * 0.06, smooth: true },
-    { r: nr * 0.88, y: m.nape * 0.46 }, { r: nr * 1.02, y: m.nape * 0.70, smooth: true },
-    { r: nr * 0.94, y: m.nape * 1.04 },
-    // ZONE 2 (matte composite). A neck that pitches and yaws under armour is
-    // sleeved in a bellows on every real machine, and it is the one surface in
-    // this frame directly behind the face: a mirror there put a second bright
-    // brushed streak immediately under the jaw and flattened the whole head into
-    // the shoulder. See the zone note in Materials.js.
-  ], 16), 'gasket', { tier: TIER.PRIMARY });
-  rig.add('neck', bevelBox(0.10 * m.torsoK, 0.05, 0.09 * m.torsoK, 0.010, { topX: 0.8 }), 'armorSecondary',
-    { p: [0, m.nape * 0.24, -FRONT * 0.012], tier: TIER.SECONDARY });
-
-  // The head shapes are authored at reference size; `scaled` applies the
-  // roster's head multiplier to their placement as well as their geometry, the
-  // same way the bone hierarchy applies it to `head` and `headTop`.
-  const k = m.headK * 1.16;
+  const k = headScale(rig, def);
 
   // Clearance solve. `lift` is a distance in metres, not a proportion, so it is
   // applied unscaled — the head sits exactly far enough above the pauldrons for
   // the whole skull to be sky, whatever this character's arms multiplier did.
   const headAboveChest = rig.restPos.head.y - rig.restPos.chest.y;
-  const want = shoulderLineY(rig, spec) - 0.014;
-  // Capped: past about seven centimetres the riser stops reading as a neck and
-  // starts reading as a giraffe, the pauldron cap has already fallen away toward
-  // the spine by then, and the camera's headroom above `headTop` is finite.
-  const lift = Math.min(0.075, Math.max(0, want - (headAboveChest + HEAD_JAW * k)));
+  const clear = shoulderLineY(rig, spec) - 0.014;
+  // Second floor, new with the exposed neck: the jaw also has to stand clear of
+  // the GORGET by `NECK_SHOW`, or the ribbed column is built and then buried.
+  // Measured on the build before this change, the front collar came within
+  // 8 mm of the chin on five fighters and 208 mm ABOVE it on bastion.
+  const throat = (rig.restPos.chest.y - rig.restPos.head.y) + m.collar * GORGET_TOP + m.collar * NECK_SHOW;
+  // Capped: past about nine centimetres the riser stops reading as a neck and
+  // starts reading as a giraffe, and the camera's headroom above `headTop` is
+  // finite. The cap is up from 0.075 because the skull it has to clear is now
+  // roughly a third smaller and buys back the room.
+  const lift = clamp(Math.max(clear - (headAboveChest + HEAD_JAW * k), throat - HEAD_JAW * k), 0, 0.095);
 
-  // Neck riser: the visible column the skull stands on. Authored in metres in
-  // the head's own frame so it always reaches from the collar to the jaw, and
-  // thickened with its own length so a tall one never reads as a drinking straw.
-  const rr = (0.050 + lift * 0.16) * m.torsoK;
-  const top = lift + HEAD_JAW * k + 0.012;
-  rig.add('head', latheProfile([
-    { r: rr * 0.80, y: -m.nape * 0.70 },
-    { r: rr * 0.94, y: -m.nape * 0.34, smooth: true },
-    { r: rr * 0.74, y: top - 0.052 },
-    { r: rr * 0.74, y: top - 0.030 },
-    { r: rr * 0.96, y: top - 0.020, smooth: true },
-    { r: rr * 0.92, y: top },
-  ], 16), 'gasket', { tier: TIER.PRIMARY });
-  // spine of the riser, and a pair of guards that keep it from reading as a pipe
-  for (const { sign, mirror } of SIDES) {
-    rig.add('head', loftHull([
-      { y: -m.nape * 0.5, w: 0.022, d: 0.052, round: 0.4 },
-      { y: top - 0.020, w: 0.018, d: 0.040, round: 0.4 },
-    ]), 'trim', { p: [sign * rr * 0.88, 0, -FRONT * 0.006], r: [0, 0, sign * -3 * DEG], mirror, tier: TIER.SECONDARY });
-  }
-  rig.glow('head', loftHull([
-    { y: -m.nape * 0.3, w: 0.012, d: 0.010, round: 0.5 },
-    { y: top - 0.030, w: 0.010, d: 0.008, round: 0.5 },
-  ]), 'spine', { p: [0, 0, -FRONT * (rr * 0.78)] });
+  buildNeck(rig, lift, k);
 
   rig.lifted(lift, () => rig.scaled(k, () => {
     (HEAD_BUILDERS[spec.head] ?? headFurnace)(rig, spec, def);
   }));
+}
+
+/**
+ * The DOMED plan (§1.7): an egg. Widest at the temples, tapering to a rounded
+ * chin with no jaw line and no mouth, deeper than it is wide, and smooth the
+ * whole way round — the incident on a domed head is the optic and nothing else.
+ *
+ * One lathe, because a lathe is the only primitive here that produces a
+ * genuinely continuous surface: the four styles built on this plan are the ones
+ * whose sheets (`volt-monk`, `vesper`, `ghostframe`, `atlas-7`) have no seam on
+ * the crown at all.
+ */
+function domeSkull(rig, o = {}) {
+  const w = o.w ?? SKULL.w, d = o.d ?? SKULL.d;
+  const jaw = o.jaw ?? HEAD_JAW, crown = o.crown ?? HEAD_CROWN;
+  const H = crown - jaw, r = w * 0.5;
+  return rig.add('head', latheProfile([
+    { r: r * 0.26, y: jaw },
+    { r: r * 0.72, y: jaw + H * 0.16, smooth: true },
+    { r: r * 0.97, y: jaw + H * 0.40, smooth: true },
+    { r: r * 1.00, y: jaw + H * 0.58, smooth: true },
+    { r: r * 0.87, y: jaw + H * 0.80, smooth: true },
+    { r: r * 0.48, y: crown - H * 0.07, smooth: true },
+    { r: 0, y: crown },
+  ], rig.maxTier >= 2 ? 26 : 14), o.mat ?? 'armorPrimary', {
+    s: [1, 1, d / w], p: [0, 0, o.z ?? 0], tier: TIER.PRIMARY,
+  });
+}
+
+/**
+ * The HELMETED plan (§1.7): a smooth bowl, a brow band standing proud across
+ * the front of it, and a pair of cheek plates that stop short of meeting under
+ * the chin. Three parts with air between them, which is the same armour-gap-
+ * mechanism reading §1.3 asks for everywhere else, applied to a head.
+ *
+ * The bowl is a loft rather than a lathe so the four helmeted styles can be
+ * asymmetric front-to-back (a kabuto is deep at the nape, a bunker is deep at
+ * the brow) without any of them going back to being a box: `round` is 0.88–0.96
+ * at every station, where the old heads sat at 0.10–0.34 and shaded as planes.
+ */
+function helmSkull(rig, o = {}) {
+  const w = o.w ?? SKULL.w, d = o.d ?? SKULL.d;
+  const jaw = o.jaw ?? HEAD_JAW, crown = o.crown ?? HEAD_CROWN;
+  const H = crown - jaw;
+  const nose = o.nose ?? 0;    // how far the face is pushed forward of the crown
+  const band = o.band ?? 0.52; // brow height as a fraction of the skull
+  rig.add('head', loftHull([
+    { y: jaw, w: w * 0.60, d: d * 0.62, z: FRONT * nose * 0.6, round: 0.92 },
+    { y: jaw + H * 0.22, w: w * 0.92, d: d * 0.94, z: FRONT * nose, round: 0.92, smooth: true },
+    { y: jaw + H * 0.52, w: w * 1.00, d: d * 1.00, z: FRONT * nose * 0.7, round: 0.90, smooth: true },
+    { y: jaw + H * 0.80, w: w * 0.90, d: d * 0.90, z: 0, round: 0.92, smooth: true },
+    { y: crown, w: w * 0.52, d: d * 0.54, z: -FRONT * nose * 0.3, round: 0.94 },
+  ], { perQuad: rig.maxTier >= 2 ? 5 : 3 }), o.mat ?? 'armorPrimary', { tier: TIER.PRIMARY });
+
+  // Brow band: a swept shell across the front quarters, standing off the bowl so
+  // the optic sits in its shadow. `shellLathe` and not a box — this is the part
+  // that used to be a `bevelBox` riot lip 0.256 m wide on bastion.
+  const by = jaw + H * band;
+  // 0.53 rather than 0.50: three per cent proud of the bowl is four millimetres
+  // at this scale, which is a shadow line under a top key and nothing more. At
+  // half the depth as well it became a hoop standing off the head.
+  const br = w * 0.53;
+  rig.add('head', shellLathe([
+    { r: br * 0.90, y: -H * 0.10 },
+    { r: br * 1.00, y: 0, smooth: true },
+    { r: br * 0.92, y: H * 0.09 },
+  ], H * 0.055, rig.maxTier >= 2 ? 16 : 10, { arc: (o.bandArc ?? 168) * DEG, phase: (90 - (o.bandArc ?? 168) * 0.5) * DEG }),
+  o.bandMat ?? 'armorSecondary', {
+    p: [0, by, FRONT * nose * 0.6], s: [1, 1, d / w], r: [0, YAW_FRONT, 0], tier: TIER.PRIMARY,
+  });
+
+  // Cheek plates. They leave the underside of the skull open — that gap is where
+  // the neck rings show from the side, and it is the only thing that stops a
+  // helmet reading as a bucket.
+  if (o.cheeks !== false) {
+    for (const { sign, mirror } of SIDES) {
+      rig.add('head', loftHull([
+        { y: jaw + H * 0.44, w: w * 0.20, d: d * 0.62, round: 0.60 },
+        { y: jaw + H * 0.16, w: w * 0.22, d: d * 0.66, round: 0.55, smooth: true },
+        { y: jaw - H * 0.10, w: w * 0.14, d: d * 0.44, round: 0.62 },
+      ]), o.cheekMat ?? 'armorSecondary', {
+        p: [sign * w * 0.44, 0, FRONT * nose * 0.35], r: [0, 0, sign * 9 * DEG], mirror, tier: TIER.PRIMARY,
+      });
+    }
+  }
 }
 
 /**
