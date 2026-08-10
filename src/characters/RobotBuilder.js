@@ -2271,6 +2271,13 @@ const bootTrim = (plan) => BOOT_TRIM[plan] ?? BOOT_TRIM.plantigrade;
  * for: the torso is 40% of the silhouette's area, so two fighters whose torso
  * profiles differ cannot read as one another however similar their limbs are.
  *
+ * The WIDTH half of each pair is now read as a *relative* opinion:
+ * `torsoStations` normalises the chest / waist / pelvis relationship into the
+ * band §1.2 gives for the fighter's frame class (see `PLAN_FRAME`) and uses
+ * these numbers only to order the cast inside it. The DEPTH half is taken
+ * literally and is untouched, which is why a keel is still a wedge and a
+ * carapace still a horizontal mass.
+ *
  *   round   corner radius of the cross-section, as a fraction of the smaller
  *           half-extent. 0.10 is a machined box, 0.95 is a cylinder. Nothing
  *           else here changes the read as cheaply.
@@ -2535,11 +2542,17 @@ function chassisFor(def) {
  *
  * Neighbouring plates read the SAME entry where they meet, so the column tapers
  * continuously from pelvis to collar instead of stepping between four boxes of
- * unrelated width. Every station is a width/depth pair in metres, and the body
- * mass named in `def.build.torso` multiplies each one independently — which is
- * what lets a barrel put its mass at the waist and a hunch put the same mass on
- * the shoulder deck without either becoming merely a bigger version of the
- * other.
+ * unrelated width. Every station is a width/depth pair in metres.
+ *
+ * It is built in two layers, and the split is the point. The body mass named in
+ * `def.build.torso` multiplies each station independently, which is what keeps
+ * ten fighters from being one another at different scales; then §1.2 of the
+ * visual target is applied over the top, which is what keeps any of them from
+ * being a shape no reference sheet contains. Left to the first layer alone the
+ * cast ran from a waist 0.29 of its chest to one 1.10 of it — five fighters
+ * wasp-waisted past caricature and two whose waist was the widest thing on
+ * them. The plan still decides where a fighter sits INSIDE its frame class's
+ * band; it no longer decides whether the band applies.
  */
 function torsoStations(spec) {
   const t = spec.torso;
@@ -2961,10 +2974,18 @@ function buildTorso(rig, spec, def) {
   // rim disappears under the pauldron rather than ending in mid-air.
   //
   // The sweep is circular and then squashed on Z to the chest's own depth
-  // ratio, which is how a lathe wraps a torso that is not round. `R` grows as
-  // the plan's corner radius falls: on a hard-cornered cuirass an inscribed
-  // ellipse would sit INSIDE the ribcage's corners for most of its arc and the
-  // plate would only show at the front.
+  // ratio, which is how a lathe wraps a torso that is not round.
+  //
+  // `R` grows as the plan's corner radius falls, and the amount is a
+  // compromise rather than a solve. In the shell's own pre-squash frame the
+  // ribcage is a rounded square of half-extent `cw/2`, whose boundary sits at
+  // `(1 - rnd) / max(|cos|,|sin|) + rnd` of that — 1.35 at the 44° middle of a
+  // hard-cornered plan and 1.09 at 65°. Clearing the middle would put the
+  // sternum end of the pectoral 35% proud of the chest, which is a fin. So the
+  // standoff clears the INBOARD third and the outboard end of the shell sinks
+  // into the breastplate on the boxy plans — which is what `paladin` and
+  // `neon-ronin` actually show: a raised pectoral either side of the centre
+  // line fading into a flat cuirass at the armpit.
   const pecR = cw * 0.5 * (1.02 + (1 - rnd) * 0.10);
   const pecH = ch * 0.66;
   const pecY = m.collar * 0.08;
@@ -3694,26 +3715,34 @@ function buildTorsoMass(rig, spec, P, rz) {
       break;
     }
     case 'wall': {
-      // Corridor guard: one flat frontal slab wider than the body carrying it,
-      // with a raised boss dead centre. It is a door, and it is meant to read
-      // as a door rather than as a torso.
-      const w = P.chest.w * 1.10;
+      // Corridor guard: a heraldic shield across the chest, broad at the
+      // shoulders and drawn to a point below the sternum, with a chevron rail
+      // along its top edge.
+      //
+      // It was one flat frontal slab 1.10 times the chest wide, 5 cm thick and
+      // 0.08 round — a door, deliberately, and the largest planar face in the
+      // cast. §1.1 allows flat only as a small deliberate facet, and §3 asks
+      // BASTION for `paladin`'s heraldic chest shield, which is a curved
+      // pressing that TAPERS: the whole reason the sheet's breastplate reads as
+      // armour is that its edges run diagonally down to a point instead of
+      // squaring off. Same footprint at the top, half the area, and it no
+      // longer buries the pectorals it is supposed to sit on.
+      const w = P.chest.w * 0.94;
       rig.add('chest', loftHull([
-        { y: -m.thorax * 0.56, w: w * 0.94, d: 0.050, round: 0.08 },
-        { y: 0, w, d: 0.058, round: 0.06, smooth: true },
-        { y: m.collar * 0.66, w: w * 0.96, d: 0.052, round: 0.08 },
-      ]), 'armorPrimary', {
-        p: [0, 0, FRONT * (P.chest.d * 0.50) + rz(0)], tier: TIER.PRIMARY,
+        { y: -m.thorax * 0.74, w: w * 0.15, d: 0.028, round: 0.5 },
+        { y: -m.thorax * 0.24, w: w * 0.70, d: 0.044, round: 0.34, smooth: true },
+        { y: m.collar * 0.20, w, d: 0.052, round: 0.24, smooth: true },
+        { y: m.collar * 0.58, w: w * 0.88, d: 0.038, round: 0.28 },
+      ], { perQuad: 4 }), 'armorPrimary', {
+        p: [0, 0, FRONT * (P.chest.d * 0.46) + rz(0)], r: [spec.plan.rake * DEG, 0, 0], tier: TIER.PRIMARY,
       });
-      rig.add('chest', latheProfile([
-        { r: 0, y: 0 }, { r: 0.086, y: 0 }, { r: 0.092, y: 0.020, smooth: true },
-        { r: 0.070, y: 0.052 }, { r: 0, y: 0.058 },
-      ], 22), 'trim', {
-        p: [0, m.collar * 0.06, FRONT * (P.chest.d * 0.50 + 0.028) + rz(0)], r: FACE_FRONT, tier: TIER.PRIMARY,
-      });
-      for (const sy of [-1, 1]) {
-        rig.add('chest', bevelBox(w * 1.02, 0.030, 0.070, 0.007), 'trim', {
-          p: [0, sy * m.thorax * 0.58, FRONT * (P.chest.d * 0.50 + 0.006) + rz(0)], tier: TIER.SECONDARY,
+      // The chevron. Two rails raked to follow the shield's shoulders rather
+      // than one horizontal bar across the whole body, which is the difference
+      // between a blazon and a packing crate.
+      for (const { sign, mirror } of SIDES) {
+        rig.add('chest', bevelBox(w * 0.56, 0.026, 0.052, 0.006), 'trim', {
+          p: [sign * w * 0.26, m.collar * 0.30, FRONT * (P.chest.d * 0.46 + 0.036) + rz(0)],
+          r: [spec.plan.rake * DEG, 0, sign * -14 * DEG], mirror, tier: TIER.SECONDARY,
         });
       }
       break;
@@ -5444,10 +5473,15 @@ function markFan(rig, spec) {
 
 /** RONIN-07 — two sheathed blades crossed at the small of the back. */
 function markScabbards(rig, spec) {
-  const t = spec.torso;
+  // Hung off the girdle's own station rather than off the raw chassis waist.
+  // §1.2's banding widened RONIN's pelvis by a fifth, and at the old literal
+  // the sheath roots and the belt frog holding them sat two centimetres inside
+  // the plate they are supposed to be strapped to.
+  const G = torsoStations(spec);
+  const bx = G.pelvis.w * 0.34, bz = -FRONT * (G.pelvis.d * 0.5 + 0.010);
   for (const { s, sign, mirror } of SIDES) {
     const len = 0.86 * rig.dim.torsoS;
-    const at = [sign * t.pelvisW * 0.30, 0.02, -FRONT * (t.waistD * 0.52)];
+    const at = [sign * bx, 0.02, bz];
     // sheath: a long slightly curved lacquered tube
     rig.add('hips', loftHull([
       { y: -len * 0.5, w: 0.030, d: 0.052, z: -FRONT * 0.014, round: 0.30 },
@@ -5458,12 +5492,12 @@ function markScabbards(rig, spec) {
       mirror, tier: TIER.PRIMARY, sprung: `cable_${s}`,
     });
     // tsuba and grip wrap at the hilt end, pointing up over the shoulder
-    const hx = sign * (t.pelvisW * 0.30 + Math.sin(58 * DEG) * len * 0.5);
+    const hx = sign * (bx + Math.sin(58 * DEG) * len * 0.5);
     const hy = 0.02 + Math.cos(58 * DEG) * len * 0.5;
     rig.add('hips', latheProfile([
       { r: 0, y: 0 }, { r: 0.044, y: 0 }, { r: 0.044, y: 0.010 }, { r: 0.030, y: 0.014 }, { r: 0, y: 0.014 },
     ], 20), 'trim', {
-      p: [hx, hy, -FRONT * (t.waistD * 0.52) + FRONT * 0.012],
+      p: [hx, hy, bz + FRONT * 0.012],
       r: [8 * DEG, sign * 8 * DEG, sign * -58 * DEG], order: 'YXZ',
       mirror, tier: TIER.PRIMARY, sprung: `cable_${s}`,
     });
@@ -5471,12 +5505,12 @@ function markScabbards(rig, spec) {
       { y: 0, w: 0.024, d: 0.030, round: 0.40 },
       { y: 0.150, w: 0.021, d: 0.026, round: 0.42 },
     ]), 'rubber', {
-      p: [hx, hy + 0.010, -FRONT * (t.waistD * 0.52) + FRONT * 0.012],
+      p: [hx, hy + 0.010, bz + FRONT * 0.012],
       r: [8 * DEG, sign * 8 * DEG, sign * -58 * DEG], order: 'YXZ',
       mirror, tier: TIER.PRIMARY, sprung: `cable_${s}`,
     });
     rig.glow('hips', bevelBox(0.010, 0.11, 0.010, 0.003), 'spine', {
-      p: [hx * 0.92, hy - 0.10, -FRONT * (t.waistD * 0.52) - FRONT * 0.020],
+      p: [hx * 0.92, hy - 0.10, bz - FRONT * 0.020],
       r: [8 * DEG, 0, sign * -58 * DEG], mirror, sprung: `cable_${s}`,
     });
   }
@@ -5484,8 +5518,8 @@ function markScabbards(rig, spec) {
   // leather, not polished steel like the tsuba and lacquered sheath either
   // side of it; ZONE 2 (matte composite) is what keeps it from taking the
   // same mirror highlight as the hardware it is holding.
-  rig.add('hips', bevelBox(t.pelvisW * 0.86, 0.046, 0.058, 0.008), 'gasket',
-    { p: [0, 0.010, -FRONT * (t.waistD * 0.50)], tier: TIER.PRIMARY });
+  rig.add('hips', bevelBox(G.pelvis.w * 0.80, 0.046, 0.058, 0.008), 'gasket',
+    { p: [0, 0.010, bz + FRONT * 0.010], tier: TIER.PRIMARY });
 }
 
 /** MANTIS — oversized raptorial forearms with a serrated inner edge. */
