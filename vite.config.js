@@ -12,6 +12,12 @@ const single = process.env.KB_SINGLEFILE === '1';
 export default defineConfig({
   base: './',
   plugins: single ? [viteSingleFile({ removeViteModuleLoader: true })] : [],
+  // The "no external host" rule above cannot be enforced by inlining alone:
+  // the analytics client fetches its own script from va.vercel-scripts.com at
+  // runtime, so a single-file build published anywhere else spends its first
+  // second on a request that a strict CSP answers with a console error. The
+  // build target is the only thing that knows, so it says so.
+  define: { __KB_SINGLEFILE__: JSON.stringify(single) },
   build: {
     target: 'es2022',
     outDir: single ? 'dist-single' : 'dist',

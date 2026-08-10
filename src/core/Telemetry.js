@@ -80,6 +80,11 @@ export class Telemetry {
   #shouldReport() {
     try {
       if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+      // The single-file build is the one that gets handed around — published as
+      // an Artifact, dropped on a share, opened from disk. It has no project to
+      // report to and its host's CSP will refuse the request anyway, so the only
+      // thing reporting buys there is an error in the player's console.
+      if (typeof __KB_SINGLEFILE__ !== 'undefined' && __KB_SINGLEFILE__) return false;
       if (navigator.webdriver) return false;                       // automation
       if (/HeadlessChrome/i.test(navigator.userAgent || '')) return false;
       const h = location.hostname;
