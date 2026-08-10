@@ -137,61 +137,69 @@ const main = async () => {
 
     console.log(`[scenecap] pair ${pi}: ${ids.join(' vs ')}`);
 
-    // The fight framing first: this is the only shot taken with the camera the
-    // player actually has, and it is where a silhouette collision shows up.
-    await page.evaluate(() => { window.KB.fightCamera?.cinematic?.(null); });
-    await sleep(1200);
+    // The fight framing first: the only shot taken with the camera the player
+    // actually has, and where a silhouette collision between the two shows up.
+    //
+    // Walk them to striking range before grabbing it. A round starts with the
+    // pair three and a half metres apart and the tracking rig frames the PAIR,
+    // so the default is a wide shot of an empty floor with two fighters on its
+    // edges -- both under a tenth of frame height, which is not a frame anyone
+    // can judge a character in.
+    await page.evaluate(() => {
+      const KB = window.KB;
+      const [a, b] = KB.fighters;
+      const mid = (a.position.x + b.position.x) * 0.5;
+      const s = Math.sign(a.position.x - b.position.x) || 1;
+      a.position.x = mid + s * 1.05;
+      b.position.x = mid - s * 1.05;
+    });
+    await sleep(1600);
     let f = resolve(OUT, `pair${pi}-${ids[0]}-vs-${ids[1]}-fight.png`);
     await grab(page, f); manifest.frames.push({ file: f, kind: 'fight', ids });
 
     for (let s = 0; s < 2; s++) {
-      // Portrait: the proportion and silhouette read, one fighter filling frame.
+      // Portrait and closeup are the rig's OWN framings and they are used with
+      // their own distance solving. Passing an explicit `dist` overrides the
+      // fit, which is how the first run of this tool photographed a fighter at
+      // a third of frame height; and passing a negative `yaw` for the
+      // right-hand fighter swung the lens round behind it, because yaw is
+      // already measured off that fighter's facing.
       await page.evaluate((side) => {
-        window.KB.fightCamera.cinematic('portrait', {
-          target: window.KB.fighters[side], dist: 4.2, yaw: side ? -0.6 : 0.6,
-        });
+        window.KB.fightCamera.cinematic('portrait', { target: window.KB.fighters[side] });
+        const hud = document.getElementById('ui');
+        if (hud) hud.style.visibility = 'hidden';
       }, s);
-      // Wait for the camera spring to arrive rather than guessing: it starts
-      // from wherever the last shot left it and can have metres to travel.
+      // Wait for the spring to arrive rather than guessing: it starts wherever
+      // the last shot left it and can have metres to travel.
       await until(page, `(() => {
         const KB = window.KB, THREE = KB.THREE, f = KB.fighters[${s}], cam = KB.camera;
         const box = new THREE.Box3().setFromObject(f.robot.group);
         const c = box.getCenter(new THREE.Vector3());
         const top = new THREE.Vector3(c.x, box.max.y, c.z).project(cam);
         const bot = new THREE.Vector3(c.x, box.min.y, c.z).project(cam);
-        return Math.abs(top.y - bot.y) / 2 > 0.45;
-      })()`, 30000, 700);
-      await sleep(700);
+        return Math.abs(top.y - bot.y) / 2 > 0.55;
+      })()`, 30000, 600);
+      await sleep(900);
       f = resolve(OUT, `pair${pi}-${ids[s]}-body.png`);
       await grab(page, f); manifest.frames.push({ file: f, kind: 'body', id: ids[s] });
 
       // Head and chest: where surfacing, panel scale, visor and the neck gap
-      // are actually legible.
+      // are actually legible. The rig solves the lens so the head fills frame
+      // and keeps the depth-of-field plane on it, which hand-parking the camera
+      // did not -- the first run's closeups were focused past the subject.
       await page.evaluate((side) => {
-        const KB = window.KB, THREE = KB.THREE, fg = KB.fighters[side], cam = KB.camera;
-        let head = null;
-        fg.robot.group.traverse((o) => { if (o.isBone && /head/i.test(o.name) && !head) head = o; });
-        const t = head.getWorldPosition(new THREE.Vector3());
-        const D = 1.5, face = fg.facing || 1;
-        const pos = new THREE.Vector3(t.x + face * D * 0.70, t.y + D * 0.28, t.z + D * 0.60);
-        KB.fightCamera.enabled = false;
-        cam.position.copy(pos); cam.lookAt(t); cam.updateMatrixWorld(true);
-        KB.cameraFocus = t.clone();
-        const hud = document.getElementById('ui');
-        if (hud) hud.style.visibility = 'hidden';
-        window.__kbPark = () => { cam.position.copy(pos); cam.lookAt(t); cam.updateMatrixWorld(true); };
-        window.__kbParkT = setInterval(window.__kbPark, 16);
+        window.KB.fightCamera.cinematic('closeup', { target: window.KB.fighters[side], bone: 'head' });
       }, s);
-      await sleep(1500);
+      await sleep(2200);
       f = resolve(OUT, `pair${pi}-${ids[s]}-head.png`);
       await grab(page, f); manifest.frames.push({ file: f, kind: 'head', id: ids[s] });
-      await page.evaluate(() => {
-        clearInterval(window.__kbParkT);
-        window.KB.fightCamera.enabled = true;
-        const hud = document.getElementById('ui');
-        if (hud) hud.style.visibility = '';
-      });
     }
+
+    await page.evaluate(() => {
+      window.KB.fightCamera.cinematic('fight');
+      const hud = document.getElementById('ui');
+      if (hud) hud.style.visibility = '';
+    });
   }
 
   manifest.complete = true;
