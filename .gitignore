@@ -18,3 +18,5 @@ scratchpad/
 # Transient measurement probes dropped in the repo root by tooling runs.
 /tm.mjs
 /tr.mjs
+/tc.mjs
+/tv.mjs

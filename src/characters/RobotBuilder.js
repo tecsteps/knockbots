@@ -2392,6 +2392,68 @@ const PLAN_CORE = {
 };
 
 /**
+ * Frame class per body mass, taken from §3's sheet assignment.
+ *
+ * Keyed off the body mass rather than off the chassis because the chassis does
+ * not agree with the sheets: BASTION and VULKAN share the `heavy` chassis but
+ * are built to `paladin` (a mid frame) and `furnace` (a heavy one); VOLTA and
+ * AXIOM share `precision` and are built to `aegis-01` (heavy) and `volt-monk`
+ * (light). Ten body masses serve ten fighters one-to-one, so this is the only
+ * per-fighter key the builder already has that carries the sheet's identity.
+ */
+const PLAN_FRAME = {
+  barrel: 'heavy', keel: 'light', hump: 'superheavy', column: 'light',
+  cuirass: 'mid', carapace: 'mid', skeletal: 'light', wall: 'mid',
+  reference: 'light', drum: 'heavy',
+};
+
+/**
+ * §1.2's waist column, as a band rather than a point.
+ *
+ * The contract gives one number per frame class — 0.75 of the chest on a light
+ * frame, 0.95 on the super-heavy — and ten fighters cannot all sit on four
+ * numbers or four pairs of them become the same torso. So each class is a band
+ * about its number and the plan's OWN waist-to-chest ratio decides where inside
+ * it the fighter lands, monotonically. That keeps the ordering the body-mass
+ * table was measured to produce (a barrel's waist is still the widest in the
+ * cast relative to its chest, a skeletal frame's still the narrowest) while
+ * putting every one of them inside the contract instead of at 0.29–1.10, which
+ * is where they were: five fighters wasp-waisted to half of what any sheet has,
+ * and two — barrel and drum — with a waist WIDER than the chest above it.
+ */
+const FRAME_WAIST = {
+  light: [0.71, 0.79], mid: [0.76, 0.84], heavy: [0.86, 0.94], superheavy: [0.92, 0.98],
+};
+
+/**
+ * Waist width as a fraction of the pelvis girdle under it.
+ *
+ * The second half of the constraint, and the half the sheets cannot supply: a
+ * pelvis is bounded by the LEGS, which on this skeleton are 0.19–0.24 m apart
+ * whatever the sheet's figure does. A girdle authored purely from the waist
+ * ratio came out 0.75 m wide on the super-heavy — a metre-and-a-half hoop the
+ * thighs would swing straight through on any kick. So the waist target sets the
+ * pelvis, the pelvis is clamped to what the legs will carry, and then the waist
+ * is taken back down to what the clamped pelvis can hold up.
+ */
+const WAIST_OVER_PELVIS = { light: 0.86, mid: 0.90, heavy: 0.94, superheavy: 0.96 };
+/** Raw waist/chest ratios the body-mass table produces, as a squash interval. */
+const RAW_WAIST_SPAN = [0.30, 1.10];
+/** Pelvis girdle bounds, as multiples of the chassis's own authored pelvis. */
+const PELVIS_GIRDLE = [0.84, 1.34];
+/**
+ * How much breadth the chest may give up to let the waist reach its band.
+ *
+ * The chest station carries the roster's `shoulders` impression on top of the
+ * body mass's own multiplier, so on the two broadest plans it came out wider
+ * than the shoulder JOINTS are apart — 0.80 m across a chest whose sockets are
+ * 0.48 m apart. That is shoulder span wearing a chest's name, and the pauldrons
+ * deliver the span anyway because they hang off the shoulder bones. Capped at
+ * 18% so a broad fighter stays broad.
+ */
+const CHEST_GIVE = 0.82;
+
+/**
  * The chassis plan, resolved against the roster's `build` and `silhouette`.
  *
  * `build` names hero forms and is taken literally — it is a choice, not a
@@ -2483,7 +2545,7 @@ function torsoStations(spec) {
   const t = spec.torso;
   const p = spec.plan ?? TORSO_PLANS.reference;
   const at = (key, w, d) => ({ w: w * p[key][0], d: d * p[key][1] });
-  return {
+  const S = {
     pelvis: at('pelvis', t.pelvisW * 0.98, t.waistD * 1.12),
     waistLo: at('waistLo', t.waistW * 1.16, t.waistD * 1.04),
     waistHi: at('waistHi', t.waistW * 1.34, t.waistD * 1.14),
@@ -2491,6 +2553,73 @@ function torsoStations(spec) {
     chest: at('chest', t.chestW, t.chestD),
     yoke: at('yoke', t.chestW * 0.84, t.chestD * 0.86),
   };
+
+  // --- §1.2: the chest / waist / pelvis relationship ------------------------
+  //
+  // Everything above this line is the body mass's own opinion, and it is kept
+  // as the RELATIVE ordering of the cast. Everything below is the contract,
+  // which is absolute. Only the WIDTHS are touched: the depth column is where
+  // half the identity in this table lives (a keel is 1.36 deep for every unit
+  // across, a cuirass 0.48) and §1.2 says nothing about it.
+  const frame = PLAN_FRAME[spec.planId] ?? 'mid';
+  const [lo, hi] = FRAME_WAIST[frame];
+  const wop = WAIST_OVER_PELVIS[frame];
+  // Cross-sections are two-dimensional, so a width correction that leaves the
+  // depth alone turns a column into a plank. The depth follows at the same
+  // half strength the chassis applies to every other "impression" scalar.
+  const soften = (k) => 1 + (k - 1) * 0.55;
+
+  // 1. Where the plan wants its waist, squashed into the frame's band. The
+  //    squash is monotone, so the cast's waist ordering survives the move.
+  const rawRatio = S.waistLo.w / S.chest.w;
+  const [rl, rh] = RAW_WAIST_SPAN;
+  const want = (lo + (hi - lo) * clamp((rawRatio - rl) / (rh - rl), 0, 1)) * S.chest.w;
+
+  // 2. The girdle that waist implies, clamped to what the legs will carry.
+  const rawPelvis = S.pelvis.w;
+  S.pelvis.w = clamp(want / wop, t.pelvisW * PELVIS_GIRDLE[0], t.pelvisW * PELVIS_GIRDLE[1]);
+  S.pelvis.d *= soften(S.pelvis.w / rawPelvis);
+
+  // 3. The waist that girdle can hold up.
+  const rawWaistLo = S.waistLo.w, rawWaistHi = S.waistHi.w;
+  let waist = Math.min(want, S.pelvis.w * wop);
+
+  // 4. If the waist still cannot reach the band's floor, the chest gives.
+  if (waist < S.chest.w * lo) {
+    const c = Math.max(S.chest.w * CHEST_GIVE, waist / lo);
+    // The yoke is the top of the same column and has to move with it, or the
+    // shoulder deck stays at the old breadth and steps out over the ribcage.
+    S.yoke.w *= c / S.chest.w;
+    S.chest.w = c;
+  }
+  // The pelvis wins the last word. On the super-heavy the chest is so broad
+  // that even after giving up its 18% the band still asks for a waist wider
+  // than the widest girdle the legs will carry, and taking the band literally
+  // there produced a mushroom: a 0.66 m waist sitting on a 0.59 m pelvis. A
+  // fighter 5% outside §1.2 reads as a fighter; one wearing its waist over the
+  // edge of its own hips does not.
+  waist = Math.min(clamp(waist, S.chest.w * lo, S.chest.w * hi), S.pelvis.w * wop);
+
+  // 5. The ribcage. At the shared 0.80 of the chest it was a pinch above the
+  //    waist that no reference sheet has — the lats taper INTO the waist, they
+  //    do not neck in and flare out again — so it is re-authored as a fraction
+  //    of the chest that keeps the plan's relative ribcage bias, and floored
+  //    above the waist so the column can never invert.
+  S.ribs.w = Math.max(
+    S.chest.w * clamp(0.86 * (p.ribs[0] / p.chest[0]), 0.80, 0.96),
+    waist * 1.02,
+  );
+
+  // 6. The upper waist is no longer authored: it is where the belly sits on the
+  //    run from the narrow point to the ribs. A plan that wanted a big gut asked
+  //    for it as waistHi/waistLo and still gets it, as a position rather than as
+  //    a licence to be wider than the chest.
+  const belly = clamp((p.waistHi[0] / p.waistLo[0] - 0.90) * 2.2, 0.16, 0.72);
+  S.waistLo.w = waist;
+  S.waistHi.w = waist + (S.ribs.w - waist) * belly;
+  S.waistLo.d *= soften(S.waistLo.w / rawWaistLo);
+  S.waistHi.d *= soften(S.waistHi.w / rawWaistHi);
+  return S;
 }
 
 function buildPelvis(rig, spec) {
@@ -2509,12 +2638,25 @@ function buildPelvis(rig, spec) {
     d0: P.pelvis.d * 0.84, d1: P.pelvis.d,
     mat: 'armorPrimary',
   });
-  // Upper girdle — carries up past the spine01 origin so the lumbar section
-  // lands inside it whatever `torso` multiplier the roster chose.
+  // Upper girdle — the belt, and the LOWER lip of the abdominal gap.
+  //
+  // It used to carry two thirds of the way up the lumbar bone and hand straight
+  // over to the painted lower spine, which sleeved the whole abdomen in armour.
+  // §1.3 names the segmented stack between chest and pelvis the most visible
+  // underskin on the body — it is the one thing `volt-monk` and `ghostframe`
+  // both put a whole detail tile on — and there was nowhere on this column for
+  // it to be. The belt now stops at a quarter of the lumbar and necks IN as it
+  // rises, so `buildAbdomen`'s stack comes out of a lip rather than out of a
+  // butt joint, and the pelvis reads as a separate block below it.
+  // The 0.45 and `buildTorso`'s matching -0.30 on the lower-lat shell are the
+  // two ends of the exposed band, and they are set together: they leave about
+  // two fifths of the hips-to-chest column showing dark. At the two thirds the
+  // first pass left, the stack was the largest single element on the torso and
+  // the fighter read as a machine wearing a corset.
   rig.section('hips', {
-    y0: -0.004, y1: m.lumbar * 0.68,
-    w0: P.pelvis.w, w1: P.waistLo.w,
-    d0: P.pelvis.d, d1: P.waistLo.d,
+    y0: -0.004, y1: m.lumbar * 0.45,
+    w0: P.pelvis.w, w1: P.pelvis.w * 0.90,
+    d0: P.pelvis.d, d1: P.pelvis.d * 0.92,
     mat: 'armorPrimary',
   });
 
@@ -2541,15 +2683,16 @@ function buildPelvis(rig, spec) {
 
     // belt lamp
     rig.glow('hips', bevelBox(0.03, 0.012, 0.012, 0.004), 'joints',
-      { p: [hx * 0.55, m.lumbar * 0.30, FRONT * d * 0.5], mirror });
+      { p: [hx * 0.55, m.lumbar * 0.14, FRONT * d * 0.5], mirror });
   }
 
-  // waist power ring: recessed channel with a glow strip inside, seated on the
-  // seam where the girdle hands over to the lumbar section
-  const ringY = m.lumbar * 0.50;
-  rig.add('hips', channelStrip(P.waistLo.w * 0.82, P.waistLo.d * 1.02, 0.018), 'darkMetal',
+  // Waist power ring: recessed channel with a glow strip inside. It follows the
+  // belt down — at half the lumbar it now stands in the open air the abdominal
+  // stack occupies, and a channel with nothing behind it reads as a hole.
+  const ringY = m.lumbar * 0.16;
+  rig.add('hips', channelStrip(P.pelvis.w * 0.86, P.pelvis.d * 1.02, 0.018), 'darkMetal',
     { p: [0, ringY, 0], tier: TIER.SECONDARY });
-  rig.glow('hips', bevelBox(P.waistLo.w * 0.60, 0.014, P.waistLo.d * 0.70, 0.004), 'spine',
+  rig.glow('hips', bevelBox(P.pelvis.w * 0.62, 0.014, P.pelvis.d * 0.72, 0.004), 'spine',
     { p: [0, ringY - 0.007, 0] });
 
   if (spec.skirt) {
@@ -2596,6 +2739,105 @@ function buildPelvis(rig, spec) {
   });
 }
 
+/**
+ * The abdominal stack — the dark second body between chest and pelvis.
+ *
+ * §1.3 lists seven places the underskin shows and calls this one "the most
+ * visible": a segmented column of rings running from the belt to under the
+ * ribcage, matte charcoal, with the painted shell overhanging it above and the
+ * pelvis block below. `volt-monk` and `ghostframe` each spend a whole detail
+ * tile on it; `atlas-7` builds its entire waist out of it and puts a coil
+ * spring down the middle.
+ *
+ * What was here was the opposite construction: a painted `plated()` band over
+ * the lumbar with three trim rings and three small floating plates on the front
+ * of it. That is armour over armour — the torso ran from the girdle to the
+ * collar as one continuous painted column, and the only dark showing anywhere
+ * on the body was the few millimetres of frame the band gaps left. The stack
+ * replaces the band outright rather than sitting under it, because the whole
+ * point is that the eye reaches mechanism, not more paint.
+ *
+ * PRIMARY throughout. It is a silhouette element — it is where the body is
+ * narrowest, so it is what makes the chest above it read as a chest — and a
+ * stack that drops out at LOD1 takes the waist with it.
+ *
+ * @param {Rig} rig
+ * @param {Object} spec resolved chassis plan
+ * @param {Object} P station table from `torsoStations`
+ */
+function buildAbdomen(rig, spec, P) {
+  const m = rig.dim;
+  // Reaching down inside the belt and up under the lower-lat shell at both
+  // ends. Overlap rather than abutment: `lumbar` and `mid` are per-character
+  // bone spacings, so a stack authored to meet its neighbours exactly opens a
+  // hole on whichever fighter's proportions round the other way.
+  // The belt's top edge is at hips-local `lumbar * 0.45` and the lower-lat
+  // shell's bottom at spine02-local `-mid * 0.30`; both are quoted here in
+  // spine01-local metres and both are overshot, so the stack runs on well
+  // inside each neighbour. Authored to meet them exactly, the first fighter
+  // whose lumbar rounded the other way opened a band of sky at the belt.
+  const y0 = -m.lumbar * 0.82;
+  const y1 = m.mid * 0.86;
+  const span = y1 - y0;
+  // The core is well inside the ring diameter: the rings are the read, and a
+  // core that comes out to meet them turns the stack back into a smooth tube
+  // with grooves scratched in it.
+  const core = 0.80, ring = 0.92;
+  const dw = (P.waistLo.d / P.waistLo.w + P.waistHi.d / P.waistHi.w) * 0.5;
+
+  // ZONE 2 (matte composite): the column the rings are stacked on. Near-round
+  // and finely sampled — this is the one part of the torso with no paint on it
+  // at all, so its shading is entirely silhouette and terminator, and at the
+  // 0.34 corner radius the rest of the column uses it read as a dark box.
+  rig.section('spine01', {
+    y0, y1,
+    w0: P.waistLo.w * core, w1: P.waistHi.w * core,
+    d0: P.waistLo.d * core, d1: P.waistHi.d * core,
+    mat: 'gasket', round: 0.92, perQuad: 4, swell: -0.04,
+    tier: TIER.PRIMARY, role: 'frame',
+  });
+
+  // The segments. Count is driven by the run rather than fixed, so a 2.1 m
+  // heavy does not wear the same four rings as a 1.8 m acrobat over half again
+  // the distance and read as a coarser machine for it.
+  const count = Math.round(clamp(span / (0.034 * m.torsoK), 4, 7));
+  rig.ribStack('spine01', {
+    count,
+    r0: P.waistLo.w * 0.5 * ring, r1: P.waistHi.w * 0.5 * ring,
+    y0: y0 + span * 0.10, y1: y1 - span * 0.12,
+    h: 0.013 * m.torsoK, deep: dw, mat: 'darkMetal', tier: TIER.PRIMARY,
+  });
+
+  // The pair of conduits every sheet runs down the exposed side of the stack.
+  // Rigid rather than the soft loom `buildMechanism` hangs off the spine: those
+  // are SECONDARY and swing, these have to be present at every LOD because they
+  // are half of what makes the gap read as mechanism rather than as a hole.
+  for (const { sign, mirror } of SIDES) {
+    const rr = 0.0095 * m.torsoK;
+    rig.add('spine01', latheProfile([
+      { r: rr * 0.86, y: y0 + span * 0.06 },
+      { r: rr, y: y0 + span * 0.40, smooth: true },
+      { r: rr * 0.92, y: y1 - span * 0.08 },
+    ], rig.maxTier >= 2 ? 9 : 6), 'rubber', {
+      p: [sign * P.waistLo.w * 0.40, 0, -FRONT * P.waistLo.d * 0.20],
+      r: [0, 0, sign * -3 * DEG], mirror, tier: TIER.PRIMARY, role: 'frame',
+    });
+  }
+
+  // §1.6: emissive lives in the narrow grooves between plates. Two hairlines in
+  // the channel the stack opens, and nothing else — the belly is the largest
+  // uninterrupted dark area on the machine and it is very easy to turn it into
+  // a lamp.
+  for (const { sign, mirror } of SIDES) {
+    rig.glow('spine01', loftHull([
+      { y: y0 + span * 0.18, w: 0.008, d: 0.007, round: 0.5 },
+      { y: y1 - span * 0.20, w: 0.006, d: 0.006, round: 0.5 },
+    ]), 'spine', {
+      p: [sign * P.waistLo.w * 0.22, 0, FRONT * (P.waistLo.d * core * 0.5 + 0.004)], mirror,
+    });
+  }
+}
+
 function buildTorso(rig, spec, def) {
   const t = spec.torso;
   const m = rig.dim;
@@ -2608,44 +2850,19 @@ function buildTorso(rig, spec, def) {
   const rnd = plan.round;
   const gap = plan.gap;
 
-  // --- lower spine: armour banded over a visible frame --------------------
-  // Every band is authored end-to-end against the measured bone spacing and
-  // overlaps its neighbour, so the column is airtight from the girdle to the
-  // collar on any set of proportions — but the *painted* plate stops short at
-  // both ends, leaving a shadowed groove of dark machine at each joint. That
-  // groove is what stops the torso reading as one extruded prism.
-  rig.plated('spine01', {
-    y0: -m.lumbar * 0.46, y1: m.mid * 0.66,
-    w0: P.waistLo.w * 0.98, w1: P.waistHi.w,
-    d0: P.waistLo.d * 0.98, d1: P.waistHi.d,
-    mat: 'armorPrimary', gap, inset: 0.82, round: rnd, swell: -0.06,
-    perQuad: rnd > 0.7 ? 5 : 3,
-  });
-  // articulated ribs, proud of the frame in the gap the armour leaves
-  for (let i = 0; i < 3; i++) {
-    const y = -m.lumbar * 0.40 + i * (m.lumbar * 0.40 + m.mid * 0.60) * 0.5;
-    rig.add('spine01', latheProfile([
-      { r: P.waistLo.w * 0.42, y: -0.010 }, { r: P.waistLo.w * 0.46, y: -0.004, smooth: true },
-      { r: P.waistLo.w * 0.46, y: 0.004, smooth: true }, { r: P.waistLo.w * 0.42, y: 0.010 },
-    ], 18), 'trim', { p: [0, y, 0], s: [1, 1, P.waistLo.d / P.waistLo.w * 1.10], tier: TIER.SECONDARY });
-  }
-
-  // abdominal segment plates, floating off the frame on a visible standoff
-  for (let i = 0; i < 3; i++) {
-    rig.add('spine01', loftHull([
-      { y: -0.019, w: P.waistLo.w * (0.60 + i * 0.05), d: 0.026, round: 0.34 },
-      { y: 0.019, w: P.waistLo.w * (0.64 + i * 0.05), d: 0.030, round: 0.30 },
-    ]), 'armorPrimary', {
-      p: [0, -m.lumbar * 0.30 + i * m.mid * 0.30, FRONT * (P.waistLo.d * 0.5 + 0.010)],
-      r: [(6 - i * 5) * DEG, 0, 0], tier: TIER.SECONDARY,
-    });
-  }
+  // --- lower spine: the exposed abdominal stack ---------------------------
+  buildAbdomen(rig, spec, P);
 
   // --- mid spine ----------------------------------------------------------
+  // The lower lats. It starts ABOVE the stack rather than at the spine02
+  // origin, so its bottom edge is a free rim overhanging a narrower dark body
+  // instead of a butt joint against another painted band — the "armour, gap,
+  // mechanism" read §1.3 asks for, at the one place on the torso the fight
+  // camera frames every round.
   rig.plated('spine02', {
-    y0: -m.mid * 0.46, y1: m.thorax * 0.70,
-    w0: P.waistHi.w * 0.98, w1: P.ribs.w,
-    d0: P.waistHi.d * 0.98, d1: P.ribs.d,
+    y0: -m.mid * 0.30, y1: m.thorax * 0.70,
+    w0: P.waistHi.w * 1.06, w1: P.ribs.w,
+    d0: P.waistHi.d * 1.06, d1: P.ribs.d,
     mat: 'armorPrimary', gap: gap * 0.9, inset: 0.84, round: rnd, swell: 0.03,
     perQuad: rnd > 0.7 ? 5 : 3,
   });
@@ -2712,37 +2929,59 @@ function buildTorso(rig, spec, def) {
     { y: m.collar * 0.90 + hunch, w: P.yoke.w, d: P.yoke.d + hunch * 1.2, z: rz(m.collar * 0.90) - FRONT * hunch * 1.5, round: Math.max(rnd, 0.34) },
   ], { perQuad: perQ }), 'armorPrimary', { tier: TIER.PRIMARY });
 
-  // Front planes. Two facets at different rakes with a shadowed split between
-  // them: the deck catches the key light square on, the sternum sits in half
-  // shade, and the chest finally reads as a form instead of the face of a box.
+  // --- sternum and pectorals ----------------------------------------------
+  //
+  // What this replaces was one slab front: two flat facets spanning 0.52–0.66
+  // of the chest width, laid across the whole thorax at two rakes, with a pair
+  // of small lofted lumps floated on top of them. From the front — the view a
+  // fighting camera holds for most of a round — that is a billboard with two
+  // bumps on it, and it is the single largest flat face on the machine.
+  //
+  // Every one of the eight sheets builds the chest the other way round: a
+  // narrow dark sternum channel down the centre line, and TWO curved plates
+  // meeting either side of it, each a section of a swept surface (§1.1) that
+  // wraps from the centre line round to the armpit. `paladin`'s heraldic
+  // breastplate, `aegis-01`'s riveted pectorals and `vesper`'s glossy shells
+  // are the same construction at three different levels of decoration.
+
+  // The centre line itself: recessed dark machine, and the seat the chest hero
+  // element lands on. It is what the two shells stop against, so it is what
+  // makes them read as two plates rather than as one interrupted one.
   rig.add('chest', loftHull([
-    { y: -m.thorax * 0.26, w: cw * 0.52, d: 0.034, round: 0.32 },
-    { y: 0, w: cw * 0.62, d: 0.044, round: 0.26, smooth: true },
-    { y: m.collar * 0.22, w: cw * 0.58, d: 0.040, round: 0.30 },
-  ]), 'armorSecondary', {
-    p: [0, 0, FRONT * (cd * 0.48)], r: [(9 + plan.rake) * DEG, 0, 0], tier: TIER.PRIMARY,
-  });
-  rig.add('chest', loftHull([
-    { y: m.collar * 0.28, w: cw * 0.66, d: 0.036, round: 0.28 },
-    { y: m.collar * 0.56, w: cw * 0.62, d: 0.030, round: 0.30, smooth: true },
-    { y: m.collar * 0.82, w: cw * 0.44, d: 0.024, round: 0.36 },
-  ]), 'armorSecondary', {
-    p: [0, 0, FRONT * (cd * 0.44) + rz(m.collar * 0.5)], r: [(-19 + plan.rake) * DEG, 0, 0], tier: TIER.PRIMARY,
-  });
-  rig.add('chest', channelStrip(cw * 0.60, 0.020, 0.014), 'darkMetal', {
-    p: [0, m.collar * 0.25, FRONT * (cd * 0.50) + rz(m.collar * 0.25)], r: FACE_FRONT, tier: TIER.SECONDARY,
+    { y: -m.thorax * 0.38, w: cw * 0.11, d: cd * 0.30, round: 0.44 },
+    { y: m.collar * 0.10, w: cw * 0.09, d: cd * 0.34, round: 0.46, smooth: true },
+    { y: m.collar * 0.70, w: cw * 0.07, d: cd * 0.26, round: 0.48 },
+  ]), 'darkMetal', {
+    p: [0, 0, FRONT * (cd * 0.34) + rz(0)], r: [plan.rake * DEG, 0, 0], tier: TIER.PRIMARY, role: 'frame',
   });
 
-  // pectoral plates, floated off the ribcage on a standoff so the gap reads
+  // The two shells. One geometry, mirrored: a lathe swept over 74° of arc,
+  // stopping 9° short of the centre line on the inboard end so the sternum
+  // shows as a hard vertical split, and running out past 80° so the outboard
+  // rim disappears under the pauldron rather than ending in mid-air.
+  //
+  // The sweep is circular and then squashed on Z to the chest's own depth
+  // ratio, which is how a lathe wraps a torso that is not round. `R` grows as
+  // the plan's corner radius falls: on a hard-cornered cuirass an inscribed
+  // ellipse would sit INSIDE the ribcage's corners for most of its arc and the
+  // plate would only show at the front.
+  const pecR = cw * 0.5 * (1.02 + (1 - rnd) * 0.10);
+  const pecH = ch * 0.66;
+  const pecY = m.collar * 0.08;
+  const pecSeg = rig.maxTier >= 2 ? 12 : 7;
   for (const { sign, mirror } of SIDES) {
-    rig.add('chest', loftHull([
-      { y: -ch * 0.34, w: cw * 0.30, d: cd * 0.26, round: 0.34 },
-      { y: 0, w: cw * 0.38, d: cd * 0.34, round: 0.26, smooth: true },
-      { y: ch * 0.34, w: cw * 0.33, d: cd * 0.28, round: 0.32 },
-    ]), 'armorPrimary', {
-      p: [sign * cw * 0.28, m.collar * 0.20, FRONT * cd * 0.44 + rz(m.collar * 0.20)],
-      r: [(-6 + plan.rake) * DEG, sign * 14 * DEG, sign * -8 * DEG],
-      mirror, tier: TIER.PRIMARY,
+    const shell = shellLathe([
+      { r: pecR * 0.90, y: -pecH * 0.50 },
+      { r: pecR * 1.00, y: -pecH * 0.16, smooth: true },
+      { r: pecR * 1.00, y: pecH * 0.20, smooth: true },
+      { r: pecR * 0.86, y: pecH * 0.50 },
+    ], cd * 0.055, pecSeg, { arc: 74 * DEG, phase: 7 * DEG });
+    shell.scale(1, 1, cd / cw);
+    rig.add('chest', shell, 'armorPrimary', {
+      p: [0, pecY, rz(pecY)], r: [plan.rake * DEG, 0, 0],
+      // A wrapped pressing with a free ground rim the whole way round, which is
+      // what the light catches at the centre split and at the armpit.
+      mirror, tier: TIER.PRIMARY, role: 'lame',
     });
     // intake louvres on the upper chest flank
     addLouvres(rig, 'chest', {
@@ -2824,85 +3063,118 @@ function buildTorso(rig, spec, def) {
 
 function buildChestCore(rig, spec, cw, cd, ch, cy, dz = 0) {
   const zf = FRONT * (cd * 0.5 + 0.008) + dz;
+  // §1.6: emissive is thin and linear, and there is exactly ONE hero element
+  // per fighter. What this replaces broke that on four of the five plans — the
+  // column plan lit five separate boxes down the sternum, the cage plan a 14 cm
+  // luminous dome, the crystal plan a 15 cm faceted lamp. At that size the core
+  // stops being a light set into a chest and becomes the chest, which is the
+  // "large glowing face" the contract rules out by name.
+  //
+  // Every style below is now the same three parts and differs only in the shape
+  // of them: a DARK WELL, a THIN polished RIM around it, and ONE emissive at
+  // the bottom of the well. Depth is what makes a core read; area is what makes
+  // it read as a sticker.
+  //
+  // Sized off the chest rather than in absolute metres. The old literals put
+  // the same 20 cm hex on a heavy's breastplate and on a keel chest 28 cm wide,
+  // where it covered almost the whole front.
+  const R = clamp(cw * 0.21, 0.042, 0.082);
+  const seg = rig.maxTier >= 2 ? 20 : 12;
+
   switch (spec.core) {
     case 'hex': {
+      // Foundry / corridor guard: a hexagonal furnace port. The rim is a
+      // six-sided collar 0.16 R deep and the light is a ring at the bottom of
+      // it, so from anywhere but dead-on the glow is half occluded by its own
+      // wall — which is what a port is.
       rig.add('chest', latheProfile([
-        { r: 0, y: 0 }, { r: 0.102, y: 0 }, { r: 0.102, y: 0.034 },
-        { r: 0.084, y: 0.048 }, { r: 0.070, y: 0.048 }, { r: 0.070, y: 0.010 }, { r: 0, y: 0.010 },
+        { r: R * 0.62, y: 0 }, { r: R, y: 0 }, { r: R, y: R * 0.30 },
+        { r: R * 0.86, y: R * 0.40 }, { r: R * 0.66, y: R * 0.40 }, { r: R * 0.62, y: R * 0.10 },
       ], 6, { faceted: true, phase: Math.PI / 6 }), 'bezel',
       { p: [0, cy, zf], r: [90 * DEG, 0, 0], tier: TIER.PRIMARY });
-      // the glow sits at the bottom of the well, behind an iris of trim blades,
-      // so the core reads as depth rather than a sticker
+      rig.add('chest', latheProfile([
+        { r: 0, y: 0 }, { r: R * 0.66, y: 0 }, { r: R * 0.66, y: R * 0.08 }, { r: 0, y: R * 0.08 },
+      ], 6, { faceted: true, phase: Math.PI / 6 }), 'darkMetal',
+      { p: [0, cy, zf - FRONT * R * 0.10], r: [90 * DEG, 0, 0], tier: TIER.PRIMARY, role: 'frame' });
       rig.glow('chest', latheProfile([
-        { r: 0, y: 0 }, { r: 0.052, y: 0 }, { r: 0.048, y: 0.010 }, { r: 0, y: 0.012 },
+        { r: R * 0.34, y: 0 }, { r: R * 0.54, y: 0 }, { r: R * 0.54, y: R * 0.06 }, { r: R * 0.34, y: R * 0.06 },
       ], 6, { faceted: true, phase: Math.PI / 6 }), 'core',
-      { p: [0, cy, zf + FRONT * 0.008], r: [90 * DEG, 0, 0] });
-      for (let i = 0; i < 6; i++) {
-        const ang = (i / 6) * Math.PI * 2 + Math.PI / 6;
-        rig.add('chest', bevelBox(0.030, 0.014, 0.020, 0.004, { topX: 0.5 }), 'trim', {
-          p: [Math.cos(ang) * 0.062, cy + Math.sin(ang) * 0.062, zf + FRONT * 0.030],
-          r: [0, 0, ang + Math.PI / 2], tier: TIER.SECONDARY,
-        });
-      }
-      rig.add('chest', boltRing(6, 0.092, 0.010, 0.012, 0), 'trim',
-        { p: [0, cy, zf + FRONT * 0.036], r: [-90 * DEG, 0, 0], tier: TIER.GREEBLE });
+      { p: [0, cy, zf - FRONT * R * 0.04], r: [90 * DEG, 0, 0] });
+      rig.add('chest', boltRing(6, R * 0.90, R * 0.11, R * 0.13, 0), 'trim',
+        { p: [0, cy, zf + FRONT * R * 0.30], r: [-90 * DEG, 0, 0], tier: TIER.GREEBLE });
       break;
     }
     case 'slit': {
-      rig.add('chest', bevelBox(0.05, ch * 0.66, 0.05, 0.010, { topX: 0.6, botX: 0.6 }), 'darkMetal',
-        { p: [0, cy, zf], tier: TIER.PRIMARY });
-      rig.glow('chest', bevelBox(0.020, ch * 0.54, 0.02, 0.005), 'core',
-        { p: [0, cy, zf + FRONT * 0.020] });
+      // Courier / pest control: a vertical firing slot. Already the thin linear
+      // emissive §1.6 asks for, so it keeps its proportions and only loses the
+      // pair of accent wings that were competing with it for the centre line.
+      const h = ch * 0.60;
+      rig.add('chest', bevelBox(R * 1.10, h, R * 0.60, 0.010, { topX: 0.6, botX: 0.6 }), 'darkMetal',
+        { p: [0, cy, zf], tier: TIER.PRIMARY, role: 'frame' });
+      rig.glow('chest', bevelBox(R * 0.34, h * 0.82, R * 0.24, 0.004), 'core',
+        { p: [0, cy, zf + FRONT * R * 0.20] });
       for (const { sign, mirror } of SIDES) {
-        rig.add('chest', bevelBox(0.045, ch * 0.72, 0.028, 0.008, { topX: 0.7 }), 'armorAccent',
-          { p: [sign * 0.052, cy, zf + FRONT * 0.012], r: [0, sign * -22 * DEG, 0], mirror, tier: TIER.SECONDARY });
+        rig.add('chest', bevelBox(R * 0.16, h * 1.06, R * 0.34, 0.005), 'trim',
+          { p: [sign * R * 0.62, cy, zf + FRONT * R * 0.10], mirror, tier: TIER.SECONDARY });
       }
       break;
     }
     case 'cage': {
+      // Dockyard / substation: a caged lamp. The bars are the read and they are
+      // dark; the light behind them is a third of the radius it was, so what
+      // the eye gets is a bright sliver between each pair of bars rather than a
+      // glowing dome with sticks laid over it.
+      rig.add('chest', latheProfile([
+        { r: 0, y: 0 }, { r: R * 0.92, y: 0 }, { r: R * 0.88, y: R * 0.16 }, { r: 0, y: R * 0.18 },
+      ], seg), 'darkMetal',
+      { p: [0, cy, zf - FRONT * R * 0.16], r: [90 * DEG, 0, 0], tier: TIER.PRIMARY, role: 'frame' });
       rig.glow('chest', latheProfile([
-        { r: 0, y: -0.062 }, { r: 0.040, y: -0.055, smooth: true }, { r: 0.066, y: -0.028, smooth: true },
-        { r: 0.072, y: 0, smooth: true }, { r: 0.066, y: 0.028, smooth: true },
-        { r: 0.040, y: 0.055, smooth: true }, { r: 0, y: 0.062 },
-      ], 20), 'core', { p: [0, cy, zf - FRONT * 0.012] });
+        { r: 0, y: 0 }, { r: R * 0.46, y: 0 }, { r: R * 0.40, y: R * 0.10 }, { r: 0, y: R * 0.12 },
+      ], seg), 'core', { p: [0, cy, zf - FRONT * R * 0.08], r: [90 * DEG, 0, 0] });
       for (let i = 0; i < 5; i++) {
-        const a = (-0.36 + i * 0.18) * Math.PI;
-        rig.add('chest', bevelBox(0.022, 0.20, 0.03, 0.006, { topX: 0.55, botX: 0.55 }), 'darkMetal', {
-          p: [Math.sin(a) * 0.062, cy, zf + FRONT * (0.012 + Math.cos(a) * 0.030)],
+        const a = (-0.34 + i * 0.17) * Math.PI;
+        rig.add('chest', bevelBox(R * 0.16, R * 1.70, R * 0.30, 0.005, { topX: 0.55, botX: 0.55 }), 'darkMetal', {
+          p: [Math.sin(a) * R * 0.62, cy, zf + FRONT * (R * 0.06 + Math.cos(a) * R * 0.26)],
           r: [0, -a * 0.6, 0], tier: TIER.PRIMARY,
         });
       }
       rig.add('chest', latheProfile([
-        { r: 0.086, y: 0 }, { r: 0.100, y: 0.012, smooth: true }, { r: 0.100, y: 0.03 }, { r: 0.086, y: 0.04 },
-      ], 22), 'trim', { p: [0, cy, zf - FRONT * 0.03], r: [90 * DEG, 0, 0], tier: TIER.SECONDARY });
+        { r: R * 0.98, y: 0 }, { r: R * 1.10, y: R * 0.10, smooth: true }, { r: R * 1.10, y: R * 0.24 }, { r: R * 0.98, y: R * 0.32 },
+      ], seg + 2), 'trim', { p: [0, cy, zf - FRONT * R * 0.30], r: [90 * DEG, 0, 0], tier: TIER.SECONDARY });
       break;
     }
     case 'column': {
-      rig.add('chest', channelStrip(0.05, ch * 0.86, 0.018), 'darkMetal',
-        { p: [0, cy, zf], r: FACE_FRONT, tier: TIER.PRIMARY });
-      for (let i = 0; i < 5; i++) {
-        rig.glow('chest', bevelBox(0.030, 0.022, 0.008, 0.003), 'core',
-          { p: [0, cy - ch * 0.28 + i * ch * 0.14, zf - FRONT * 0.006] });
-      }
+      // Reliquary / reference chassis: a single sealed strip light down the
+      // sternum, in a recessed channel, between two polished rails. One
+      // element, and the thinnest in the cast — this is the plan whose whole
+      // identity is that nothing is bolted to it.
+      const h = ch * 0.84;
+      rig.add('chest', channelStrip(R * 0.62, h, 0.018), 'darkMetal',
+        { p: [0, cy, zf], r: FACE_FRONT, tier: TIER.PRIMARY, role: 'frame' });
+      rig.glow('chest', bevelBox(R * 0.30, h * 0.80, 0.008, 0.003), 'core',
+        { p: [0, cy, zf - FRONT * 0.005] });
       for (const { sign, mirror } of SIDES) {
-        rig.add('chest', bevelBox(0.018, ch * 0.9, 0.024, 0.005), 'trim',
-          { p: [sign * 0.036, cy, zf], mirror, tier: TIER.SECONDARY });
+        rig.add('chest', bevelBox(R * 0.20, h * 1.02, R * 0.28, 0.005), 'trim',
+          { p: [sign * R * 0.44, cy, zf], mirror, tier: TIER.SECONDARY });
       }
       break;
     }
     default: { // crystal
+      // Casino security / bodyguard: a gem in a claw setting. The stone is
+      // small and stands well proud, so it catches the key light as a hard
+      // specular point instead of washing the plate around it.
       const crystal = latheProfile([
-        { r: 0, y: -0.075 }, { r: 0.055, y: -0.020 }, { r: 0.062, y: 0.006 }, { r: 0, y: 0.078 },
+        { r: 0, y: -R * 0.52 }, { r: R * 0.36, y: -R * 0.14 }, { r: R * 0.40, y: R * 0.04 }, { r: 0, y: R * 0.54 },
       ], 6, { faceted: true, phase: Math.PI / 6 });
-      rig.glow('chest', crystal, 'core', { p: [0, cy, zf + FRONT * 0.028], r: [-90 * DEG * FRONT, 0, 0] });
+      rig.glow('chest', crystal, 'core', { p: [0, cy, zf + FRONT * R * 0.34], r: [-90 * DEG * FRONT, 0, 0] });
       rig.add('chest', latheProfile([
-        { r: 0.086, y: 0 }, { r: 0.094, y: 0.010, smooth: true }, { r: 0.072, y: 0.040 }, { r: 0.062, y: 0.040 },
-        { r: 0.078, y: 0.008 }, { r: 0.076, y: 0 },
+        { r: R * 0.86, y: 0 }, { r: R * 0.96, y: R * 0.10, smooth: true }, { r: R * 0.62, y: R * 0.42 },
+        { r: R * 0.50, y: R * 0.42 }, { r: R * 0.72, y: R * 0.08 }, { r: R * 0.70, y: 0 },
       ], 6, { faceted: true, phase: Math.PI / 6 }), 'trim',
       { p: [0, cy, zf], r: [90 * DEG, 0, 0], tier: TIER.PRIMARY });
       for (let i = 0; i < 3; i++) {
-        rig.decal('chest', MARKINGS.GAUGE, 0.05, 0.05, {
-          p: [Math.cos(i * 2.1) * 0.11, cy + Math.sin(i * 2.1) * 0.09, zf + FRONT * 0.006],
+        rig.decal('chest', MARKINGS.GAUGE, R * 0.60, R * 0.60, {
+          p: [Math.cos(i * 2.1) * R * 1.30, cy + Math.sin(i * 2.1) * R * 1.10, zf + FRONT * 0.006],
           r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
         });
       }
@@ -3239,25 +3511,38 @@ function buildTorsoMass(rig, spec, P, rz) {
   switch (spec.planId) {
     case 'barrel': {
       // Foundry: a hinged fire door across the belly, with two hoop bands
-      // shrunk on above and below it. The door is the widest thing on the
-      // fighter and it sits at waist height, which is what stops this reading
-      // as another broad-shouldered heavy.
-      const r = P.waistHi.w * 0.52;
+      // shrunk on above and below it. Nothing else in the cast has a stoke hole
+      // on its front, which is what stops this reading as another
+      // broad-shouldered heavy.
+      //
+      // It used to be a full circle at 0.52 of the upper waist, and it was
+      // measurably the worst thing on the fighter: `docs/shots/03-full-body.jpg`
+      // shows a 0.47 m manhole cover from crotch to sternum, covering the entire
+      // abdomen. It has to be a door on a belly, not a shield — so it is now an
+      // OVAL, wider than tall, sitting inside the exposed band with the ring
+      // stack of §1.3 showing above and below it. The squash is baked into the
+      // geometry rather than passed as a placement scale, because `add` derives
+      // the plate frame from one `getMaxScaleOnAxis` and a non-uniform placement
+      // would report the door a third taller than it is.
+      const r = P.waistHi.w * 0.46;
       const zf = FRONT * (P.waistHi.d * 0.5) + rz(0);
-      rig.add('spine01', latheProfile([
+      const door = latheProfile([
         { r: 0, y: 0 }, { r: r * 0.94, y: 0 }, { r, y: 0.018, smooth: true },
         { r, y: 0.040 }, { r: r * 0.86, y: 0.052 }, { r: 0, y: 0.052 },
-      ], 22), 'armorSecondary', { p: [0, m.mid * 0.16, zf], r: FACE_FRONT, tier: TIER.PRIMARY });
-      rig.add('spine01', boltRing(9, r * 0.82, 0.010, 0.013), 'trim',
-        { p: [0, m.mid * 0.16, zf + FRONT * 0.052], r: FACE_BACK, tier: TIER.GREEBLE });
+      ], 22);
+      door.scale(1, 1, 0.60);
+      rig.add('spine01', door, 'armorSecondary',
+        { p: [0, m.mid * 0.14, zf], r: FACE_FRONT, tier: TIER.PRIMARY });
       for (let i = 0; i < 4; i++) {
-        rig.glow('spine01', bevelBox(r * (1.02 - i * 0.16), 0.014, 0.010, 0.003), 'core',
-          { p: [0, m.mid * 0.16 - 0.036 + i * 0.024, zf + FRONT * 0.050] });
+        rig.glow('spine01', bevelBox(r * (0.92 - i * 0.16), 0.012, 0.010, 0.003), 'core',
+          { p: [0, m.mid * 0.14 - 0.026 + i * 0.017, zf + FRONT * 0.050] });
       }
+      // The hoops hug the ring stack rather than standing off it: at 0.60 of the
+      // upper waist they were a wider hoop than the chest above them.
       for (const dy of [-0.5, 0.62]) {
         rig.add('spine01', latheProfile([
-          { r: P.waistHi.w * 0.55, y: 0 }, { r: P.waistHi.w * 0.60, y: 0.012, smooth: true },
-          { r: P.waistHi.w * 0.60, y: 0.036 }, { r: P.waistHi.w * 0.55, y: 0.048 },
+          { r: P.waistHi.w * 0.50, y: 0 }, { r: P.waistHi.w * 0.545, y: 0.012, smooth: true },
+          { r: P.waistHi.w * 0.545, y: 0.036 }, { r: P.waistHi.w * 0.50, y: 0.048 },
         ], 24), 'trim', {
           p: [0, m.mid * dy, rz(m.mid * dy)],
           s: [1, 1, P.waistHi.d / P.waistHi.w], tier: TIER.PRIMARY,
@@ -5917,8 +6202,11 @@ function buildVariation(rig, spec, def) {
   // service stencils: a lifting point over one hip, a no-step warning on the
   // opposite shin, both on the side a crew chief would actually walk up to
   const lift = rng.sign();
+  // Against the girdle's own station, not the raw chassis waist: the pelvis is
+  // banded to what the legs will carry now (§1.2) and the two numbers no longer
+  // agree, so a stencil placed on the old one lands inside the plate.
   rig.decal('hips', MARKINGS.LIFT, 0.075, 0.038, {
-    p: [lift * t.pelvisW * 0.40, 0.028, back * (t.waistD * 0.5 + 0.014)],
+    p: [lift * t.pelvisW * 0.40, 0.028, back * (torsoStations(spec).pelvis.d * 0.5 + 0.008)],
     r: [0, YAW_BACK, lift * 4 * DEG], tier: TIER.GREEBLE,
   });
   rig.decal(`knee_${lift > 0 ? 'R' : 'L'}`, MARKINGS.NOSTEP, spec.legs.shin * 1.5, spec.legs.shin * 0.62, {
@@ -5979,13 +6267,28 @@ function buildVariation(rig, spec, def) {
     r: [0, YAW_BACK, rng.range(-0.2, 0.2)], tier: TIER.GREEBLE,
   });
 
-  // 5. an extra armour rib across the abdomen, or a bare segmented gap
+  // 5. a partial belly guard over the abdominal stack, or a bare one
+  //
+  // These used to be trim ribs laid across a PAINTED abdomen at a literal
+  // depth. The abdomen is now the exposed ring stack of §1.3 and it is a good
+  // deal narrower than the raw chassis waist, so ribs authored against
+  // `t.waistD` would hang in clear air in front of it. Read off the station and
+  // turned into a stack of short cover lames instead: the fighters that draw
+  // them show armour over mechanism at the waist, the ones that do not show all
+  // mechanism, and both are readings the sheets contain.
   if (rng.next() < 0.55) {
-    const ribs = 2 + rng.int(2);
-    for (let i = 0; i < ribs; i++) {
-      rig.add('spine01', bevelBox(t.waistW * (0.52 + i * 0.10), 0.020, 0.026, 0.005), 'trim', {
-        p: [0, 0.010 + i * 0.036, FRONT * (t.waistD * 0.5 + 0.016)],
-        r: [(8 - i * 6) * DEG, 0, 0], tier: TIER.GREEBLE,
+    const V = torsoStations(spec);
+    const lames = 2 + rng.int(2);
+    for (let i = 0; i < lames; i++) {
+      const f = i / Math.max(1, lames - 1);
+      const w = V.waistLo.w + (V.waistHi.w - V.waistLo.w) * f;
+      const d = V.waistLo.d + (V.waistHi.d - V.waistLo.d) * f;
+      rig.add('spine01', loftHull([
+        { y: -0.014, w: w * 0.50, d: 0.022, round: 0.42 },
+        { y: 0.014, w: w * 0.54, d: 0.026, round: 0.38 },
+      ]), 'armorSecondary', {
+        p: [0, rig.dim.mid * (0.06 + i * 0.30), FRONT * (d * 0.40 + 0.012)],
+        r: [(8 - i * 6) * DEG, 0, 0], tier: TIER.SECONDARY, role: 'lame',
       });
     }
   }
