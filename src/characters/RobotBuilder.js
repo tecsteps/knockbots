@@ -3810,21 +3810,23 @@ function buildNeck(rig, lift, k) {
   // lift (it is placed on the unlifted bone) but reaching UP TO the lifted jaw,
   // so its length absorbs the clearance solve instead of a gap doing it.
   const rr = (0.044 + lift * 0.14) * m.torsoK;
-  const jaw = lift + HEAD_JAW * k + 0.012;
+  // Where the riser has to reach: the jaw, but never below the shoulder of its
+  // own profile. The clearance solve gives a fighter with low pauldrons about
+  // fifteen millimetres of lift, and at that value the raw jaw height lands
+  // UNDER the station beneath it — the lathe folds back through itself and the
+  // ring stack bunches inside the gorget where nothing can see it. Overshooting
+  // instead is free: the extra centimetre is inside the skull.
+  const rise = Math.max(lift + HEAD_JAW * k + 0.012, -m.nape * 0.30 + 0.044);
   rig.add('head', latheProfile([
     { r: rr * 0.84, y: -m.nape * 0.72 },
     { r: rr * 0.92, y: -m.nape * 0.30, smooth: true },
-    { r: rr * 0.80, y: jaw - 0.030, smooth: true },
-    { r: rr * 0.96, y: jaw - 0.014, smooth: true },
-    { r: rr * 0.90, y: jaw },
+    { r: rr * 0.80, y: rise - 0.030, smooth: true },
+    { r: rr * 0.96, y: rise - 0.014, smooth: true },
+    { r: rr * 0.90, y: rise },
   ], seg), 'gasket', { tier: TIER.PRIMARY });
-  // The stack has to spread over the riser however long the clearance solve made
-  // it. A fighter with low pauldrons gets 15 mm of lift and a riser barely
-  // 40 mm tall; stated as an absolute inset from the jaw, the three rings ran
-  // off the bottom of it and bunched inside the gorget where nothing sees them.
   rig.ribStack('head', {
     count: 3, r0: rr * 0.96, r1: rr * 0.84,
-    y0: -m.nape * 0.62, y1: Math.max(jaw - 0.012, -m.nape * 0.30),
+    y0: -m.nape * 0.62, y1: rise - 0.012,
     h: 0.010 * m.torsoK, deep: 1.05, mat: 'darkMetal', tier: TIER.PRIMARY,
   });
 
@@ -3837,15 +3839,15 @@ function buildNeck(rig, lift, k) {
     rig.add('head', latheProfile([
       { r: 0.0090, y: -m.nape * 0.62 },
       { r: 0.0105, y: -m.nape * 0.10, smooth: true },
-      { r: 0.0085, y: jaw - 0.006 },
+      { r: 0.0085, y: rise - 0.006 },
     ], rig.maxTier >= 2 ? 9 : 6), 'rubber', {
       p: [sign * rr * 0.82, 0, -FRONT * rr * 0.62], r: [0, 0, sign * -4 * DEG],
       mirror, tier: TIER.PRIMARY, role: 'frame',
     });
   }
   rig.glow('head', loftHull([
-    { y: -m.nape * 0.34, w: 0.011, d: 0.009, round: 0.5 },
-    { y: jaw - 0.022, w: 0.009, d: 0.007, round: 0.5 },
+    { y: -m.nape * 0.42, w: 0.011, d: 0.009, round: 0.5 },
+    { y: rise - 0.022, w: 0.009, d: 0.007, round: 0.5 },
   ]), 'spine', { p: [0, 0, -FRONT * (rr * 0.86)] });
 }
 
@@ -3952,9 +3954,12 @@ function helmSkull(rig, o = {}) {
   if (o.cheeks !== false) {
     for (const { sign, mirror } of SIDES) {
       rig.add('head', loftHull([
-        { y: jaw + H * 0.44, w: w * 0.20, d: d * 0.62, round: 0.60 },
-        { y: jaw + H * 0.16, w: w * 0.22, d: d * 0.66, round: 0.55, smooth: true },
-        { y: jaw - H * 0.10, w: w * 0.14, d: d * 0.44, round: 0.62 },
+        { y: jaw + H * 0.46, w: w * 0.20, d: d * 0.62, round: 0.60 },
+        { y: jaw + H * 0.20, w: w * 0.22, d: d * 0.66, round: 0.55, smooth: true },
+        // Stops AT the jaw line, not below it. HEAD_JAW is the number the
+        // clearance solve stands the whole skull on, so a cheek plate hanging
+        // twenty millimetres under it spends the neck's exposure on itself.
+        { y: jaw + H * 0.02, w: w * 0.14, d: d * 0.44, round: 0.62 },
       ]), o.cheekMat ?? 'armorSecondary', {
         p: [sign * w * 0.44, 0, FRONT * nose * 0.35], r: [0, 0, sign * 9 * DEG], mirror, tier: TIER.PRIMARY,
       });
