@@ -3818,9 +3818,13 @@ function buildNeck(rig, lift, k) {
     { r: rr * 0.96, y: jaw - 0.014, smooth: true },
     { r: rr * 0.90, y: jaw },
   ], seg), 'gasket', { tier: TIER.PRIMARY });
+  // The stack has to spread over the riser however long the clearance solve made
+  // it. A fighter with low pauldrons gets 15 mm of lift and a riser barely
+  // 40 mm tall; stated as an absolute inset from the jaw, the three rings ran
+  // off the bottom of it and bunched inside the gorget where nothing sees them.
   rig.ribStack('head', {
     count: 3, r0: rr * 0.96, r1: rr * 0.84,
-    y0: -m.nape * 0.52, y1: jaw - 0.034,
+    y0: -m.nape * 0.62, y1: Math.max(jaw - 0.012, -m.nape * 0.30),
     h: 0.010 * m.torsoK, deep: 1.05, mat: 'darkMetal', tier: TIER.PRIMARY,
   });
 
@@ -3878,9 +3882,9 @@ function buildHead(rig, spec, def) {
  * whole way round — the incident on a domed head is the optic and nothing else.
  *
  * One lathe, because a lathe is the only primitive here that produces a
- * genuinely continuous surface: the four styles built on this plan are the ones
- * whose sheets (`volt-monk`, `vesper`, `ghostframe`, `atlas-7`) have no seam on
- * the crown at all.
+ * genuinely continuous surface: the five styles built on this plan — mono,
+ * swept, turret, lantern, crown — are the ones whose sheets (`volt-monk`,
+ * `vesper`, `ghostframe`, `atlas-7`) have no seam on the crown at all.
  */
 function domeSkull(rig, o = {}) {
   const w = o.w ?? SKULL.w, d = o.d ?? SKULL.d;
@@ -3905,10 +3909,11 @@ function domeSkull(rig, o = {}) {
  * the chin. Three parts with air between them, which is the same armour-gap-
  * mechanism reading §1.3 asks for everywhere else, applied to a head.
  *
- * The bowl is a loft rather than a lathe so the four helmeted styles can be
- * asymmetric front-to-back (a kabuto is deep at the nape, a bunker is deep at
- * the brow) without any of them going back to being a box: `round` is 0.88–0.96
- * at every station, where the old heads sat at 0.10–0.34 and shaded as planes.
+ * The bowl is a loft rather than a lathe so the five helmeted styles — furnace,
+ * kabuto, mandible, bunker, insulator — can be asymmetric front-to-back (a
+ * kabuto is deep at the nape, a bunker is deep at the brow) without any of them
+ * going back to being a box: `round` is 0.90–0.94 at every station, where the
+ * old heads sat at 0.10–0.34 and shaded as four planes and a fillet.
  */
 function helmSkull(rig, o = {}) {
   const w = o.w ?? SKULL.w, d = o.d ?? SKULL.d;
@@ -3972,13 +3977,20 @@ function addVisor(rig, o) {
   // the only place on the fighter that gets a mirror-tight coat: a 0.035-rough
   // lobe next to the plate's ~0.28 coat is a hard small highlight against a
   // broad one, which is the whole reason a face reads as an instrument.
-  rig.add('head', channelStrip(w, h * 2.1, 0.026), 'bezel',
+  // The well is now three times the slit's height rather than twice it, and the
+  // slit itself is a THIRD of the emissive area it was. §1.6: "emissive is thin
+  // and linear ... it is never a large glowing face." Photographed at closeup
+  // framing, the old band was a solid white lozenge a fifth of the head wide
+  // and, after bloom, the brightest object in the frame by a wide margin — the
+  // exact "big glowing face" the contract rules out. A slit reading as a line
+  // with dark either side of it is what every one of the eight sheets has.
+  rig.add('head', channelStrip(w, h * 3.0, 0.026), 'bezel',
     { p: [0, y, z], r: [FACE_FRONT[0] + tilt, 0, 0], tier: TIER.SECONDARY });
   rig.glow('head', loftHull([
-    { y: -h * 0.5, w: w * 0.74, d: 0.011, round: 0.5 },
-    { y: -h * 0.18, w: w * 0.96, d: 0.015, round: 0.45, smooth: true },
-    { y: h * 0.18, w: w * 0.96, d: 0.015, round: 0.45, smooth: true },
-    { y: h * 0.5, w: w * 0.74, d: 0.011, round: 0.5 },
+    { y: -h * 0.5, w: w * 0.70, d: 0.008, round: 0.5 },
+    { y: -h * 0.16, w: w * 0.94, d: 0.011, round: 0.45, smooth: true },
+    { y: h * 0.16, w: w * 0.94, d: 0.011, round: 0.45, smooth: true },
+    { y: h * 0.5, w: w * 0.70, d: 0.008, round: 0.5 },
   ]), group, { p: [0, y, z + FRONT * 0.005], r: [tilt, 0, 0] });
   // brow: overhang plus a hard lower edge for the shadow to break on
   rig.add('head', loftHull([
@@ -4015,543 +4027,469 @@ function discShed(r, h, segments = 24) {
   ], segments);
 }
 
+/**
+ * Small recessed lens: a dark socket with a bright pupil sitting inside it.
+ *
+ * §1.6 — "emissive is thin and linear ... it is never a large glowing face."
+ * Every optic on a domed head is one of these or a pair of them, at sixteen to
+ * twenty-one millimetres of socket, which is two or three pixels at fighting
+ * range and a hard specular point at close range. That is the whole budget a
+ * face gets, and it is why the plans in §1.7 can afford to have no other
+ * feature on them at all.
+ *
+ * `yaw` turns the lens outward around the skull and has to be applied OUTSIDE
+ * the pitch that stands it up — hence the YXZ order. In XYZ the yaw multiplies
+ * in before the 90-degree pitch and vanishes entirely, which put both of
+ * MANTIS's compound eyes flat on top of its head.
+ */
+function addLens(rig, o) {
+  const r = o.r ?? 0.016;
+  const seg = rig.maxTier >= 2 ? 14 : 8;
+  const place = {
+    p: o.p, r: [FACE_FRONT[0] + (o.tilt ?? 0), o.yaw ?? 0, 0], order: 'YXZ', mirror: o.mirror,
+  };
+  // Ring, then a dark well, then a small pupil. The well is the reason the ring
+  // is not a solid disc of light: with the emissive filling the socket, ANVIL
+  // and MANTIS photographed as a pair of cartoon eyes — two saturated circles a
+  // fifth of the head across each. The pupil is 0.52 of the socket, so what
+  // reads at distance is a dark eye with a highlight in it.
+  rig.add('head', latheProfile([
+    { r: r * 0.98, y: 0 },
+    { r: r * 1.34, y: r * 0.10, smooth: true }, { r: r * 1.30, y: r * 0.46 },
+    { r: r * 0.96, y: r * 0.62 },
+  ], seg), o.ring ?? 'bezel', { ...place, tier: TIER.PRIMARY });
+  rig.add('head', latheProfile([
+    { r: 0, y: 0 }, { r: r * 1.02, y: 0 }, { r: r * 1.02, y: r * 0.26 },
+  ], seg), 'bezel', { ...place, tier: TIER.PRIMARY });
+  rig.glow('head', latheProfile([
+    { r: 0, y: r * 0.30 }, { r: r * 0.52, y: r * 0.30 },
+    { r: r * 0.44, y: r * 0.50, smooth: true }, { r: 0, y: r * 0.60 },
+  ], seg), o.group ?? 'visor', place);
+}
+
 function headFurnace(rig) {
-  // VULKAN. Bulldog: broad, low, thrust forward on a heavy jaw, with a caged
-  // furnace where a face would be. It never gets tall, so it earns its
-  // silhouette by being wider than the neck and hanging out over the chest.
-  rig.add('head', loftHull([
-    { y: -0.056, w: 0.150, d: 0.152, round: 0.40 },
-    { y: -0.004, w: 0.204, d: 0.192, round: 0.30, smooth: true },
-    { y: 0.062, w: 0.212, d: 0.198, round: 0.28, smooth: true },
-    { y: 0.116, w: 0.172, d: 0.164, round: 0.34, smooth: true },
-    { y: 0.146, w: 0.114, d: 0.112, round: 0.44 },
-  ]), 'armorPrimary', { tier: TIER.PRIMARY });
-
-  // brow shelf, heavy enough to throw the whole face into shadow
-  rig.add('head', loftHull([
-    { y: 0, w: 0.218, d: 0.062, round: 0.24 },
-    { y: 0.026, w: 0.196, d: 0.040, round: 0.32 },
-  ]), 'armorSecondary', { p: [0, 0.086, FRONT * 0.070], r: [-20 * DEG, 0, 0], tier: TIER.PRIMARY });
-
-  // jaw, jutting forward and down
-  rig.add('head', loftHull([
-    { y: -0.062, w: 0.132, d: 0.078, z: FRONT * 0.020, round: 0.34 },
-    { y: -0.020, w: 0.176, d: 0.096, z: FRONT * 0.006, round: 0.28, smooth: true },
-    { y: 0.026, w: 0.184, d: 0.088, round: 0.28 },
-  ]), 'armorSecondary', { p: [0, 0, FRONT * 0.060], r: [8 * DEG, 0, 0], tier: TIER.PRIMARY });
-
-  // face cage over the furnace
-  for (let i = -2; i <= 2; i++) {
-    rig.add('head', loftHull([
-      { y: -0.052, w: 0.013, d: 0.026, round: 0.4 },
-      { y: 0.052, w: 0.011, d: 0.024, round: 0.4 },
-    ]), 'bezel', {
-      p: [i * 0.026, 0.020, FRONT * (0.108 - Math.abs(i) * 0.009)], r: [0, i * -9 * DEG, 0], tier: TIER.PRIMARY,
-    });
-  }
-  rig.add('head', loftHull([
-    { y: 0, w: 0.170, d: 0.030, round: 0.35 },
-    { y: 0.014, w: 0.158, d: 0.022, round: 0.4 },
-  ]), 'trim', { p: [0, 0.070, FRONT * 0.096], r: [-14 * DEG, 0, 0], tier: TIER.SECONDARY });
-  rig.add('head', loftHull([
-    { y: 0, w: 0.156, d: 0.028, round: 0.35 },
-    { y: 0.014, w: 0.148, d: 0.020, round: 0.4 },
-  ]), 'trim', { p: [0, -0.030, FRONT * 0.098], r: [16 * DEG, 0, 0], tier: TIER.SECONDARY });
-  // The furnace itself.
+  // VULKAN — the `furnace` sheet. A squat riveted helm with one wide slot for a
+  // face, a full-width brow strap in bare trim metal, and a riveted band running
+  // the crown from brow to nape. Broadest brow band in the cast, which is what
+  // makes it read as pressed and bolted plate rather than as a casting.
   //
-  // These discs used to sit at z = 0.084. The head hull at this height is
-  // 0.195 m deep about its own origin, so its front face is at z = 0.097: the
-  // furnace was thirteen millimetres *inside solid geometry*, and Vulkan — the
-  // character the canonical `02-closeup-face` photographs — rendered with a
-  // black hole behind a grille and no eye at all. Measured on a 200x220 crop of
-  // the face at that shot's framing, the region held 0.22% of pixels above 235
-  // and a peak of 242, i.e. no focal point whatsoever; every Tekken 8 closeup in
-  // `ref/` puts its brightest, smallest, highest-frequency element on the face.
-  //
-  // They now sit proud of the hull and inside the cage's depth range, so the
-  // bars silhouette against them, which is the whole point of a caged furnace.
-  for (let i = -1; i <= 1; i++) {
-    rig.glow('head', latheProfile([
-      { r: 0, y: 0 }, { r: 0.022 - Math.abs(i) * 0.006, y: 0 },
-      { r: 0.019 - Math.abs(i) * 0.006, y: 0.009 }, { r: 0, y: 0.013 },
-    ], 18), 'visor', { p: [i * 0.038, 0.026, FRONT * 0.100], r: [-90 * DEG * -FRONT, 0, 0] });
-  }
-
-  // riveted skull cap and a pair of flue nubs on the whip leaves
-  rig.add('head', shellLathe([
-    { r: 0.098, y: -0.062 }, { r: 0.106, y: -0.024, smooth: true },
-    { r: 0.106, y: 0.024, smooth: true }, { r: 0.090, y: 0.060 },
-  ], 0.022, 18, { arc: 190 * DEG, phase: -5 * DEG }), 'armorSecondary', {
-    p: [0, 0.086, -FRONT * 0.014], r: [-90 * DEG, 0, 0], tier: TIER.PRIMARY,
+  // What was here was a bulldog: a jutting jaw, a five-bar face cage and three
+  // furnace discs behind it. §1.7 gives a helmeted head a brow band, a cheek
+  // plate, a visor slit and a crest, and nothing else — on a skull now a third
+  // smaller than it was, a five-bar cage is three pixels of noise. One lit slot
+  // replaces all of it and stays legible at every distance the fight camera
+  // uses.
+  helmSkull(rig, {
+    w: SKULL.w * 1.05, d: SKULL.d * 0.93, nose: 0.008, band: 0.54, bandArc: 208, bandMat: 'trim',
   });
-  rig.add('head', boltRing(7, 0.086, 0.008, 0.010), 'trim',
-    { p: [0, 0.148, -FRONT * 0.014], tier: TIER.GREEBLE });
+  addVisor(rig, { w: 0.104, h: 0.012, y: 0.022, z: FRONT * 0.080, brow: 0.014, posts: false });
+
+  // Riveted crown strap. Swept ear to ear (the lathe axis is rolled onto -Z, so
+  // 90 degrees of arc is straight up) on a radius that clears the bowl by about
+  // five millimetres — enough for a shadow line, not enough to read as a hoop.
+  rig.add('head', shellLathe([
+    { r: 0.070, y: -0.030 }, { r: 0.077, y: 0, smooth: true }, { r: 0.070, y: 0.030 },
+  ], 0.009, rig.maxTier >= 2 ? 15 : 9, { arc: 150 * DEG, phase: 15 * DEG }), 'armorSecondary', {
+    p: [0, 0.074, 0], r: [-90 * DEG, 0, 0], tier: TIER.PRIMARY,
+  });
+  rig.add('head', boltRing(6, 0.044, 0.006, 0.007), 'trim', { p: [0, 0.126, 0], tier: TIER.GREEBLE });
+
+  // Two short flue stubs on the whip leaves. Stubs, not the 0.07 m stacks they
+  // replace: a helmeted head is allowed to break its outline, but §1.2 measures
+  // the head's bounding box and a pair of chimneys puts half the skull's own
+  // height back into it.
   for (const { s: side, sign, mirror } of SIDES) {
     const stack = `antenna_${side}`;
     rig.add('head', latheProfile([
-      { r: 0.022, y: 0 }, { r: 0.022, y: 0.058 }, { r: 0.027, y: 0.063, smooth: true },
-      { r: 0.017, y: 0.072 }, { r: 0, y: 0.072 },
-    ], 14), 'darkMetal', {
-      p: [sign * 0.062, 0.126, -FRONT * 0.058], r: [-26 * DEG, 0, sign * 12 * DEG], mirror, tier: TIER.PRIMARY,
-      sprung: stack,
+      { r: 0.014, y: 0 }, { r: 0.014, y: 0.026 }, { r: 0.018, y: 0.030, smooth: true },
+      { r: 0.011, y: 0.036 }, { r: 0, y: 0.036 },
+    ], 10), 'darkMetal', {
+      p: [sign * 0.050, 0.086, -FRONT * 0.042], r: [-22 * DEG, 0, sign * 10 * DEG], mirror,
+      tier: TIER.PRIMARY, sprung: stack,
     });
-    rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.013, y: 0 }, { r: 0, y: 0.008 }], 14), 'vents',
-      { p: [sign * 0.085, 0.190, -FRONT * 0.090], r: [-26 * DEG, 0, sign * 12 * DEG], mirror, sprung: stack });
+    rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.008, y: 0 }, { r: 0, y: 0.006 }], 10), 'vents',
+      { p: [sign * 0.063, 0.118, -FRONT * 0.055], r: [-22 * DEG, 0, sign * 10 * DEG], mirror, sprung: stack });
   }
 }
 
 function headSwept(rig) {
-  // KESTREL. A cycle helmet: one continuous ovoid shell with a single tall fin
-  // running the length of the crown and overhanging the nape, and a wraparound
-  // band low across the face. The only skull in the cast with no separate ear,
-  // jaw or cheek part, so the outline is one unbroken curve interrupted once.
-  rig.add('head', loftHull([
-    { y: -0.052, w: 0.104, d: 0.146, z: FRONT * 0.020, round: 0.46 },
-    { y: 0.004, w: 0.142, d: 0.206, z: FRONT * 0.010, round: 0.40, smooth: true },
-    { y: 0.078, w: 0.138, d: 0.214, z: -FRONT * 0.006, round: 0.38, smooth: true },
-    { y: 0.132, w: 0.098, d: 0.162, z: -FRONT * 0.024, round: 0.46 },
-  ], { perQuad: 4 }), 'armorPrimary', { tier: TIER.PRIMARY });
+  // KESTREL — derived from `ghostframe`'s frame with `volt-monk`'s surfacing, so
+  // it is on the domed plan: one continuous egg drawn out fore and aft into a
+  // teardrop, with a low blade of a crest along the crown to the nape.
+  //
+  // That crest used to be a 0.19 m fin standing 0.05 m clear of the shell — a
+  // third of a head-height of pure bounding box. It is now a raised spine ON the
+  // shell: the same "this head is pointing somewhere" read at forty pixels, none
+  // of the volume.
+  domeSkull(rig, { w: SKULL.w * 0.94, d: SKULL.d * 1.10, z: -FRONT * 0.006 });
+  addVisor(rig, { w: 0.100, h: 0.011, y: 0.034, z: FRONT * 0.082, tilt: -12 * DEG, brow: 0.014, posts: false });
 
-  addVisor(rig, { w: 0.132, h: 0.026, y: 0.038, z: FRONT * 0.100, tilt: -12 * DEG, brow: 0.022, posts: false });
+  // The crest is swept on the egg's OWN curve rather than lofted across it. A
+  // straight loft over a curved crown is buried at both ends and proud only in
+  // the middle — authored as a box-shaped fin it disappeared completely into the
+  // shell, which is what the first pass of this head did. A circular blade
+  // centred just under the temples clears the surface by eight to ten
+  // millimetres for its whole length.
+  const fin = { p: [0, 0.056, 0], r: [0, 0, 90 * DEG], tier: TIER.PRIMARY };
+  rig.add('head', shellLathe([
+    { r: 0.100, y: -0.009 }, { r: 0.104, y: 0, smooth: true }, { r: 0.100, y: 0.009 },
+  ], 0.014, rig.maxTier >= 2 ? 16 : 10, { arc: 142 * DEG, phase: -62 * DEG }), 'armorAccent', fin);
+  rig.glow('head', shellLathe([
+    { r: 0.1055, y: -0.0028 }, { r: 0.1065, y: 0, smooth: true }, { r: 0.1055, y: 0.0028 },
+  ], 0.005, rig.maxTier >= 2 ? 14 : 9, { arc: 122 * DEG, phase: -52 * DEG }), 'spine', fin);
 
-  // The fin. It starts forward of the brow and runs past the nape, so the head
-  // reads as pointing somewhere even as a black shape at forty pixels.
-  rig.add('head', loftHull([
-    { y: 0.062, w: 0.026, d: 0.062, z: FRONT * 0.086, round: 0.32 },
-    { y: 0.122, w: 0.022, d: 0.196, z: FRONT * 0.010, round: 0.24, smooth: true },
-    { y: 0.166, w: 0.017, d: 0.190, z: -FRONT * 0.070, round: 0.24, smooth: true },
-    { y: 0.184, w: 0.008, d: 0.104, z: -FRONT * 0.146, round: 0.40 },
-  ]), 'armorAccent', { tier: TIER.PRIMARY });
-  rig.glow('head', loftHull([
-    { y: 0.106, w: 0.008, d: 0.150, z: FRONT * 0.020, round: 0.5 },
-    { y: 0.172, w: 0.006, d: 0.110, z: -FRONT * 0.116, round: 0.5 },
-  ]), 'spine', { tier: TIER.PRIMARY });
-
-  // chin intake, the one recess on an otherwise sealed shell
+  // the one recess on an otherwise sealed shell
   addLouvres(rig, 'head', {
-    p: [0, -0.026, FRONT * 0.104], r: [(-24) * DEG, YAW_FRONT, 0],
-    w: 0.074, h: 0.034, n: 3, depth: 0.014, glow: 'vents',
+    p: [0, -0.018, FRONT * 0.074], r: [(-26) * DEG, YAW_FRONT, 0],
+    w: 0.054, h: 0.024, n: 3, depth: 0.010, glow: 'vents',
   });
   for (const { sign, mirror } of SIDES) {
     rig.add('head', loftHull([
-      { y: -0.010, w: 0.016, d: 0.070, round: 0.42 },
-      { y: 0.058, w: 0.013, d: 0.056, round: 0.44 },
-    ]), 'trim', { p: [sign * 0.070, 0.020, -FRONT * 0.030], r: [0, 0, sign * -6 * DEG], mirror, tier: TIER.SECONDARY });
+      { y: -0.004, w: 0.012, d: 0.054, round: 0.46 },
+      { y: 0.046, w: 0.010, d: 0.040, round: 0.48 },
+    ]), 'trim', { p: [sign * 0.056, 0.016, -FRONT * 0.020], r: [0, 0, sign * -6 * DEG], mirror, tier: TIER.SECONDARY });
   }
 }
 
 function headTurret(rig) {
-  // ANVIL. Barely a head at all: a squat dome sunk inside a collar ring wider
-  // than the skull, with one deep cyclops slit and two lifting eyes on the
-  // crown. It is the only fighter in the cast whose head does not clear its own
-  // collar, which is exactly the read a dockyard lifting rig wants.
+  // ANVIL — the `atlas-7` sheet. A riveted diving bell: near spherical, a pair
+  // of brass goggle lenses set wide on the face with a breather grille sunk
+  // between them, and two lifting eyes on the crown. Domed plan — no jaw, no
+  // brow band, no visor.
+  //
+  // The collar shed this dome used to sit down inside measured 0.316 m across on
+  // a 0.215 m skull: the widest head on the roster, and the reason ANVIL came in
+  // at 5.88 body-heights per head. The bell now clears its own collar, and the
+  // ring that is left is a rivet band on the shell rather than a hat brim.
+  domeSkull(rig, { w: SKULL.w * 1.02, d: SKULL.d * 0.86, crown: HEAD_CROWN - 0.012 });
   rig.add('head', latheProfile([
-    { r: 0.052, y: -0.056 }, { r: 0.100, y: -0.030, smooth: true },
-    { r: 0.116, y: 0.006, smooth: true }, { r: 0.112, y: 0.046, smooth: true },
-    { r: 0.076, y: 0.082, smooth: true }, { r: 0, y: 0.096 },
-  ], 24), 'armorPrimary', { s: [1, 1, 1.10], tier: TIER.PRIMARY });
+    { r: 0.0625, y: 0.002 }, { r: 0.0675, y: 0.011, smooth: true }, { r: 0.0625, y: 0.020 },
+  ], rig.maxTier >= 2 ? 22 : 12), 'trim', { s: [1, 1, 1.05], tier: TIER.PRIMARY });
+  rig.add('head', boltRing(8, 0.038, 0.006, 0.007), 'trim', { p: [0, 0.104, 0], tier: TIER.GREEBLE });
 
-  // collar ring: a wide flat shed the dome sits down inside
-  rig.add('head', discShed(0.158, 0.030, 26), 'armorSecondary', { p: [0, -0.056, 0], tier: TIER.PRIMARY });
-  rig.add('head', boltRing(10, 0.132, 0.009, 0.011), 'trim', { p: [0, -0.026, 0], tier: TIER.GREEBLE });
-
-  // one slit, cut deep so the brow above it holds a hard shadow
-  rig.add('head', channelStrip(0.152, 0.040, 0.030), 'bezel',
-    { p: [0, 0.014, FRONT * 0.092], r: FACE_FRONT, tier: TIER.SECONDARY });
-  rig.glow('head', loftHull([
-    { y: -0.008, w: 0.108, d: 0.012, round: 0.5 },
-    { y: 0.008, w: 0.116, d: 0.014, round: 0.5 },
-  ]), 'visor', { p: [0, 0.014, FRONT * 0.098] });
-  rig.add('head', loftHull([
-    { y: 0, w: 0.150, d: 0.048, round: 0.24 },
-    { y: 0.020, w: 0.126, d: 0.026, round: 0.34 },
-  ]), 'armorSecondary', { p: [0, 0.042, FRONT * 0.086], r: [-26 * DEG, 0, 0], tier: TIER.PRIMARY });
+  for (const { sign, mirror } of SIDES) {
+    addLens(rig, {
+      p: [sign * 0.036, 0.038, FRONT * 0.058], tilt: -12 * DEG, yaw: sign * 24 * DEG,
+      r: 0.020, ring: 'trim', mirror,
+    });
+  }
+  // breather grille, the one dark incident between the two lenses
+  rig.add('head', channelStrip(0.030, 0.036, 0.014), 'bezel',
+    { p: [0, -0.008, FRONT * 0.056], r: [FACE_FRONT[0] + 14 * DEG, 0, 0], tier: TIER.SECONDARY });
 
   // lifting eyes — two closed loops on the crown, the one silhouette break
   for (const { sign, mirror } of SIDES) {
-    const ring = [];
-    const R = 0.026;
-    for (let i = 0; i < 10; i++) {
-      const a = (i / 10) * Math.PI * 2;
-      const g = bevelBox(0.014, 0.013, (2 * Math.PI * R) / 10 * 0.94, 0.003);
-      g.applyMatrix4(new THREE.Matrix4().compose(
-        new THREE.Vector3(Math.cos(a) * R, Math.sin(a) * R, 0),
-        new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, a + Math.PI / 2)),
-        new THREE.Vector3(1, 1, 1),
-      ));
-      ring.push(g);
-    }
-    rig.add('head', joinGeometries(ring), 'trim', {
-      p: [sign * 0.050, 0.116, -FRONT * 0.010], r: [0, sign * 22 * DEG, 0], mirror, tier: TIER.PRIMARY,
+    rig.add('head', segmentRing(0.019, 0.010, 0.009, 8, 0.002), 'trim', {
+      p: [sign * 0.034, 0.110, -FRONT * 0.006], r: [0, sign * 24 * DEG, 0], mirror, tier: TIER.PRIMARY,
     });
   }
 }
 
 function headKabuto(rig) {
-  // RONIN-07. A helm bowl with a flared layered neck guard and a crescent crest
-  // sweeping up and forward off the brow. The crescent alone names the character
-  // at any size, and the shikoro gives the head a wider base than the neck,
-  // which no other skull here does.
-  rig.add('head', latheProfile([
-    { r: 0.062, y: -0.046 }, { r: 0.096, y: -0.014, smooth: true },
-    { r: 0.104, y: 0.036, smooth: true }, { r: 0.086, y: 0.092, smooth: true },
-    { r: 0.038, y: 0.128, smooth: true }, { r: 0, y: 0.140 },
-  ], 24), 'armorPrimary', { s: [1, 1, 1.14], tier: TIER.PRIMARY });
+  // RONIN-07 — the `neon-ronin` sheet. A helm bowl deeper at the nape than at
+  // the brow, a three-lame shikoro stepping down over the neck, and a crescent
+  // maedate springing off a boss on the brow. The crescent alone names the
+  // character at any size.
+  //
+  // Everything here is between half and two thirds of what it was. The old
+  // shikoro was a 0.30 m disc: measured on the built mesh, RONIN's head came out
+  // 0.396 m wide against 0.222 m tall — a w/h of 1.78 where a head wants 0.7,
+  // and 5.00 body-heights per head, the worst number on the roster.
+  helmSkull(rig, {
+    w: SKULL.w * 0.92, d: SKULL.d * 1.02, nose: -0.006, band: 0.58, bandArc: 176, cheekMat: 'trim',
+  });
+  addVisor(rig, { w: 0.092, h: 0.011, y: 0.040, z: FRONT * 0.078, tilt: -6 * DEG, brow: 0.018, posts: false });
 
-  // shikoro: three flared lames stepping out and down over the shoulders
+  // shikoro: three flared lames stepping out and down over the shoulders,
+  // centred on the nape (270 degrees is -Z in the lathe's own frame)
   for (let i = 0; i < 3; i++) {
-    const R = 0.116 + i * 0.030;
+    const R = 0.076 + i * 0.015;
     rig.add('head', shellLathe([
-      { r: R * 0.86, y: 0 }, { r: R, y: 0.020, smooth: true }, { r: R * 0.92, y: 0.044 },
-    ], 0.011, 22, { arc: 250 * DEG, phase: 145 * DEG }), i === 1 ? 'armorAccent' : 'armorSecondary', {
-      p: [0, -0.006 - i * 0.030, -FRONT * 0.006], r: [(-22 - i * 9) * DEG, 0, 0], tier: TIER.PRIMARY,
+      { r: R * 0.88, y: 0 }, { r: R, y: 0.013, smooth: true }, { r: R * 0.92, y: 0.028 },
+    ], 0.008, rig.maxTier >= 2 ? 18 : 11, { arc: 244 * DEG, phase: 148 * DEG }),
+    i === 1 ? 'armorAccent' : 'armorSecondary', {
+      p: [0, -0.004 - i * 0.019, -FRONT * 0.004], r: [(-20 - i * 8) * DEG, 0, 0], tier: TIER.PRIMARY,
     });
   }
 
-  // menpo: a face mask with a horizontal grille and a pointed chin
-  rig.add('head', loftHull([
-    { y: -0.058, w: 0.070, d: 0.048, z: FRONT * 0.014, round: 0.34 },
-    { y: -0.010, w: 0.124, d: 0.062, round: 0.26, smooth: true },
-    { y: 0.048, w: 0.132, d: 0.056, round: 0.26 },
-  ]), 'trim', { p: [0, 0, FRONT * 0.072], r: [4 * DEG, 0, 0], tier: TIER.PRIMARY });
+  // menpo grille under the visor — three thin bars, this plan's one nod to a
+  // mouth on a head that does not have one
   for (let i = 0; i < 3; i++) {
-    rig.add('head', bevelBox(0.096 - i * 0.014, 0.006, 0.008, 0.002), 'bezel',
-      { p: [0, -0.040 + i * 0.016, FRONT * 0.106], r: [10 * DEG, 0, 0], tier: TIER.GREEBLE });
+    rig.add('head', bevelBox(0.058 - i * 0.010, 0.005, 0.006, 0.0015), 'bezel',
+      { p: [0, -0.026 + i * 0.013, FRONT * 0.070], r: [10 * DEG, 0, 0], tier: TIER.GREEBLE });
   }
-  addVisor(rig, { w: 0.116, h: 0.022, y: 0.052, z: FRONT * 0.092, tilt: -6 * DEG, brow: 0.030, posts: false });
 
-  // maedate: the crescent. Two blades springing from one boss, curving up and
-  // forward, on the whip leaves so they keep ringing after a head turn.
-  //
-  // A real maedate is a broad flat pressing, and that is not decoration — it is
-  // the reason the crest survives being small on screen. At 24mm across, these
-  // were horns: a hairline at fighting range, and RONIN measured 0.134 against
-  // AXIOM in profile, the closest pair on the sheet. Broad and thin, they read
-  // as one crescent from the front and as a long curved blade from the side,
-  // which is the only view the fight camera gives.
+  // maedate: the crescent. Two broad flat blades springing from one boss, on the
+  // whip leaves so they keep ringing after a head turn. Broad and thin is not
+  // decoration — it is why the crest survives being small on screen. At 24 mm
+  // across an earlier pass these were horns, and a horn is a hairline at
+  // fighting range.
   for (const { s: side, sign, mirror } of SIDES) {
     const whip = `antenna_${side}`;
     rig.add('head', loftHull([
-      { y: 0, w: 0.052, d: 0.030, round: 0.30 },
-      { y: 0.118, w: 0.104, d: 0.020, z: FRONT * 0.052, round: 0.16, smooth: true },
-      { y: 0.216, w: 0.086, d: 0.013, z: FRONT * 0.140, round: 0.18, smooth: true },
-      { y: 0.276, w: 0.030, d: 0.009, z: FRONT * 0.206, round: 0.34 },
+      { y: 0, w: 0.036, d: 0.022, round: 0.34 },
+      { y: 0.078, w: 0.072, d: 0.014, z: FRONT * 0.034, round: 0.18, smooth: true },
+      { y: 0.142, w: 0.058, d: 0.009, z: FRONT * 0.092, round: 0.20, smooth: true },
+      { y: 0.182, w: 0.021, d: 0.006, z: FRONT * 0.136, round: 0.36 },
     ]), 'trim', {
-      p: [sign * 0.024, 0.102, FRONT * 0.026],
+      p: [sign * 0.019, 0.086, FRONT * 0.018],
       r: [-14 * DEG, 0, sign * 21 * DEG], mirror, tier: TIER.PRIMARY, sprung: whip,
     });
-    // A crimson cord line down the blade's spine, the character's accent colour
-    // on the one part of it that is never in shadow.
+    // a crimson cord line down the blade's spine, the character's accent colour
+    // on the one part of it that is never in shadow
     rig.add('head', loftHull([
-      { y: 0.010, w: 0.014, d: 0.008, round: 0.5 },
-      { y: 0.230, w: 0.010, d: 0.006, z: FRONT * 0.150, round: 0.5 },
+      { y: 0.008, w: 0.010, d: 0.006, round: 0.5 },
+      { y: 0.152, w: 0.007, d: 0.004, z: FRONT * 0.100, round: 0.5 },
     ]), 'armorAccent', {
-      p: [sign * 0.024, 0.102, FRONT * 0.036],
+      p: [sign * 0.019, 0.086, FRONT * 0.025],
       r: [-14 * DEG, 0, sign * 21 * DEG], mirror, tier: TIER.SECONDARY, sprung: whip,
     });
   }
   rig.add('head', latheProfile([
-    { r: 0, y: 0 }, { r: 0.032, y: 0 }, { r: 0.036, y: 0.010, smooth: true },
-    { r: 0.026, y: 0.028 }, { r: 0, y: 0.030 },
-  ], 20), 'armorAccent', { p: [0, 0.098, FRONT * 0.048], r: [-70 * DEG * -FRONT, 0, 0], tier: TIER.PRIMARY });
+    { r: 0, y: 0 }, { r: 0.022, y: 0 }, { r: 0.025, y: 0.008, smooth: true },
+    { r: 0.017, y: 0.020 }, { r: 0, y: 0.022 },
+  ], 16), 'armorAccent', { p: [0, 0.084, FRONT * 0.034], r: [-70 * DEG * -FRONT, 0, 0], tier: TIER.PRIMARY });
 }
 
 function headMandible(rig) {
-  // MANTIS. A narrow triangular head thrust forward on the raked thorax, with
-  // wide-set compound optics instead of a centred band and two palps curling in
-  // under the jaw. Nothing else in the cast has its eyes off the centre line.
-  rig.add('head', loftHull([
-    { y: -0.050, w: 0.088, d: 0.140, z: FRONT * 0.052, round: 0.44 },
-    { y: 0.006, w: 0.146, d: 0.206, z: FRONT * 0.030, round: 0.32, smooth: true },
-    { y: 0.084, w: 0.150, d: 0.212, z: FRONT * 0.008, round: 0.28, smooth: true },
-    { y: 0.142, w: 0.104, d: 0.150, z: -FRONT * 0.018, round: 0.36 },
-  ]), 'armorPrimary', { tier: TIER.PRIMARY });
+  // MANTIS — derived in the `neon-ronin` language. A narrow wedge of a helm
+  // thrust forward on the raked thorax, with wide-set compound optics instead of
+  // a centred band and a palp curling in under each of them. Nothing else in the
+  // cast has its eyes off the centre line, and that survives at silhouette size.
+  helmSkull(rig, {
+    w: SKULL.w * 0.86, d: SKULL.d * 1.06, nose: 0.020, band: 0.64, bandArc: 148,
+    bandMat: 'armorAccent', cheeks: false,
+  });
 
-  // compound optics: two domes set out on the temples, framed by a dark socket
-  for (const { sign, mirror } of SIDES) {
-    rig.add('head', latheProfile([
-      { r: 0, y: 0 }, { r: 0.048, y: 0 }, { r: 0.050, y: 0.010, smooth: true },
-      { r: 0.036, y: 0.026 }, { r: 0.028, y: 0.026 }, { r: 0.028, y: 0 },
-    ], 18), 'bezel', {
-      p: [sign * 0.062, 0.052, FRONT * 0.070], r: [-8 * DEG, sign * 34 * DEG, 0], mirror, tier: TIER.PRIMARY,
-    });
-    rig.glow('head', latheProfile([
-      { r: 0, y: 0 }, { r: 0.033, y: 0 }, { r: 0.031, y: 0.012, smooth: true }, { r: 0, y: 0.022 },
-    ], 18), 'visor', {
-      p: [sign * 0.070, 0.052, FRONT * 0.086], r: [-8 * DEG, sign * 34 * DEG, 0], mirror,
-    });
-  }
-
-  // palps, curling forward and inward under the face
-  for (const { sign, mirror } of SIDES) {
-    rig.add('head', loftHull([
-      { y: 0, w: 0.026, d: 0.038, round: 0.40 },
-      { y: -0.048, w: 0.020, d: 0.044, z: FRONT * 0.036, round: 0.38, smooth: true },
-      { y: -0.082, w: 0.009, d: 0.024, z: FRONT * 0.070, round: 0.46 },
-    ]), 'trim', {
-      p: [sign * 0.044, -0.014, FRONT * 0.100], r: [0, sign * -14 * DEG, sign * 20 * DEG], mirror, tier: TIER.PRIMARY,
-    });
-  }
-  rig.add('head', loftHull([
-    { y: 0, w: 0.096, d: 0.040, round: 0.30 },
-    { y: 0.020, w: 0.070, d: 0.020, round: 0.42 },
-  ]), 'armorSecondary', { p: [0, 0.098, FRONT * 0.096], r: [-30 * DEG, 0, 0], tier: TIER.PRIMARY });
-
-  // twin antennae, swept back well past the nape
   for (const { s: side, sign, mirror } of SIDES) {
-    const whip = `antenna_${side}`;
-    rig.add('head', loftHull([
-      { y: 0, w: 0.020, d: 0.084, round: 0.30 },
-      { y: 0.062, w: 0.016, d: 0.140, z: -FRONT * 0.056, round: 0.26, smooth: true },
-      { y: 0.104, w: 0.006, d: 0.082, z: -FRONT * 0.132, round: 0.40 },
-    ]), 'armorAccent', {
-      p: [sign * 0.038, 0.112, -FRONT * 0.014], r: [20 * DEG, sign * -12 * DEG, sign * 18 * DEG],
-      order: 'YXZ', mirror, tier: TIER.PRIMARY, sprung: whip,
+    addLens(rig, {
+      p: [sign * 0.046, 0.038, FRONT * 0.058], tilt: -10 * DEG, yaw: sign * 34 * DEG, r: 0.021, mirror,
     });
-    rig.add('head', latheProfile([
-      { r: 0.006, y: 0 }, { r: 0.006, y: 0.05 }, { r: 0.003, y: 0.054 }, { r: 0.003, y: 0.17 }, { r: 0, y: 0.18 },
-    ], 10), 'trim', {
-      p: [sign * 0.050, 0.124, -FRONT * 0.022], r: [-22 * DEG, 0, sign * 20 * DEG], mirror, tier: TIER.GREEBLE, sprung: whip,
+    // palp, curling forward and inward under the optic
+    rig.add('head', loftHull([
+      { y: 0, w: 0.019, d: 0.028, round: 0.42 },
+      { y: -0.038, w: 0.014, d: 0.032, z: FRONT * 0.026, round: 0.40, smooth: true },
+      { y: -0.062, w: 0.007, d: 0.017, z: FRONT * 0.052, round: 0.46 },
+    ]), 'trim', {
+      p: [sign * 0.032, -0.010, FRONT * 0.072], r: [0, sign * -14 * DEG, sign * 20 * DEG], mirror, tier: TIER.PRIMARY,
+    });
+    // antenna, swept back past the nape, on the whip leaf
+    rig.add('head', loftHull([
+      { y: 0, w: 0.015, d: 0.058, round: 0.34 },
+      { y: 0.044, w: 0.011, d: 0.094, z: -FRONT * 0.038, round: 0.30, smooth: true },
+      { y: 0.072, w: 0.005, d: 0.054, z: -FRONT * 0.088, round: 0.42 },
+    ]), 'armorAccent', {
+      p: [sign * 0.028, 0.090, -FRONT * 0.012], r: [20 * DEG, sign * -12 * DEG, sign * 18 * DEG],
+      order: 'YXZ', mirror, tier: TIER.PRIMARY, sprung: `antenna_${side}`,
     });
   }
 }
 
 function headLantern(rig) {
-  // NYX. A wide flat brim over an open lantern cage with the light floating
-  // inside it. At a hundred pixels this is a horizontal line with a bright dot
-  // under it, which is the most legible head shape in the cast and the only one
-  // whose widest point is a single thin plane.
-  rig.add('head', loftHull([
-    { y: -0.048, w: 0.078, d: 0.076, round: 0.40 },
-    { y: 0.012, w: 0.098, d: 0.096, round: 0.34, smooth: true },
-    { y: 0.086, w: 0.092, d: 0.090, round: 0.36, smooth: true },
-    { y: 0.128, w: 0.048, d: 0.048, round: 0.46 },
-  ]), 'darkMetal', { tier: TIER.PRIMARY });
-
-  // the brim
-  rig.add('head', discShed(0.164, 0.018, 26), 'armorPrimary', { p: [0, 0.052, 0], s: [1, 1, 0.86], tier: TIER.PRIMARY });
+  // NYX — the `vesper` sheet plus the lantern lens the roster asks for. A glossy
+  // black egg with one gold ring at the brow and a single tall lens burning
+  // through a slot in the face. At a hundred pixels this is a dark oval with a
+  // bright vertical bar in it, which is the most legible face in the cast.
+  //
+  // The wide flat brim that used to define this head measured 0.328 m across on
+  // a 0.343 m skull — NYX carried the largest head on the roster at 4.98
+  // body-heights. The brim is now a ring ON the head, and the read it carried
+  // (one hard horizontal line under a top key) survives as the ring's own
+  // shadow.
+  domeSkull(rig, { w: SKULL.w * 0.96, d: SKULL.d * 0.96 });
   rig.add('head', latheProfile([
-    { r: 0.156, y: 0 }, { r: 0.166, y: 0.008, smooth: true }, { r: 0.156, y: 0.017 },
-  ], 26), 'trim', { p: [0, 0.052, 0], s: [1, 1, 0.86], tier: TIER.SECONDARY });
+    { r: 0.0660, y: 0 }, { r: 0.0705, y: 0.008, smooth: true }, { r: 0.0660, y: 0.016 },
+  ], rig.maxTier >= 2 ? 24 : 13), 'trim', {
+    p: [0, 0.046, 0], s: [1, 1, SKULL.d / SKULL.w], tier: TIER.PRIMARY,
+  });
 
-  // cage: four corner posts with the core hanging between them, so the skull
-  // has a hole in it and the glow reads through from both sides
-  for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      rig.add('head', loftHull([
-        { y: -0.040, w: 0.014, d: 0.014, round: 0.44 },
-        { y: 0.046, w: 0.011, d: 0.011, round: 0.46 },
-      ]), 'trim', { p: [sx * 0.044, 0, sz * FRONT * 0.042], tier: TIER.PRIMARY });
-    }
-  }
+  // the lantern: a dark well sunk into the face with the core floating in it
+  rig.add('head', channelStrip(0.030, 0.082, 0.020), 'bezel',
+    { p: [0, 0.024, FRONT * 0.076], r: [FACE_FRONT[0] - 4 * DEG, 0, 0], tier: TIER.PRIMARY });
   rig.glow('head', latheProfile([
-    { r: 0, y: -0.030 }, { r: 0.030, y: -0.010 }, { r: 0.032, y: 0.004 }, { r: 0, y: 0.034 },
-  ], 6, { faceted: true, phase: Math.PI / 6 }), 'core', { p: [0, 0.006, 0] });
-  addVisor(rig, { w: 0.082, h: 0.018, y: 0.022, z: FRONT * 0.052, brow: 0.018, posts: false, group: 'visor' });
+    { r: 0, y: -0.030 }, { r: 0.014, y: -0.016 }, { r: 0.015, y: 0.014 }, { r: 0, y: 0.032 },
+  ], 6, { faceted: true, phase: Math.PI / 6 }), 'core', { p: [0, 0.024, FRONT * 0.072] });
+  for (const { sign, mirror } of SIDES) {
+    rig.glow('head', loftHull([
+      { y: -0.022, w: 0.006, d: 0.005, round: 0.5 },
+      { y: 0.038, w: 0.005, d: 0.004, round: 0.5 },
+    ]), 'visor', { p: [sign * 0.026, 0.018, FRONT * 0.068], r: [0, 0, sign * -10 * DEG], mirror });
+  }
 
   // finial
   rig.add('head', latheProfile([
-    { r: 0.026, y: 0 }, { r: 0.020, y: 0.018 }, { r: 0.010, y: 0.024 },
-    { r: 0.010, y: 0.056 }, { r: 0, y: 0.072 },
-  ], 14), 'armorAccent', { p: [0, 0.124, 0], tier: TIER.PRIMARY });
-  rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.013, y: 0 }, { r: 0, y: 0.016 }], 12), 'spine',
-    { p: [0, 0.192, 0] });
+    { r: 0.018, y: 0 }, { r: 0.013, y: 0.012 }, { r: 0.007, y: 0.016 },
+    { r: 0.007, y: 0.034 }, { r: 0, y: 0.044 },
+  ], 12), 'armorAccent', { p: [0, 0.120, 0], tier: TIER.PRIMARY });
+  rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.009, y: 0 }, { r: 0, y: 0.011 }], 10), 'spine',
+    { p: [0, 0.158, 0] });
 }
 
 function headBunker(rig) {
-  // BASTION. A wide low vault with a slit cut deep under a riot brow, and cheek
-  // wings that drop outward onto the shoulders. There is no crest and no
-  // antenna: the head is part of the wall, and anything sticking out of it would
-  // break the one read this character has.
-  rig.add('head', loftHull([
-    { y: -0.048, w: 0.196, d: 0.156, round: 0.16 },
-    { y: 0.004, w: 0.244, d: 0.196, round: 0.12, smooth: true },
-    { y: 0.062, w: 0.250, d: 0.200, round: 0.12, smooth: true },
-    { y: 0.104, w: 0.212, d: 0.168, round: 0.18 },
-  ]), 'armorPrimary', { tier: TIER.PRIMARY });
+  // BASTION — the `paladin` sheet. A tall narrow knight's helm with one upright
+  // fin crest running brow to nape, a narrow slit under a heavy brow, and cheek
+  // plates dropping to the jaw line. The fin is the whole silhouette: it is what
+  // stops a smooth helm reading as a thumb.
+  //
+  // What this replaces was a wide low vault — 0.348 m across against 0.179 m
+  // tall, a w/h of 1.94 where a head wants about 0.7. It measured 10.95
+  // body-heights on HEIGHT while reading as a brick from every angle the fight
+  // camera actually uses, which is exactly the trap §2.4 is describing.
+  helmSkull(rig, {
+    w: SKULL.w * 0.90, d: SKULL.d * 1.00, nose: 0.012, band: 0.56, bandArc: 156, bandMat: 'trim',
+  });
+  addVisor(rig, { w: 0.086, h: 0.011, y: 0.030, z: FRONT * 0.090, tilt: -3 * DEG, brow: 0.020, posts: false });
 
-  // face plate, near vertical, with the slit set well back inside it
-  rig.add('head', loftHull([
-    { y: -0.044, w: 0.176, d: 0.044, round: 0.14 },
-    { y: 0.010, w: 0.222, d: 0.050, round: 0.10, smooth: true },
-    { y: 0.076, w: 0.226, d: 0.044, round: 0.12 },
-  ]), 'armorSecondary', { p: [0, 0, FRONT * 0.094], r: [-3 * DEG, 0, 0], tier: TIER.PRIMARY });
-  addVisor(rig, { w: 0.192, h: 0.020, y: 0.036, z: FRONT * 0.118, tilt: -3 * DEG, brow: 0.046 });
+  // The crest: a standing blade swept on the helm's own curve, so it clears the
+  // shell by a centimetre and a half along its whole length instead of only at
+  // the tip. Authored as a straight loft it sat inside the bowl for two thirds
+  // of its run and BASTION photographed with no crest at all.
+  const crest = { p: [0, 0.058, 0], r: [0, 0, 90 * DEG], tier: TIER.PRIMARY };
+  rig.add('head', shellLathe([
+    { r: 0.104, y: -0.010 }, { r: 0.110, y: 0, smooth: true }, { r: 0.104, y: 0.010 },
+  ], 0.016, rig.maxTier >= 2 ? 16 : 10, { arc: 128 * DEG, phase: -56 * DEG }), 'armorAccent', crest);
+  rig.glow('head', shellLathe([
+    { r: 0.1115, y: -0.0030 }, { r: 0.1125, y: 0, smooth: true }, { r: 0.1115, y: 0.0030 },
+  ], 0.005, rig.maxTier >= 2 ? 14 : 9, { arc: 108 * DEG, phase: -46 * DEG }), 'spine',
+  { ...crest, tier: TIER.SECONDARY });
 
-  // riot brow: one heavy horizontal lip standing proud of the face plate
-  rig.add('head', bevelBox(0.256, 0.024, 0.052, 0.006), 'trim',
-    { p: [0, 0.078, FRONT * 0.108], r: [-8 * DEG, 0, 0], tier: TIER.PRIMARY });
-
-  // cheek wings, dropping outward so the head is wider at the jaw than the crown
-  for (const { sign, mirror } of SIDES) {
-    rig.add('head', loftHull([
-      { y: 0.048, w: 0.034, d: 0.126, round: 0.20 },
-      { y: -0.010, w: 0.040, d: 0.144, round: 0.16, smooth: true },
-      { y: -0.074, w: 0.030, d: 0.108, round: 0.24 },
-    ]), 'armorSecondary', {
-      p: [sign * 0.128, 0.012, -FRONT * 0.004], r: [0, 0, sign * 13 * DEG], mirror, tier: TIER.PRIMARY,
-    });
-    addLouvres(rig, 'head', {
-      p: [sign * 0.146, 0.030, -FRONT * 0.010], r: [0, sign * 90 * DEG, 0],
-      w: 0.090, h: 0.048, n: 3, depth: 0.012, mirror, glow: 'joints',
-    });
-  }
-
-  // nape armour, closing the back of the vault down onto the riser
-  rig.add('head', loftHull([
-    { y: -0.048, w: 0.166, d: 0.044, round: 0.16 },
-    { y: 0.026, w: 0.204, d: 0.050, round: 0.14, smooth: true },
-    { y: 0.094, w: 0.184, d: 0.042, round: 0.18 },
-  ]), 'armorSecondary', { p: [0, 0, -FRONT * 0.092], r: [4 * DEG, 0, 0], tier: TIER.PRIMARY });
+  // nape guard, closing the back of the helm down onto the riser. 270 degrees is
+  // -Z in the lathe's frame, so the arc is centred on the back of the head.
+  rig.add('head', shellLathe([
+    { r: 0.056, y: -0.034 }, { r: 0.064, y: -0.004, smooth: true }, { r: 0.055, y: 0.028 },
+  ], 0.009, rig.maxTier >= 2 ? 14 : 9, { arc: 132 * DEG, phase: 204 * DEG }), 'armorSecondary', {
+    p: [0, 0.010, 0], s: [1, 1, SKULL.d / SKULL.w], tier: TIER.PRIMARY,
+  });
 }
 
 function headMono(rig) {
-  // AXIOM. One smooth ovoid, one narrow band, one equator seam, and nothing
-  // else at all. It is the only head in the cast with no protrusion of any
-  // kind, and that is deliberately its identity — at silhouette size the
+  // AXIOM — the `volt-monk` sheet. One smooth ovoid, one equator seam, one
+  // temple lens and a column of three indicator dots on the brow. It is the only
+  // head in the cast with no protrusion of any kind, and at silhouette size the
   // absence of a crest reads as loudly as a crest does.
-  rig.add('head', latheProfile([
-    { r: 0.040, y: -0.050 }, { r: 0.082, y: -0.020, smooth: true },
-    { r: 0.098, y: 0.026, smooth: true }, { r: 0.096, y: 0.086, smooth: true },
-    { r: 0.062, y: 0.144, smooth: true }, { r: 0, y: 0.168 },
-  ], 26), 'armorPrimary', { s: [1, 1, 1.16], tier: TIER.PRIMARY });
-
-  addVisor(rig, { w: 0.126, h: 0.020, y: 0.058, z: FRONT * 0.098, brow: 0.020, posts: false });
+  domeSkull(rig, { w: SKULL.w * 0.94, d: SKULL.d * 1.00 });
 
   // equator seam: the whole panel story on this skull, and enough of it. A
-  // machined split with a rolled lip either side of it is what says the helmet
-  // opens, which is all the incident a clean form is allowed.
+  // machined split with a rolled lip either side is what says the helmet opens,
+  // which is all the incident a clean form is allowed.
   rig.add('head', latheProfile([
-    { r: 0.100, y: 0 }, { r: 0.104, y: 0.006, smooth: true }, { r: 0.104, y: 0.014 }, { r: 0.100, y: 0.020 },
-  ], 26), 'trim', { p: [0, 0.028, 0], s: [1, 1, 1.16], tier: TIER.SECONDARY });
-  rig.add('head', channelStrip(0.040, 0.150, 0.010), 'darkMetal',
-    { p: [0, 0.052, -FRONT * 0.100], r: FACE_BACK, s: [1, 1, 1], tier: TIER.SECONDARY });
-  rig.decal('head', MARKINGS.BARCODE, 0.064, 0.030, { p: [0, 0.014, -FRONT * 0.104], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE });
+    { r: 0.0645, y: 0 }, { r: 0.0675, y: 0.005, smooth: true },
+    { r: 0.0675, y: 0.012 }, { r: 0.0645, y: 0.017 },
+  ], rig.maxTier >= 2 ? 24 : 13), 'trim', {
+    p: [0, 0.026, 0], s: [1, 1, SKULL.d / (SKULL.w * 0.94)], tier: TIER.SECONDARY,
+  });
+
+  // the temple lens — off centre, which is what makes this head a face rather
+  // than an egg, and the single most copied feature on the sheet
+  addLens(rig, { p: [0.052, 0.048, FRONT * 0.048], tilt: -6 * DEG, yaw: 62 * DEG, r: 0.017, ring: 'trim' });
+  for (let i = 0; i < 3; i++) {
+    rig.glow('head', latheProfile([
+      { r: 0, y: 0 }, { r: 0.0055, y: 0 }, { r: 0, y: 0.005 },
+    ], 8), 'visor', { p: [-0.020, 0.070 - i * 0.016, FRONT * 0.078], r: FACE_FRONT });
+  }
+  rig.decal('head', MARKINGS.BARCODE, 0.048, 0.022,
+    { p: [0, 0.010, -FRONT * 0.082], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE });
 }
 
 function headInsulator(rig) {
-  // VOLTA. A squat cylindrical skull under a stack of three ceramic sheds,
-  // reducing in radius, with the arc gap at the top. A bushing column is a
-  // shape nothing organic makes, and stacked discs stay legible at any size
-  // because each one draws its own horizontal line.
-  rig.add('head', latheProfile([
-    { r: 0.058, y: -0.050 }, { r: 0.090, y: -0.032, smooth: true },
-    { r: 0.096, y: 0.038, smooth: true }, { r: 0.086, y: 0.058 },
-    { r: 0.060, y: 0.062 },
-  ], 24), 'armorPrimary', { s: [1, 1, 1.08], tier: TIER.PRIMARY });
+  // VOLTA — the `aegis-01` sheet. A rounded helm with a broad accent strip
+  // across the brow, a narrow arc-white slit, and a cylindrical bushing over
+  // each ear; the sheet's head is a helmet with a hub on the side of it. The two
+  // ceramic sheds on the crown are what keeps VOLTA's own insulator identity on
+  // top of that.
+  //
+  // The stack used to be three sheds up to 0.104 m in radius standing clear
+  // above the skull. A bushing column is a good shape, but that was a hat: it
+  // put the head's widest and its highest geometry somewhere a head has neither.
+  // A crown 40 mm lower than the canon: the sheds have to stand ON the helm,
+  // and at the full height they were four millimetres proud of a bowl that was
+  // still widening under them — invisible from every angle.
+  helmSkull(rig, {
+    w: SKULL.w * 0.98, d: SKULL.d * 0.94, crown: HEAD_CROWN - 0.040, band: 0.50,
+    bandArc: 184, bandMat: 'armorAccent',
+  });
+  addVisor(rig, { w: 0.098, h: 0.012, y: 0.014, z: FRONT * 0.074, brow: 0.016, posts: false });
 
-  addVisor(rig, { w: 0.116, h: 0.024, y: 0.010, z: FRONT * 0.088, brow: 0.026 });
-
-  for (let i = 0; i < 3; i++) {
-    const r = 0.104 - i * 0.020;
-    rig.add('head', discShed(r, 0.024, 22), i % 2 ? 'trim' : 'armorSecondary',
-      { p: [0, 0.062 + i * 0.040, 0], tier: TIER.PRIMARY });
+  for (let i = 0; i < 2; i++) {
+    const r = 0.056 - i * 0.014;
+    rig.add('head', discShed(r, 0.015, rig.maxTier >= 2 ? 20 : 12), i % 2 ? 'trim' : 'armorSecondary',
+      { p: [0, 0.112 + i * 0.022, 0], tier: TIER.PRIMARY });
     rig.add('head', latheProfile([
-      { r: r * 0.44, y: 0 }, { r: r * 0.44, y: 0.018 },
-    ], 18), 'darkMetal', { p: [0, 0.086 + i * 0.040, 0], tier: TIER.SECONDARY });
+      { r: r * 0.42, y: 0 }, { r: r * 0.42, y: 0.011 },
+    ], 12), 'darkMetal', { p: [0, 0.127 + i * 0.022, 0], tier: TIER.SECONDARY });
   }
   // arc terminal
   rig.add('head', latheProfile([
-    { r: 0, y: 0 }, { r: 0.030, y: 0 }, { r: 0.032, y: 0.012, smooth: true },
-    { r: 0.022, y: 0.030 }, { r: 0, y: 0.034 },
-  ], 20), 'trim', { p: [0, 0.182, 0], tier: TIER.PRIMARY });
-  rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.017, y: 0 }, { r: 0, y: 0.020 }], 14), 'core',
-    { p: [0, 0.214, 0] });
-  rig.emitter('arc', 'head', [0, 0.222, 0], [0, 1, 0], 0.03);
+    { r: 0, y: 0 }, { r: 0.017, y: 0 }, { r: 0.019, y: 0.007, smooth: true },
+    { r: 0.013, y: 0.018 }, { r: 0, y: 0.020 },
+  ], 14), 'trim', { p: [0, 0.152, 0], tier: TIER.PRIMARY });
+  rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.010, y: 0 }, { r: 0, y: 0.012 }], 10), 'core',
+    { p: [0, 0.170, 0] });
+  rig.emitter('arc', 'head', [0, 0.178, 0], [0, 1, 0], 0.03);
 
-  // cheek bushings, so the profile is not merely a column
+  // ear bushings, so the profile is not merely a helm
   for (const { sign, mirror } of SIDES) {
     rig.add('head', latheProfile([
-      { r: 0, y: 0 }, { r: 0.032, y: 0 }, { r: 0.036, y: 0.010, smooth: true },
-      { r: 0.036, y: 0.032 }, { r: 0.026, y: 0.040 }, { r: 0, y: 0.040 },
-    ], 18), 'darkMetal', {
-      p: [sign * 0.086, 0.006, -FRONT * 0.014], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY,
+      { r: 0, y: 0 }, { r: 0.023, y: 0 }, { r: 0.026, y: 0.007, smooth: true },
+      { r: 0.026, y: 0.020 }, { r: 0.018, y: 0.026 }, { r: 0, y: 0.026 },
+    ], rig.maxTier >= 2 ? 16 : 10), 'darkMetal', {
+      p: [sign * 0.060, 0.020, -FRONT * 0.008], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY,
     });
   }
 }
 
 function headCrown(rig) {
-  // SERAPH. A ceremonial helm with a veiled face, four flared horns and a halo
-  // standing off the nape. The only skull in the cast with no hard corner on
-  // it, and the only one with a detached element, which is what an arcane
-  // chassis is for.
-  rig.add('head', latheProfile([
-    { r: 0.042, y: -0.050 }, { r: 0.078, y: -0.008, smooth: true }, { r: 0.094, y: 0.048, smooth: true },
-    { r: 0.088, y: 0.110, smooth: true }, { r: 0.052, y: 0.158, smooth: true }, { r: 0, y: 0.176 },
-  ], 24), 'armorPrimary', { s: [1, 1, 1.12], tier: TIER.PRIMARY });
-  // veil
-  rig.add('head', loftHull([
-    { y: -0.052, w: 0.072, d: 0.048, round: 0.44 },
-    { y: 0.010, w: 0.116, d: 0.060, round: 0.34, smooth: true },
-    { y: 0.078, w: 0.126, d: 0.056, round: 0.30, smooth: true },
-    { y: 0.116, w: 0.104, d: 0.044, round: 0.38 },
-  ]), 'trim', { p: [0, 0, FRONT * 0.062], r: [-4 * DEG, 0, 0], tier: TIER.PRIMARY });
+  // SERAPH — the `ghostframe` sheet. A smooth pearl egg with a veil shell down
+  // the face and a segmented halo standing off the nape. Domed plan: the sheet's
+  // head has no jaw, no brow band and no horn, and the halo carries the whole
+  // silhouette by itself.
+  //
+  // The four flared horns that used to sit on this crown ran to 0.23 m — longer
+  // than the skull was tall, and the single biggest contributor to SERAPH's 6.06
+  // body-heights per head. Two short crown points remain, kept because an arcane
+  // frame with nothing at all on its head reads as AXIOM.
+  domeSkull(rig, { w: SKULL.w * 0.92, d: SKULL.d * 0.98 });
 
-  addVisor(rig, { w: 0.098, h: 0.022, y: 0.070, z: FRONT * 0.090, brow: 0.026, posts: false });
+  // veil: a shallow trim shell over the face. Scaled in Z by the egg's own
+  // width-to-depth ratio, which is what makes a swept arc follow an ovoid rather
+  // than cut into it at the temples and float at the nose.
+  rig.add('head', shellLathe([
+    { r: 0.020, y: -0.048 }, { r: 0.056, y: 0.004, smooth: true },
+    { r: 0.066, y: 0.056, smooth: true }, { r: 0.061, y: 0.094 },
+  ], 0.007, rig.maxTier >= 2 ? 16 : 10, { arc: 128 * DEG, phase: 26 * DEG }), 'trim', {
+    s: [1, 1, (SKULL.d * 0.98) / (SKULL.w * 0.92)], tier: TIER.PRIMARY,
+  });
+  addVisor(rig, { w: 0.078, h: 0.011, y: 0.044, z: FRONT * 0.082, brow: 0.016, posts: false });
 
   // forehead crystal
   rig.glow('head', latheProfile([
-    { r: 0, y: -0.032 }, { r: 0.022, y: -0.008 }, { r: 0.024, y: 0.005 }, { r: 0, y: 0.038 },
+    { r: 0, y: -0.022 }, { r: 0.014, y: -0.006 }, { r: 0.015, y: 0.004 }, { r: 0, y: 0.026 },
   ], 6, { faceted: true, phase: Math.PI / 6 }), 'core',
-  { p: [0, 0.124, FRONT * 0.062], r: [-70 * DEG * -FRONT, 0, 0] });
+  { p: [0, 0.090, FRONT * 0.052], r: [-70 * DEG * -FRONT, 0, 0] });
 
-  // horns
+  // crown points
   for (const { s: side, sign, mirror } of SIDES) {
-    const whip = `antenna_${side}`;
-    for (let j = 0; j < 2; j++) {
-      const len = j === 0 ? 0.23 : 0.16;
-      rig.add('head', loftHull([
-        { y: 0, w: 0.028, d: 0.036, round: 0.34 },
-        { y: len * 0.58, w: 0.020, d: 0.026, z: -FRONT * len * 0.16, round: 0.36, smooth: true },
-        { y: len, w: 0.007, d: 0.009, z: -FRONT * len * 0.34, round: 0.45 },
-      ]), 'armorAccent', {
-        p: [sign * (0.056 + j * 0.026), 0.108 + j * 0.012, -FRONT * (0.012 + j * 0.036)],
-        r: [(26 + j * 14) * DEG, 0, sign * (24 + j * 16) * DEG],
-        mirror, tier: TIER.PRIMARY, sprung: whip,
-      });
-    }
-    rig.glow('head', loftHull([
-      { y: 0, w: 0.007, d: 0.007, round: 0.5 },
-      { y: 0.125, w: 0.005, d: 0.005, round: 0.5 },
-    ]), 'spine', { p: [sign * 0.060, 0.152, -FRONT * 0.036], r: [26 * DEG, 0, sign * 24 * DEG], mirror, sprung: whip });
+    rig.add('head', loftHull([
+      { y: 0, w: 0.018, d: 0.024, round: 0.36 },
+      { y: 0.042, w: 0.012, d: 0.016, z: -FRONT * 0.012, round: 0.40, smooth: true },
+      { y: 0.074, w: 0.005, d: 0.007, z: -FRONT * 0.028, round: 0.46 },
+    ]), 'armorAccent', {
+      p: [sign * 0.036, 0.094, -FRONT * 0.012], r: [26 * DEG, 0, sign * 26 * DEG],
+      mirror, tier: TIER.PRIMARY, sprung: `antenna_${side}`,
+    });
   }
 
   // halo: a segmented ring standing off the nape, tilted so it reads as a disc
   // from the front and as a line in profile
-  const halo = [];
-  const R = 0.148;
-  for (let i = 0; i < 20; i++) {
-    const a = (i / 20) * Math.PI * 2;
-    const g = bevelBox(0.020, 0.017, (2 * Math.PI * R) / 20 * 0.9, 0.004);
-    g.applyMatrix4(new THREE.Matrix4().compose(
-      new THREE.Vector3(Math.cos(a) * R, Math.sin(a) * R, 0),
-      new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, a + Math.PI / 2)),
-      new THREE.Vector3(1, 1, 1),
-    ));
-    halo.push(g);
-  }
-  rig.add('head', joinGeometries(halo), 'trim',
-    { p: [0, 0.104, -FRONT * 0.106], r: [16 * DEG, 0, 0], tier: TIER.PRIMARY });
+  const R = 0.092;
+  rig.add('head', segmentRing(R, 0.015, 0.012, rig.maxTier >= 2 ? 16 : 10, 0.003), 'trim',
+    { p: [0, 0.062, -FRONT * 0.080], r: [16 * DEG, 0, 0], tier: TIER.PRIMARY });
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + 0.5;
-    rig.glow('head', bevelBox(0.034, 0.011, 0.009, 0.003), 'spine', {
-      p: [Math.cos(a) * R, 0.104 + Math.sin(a) * R, -FRONT * 0.096], r: [16 * DEG, 0, a + Math.PI / 2],
+    rig.glow('head', bevelBox(0.024, 0.008, 0.007, 0.002), 'spine', {
+      p: [Math.cos(a) * R, 0.062 + Math.sin(a) * R, -FRONT * 0.072], r: [16 * DEG, 0, a + Math.PI / 2],
     });
   }
-
-  // circlet
-  const circlet = [];
-  for (let i = 0; i < 14; i++) {
-    const a = (i / 14) * Math.PI * 2;
-    const g = bevelBox(0.020, 0.022, 0.015, 0.004);
-    g.applyMatrix4(new THREE.Matrix4().compose(
-      new THREE.Vector3(Math.cos(a) * 0.090, 0, Math.sin(a) * 0.100),
-      new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -a, 0)),
-      new THREE.Vector3(1, 1, 1),
-    ));
-    circlet.push(g);
-  }
-  rig.add('head', joinGeometries(circlet), 'trim', { p: [0, 0.046, 0], tier: TIER.SECONDARY });
 }
 
 /**
