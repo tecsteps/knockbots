@@ -784,6 +784,7 @@ function fallbackMaterial(name, palette) {
     piston: { color: '#c9ced4', metalness: 1.0, roughness: 0.12 },
     rubber: { color: '#15171a', metalness: 0.05, roughness: 0.92 },
     gasket: { color: '#2b2f35', metalness: 0, roughness: 0.86, sheen: 0.6 },
+    underskin: { color: '#1c1f23', metalness: 0.62, roughness: 0.78, sheen: 0.3 },
     bezel: { color: '#0d1014', metalness: 0.35, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.035 },
     carbon: { color: '#1a1d21', metalness: 0.4, roughness: 0.42, clearcoat: 0.8 },
     worn: { color: palette.secondary, metalness: 0.9, roughness: 0.55 },
@@ -837,6 +838,14 @@ function resolveMaterials(environment, palette) {
     // anything smaller than ~15/255 (docs/PROFILING.md trap 5) and the in-page
     // toggle measures 0.000/255 between two grabs of an unchanged frame.
     gasket: pick('gasket').clone(),
+    // §1.3's second body. Materials.js authors `kb.underskin` specifically for
+    // it — dark graphite, no clearcoat, a hard rim on every rib — and nothing
+    // was binding it, so the ring stacks were still coming through on
+    // `darkMetal`: a conductor at F0 0.115 with anisotropy, which on a column of
+    // a dozen 3 mm rings mirrors the arena practicals back as a ladder of
+    // highlights. That is most of why the waist photographed as a bright silver
+    // slinky rather than as mechanism sitting in shadow between the shells.
+    underskin: pick('underskin').clone(),
     bezel: pick('bezel').clone(),
     carbon: pick('carbon').clone(),
     glass: pick('glass').clone(),
@@ -1651,22 +1660,54 @@ class Rig {
    * Ribbed underskin stack on a bone axis, for the limb branches that keep
    * their own bespoke masses (digitigrade calf, piston column) and so cannot go
    * through `limb()`. Same rings, same reason.
+   *
+   * IT IS A STACK OF DISCS, NOT A SPRING. Both halves of that sentence were
+   * wrong here and between them they put the same bright silver slinky on the
+   * waist, the calf and the ram of every fighter in the cast:
+   *
+   * - the ring PROFILE was a torus — 0.98 out to 1.18 and back with a `smooth`
+   *   apex, i.e. a round wire cross-section, which is a coil turn;
+   * - the SPACING was whatever the call site's `count` happened to give. At the
+   *   waist that was seven rings 32 mm apart on a 26 mm ring, so a quarter of
+   *   the run was open valley cut 14% of the waist width deep, and the eye read
+   *   daylight between turns.
+   *
+   * §1.3 asks for the opposite thing: "ribbed segments, braided bundles and
+   * stacked discs", a close-packed dark column. So the profile is a hard-edged
+   * disc with a chamfer and no smoothed apex, and the count is DERIVED from the
+   * run so the discs always abut with a hairline groove rather than being a
+   * number a call site picks. `count` remains overridable for the two stacks
+   * that are counting real hardware, and `coil` restores the round turn for
+   * ANVIL, the one machine in the reference that actually wears an exposed
+   * spring (`atlas-7`'s waist, and it is short and dark).
    */
   ribStack(bone, o) {
-    const n = Math.max(1, o.count ?? 3);
     const h = o.h ?? 0.018;
+    const span = (o.y1 ?? 0) - (o.y0 ?? 0);
+    // Two half-heights plus a groove that is a fraction of the disc, never a
+    // multiple of it. A coil is wound solid, so its turns pack tighter still.
+    const coil = !!o.coil;
+    const pitch = h * 2 + h * (o.groove ?? (coil ? 0.10 : 0.30));
+    const n = Math.max(1, Math.round(o.count ?? (Math.abs(span) / pitch + 1)));
     for (let i = 0; i < n; i++) {
       const f = n === 1 ? 0.5 : i / (n - 1);
       const r = o.r0 + (o.r1 - o.r0) * f;
-      const g = latheProfile([
-        { r: r * 0.98, y: -h },
-        { r: r * 1.18, y: -h * 0.40, smooth: true },
-        { r: r * 1.18, y: h * 0.40 },
-        { r: r * 0.98, y: h },
+      const g = latheProfile(coil ? [
+        { r: r * 0.94, y: -h },
+        { r: r * 1.08, y: -h * 0.34, smooth: true },
+        { r: r * 1.08, y: h * 0.34, smooth: true },
+        { r: r * 0.94, y: h },
+      ] : [
+        // No `smooth` anywhere: the whole difference between a rib and a turn of
+        // wire is that a rib has an edge on it for the key to catch.
+        { r: r * 1.00, y: -h },
+        { r: r * 1.07, y: -h * 0.76 },
+        { r: r * 1.07, y: h * 0.76 },
+        { r: r * 1.00, y: h },
       ], this.maxTier >= 2 ? 14 : 10);
-      g.translate(0, o.y0 + (o.y1 - o.y0) * f, 0);
+      g.translate(0, o.y0 + span * f, 0);
       if (o.deep) g.scale(1, 1, o.deep);
-      this.add(bone, g, o.mat ?? 'darkMetal', {
+      this.add(bone, g, o.mat ?? 'underskin', {
         p: o.p, r: o.rot, mirror: o.mirror,
         tier: o.tier ?? TIER.SECONDARY, role: 'frame',
       });
@@ -2329,7 +2370,17 @@ const TORSO_PLANS = {
     pelvis: [1.00, 1.02], waistLo: [0.98, 1.06], waistHi: [1.06, 1.16],
     ribs: [1.16, 1.26], chest: [1.18, 1.32], yoke: [1.18, 1.36],
     round: 0.42, rake: 6, hunch: 0.072, gap: 0.030,
-    pauldron: { w: 1.24, h: 1.22, d: 1.26, layers: 3, taper: 0.96 },
+    // §3 builds ANVIL to `atlas-7`, and on that sheet the mass is on the
+    // SHOULDERS: two spherical bosses with a spoked wheel hub set into the outer
+    // face of each, big enough that the head sits in a notch between them. The
+    // back carries only a coil-spring spine. What was here inverted that — three
+    // stacked lames on the shoulder and a barrel behind the neck wider than the
+    // torso — and the fight frames show the barrel occluding ANVIL's own head
+    // from the front. The boss branch in `buildArm` is that shoulder, so this
+    // plan takes it, and `case 'hump'` in `buildTorsoMass` gives the back up.
+    pauldron: { w: 1.28, h: 1.14, d: 1.30, layers: 1, slab: true },
+    // The one waist in the cast that keeps a real helix — see `buildAbdomen`.
+    coilWaist: true,
   },
   column: {
     pelvis: [0.84, 0.86], waistLo: [0.76, 0.80], waistHi: [0.78, 0.84],
@@ -2814,10 +2865,24 @@ function buildAbdomen(rig, spec, P) {
   const y0 = -m.lumbar * 0.82;
   const y1 = m.mid * 0.86;
   const span = y1 - y0;
-  // The core is well inside the ring diameter: the rings are the read, and a
-  // core that comes out to meet them turns the stack back into a smooth tube
-  // with grooves scratched in it.
-  const core = 0.80, ring = 0.92;
+  // The one exposed spring in the reference. `atlas-7` carries a short dark
+  // coil in the waist gap between the chest shell and the belt, flanked by two
+  // brass rams — the detail tile is entirely that — and it is the ONLY machine
+  // of the eight with a helical anything on show. ANVIL is built to that sheet
+  // (§3), so its waist keeps real turns while the other nine get discs. A
+  // detail every fighter shares cannot name any of them; a detail one fighter
+  // has names that one.
+  const coil = !!spec.plan.coilWaist;
+  // How far the core sits inside the ring diameter is the whole difference
+  // between grooves and daylight. At 0.80 against a ring reaching 1.086 the
+  // valley floor was 14% of the waist width down and read as sky between the
+  // turns, on all ten fighters; at 0.87 against 1.00 the disc rims still stand
+  // a clear 6.5% proud — enough to catch the key on every edge — over a floor
+  // the eye reads as shadow. Any closer and the stack goes back to being a
+  // smooth tube with grooves scratched in it, which is what the 0.80 guarded
+  // against. A spring, by contrast, IS wound clear of what it is sprung
+  // against, so the coil branch keeps the deep recess the disc branch loses.
+  const core = coil ? 0.72 : 0.87, ring = coil ? 0.90 : 0.94;
   const dw = (P.waistLo.d / P.waistLo.w + P.waistHi.d / P.waistHi.w) * 0.5;
 
   // ZONE 2 (matte composite): the column the rings are stacked on. Near-round
@@ -2832,15 +2897,20 @@ function buildAbdomen(rig, spec, P) {
     tier: TIER.PRIMARY, role: 'frame',
   });
 
-  // The segments. Count is driven by the run rather than fixed, so a 2.1 m
-  // heavy does not wear the same four rings as a 1.8 m acrobat over half again
-  // the distance and read as a coarser machine for it.
-  const count = Math.round(clamp(span / (0.034 * m.torsoK), 4, 7));
+  // The segments. `ribStack` derives the count from the run and the disc
+  // height so they always abut: what was here capped it at seven, which on a
+  // heavy's 240 mm waist meant a 26 mm disc every 32 mm and a 6 mm valley
+  // between each pair. Discs are also thinner than the old rings — a rib on the
+  // reference is a few millimetres of edge, not a finger's width of wire.
   rig.ribStack('spine01', {
-    count,
     r0: P.waistLo.w * 0.5 * ring, r1: P.waistHi.w * 0.5 * ring,
     y0: y0 + span * 0.10, y1: y1 - span * 0.12,
-    h: 0.013 * m.torsoK, deep: dw, mat: 'darkMetal', tier: TIER.PRIMARY,
+    // Same zone, same material either way. `darkMetal` is the wrong half of the
+    // library for a spring in a shadowed recess — F0 0.115 with anisotropy is a
+    // half-mirror, and on a helix that is a ladder of highlights, which is the
+    // "bright silver" half of the complaint independent of the geometry.
+    h: (coil ? 0.0125 : 0.0092) * m.torsoK, deep: dw, coil,
+    mat: 'underskin', tier: TIER.PRIMARY,
   });
 
   // The pair of conduits every sheet runs down the exposed side of the stack.
@@ -3456,11 +3526,20 @@ function buildBackHardware(rig, spec, cyIn, rz = () => 0) {
       break;
     }
     case 'coil': {
-      // Casino security: three toroidal windings stacked flat against the back
+      // Casino security: two toroidal windings stacked flat against the back
       // at reducing radius. Segmented blocks rather than a lathed torus, so the
       // facets catch the rim light and it reads as forged rather than as a donut.
-      for (let k = 0; k < 3; k++) {
-        const R = 0.215 - k * 0.045;
+      //
+      // Sized DOWN from R 0.215 / three windings, for the same reason ANVIL's
+      // hump was: 0.43 m across is wider than NYX's whole chest, and NYX is
+      // built to `vesper` (§3), the one sheet of the eight with a completely
+      // BARE back — no pack, no fins, no rings. The unit has to earn its place
+      // against that, so what is left is the smallest thing that still reads as
+      // a winding from the fight camera: two hoops lying flat on the backplate,
+      // the outer one 0.29 m across, nothing standing above the shoulder line.
+      const RINGS = 2;
+      for (let k = 0; k < RINGS; k++) {
+        const R = 0.145 - k * 0.040;
         const SEGS = 16 - k * 2;
         const blocks = [];
         for (let i = 0; i < SEGS; i++) {
@@ -3483,18 +3562,21 @@ function buildBackHardware(rig, spec, cyIn, rz = () => 0) {
       // lamp positioned in the un-raked circle drifted up to 45 mm off the ring
       // it is set into at the top and bottom of the sweep. Rake the position by
       // the same angle and it lands in the winding every time.
-      const rake = 12 * DEG;
+      // The lamp radius is read off the outer winding rather than repeated as a
+      // literal, or shrinking the ring leaves five pilot lights orbiting in
+      // clear air — which is what happened the last time this number moved.
+      const rake = 12 * DEG, lampR = 0.145;
       for (let i = 0; i < 5; i++) {
         const a = (i / 5) * Math.PI * 2 + 0.4;
-        const ry = Math.sin(a) * 0.215;
-        rig.glow('chest', bevelBox(0.044, 0.016, 0.010, 0.004), 'core', {
-          p: [Math.cos(a) * 0.215, cy + 0.05 + ry * Math.cos(rake), zb + back * 0.036 + ry * Math.sin(rake)],
+        const ry = Math.sin(a) * lampR;
+        rig.glow('chest', bevelBox(0.034, 0.014, 0.010, 0.004), 'core', {
+          p: [Math.cos(a) * lampR, cy + 0.05 + ry * Math.cos(rake), zb + back * 0.036 + ry * Math.sin(rake)],
           r: [rake, 0, a + Math.PI / 2],
         });
       }
       rig.add('chest', latheProfile([
-        { r: 0, y: 0 }, { r: 0.052, y: 0 }, { r: 0.058, y: 0.016, smooth: true },
-        { r: 0.044, y: 0.048 }, { r: 0, y: 0.052 },
+        { r: 0, y: 0 }, { r: 0.042, y: 0 }, { r: 0.047, y: 0.014, smooth: true },
+        { r: 0.035, y: 0.042 }, { r: 0, y: 0.046 },
       ], 20), 'darkMetal', { p: [0, cy + 0.05, zb + back * 0.03], r: [-90 * DEG * back, 0, 0], tier: TIER.PRIMARY });
       break;
     }
@@ -3665,36 +3747,66 @@ function buildTorsoMass(rig, spec, P, rz) {
       break;
     }
     case 'hump': {
-      // Dockyard: an enormous rounded upper back that climbs past the head line.
-      // Nothing else in the cast has mass above its own shoulders, so this is
-      // the whole silhouette from any angle.
-      // Lowered and pushed further aft. At 1.66 collars the crest of the hump
-      // reached the skull's own crown and sat only 0.30 of a chest depth behind
-      // it, so from every bearing the fight camera uses ANVIL's head was inside
-      // its own back: the frames show one convex yellow lump with no neck and
-      // no head break in the outline, which §4.8 fails on. 1.44 keeps the mass
-      // unmistakably above the shoulder line — still the only fighter in the
-      // cast with any — while leaving the helm as sky, and 0.42 puts the whole
-      // crest behind the head in profile rather than beside it.
-      const w = P.yoke.w * 1.34;
+      // Dockyard, built to `atlas-7`: a diving-suit yoke across the top of the
+      // back, and a coil-spring spine running down the middle of it.
+      //
+      // WHAT THIS REPLACES AND WHY. It was a barrel — 1.34 yoke widths across,
+      // 1.16 chest depths deep, five trim hoops shrunk onto it, its crest at
+      // 1.44 collars — parked behind the neck. Two rounds of shrinking it did
+      // not fix the kind of error it was: at 1.34 yoke it is WIDER THAN THE
+      // SHOULDER SPAN, so from the front it is the outline, and at 1.44 collars
+      // it stands level with the skull, so it occludes the head from every
+      // bearing the fight camera uses. `pair1-anvil-body.png` is exactly that
+      // picture. And the sheet it is supposed to come from has none of it: the
+      // back of `atlas-7` is a low shell no wider than the shoulder line with a
+      // short spring down the spine, and every gram of the mass anyone would
+      // name about that machine is in the two spherical shoulder bosses (which
+      // this plan's `pauldron` now carries) and in the belly.
+      //
+      // So: a yoke that stops at 0.62 of a collar — well under the jaw — and
+      // 0.94 of the yoke width, so the pauldrons are always the widest thing on
+      // the fighter and the head always breaks the outline.
+      const w = P.yoke.w * 0.94;
       rig.add('chest', loftHull([
-        { y: m.collar * 0.30, w: w * 0.80, d: P.chest.d * 1.02, round: 0.46 },
-        { y: m.collar * 0.84, w, d: P.chest.d * 1.16, round: 0.44, smooth: true },
-        { y: m.collar * 1.20, w: w * 0.92, d: P.chest.d * 1.02, round: 0.46, smooth: true },
-        { y: m.collar * 1.44, w: w * 0.52, d: P.chest.d * 0.60, round: 0.5 },
+        { y: -m.thorax * 0.30, w: w * 0.72, d: P.chest.d * 0.72, round: 0.48 },
+        { y: m.collar * 0.16, w, d: P.chest.d * 0.90, round: 0.46, smooth: true },
+        { y: m.collar * 0.62, w: w * 0.74, d: P.chest.d * 0.66, round: 0.5 },
       ]), 'armorPrimary', {
-        p: [0, 0, back * P.chest.d * 0.42 + rz(m.collar)], r: [-10 * DEG, 0, 0], tier: TIER.PRIMARY,
+        p: [0, 0, back * P.chest.d * 0.30 + rz(m.collar * 0.2)], r: [-8 * DEG, 0, 0], tier: TIER.PRIMARY,
       });
-      for (let i = 0; i < 5; i++) {
-        rig.add('chest', latheProfile([
-          { r: w * (0.42 - i * 0.03), y: 0 }, { r: w * (0.46 - i * 0.03), y: 0.010, smooth: true },
-          { r: w * (0.46 - i * 0.03), y: 0.028 }, { r: w * (0.42 - i * 0.03), y: 0.038 },
-        ], 20), 'trim', {
-          // Follows the shell above, which moved back and down; these hoops are
-          // shrunk onto it and cannot be authored against the old station.
-          p: [0, m.collar * (0.42 + i * 0.20), back * P.chest.d * (0.42 - i * 0.02) + rz(m.collar)],
-          r: [-10 * DEG, 0, 0], s: [1, 1, 1.16], tier: TIER.SECONDARY,
-        });
+      // The coil-spring spine. `atlas-7`'s detail tile is a short dark helix
+      // between two brass rams, and it is the one exposed spring on any of the
+      // eight sheets — so it is worth building as real turns rather than as
+      // another band of trim, and it is worth being the only one.
+      //
+      // Every part of the assembly carries its height IN THE GEOMETRY and is
+      // placed at p.y = 0 with the same 8-degree rake. That is not fussiness:
+      // `add` composes T(p)·R(r), so a part whose height lives in `p` is
+      // rotated about its own origin while a part whose height lives in its
+      // vertices is swung about the column's root, and mixing the two walks the
+      // spring off its own anchors by a centimetre and a half at this rake.
+      const sy = -m.thorax * 0.18, sh = m.thorax * 0.62;
+      const spineAt = { p: [0, 0, back * (P.chest.d * 0.52) + rz(sy)], r: [-8 * DEG, 0, 0] };
+      const shaft = latheProfile([
+        { r: w * 0.15, y: 0 }, { r: w * 0.18, y: sh * 0.10, smooth: true },
+        { r: w * 0.18, y: sh * 0.90, smooth: true }, { r: w * 0.15, y: sh },
+      ], 16);
+      shaft.translate(0, sy, 0);
+      rig.add('chest', shaft, 'darkMetal', { ...spineAt, tier: TIER.SECONDARY });
+      rig.ribStack('chest', {
+        r0: w * 0.25, r1: w * 0.23, y0: sy + sh * 0.06, y1: sy + sh * 0.94,
+        h: 0.0115 * m.torsoK, coil: true, mat: 'underskin',
+        p: spineAt.p, rot: spineAt.r, tier: TIER.PRIMARY,
+      });
+      // Anchor plates top and bottom, so the spring is sprung against something
+      // rather than floating in the middle of a back.
+      for (const dy of [0, 1]) {
+        const cap = latheProfile([
+          { r: 0, y: 0 }, { r: w * 0.31, y: 0 }, { r: w * 0.33, y: 0.012, smooth: true },
+          { r: w * 0.26, y: 0.030 }, { r: 0, y: 0.030 },
+        ], 20);
+        cap.translate(0, sy + sh * dy - (dy ? 0 : 0.030), 0);
+        rig.add('chest', cap, 'trim', { ...spineAt, tier: TIER.SECONDARY });
       }
       break;
     }
@@ -6191,9 +6303,14 @@ function buildLeg(rig, spec, side, sign, mirror) {
       { y: -sLen * 0.90, w: ankleW * 0.40, d: ankleW * 0.34, round: 0.80 },
       { y: -sLen * 0.44, w: ankleW * 0.46, d: ankleW * 0.40, round: 0.80 },
     ]), 'darkMetal', { p: [0, 0, -FRONT * L.shin * 0.34], mirror, tier: TIER.PRIMARY });
+    // Close-packed and sized to the bar they are on: at r 0.24-0.27 of an ankle
+    // width with the old torus profile these stood 0.57 ankle widths across a
+    // 0.43-wide bar, four of them with daylight between — the calf's share of
+    // the slinky. `ribStack` derives the count now; the radii come in so the
+    // rims sit just proud of the bar rather than hooping it.
     rig.ribStack(`knee_${S}`, {
-      count: 4, r0: ankleW * 0.24, r1: ankleW * 0.27,
-      y0: -sLen * 0.84, y1: -sLen * 0.50, h: sLen * 0.018,
+      r0: ankleW * 0.21, r1: ankleW * 0.24,
+      y0: -sLen * 0.84, y1: -sLen * 0.50, h: sLen * 0.014,
       p: [0, 0, -FRONT * L.shin * 0.34], deep: 0.86, mirror,
     });
     // calf thruster
@@ -6216,21 +6333,32 @@ function buildLeg(rig, spec, side, sign, mirror) {
       mat: 'armorPrimary', round: 0.78, swell: 0.06, mirror,
     });
     const cr = kneeW * 0.52;
-    // The column's own underskin, in the free run between the first gland nut
-    // (0.36) and the second (0.70).
+    // The column's own underskin, in the whole free run between the two gland
+    // nuts. Three widely-spaced torus rings at 1.06 of the ram radius read as a
+    // spring wound round the ram — the same defect as the waist, on the one leg
+    // plan whose column is bare enough to show it. Close-packed discs just
+    // proud of the ram read as a ribbed sleeve, and running them the full
+    // length of the free run leaves no bare column for the eye to read the
+    // remaining nuts as turns of.
     rig.ribStack(`knee_${S}`, {
-      count: 3, r0: cr * 1.06, r1: cr * 1.04,
-      y0: -sLen * 0.44, y1: -sLen * 0.58, h: sLen * 0.014, mirror,
+      r0: cr * 1.03, r1: cr * 1.02,
+      y0: -sLen * 0.46, y1: -sLen * 0.88, h: sLen * 0.011, mirror,
     });
     rig.add(`knee_${S}`, latheProfile([
       { r: cr * 1.20, y: -sLen * 0.30 }, { r: cr, y: -sLen * 0.36, smooth: true },
       { r: cr, y: -sLen * 0.70 }, { r: cr * 0.78, y: -sLen * 0.74 },
       { r: cr * 0.78, y: -sLen * 0.98 }, { r: cr * 0.60, y: -sLen * 1.00 },
     ], 20), 'piston', { mirror, tier: TIER.PRIMARY });
-    for (const f of [0.36, 0.70, 0.92]) {
+    // TWO gland nuts, not three, and 14% proud rather than 22%. Three polished
+    // bands standing a fifth of a radius off a bare ram, evenly spaced down the
+    // one limb in the cast with no shin armour, is a slinky by any other name —
+    // the ANVIL and VOLTA legs in the fight frames read exactly the way the
+    // waist stacks did. A gland nut is a fitting at the END of a stroke, so
+    // there are two of them and the ribbed sleeve above runs between.
+    for (const f of [0.40, 0.94]) {
       rig.add(`knee_${S}`, latheProfile([
-        { r: cr * 1.02, y: 0 }, { r: cr * 1.22, y: 0.012, smooth: true },
-        { r: cr * 1.22, y: 0.032 }, { r: cr * 1.02, y: 0.044 },
+        { r: cr * 1.02, y: 0 }, { r: cr * 1.14, y: 0.012, smooth: true },
+        { r: cr * 1.14, y: 0.030 }, { r: cr * 1.02, y: 0.040 },
       ], 20), 'trim', { p: [0, -sLen * f, 0], mirror, tier: TIER.SECONDARY });
     }
     for (const { sign: sx } of SIDES) {
@@ -6282,14 +6410,61 @@ function buildLeg(rig, spec, side, sign, mirror) {
   });
 
   // --- ankle
+  // The tarsal collar: the run between where the shank's shell stops and the
+  // pivot the foot turns about.
+  //
+  // MEASURED, not eyeballed. Skin the built mesh, section it with a horizontal
+  // plane every few millimetres through the ankle and take the area of the
+  // section that belongs to this leg. There is no literal hole — a
+  // triangle-crossing scan finds geometry at every height — but on AXIOM at
+  // rest the five slices of the handover ran 21, 22, 33, 44, 59 cm² between a
+  // 52 cm² shank and a 107 cm² boot, i.e. a stick two fifths the width of
+  // either thing it joins, which is what "the foot reads as detached" is. With
+  // this collar and the widened pastern below they run 36, 36, 49, 62, 79, and
+  // at 25 degrees of ankle flex 38, 41, 56, 78, 84 against 24, 28, 39, 60, 69.
+  // NYX (digitigrade) moves 38/36/48/47/38 to 38/45/62/60/55. The previous
+  // round's pastern closes that run from the FOOT side and stops at the pivot;
+  // nothing closed it from the SHANK side.
+  //
+  // Bound to the shank, reaching just past the pivot. The pastern below is
+  // bound to the foot and reaches just past it the other way, so the two
+  // overlap ON the axis they rotate about — the seam is a working joint at
+  // every flexion angle instead of a gap that opens with one. The piston plan
+  // needs none: its ram already runs to -1.00 of the shin.
+  if (!piston) {
+    // The digitigrade lower section is thrown forward off the hock and carries
+    // its own shear, so its bottom station is not on the bone axis; the collar
+    // has to land under it, not under the bone.
+    const cz = digi ? FRONT * (L.shin * 0.06 - 0.075) : 0;
+    const cw = ankleW * (digi ? 0.90 : 0.96);
+    rig.add(`knee_${S}`, loftHull([
+      { y: -sLen * 1.03, w: cw * 0.88, d: cw * 1.04, round: 0.86 },
+      { y: -sLen * 0.96, w: cw, d: cw * 1.12, round: 0.86, smooth: true },
+      { y: -sLen * (digi ? 0.90 : 0.86), w: cw * 1.04, d: cw * 1.16, round: 0.84 },
+    ]), 'underskin', { p: [0, 0, cz], mirror, tier: TIER.PRIMARY, role: 'frame' });
+    // §1.3 puts the underskin "behind the ankle" and this is the only place on
+    // the leg it can go: two rings on the collar, which is what stops it
+    // reading as a smooth peg between two shells.
+    rig.ribStack(`knee_${S}`, {
+      r0: cw * 0.50, r1: cw * 0.54,
+      y0: -sLen * 1.00, y1: -sLen * 0.93, h: sLen * 0.010,
+      p: [0, 0, cz], deep: 1.08, mirror,
+    });
+  }
   // Radius stays under the ankle's height above the floor plane, or the joint
   // housing would clip through the ground on a flat-footed stance. It also has
   // to clear half the shank, or the bezel disappears inside the leg it is
   // supposed to hinge — which is what the old 0.44 factor did once the shank
   // stopped being a tube.
+  //
+  // The boot's half-LENGTH went 0.22 -> 0.34 of an ankle width with it. At 0.22
+  // the barrel was 58 mm across a limb 100 mm wide, so the one piece of
+  // hardware that is supposed to bridge the shank and the boot was itself the
+  // narrowest thing in the run and added a second waist to the one the collar
+  // above is there to remove.
   const ankleR = Math.min(ankleW * 0.58, m.ankle * 0.78);
   rig.bezel(`ankle_${S}`, {
-    radius: ankleW * 0.26, face: ankleW * 0.58, boot: ankleR, half: ankleW * 0.22,
+    radius: ankleW * 0.30, face: ankleW * 0.58, boot: ankleR, half: ankleW * 0.34,
     sign, mirror, p: [0, 0.006, 0],
   });
 
@@ -6328,11 +6503,16 @@ function buildLeg(rig, spec, side, sign, mirror) {
   // than assumed.
   const ankleUp = (rig.restPos[`ankle_${S}`]?.y ?? 0) - (rig.restPos[`foot_${S}`]?.y ?? 0);
   const ankleBack = (rig.restPos[`foot_${S}`]?.z ?? 0) - (rig.restPos[`ankle_${S}`]?.z ?? 0);
+  // Its top station used to NECK — 0.86 of an ankle width at mid-height down to
+  // 0.74 at the pivot — so the link got thinner exactly where it had to hand
+  // over to the shank, and the handover was the visible pinch. It swells to the
+  // pivot now and meets the tarsal collar's own bottom station (0.88 of the
+  // same unit) from underneath, so the overlap is a sleeve rather than a butt.
   rig.add(`foot_${S}`, loftHull([
     { y: -0.010, w: fw * 0.62, d: fw * 0.66, round: 0.62 },
-    { y: ankleUp * 0.52, w: ankleW * 0.86, d: ankleW * 1.00, z: -FRONT * ankleBack * 0.52, round: 0.72, smooth: true },
-    { y: ankleUp * 1.06, w: ankleW * 0.74, d: ankleW * 0.84, z: -FRONT * ankleBack * 1.06, round: 0.78 },
-  ]), 'gasket', { mirror, tier: TIER.PRIMARY, role: 'frame' });
+    { y: ankleUp * 0.52, w: ankleW * 0.90, d: ankleW * 1.02, z: -FRONT * ankleBack * 0.52, round: 0.72, smooth: true },
+    { y: ankleUp * 1.10, w: ankleW * 0.94, d: ankleW * 1.06, z: -FRONT * ankleBack * 1.10, round: 0.80 },
+  ]), 'underskin', { mirror, tier: TIER.PRIMARY, role: 'frame' });
   // A boot assembled from a sole box, a toe box and a heel box reads as three
   // boxes, and it reads that way from every angle the fight camera uses because
   // the feet are the one part of a fighter never occluded by anything. So each

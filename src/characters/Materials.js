@@ -4861,7 +4861,22 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // of anything in the library (line above: grime 1.25, oxide 1.4), since a
     // contamination layer scatters some of the diffuse a bare conductor would
     // otherwise suppress.
-    metalness: 0.9,
+    //
+    // 0.9 -> 0.72, AND IT IS THE ONE LEVER IN THIS FILE THAT REACHES THE ACCENT
+    // WITHOUT REACHING THE BRIGHT-WORK. The builder overrides `metalness: 1.0`
+    // on its `trim` batch and does not override it on `armorAccent`, so this
+    // number is now the only term the two batches do not share — which matters,
+    // because the surviving fault is entirely the accent's: ANVIL's shield
+    // interior comes back a saturated leaf GREEN (measured 62,117,11 on
+    // pair1-anvil-vs-seraph-fight, on a fighter whose palette contains no
+    // green), and green is what gold F0 times this arena's teal deck bounce
+    // makes on any surface with no diffuse term to anchor it. Dropping the env
+    // further would have dimmed every bezel in the cast to fix one batch. At
+    // 0.72 the accent keeps a diffuse component in its own hue, so the plate
+    // stays the colour the palette says it is and the reflection rides ON it —
+    // candy-coated metal, which is what `neon-ronin`, `vesper` and `aegis-01`
+    // all show their accent areas to be.
+    metalness: 0.72,
     // A thin coat, tight. On the trim batch it is the lacquer over a plated
     // ring; on the accent batch it is the same clearcoat the primary plate has.
     // 0.55/0.10 rather than 1.0/0.05 because this material binds no clearcoat
@@ -4888,7 +4903,18 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // reference round raised against this fighter. 1.2 still reads as metal
     // (the roughness under 0.25 is what does most of that work) and leaves the
     // arena's cast as a tint rather than as the colour.
-    envMapIntensity: 1.2,
+    //
+    // 1.2 -> 0.95, because 1.2 was not enough either and the failure is the
+    // same one, one stop quieter. pair1-seraph-body (palette round) still shows
+    // ANVIL's pauldron and shin plates swinging to ACID GREEN as the camera
+    // moves, while pair1-anvil-body — a few degrees away — has them warm cream:
+    // a view-dependent hue swing of that size is by definition the env term,
+    // and gold F0 times this arena's cyan deck bounce is green wherever the
+    // reflection vector finds the deck. Under 1 the reflection is a highlight
+    // on a metal rather than a second albedo, which is also the honest reading
+    // for a batch that covers 77 builder call sites: bright-work is supposed to
+    // catch the light, not to BE the light.
+    envMapIntensity: 0.95,
   });
 
   const darkMetal = new StoryPhysicalMaterial({
@@ -4933,10 +4959,18 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // lifted this zone above the armour. §1.3 is explicit that this layer must
     // sit in shadow between the shells; it is the only surface in the library
     // that is allowed to be the darkest thing in frame.
+    //
+    // 0.55 -> 0.40 in the palette round, because this is the material the
+    // builder's rib stacks actually bind and the r3 captures show those ribs
+    // taking the arena's colour rather than their own: pair0-vulkan-body's
+    // waist reads salmon-and-cyan, pair3-bastion-head's reads pink-and-cobalt.
+    // The roughness scalar is already at its ceiling (`metalOrm` authors
+    // 0.22-0.45 and a scalar can only multiply DOWN), so the environment term
+    // is the only remaining lever on how much of the room a rib crest returns.
     anisotropy: 0.24,
     anisotropyRotation: 0,
     anisotropyMap: shared.metalAniso,
-    envMapIntensity: 0.55,
+    envMapIntensity: 0.4,
   });
 
   // A rod and a mirror boss carry almost no history — the rod is wiped by its
@@ -5146,16 +5180,31 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
   // kind: it is a dielectric bellows boot, matte and light-scattering, where the
   // sheets show dark graphite METAL with a hard specular rim on every rib. So:
   //
-  //   metalness 0.62   a conductor, but not a clean one — a dark machined
-  //                    graphite composite, which is what puts a rim on the ribs
-  //                    without letting the whole segment take the palette hue
-  //   roughness 0.78   a SCALAR over the soft ORM, which sits around 0.78 of its
-  //                    own, so the surface lands near 0.6 — well under the
-  //                    coated plate above it and nowhere near the polished ring
-  //                    beside it. This zone must never compete for the eye
+  //   metalness 0.28   MOSTLY DIELECTRIC, and this is the number that moved.
+  //                    0.62 was chosen to "put a rim on the ribs", and it does
+  //                    — but a conductor's rim is COLOURED BY WHAT IT
+  //                    REFLECTS, and this arena is lit by a magenta practical
+  //                    on one side and a cyan bounce off the wet deck on the
+  //                    other. Photographed on the r3 set: BASTION's waist
+  //                    column is a ladder of alternating hot-pink and cobalt
+  //                    bands (pair3-bastion-head, 4x), VULKAN's is salmon
+  //                    (pair0-vulkan-body), SERAPH's spine is white and pink.
+  //                    Every one of those is the room's colour, not the
+  //                    machine's. A graphite composite is a filled polymer: it
+  //                    conducts badly, its highlight is a weak white
+  //                    dielectric one, and a weak white highlight is what lets
+  //                    a rib read as a rib instead of as a neon tube.
+  //   roughness 1.0    a SCALAR over the soft ORM, which sits around 0.78 of
+  //                    its own, so the surface delivers ~0.78. Was 0.78, i.e.
+  //                    ~0.6 delivered — a lobe narrow enough to return a
+  //                    recognisable image of a light source. This zone must
+  //                    never compete for the eye and at ~0.78 it cannot.
   //   clearcoat 0      no paint, therefore no lacquer
-  //   sheen     0.3    the grazing rim that separates a rib from its neighbour
-  //                    when the key is doing nothing to help
+  //   sheen     0.22   the grazing rim that separates a rib from its neighbour
+  //                    when the key is doing nothing to help. Down with the
+  //                    rest: with the specular now broad and white, the sheen
+  //                    is the only remaining term that can put a hard line on
+  //                    a rib crest, and §1.3 wants shadow and machinery there.
   //
   // It costs ONE material object and ZERO texture memory: `buildSoftDetail`
   // already bakes moulding ribs into shared.softNormal/softOrm/softMod at
@@ -5170,8 +5219,18 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
   // the one part of the fighter whose whole job is to look extruded.
   const underskin = new StoryPhysicalMaterial({
     name: 'kb.underskin',
-    story: story({ ...bareSteel, grime: 0.6, dust: 0.3, seam: 0, lattice: 0, detail: 0, burnish: 0.35, hollow: 0.8 }),
-    color: linearColor(alloy([0.028, 0.029, 0.032], secondary, 0.2)),
+    // `burnish` comes off too: it polishes convex edges toward bare bright
+    // alloy, and on a stack of a dozen ribs every single crest is a convex
+    // edge — so the term that reads as "a worn edge" on a plate reads as "a
+    // chrome thread" on a rib column.
+    story: story({ ...bareSteel, grime: 0.6, dust: 0.3, seam: 0, lattice: 0, detail: 0, burnish: 0.12, hollow: 0.8 }),
+    // 0.028 -> 0.021 neutral, hue amount 0.2 -> 0.12. §1.3 asks for the same
+    // substance on all eight sheets — the machine under the paint, not part of
+    // the paint scheme — and the amount of the character that belongs in it is
+    // a cast, not a tint. The darker neutral is what makes armour-then-gap-then-
+    // mechanism three values instead of two: the gap is the darkest, this sits
+    // just above it, the plate sits well above both.
+    color: linearColor(alloy([0.021, 0.022, 0.025], secondary, 0.12)),
     map: shared.softMod,
     normalMap: shared.softNormal,
     normalScale: new THREE.Vector2(1.6, 1.6),
@@ -5181,16 +5240,22 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // carries ZERO in its blue channel because it was baked for an elastomer, so
     // binding it here would multiply this material's metalness straight to nil
     // and hand back the dielectric boot the zone already has.
-    roughness: 0.78,
-    metalness: 0.62,
+    roughness: 1,
+    metalness: 0.28,
     clearcoat: 0,
-    sheen: 0.3,
-    sheenColor: new THREE.Color(0x7d848d),
+    sheen: 0.22,
+    sheenColor: new THREE.Color(0x6b7178),
     sheenRoughness: 1,
     sheenRoughnessMap: shared.softOrm,
-    specularIntensity: 0.85,
+    // 0.85 -> 0.5 and 0.8 -> 0.3. These are the two terms that decide how much
+    // of the ROOM this surface returns, and the room is the problem: with the
+    // envMap at 0.8 a waist column a metre from a magenta practical is a
+    // magenta waist column whatever its albedo says. At 0.3 the arena lands as
+    // a faint cast on graphite, which is the rim light doing its job rather
+    // than repainting the part.
+    specularIntensity: 0.5,
     ior: 1.5,
-    envMapIntensity: 0.8,
+    envMapIntensity: 0.3,
   });
 
   // Anodised optic surround. The one surface on the fighter allowed a mirror
@@ -5235,7 +5300,14 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     metalnessMap: shared.softOrm,
     roughness: 1,
     metalness: 1,
-    sheen: 1,
+    // Sheen 1.0 in the character's bright-work hue, on a ribbed sheath, is a
+    // retroreflective lobe that lights EVERY rib crest at once — a rope that
+    // glows along its whole length in whatever colour is nearest. §1.3 puts
+    // cable runs in the same dark-mechanism family as the rib stacks, and §1.6
+    // allows one hero emissive per fighter and no glowing surfaces beyond it.
+    // At 0.45 the loom still reads as sheathed braid under grazing light and
+    // stops being the third-brightest object on the machine.
+    sheen: 0.45,
     sheenColor: new THREE.Color(p.trim),
     sheenRoughness: 1,
     sheenRoughnessMap: shared.softOrm,

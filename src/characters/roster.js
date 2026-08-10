@@ -32,12 +32,34 @@
  *    produces a metal that reflects a fifth of what brass reflects: the capture
  *    round measured NYX's gold bezels as "a matte brown dome ... reading as felt
  *    or clay" and VOLTA's brass shoulder disc as "chalky salmon", off entries of
- *    #D2A63F and #B98C4E. Measured F0 for the three metals this roster uses,
- *    converted to sRGB: polished gold #FFDE92, polished brass #F0D399, nickel
- *    #E1E5ED. Every entry below now sits in that range and carries only the
+ *    #D2A63F and #B98C4E. Measured F0 for the three POLISHED metals: gold
+ *    #FFDE92, brass #F0D399, nickel #E1E5ED. Every entry carries the
  *    character's HUE — which is the part that was always doing the work, and
  *    the part `Materials.alloy()` renormalises anyway when it derives
  *    `kb.chrome`.
+ *
+ *    AND THEN THEY ALL CAME BACK DOWN, BECAUSE 77 IS NOT A DETAIL COUNT.
+ *    `trim` reaches 77 builder call sites against `armorPrimary`'s 34. At the
+ *    polished end of the range that is not "the bright-work on the hardware",
+ *    it is MOST OF THE FIGHTER rendered as a mirror, and the r3 capture set
+ *    shows the whole cast converging on it: RONIN-07 photographs as polished
+ *    silver with red stripes against the darkest of the eight sheets, MANTIS as
+ *    brass-and-chrome, NYX as bronze where `vesper` is black, BASTION as a
+ *    silver machine with blue panels, VULKAN as a copper showroom piece against
+ *    a scorched-iron sheet. Ten fighters, one substance.
+ *
+ *    The polished values are the top of the range and not the whole of it. Real
+ *    hardware finishes cover most of a decade of reflectance — blued steel,
+ *    black-oxide gunmetal, aged brass, anodised alloy, scorched iron — and the
+ *    eight sheets use the DARK end far more than the bright one: `neon-ronin`
+ *    and `furnace` have no bright metal on them at all, `aegis-01`'s joints are
+ *    dark gunmetal, and only `atlas-7` and `volt-monk` genuinely want a large
+ *    bright area. So each entry now sits where its own sheet puts it. What is
+ *    NOT bought back by darkening the F0 is the polish: that lives in
+ *    `kb.worn`'s roughness (0.13-0.25 delivered), which is what puts the hard
+ *    travelling rim on a bezel, and it is unchanged. A dark metal with a tight
+ *    lobe is a blued ring; a bright metal with a tight lobe on 77 parts is a
+ *    chrome fighter.
  *
  * Proportion multipliers stay inside 0.9..1.15 as the rig requires; the real
  * silhouette differentiation comes from `silhouette` and `build`, which change
@@ -239,14 +261,28 @@ export const ROSTER = [
       // underlayer that is nearly zero is a hole rather than a surface.
       primary: '#5C3226',   // scorched iron, oxidised warm
       secondary: '#242220', // soot-blackened steel
-      accent: '#FF6A1A',    // molten orange hazard bands
+      // `armorAccent` is `tint(pick('worn'), palette.accent)` at metalness 0.9,
+      // so this hex is a conductor's F0 and not a coat of paint. At #FF6A1A it
+      // was a saturated orange MIRROR on 23 call sites, which is where the
+      // capture's candy-orange came from; the sheet's hazard bands are painted
+      // hot steel that has been through a fire. Same hue, a stop of reflectance
+      // out of it, so it stops competing with the vent glow directly above it.
+      accent: '#E05E18',    // molten orange hazard bands
       // Pushed off 11° to 17°: RONIN's crimson sits at 350° and the two were
       // the closest pair on the wheel, which the "distinct hue per character"
       // rule above exists to prevent.
       emissive: '#FF4A08',  // furnace red-orange
-      // Warm, and a shade off the brass the other three warm fighters use, so
-      // `furnace`'s hardware still reads as scorched rather than as showroom.
-      trim: '#E6BE84',      // hot brass, F0
+      // THE `furnace` SHEET HAS NO BRIGHT-WORK ON IT. Every rivet, collar and
+      // joint barrel on that character is dark scorched steel; the only bright
+      // thing anywhere is the vent light. `trim` is on 77 builder call sites
+      // against `armorPrimary`'s 34, so a #E6BE84 there was not "hot brass on
+      // the hardware", it was a brass fighter — pair0-vulkan-body reads as a
+      // copper-and-salmon showroom piece with a dark red wash, which is the
+      // opposite of the sheet. Reflectance is what a metal's darkness lives in
+      // once roughness is already at its ceiling, and blackened iron genuinely
+      // sits well under polished stock: this is about a stop and a half under
+      // ANVIL's aged brass, in the same family BASTION's blued steel is in.
+      trim: '#AE9375',      // scorched steel, warm oxide cast, F0
     },
     stats: { power: 10, speed: 3, reach: 7, weight: 9, defense: 5 },
     moveSet: 'vulkan',
@@ -282,7 +318,13 @@ export const ROSTER = [
       secondary: '#1E2A38', // deep slate underskin
       accent: '#00A8FF',    // cobalt racing stripe
       emissive: '#31E8FF',  // cyan coolant glow
-      trim: '#DCE3EB',      // polished aluminium, F0
+      // Was #DCE3EB. Arctic white primary plus a near-white metal on the 77
+      // trim sites left nothing between the two: pair0-kestrel-body is one
+      // continuous white-and-chrome figure whose cobalt only survives on the
+      // shins. `volt-monk`'s surfacing — which §3 hands this fighter — works
+      // because its metal is a full value step DARKER than its shell, and that
+      // step is the only thing making the joint rings visible on a white body.
+      trim: '#B6C3D2',      // brushed aluminium, a step under the shell, F0
     },
     stats: { power: 4, speed: 10, reach: 6, weight: 3, defense: 5 },
     moveSet: 'kestrel',
@@ -316,13 +358,27 @@ export const ROSTER = [
       // carries it. The oil black warms toward the sheet's olive-black so the
       // exposed frame belongs to the same machine as the plates.
       primary: '#D6A017',   // safety yellow, chipped
-      secondary: '#2B2820', // olive-black oil film
+      // `atlas-7` is a TWO-PAINT character and this is the second paint. Read
+      // the sheet: an olive shell banded, at chest, upper arm and thigh, with
+      // a wide cream/bone stripe — that banding is most of what stops a
+      // super-heavy from reading as one undifferentiated lump. §3 turns the
+      // olive into safety yellow and says nothing about the bone, because the
+      // bone was never the thing that needed changing. At #2B2820 the second
+      // paint was a near-black that lands almost nowhere the eye can see it,
+      // and pair1-anvil-body came back as a single flat yellow mass with no
+      // internal division at all. Warm and light, so it separates from the
+      // yellow by hue and chroma rather than by value — a bone band on a yellow
+      // plate is exactly the sheet, where a grey band would be a dead zone.
+      secondary: '#C4B491', // bone banding, `atlas-7`'s second paint
       accent: '#FFC53D',    // hazard chevrons
       emissive: '#FFD21A',  // amber warning strobes
-      // `atlas-7`'s whole second colour. Every hub ring, rivet collar and wheel
-      // spoke on that sheet is warm brass against olive plate, and at #B0873C
-      // they were reflecting less than half of what brass does.
-      trim: '#EFD9A2',      // aged brass hubs and collars, F0
+      // `atlas-7`'s whole second colour, and the one fighter in the cast whose
+      // sheet genuinely wants a large area of bright-work. It still comes down
+      // from #EFD9A2: that value is polished showroom brass and the sheet's
+      // hubs are AGED — a dockyard rig that has been outside for a decade. This
+      // is still unmistakably brass against the yellow, and it stops the trim
+      // batch out-reflecting the plates it is supposed to be hardware on.
+      trim: '#D3B172',      // aged brass hubs and collars, F0
     },
     stats: { power: 9, speed: 4, reach: 5, weight: 10, defense: 7 },
     moveSet: 'anvil',
@@ -354,11 +410,49 @@ export const ROSTER = [
       // no gold anywhere on that character. Aged temple gold against porcelain
       // and violet was a third colour story fighting the other two, and it was
       // the more visible for being handed a mirror lobe this round.
-      primary: '#EDE9F5',   // porcelain
-      secondary: '#2A2836', // graphite spine, faintly indigo
-      accent: '#B49CFF',    // lilac inlay
-      emissive: '#8A5CFF',  // violet field glow
-      trim: '#E2E7EE',      // bright nickel, F0
+      //
+      // AND IT STILL CAME OUT WHITE. pair1-seraph-body has no violet anywhere
+      // on the body — a bone-white figure taking the arena's blue rim on one
+      // side and its warm key on the other, which is what a near-achromatic
+      // palette does under coloured light: it stops being the character's
+      // colour and becomes the room's. `ghostframe` is not white. It is a
+      // PEARL, and a pearl is a light surface that carries a hue; every plate
+      // on that sheet has a lilac-to-cyan shift in it and the sheet's own
+      // darks are graphite. Three of the four paint values move toward the
+      // violet so that the fighter has a hue of its own to defend with:
+      //  - primary keeps its value and gains chroma, so it reads pearl-lilac
+      //    rather than paper;
+      //  - accent, which is a metal F0 on 23 sites, goes properly violet
+      //    instead of being a lilac two shades off the primary;
+      //  - trim comes off bright nickel. §1.4 wants the bezels to read, and on
+      //    a WHITE body a white metal cannot: `ghostframe`'s hardware is the
+      //    graphite frame with a polished edge, so this is a pewter with the
+      //    same violet cast, which is a value step under the shell and visible
+      //    on it. Bright nickel on 77 sites is also half of why this fighter
+      //    photographed as one continuous white mass.
+      // SECOND PASS, AND THE CHROMA GOES UP AGAIN. The first set of numbers
+      // fixed the chrome (the nickel trim was half the fighter) but the body
+      // still photographed neutral: pair1-seraph-body has violet on the dorsal
+      // fins and NOWHERE else, because a 4%-chroma pearl under a warm key and a
+      // cyan deck bounce is whichever of those two is facing it. The sheet's
+      // pearl is not a 4% tint — every plate on `ghostframe` runs lilac through
+      // cyan across its own curvature. Chroma is the only defence a light
+      // surface has against coloured light, so all three paint values carry
+      // more of it, and the trim stops being a neutral pewter and becomes the
+      // violet-grey the sheet's frame actually is.
+      primary: '#DDD1F4',   // pearl porcelain, lilac cast
+      // Third pass, and this is where the violet finally gets area. `secondary`
+      // is 41 builder call sites — more than the primary — and it was the one
+      // value in this palette still doing its job in neutral. A DARK violet is
+      // not the mistake NYX's #2E1B3A was: that one was a large chromatic paint
+      // on a fighter whose sheet is black plus gold plus one line, where this
+      // fighter's sheet is pearl over a dark body with violet running through
+      // it. Held under 0.28 value so it stays the character's dark rather than
+      // becoming a third paint.
+      secondary: '#2B2540', // violet-graphite spine
+      accent: '#9B6BFF',    // violet inlay
+      emissive: '#8A4CFF',  // violet field glow
+      trim: '#B3A9CB',      // pewter with a violet cast, F0
     },
     stats: { power: 6, speed: 6, reach: 9, weight: 4, defense: 4 },
     moveSet: 'seraph',
@@ -406,7 +500,30 @@ export const ROSTER = [
       secondary: '#33363D', // graphite underskin panels
       accent: '#FF2B45',    // crimson cord wrap
       emissive: '#FF1A3C',  // crimson blade-edge glow
-      trim: '#D6DAE2',      // polished nickel, F0
+      // AND THE NICKEL WENT THE SAME WAY THE BONE PLATES DID, FOR THE SAME
+      // REASON. The lacquer landed; the fighter did not. pair2-ronin-body is a
+      // POLISHED SILVER robot with red stripes, because `trim` is 77 call sites
+      // and a #D6DAE2 conductor at roughness 0.13-0.25 beats a black plate for
+      // the eye every time. `neon-ronin` is the darkest of the eight sheets and
+      // there is no bright metal on it at all — its hardware is dark gunmetal
+      // that shows as a rim and nothing more. Separation from NYX survives this
+      // and is better for it: NYX is black with GOLD rings, this is black with
+      // dark steel and a crimson line.
+      // Second pass: #838A94 stopped the silver and left a BRONZE. A neutral
+      // metal under this arena's warm key is a warm metal — physically right,
+      // and on 77 call sites it means the lacquer never gets to be the read.
+      // Black-oxide conversion coating is a real finish on a real blade and it
+      // reflects a fraction of bare stock; this is what the sheet's hardware
+      // is, and at this level the joint rings still show the hard bright rim
+      // §1.4 wants, because that rim is roughness 0.13-0.25 and not F0.
+      // Third pass, and the last move is HUE rather than value. At #5F656E the
+      // silver is gone and pair2-ronin-body reads BRONZE, because a neutral F0
+      // under this arena's warm key reflects a warm key — the reflection is the
+      // whole of a conductor's colour and a neutral one has no opinion of its
+      // own. Black oxide on steel is genuinely blue-black, so leaning it cool
+      // gives the metal something to answer the key with, and lacquer black
+      // plus a cool-dark hardware plus a crimson line is `neon-ronin`.
+      trim: '#545C6A',      // black-oxide gunmetal, cool, rim-only bright-work, F0
     },
     stats: { power: 7, speed: 7, reach: 6, weight: 5, defense: 6 },
     moveSet: 'ronin',
@@ -440,7 +557,19 @@ export const ROSTER = [
       secondary: '#161B14', // matte void underside
       accent: '#9DFF3C',    // acid green wing flash
       emissive: '#7CFF00',  // bio-luminous acid glow
-      trim: '#DAE2D4',      // nickel mandible edge, F0
+      // Follows RONIN-07 down and for the same reason — this fighter is in the
+      // same `neon-ronin` language (§3) and pair2-mantis-body came back as a
+      // brass-and-chrome insect with green flashes rather than a carbon one.
+      // The mandible EDGE is bright on the sheet; the 77 sites this hex reaches
+      // are not all mandible edges.
+      // Follows RONIN-07 down a second time for the same reason: at #8B9386
+      // pair2-mantis-head is an olive-BRONZE insect, and the carbon carapace
+      // this fighter is supposed to be cannot be seen past 77 sites of warm
+      // metal.
+      // Third pass with RONIN-07, same mechanism: at #62685C the metal took the
+      // warm key and pair2-mantis-body came back KHAKI. Cool and dark, so the
+      // carapace olive is the fighter's colour and the hardware is shadow.
+      trim: '#545A54',      // black-oxide gunmetal, cool olive cast, F0
     },
     stats: { power: 5, speed: 9, reach: 8, weight: 4, defense: 3 },
     moveSet: 'mantis',
@@ -487,11 +616,21 @@ export const ROSTER = [
       // 16°/350°/322° they sit about 27° apart each, which is the widest the
       // three can be without one of them ceasing to be its character's colour.
       emissive: '#FF34B4',  // magenta core glow
-      // The textbook sRGB value for polished gold's F0. This is the character's
-      // entire second colour and it is on 77 call sites; §1.4 wants every one of
-      // them to show a bright rim over a dark core, which is what an F0 this
-      // high and a roughness this low do together.
-      trim: '#FFDE92',      // polished gold ring bezels, F0
+      // Was the textbook sRGB F0 for polished gold. The gold is still the point
+      // and this is still gold — it comes down because "it is on 77 call sites"
+      // is an argument in BOTH directions and the capture settled it:
+      // pair3-nyx-body is a bronze figure with black showing through, where the
+      // sheet is a BLACK figure with gold rings on it. `vesper`'s bezels are
+      // antique, not showroom; at the textbook value the hardware stopped being
+      // jewellery on a black body and became the body. Two thirds of the way
+      // down to the blued steels keeps the hue, keeps the bright rim §1.4 asks
+      // for — that rim is roughness 0.13-0.25 doing the work, not F0 — and
+      // hands the gloss black back the area it is supposed to own.
+      // Second pass, one more step: pair3-nyx-body is now recognisably `vesper`
+      // — gloss black torso, gold hardware, magenta line — but the limbs still
+      // read gold rather than black with gold ON them, which is the whole
+      // composition of that sheet.
+      trim: '#D0A95C',      // antique gold ring bezels, F0
     },
     stats: { power: 6, speed: 8, reach: 5, weight: 4, defense: 6 },
     moveSet: 'nyx',
@@ -537,9 +676,21 @@ export const ROSTER = [
       // reading, and it also has to: the builder puts `trim` on 77 call sites
       // against `armorPrimary`'s 34, so a nickel F0 here turns the whole
       // defensive fighter into chrome — which is what the first capture of this
-      // round showed. #9EABBB is still a real metal (blued steel sits near 0.35
-      // linear) and is a stop and a half under NYX's gold.
-      trim: '#9EABBB',      // blued steel, F0
+      // round showed. #9EABBB was the right diagnosis and half a step:
+      // pair3-bastion-head still photographs as a SILVER machine with blue
+      // panels rather than a blue machine with steel hardware. Blued steel
+      // covers a wide band — roughly 0.2 to 0.4 linear, depending on how far
+      // the bluing went — and this sits at the dark end of it, which is where a
+      // door that has been standing in one corridor for twenty years belongs.
+      // ...and a third step, with the HUE finally doing some of the work.
+      // pair3-nyx-body still has BASTION as a silver machine with blue panels,
+      // and the reason a near-neutral keeps winning is that it is neutral: the
+      // 77 trim sites and the 34 primary sites are the same object to the eye
+      // unless they share a colour. Bluing is an iron oxide and it is BLUE;
+      // giving this the primary's hue makes the hardware belong to the plate
+      // instead of competing with it, and §3's "gunmetal blue" then describes
+      // the whole fighter rather than a third of it.
+      trim: '#6D8199',      // dark blued steel, F0
     },
     stats: { power: 7, speed: 4, reach: 5, weight: 9, defense: 10 },
     moveSet: 'bastion',
@@ -574,12 +725,25 @@ export const ROSTER = [
       primary: '#F2F5F3',   // clinical white composite
       secondary: '#1C2E2D', // dark teal slate underlayer
       accent: '#00C79A',    // calibration green
-      emissive: '#28FFC8',  // mint diagnostic glow
+      // Pushed 166° -> 159°. KESTREL's coolant cyan sits at 187° and these two
+      // were the closest pair on the wheel after the red half was spread; the
+      // bloom pass separates fighters by emissive hue and 21° is not a
+      // separation. `volt-monk`'s glow is a green-leaning cyan anyway, so the
+      // move is toward the sheet rather than away from it.
+      emissive: '#1FFFB0',  // mint diagnostic glow
       // §3 turns `volt-monk`'s brass into anodised grey-green. Anodising is a
       // transparent oxide over the metal, so the substrate's reflectance is
       // still a metal's — only the hue shifts. #8FA5A2 was the hue with the
       // metal taken out of it.
-      trim: '#C6D4CC',      // anodised grey-green, F0
+      //
+      // What #C6D4CC then got wrong is the other half: it sits so close to the
+      // white composite in value and chroma that on pair4-axiom-body the two
+      // zones merge and the fighter reads as one cream mass with green pips.
+      // `volt-monk`'s trim is legible from across the room because it is a WARM
+      // metal against a COOL white — a full step of contrast at every joint
+      // ring. Anodising is the wrong direction to buy warmth in, so the step is
+      // bought in value and chroma instead.
+      trim: '#9FB3A8',      // anodised grey-green, F0
     },
     stats: { power: 6, speed: 7, reach: 6, weight: 6, defense: 7 },
     moveSet: 'axiom',
@@ -619,7 +783,16 @@ export const ROSTER = [
       secondary: '#2A2119', // tar-dipped insulation
       accent: '#E4B266',    // polished brass collars
       emissive: '#F2F7FF',  // arc-white discharge
-      trim: '#F0D399',      // polished brass, F0
+      // Read `aegis-01` again for what its metal actually is: the plates are
+      // paint, the BANDS are the second paint, and every joint barrel, hub and
+      // knuckle collar between them is dark gunmetal. There is no brass
+      // hardware on that sheet. §3's "burnished copper / brass" names the two
+      // PAINTS — which `primary` and `accent` already carry — so putting a
+      // polished brass on the 77 trim sites as well made a third brass area
+      // larger than either of them, and pair4-volta-body came back as a brass
+      // machine with copper panels. Warm-tinted dark gunmetal puts the
+      // hardware back underneath the paint, where the sheet has it.
+      trim: '#A0958A',      // dark gunmetal, warm cast, F0
     },
     stats: { power: 8, speed: 6, reach: 5, weight: 7, defense: 6 },
     moveSet: 'volta',
