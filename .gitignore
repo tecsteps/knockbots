@@ -13,3 +13,4 @@ ref/
 .vercel
 shots/.capture-lock
 scratchpad/
+.scratch/
