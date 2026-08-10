@@ -171,14 +171,22 @@ const main = async () => {
       }, s);
       // Wait for the spring to arrive rather than guessing: it starts wherever
       // the last shot left it and can have metres to travel.
-      await until(page, `(() => {
+      // Two conditions, not one. Height-fraction alone is satisfied just as well
+      // by a lens that has ended up INSIDE the fighter as by one that has framed
+      // it -- SERAPH's round-2 portrait was photographed from within its own
+      // ribcage and passed a frac > 0.55 test while doing it. Require the camera
+      // to be a body-length away as well, and cap the fraction so an overshoot
+      // is waited out rather than photographed.
+      const framed = await until(page, `(() => {
         const KB = window.KB, THREE = KB.THREE, f = KB.fighters[${s}], cam = KB.camera;
         const box = new THREE.Box3().setFromObject(f.robot.group);
         const c = box.getCenter(new THREE.Vector3());
         const top = new THREE.Vector3(c.x, box.max.y, c.z).project(cam);
         const bot = new THREE.Vector3(c.x, box.min.y, c.z).project(cam);
-        return Math.abs(top.y - bot.y) / 2 > 0.55;
+        const frac = Math.abs(top.y - bot.y) / 2;
+        return frac > 0.50 && frac < 0.98 && cam.position.distanceTo(c) > 1.8;
       })()`, 30000, 600);
+      if (!framed) console.log(`[scenecap] ${ids[s]} body: framing never converged — frame is suspect`);
       await sleep(900);
       f = resolve(OUT, `pair${pi}-${ids[s]}-body.png`);
       await grab(page, f); manifest.frames.push({ file: f, kind: 'body', id: ids[s] });

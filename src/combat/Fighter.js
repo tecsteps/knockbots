@@ -152,6 +152,22 @@ const PELVIS_LIFT_MAX = 0.32;
 // that direction does move the body, and 45mm/tick reads as settling.
 const PELVIS_LIFT_RISE = 0.10;
 const PELVIS_LIFT_FALL = 0.045;
+// The correction also runs the other way, and has to. A clip's root track is
+// authored once for a reference rig; a fighter whose own legs are shorter than
+// that rig's stands with BOTH boots in the air and no foot solver can help,
+// because there is no penetration to solve. Measured in the neutral idle with
+// the sole reading fixed, four of the ten still hung clear of the deck — vulkan
+// 143mm, bastion 72mm, anvil 51mm, volta 41mm — and the pelvis is the only
+// thing that can close that.
+// 0.16m is vulkan's gap plus a little; past that the clip is not a stance and
+// forcing it down would be a guess.
+const PELVIS_SINK_MAX = 0.16;
+// Deliberately a quarter of the rise rate. A run has a flight phase where both
+// boots are legitimately clear for a handful of ticks, and this is what keeps
+// that from reading as a duck: 12mm/tick recovers 36mm across a three-tick
+// flight and springs straight back, while a standing gap still closes inside
+// two tenths of a second and then stays closed.
+const PELVIS_SINK_RATE = 0.012;
 // Below this the correction is not worth carrying and is snapped away, so the
 // pelvis is not left riding a fraction of a millimetre high forever.
 const PELVIS_LIFT_EPS = 0.0008;
@@ -2819,19 +2835,51 @@ export class Fighter {
    * scalar drop is what makes it survive a rotation: as the foot pitches over on
    * to its toe, the recorded sole point pitches with it and still reports where
    * the boot is, which a fixed offset could not.
+   *
+   * THE FLOOR IS READ THROUGH THE SKINNING, and it has to be. This used to take
+   * the eight corners of each child's `geometry.boundingBox` through the child's
+   * `matrixWorld` — but a SkinnedMesh's bounding box is in BIND space, and its
+   * `matrixWorld` is the container's, not the skeleton's. So the "posed
+   * reference stance" in the paragraph above was never actually read: what came
+   * out was the A-pose's lowest point, on a rig whose A-pose does not stand on
+   * the floor at all. Measured across the ten fighters, the A-pose sole ran from
+   * 181mm BELOW the origin (kestrel) to 172mm above it (vulkan), so every
+   * fighter recorded a sole plane displaced by that error, `#pelvisNeed` read the
+   * displacement as penetration, and the pelvis lift hoisted the machine off the
+   * concrete by exactly as much as it was wrong. In the shipped idle the cast
+   * floated 92mm to 271mm clear of the deck — visible from any full-body framing,
+   * and the reason the boots in `docs/shots/03-full-body.jpg` cast their contact
+   * shadows onto nothing.
+   *
+   * Only the boot bones are sampled. It is both cheaper than skinning 80k
+   * vertices and more correct: the lowest point of the whole robot is only the
+   * sole if nothing else hangs lower, and a scabbard chape, a cable loop or a
+   * knee spur all do on some of this cast.
    */
   #measureSole() {
     this.group.updateMatrixWorld(true);
+    // `skinIndex` indexes `skeleton.bones`, which `createSkeleton` fills in
+    // `BONES` order — so the canonical name table is the lookup, no search.
+    const tips = new Set();
+    for (const side of ['L', 'R']) {
+      for (const n of [`ankle_${side}`, `foot_${side}`, `toe_${side}`]) {
+        const i = BONE_NAMES.indexOf(n);
+        if (i >= 0) tips.add(i);
+      }
+    }
     let floor = Infinity;
     this.group.traverse((o) => {
-      const g = o.geometry;
-      if (!g) return;
-      if (!g.boundingBox) g.computeBoundingBox();
-      const bb = g.boundingBox;
-      if (!bb) return;
-      for (let i = 0; i < 8; i++) {
-        _v.set(i & 1 ? bb.max.x : bb.min.x, i & 2 ? bb.max.y : bb.min.y, i & 4 ? bb.max.z : bb.min.z)
-          .applyMatrix4(o.matrixWorld);
+      if (!o.isSkinnedMesh) return;
+      const pos = o.geometry.getAttribute('position');
+      const si = o.geometry.getAttribute('skinIndex');
+      if (!pos || !si) return;
+      for (let i = 0; i < pos.count; i++) {
+        // Rigid binding: `skinIndex.x` is the only bone this vertex belongs to,
+        // so one lookup decides whether it is boot at all.
+        if (!tips.has(si.getX(i))) continue;
+        _v.fromBufferAttribute(pos, i);
+        o.applyBoneTransform(i, _v);
+        o.localToWorld(_v);
         if (_v.y < floor) floor = _v.y;
       }
     });
@@ -2846,7 +2894,16 @@ export class Fighter {
         const drop = _v.y - floor;
         // A bone whose "sole" is above it, or absurdly far below, is not part of
         // the boot; ignore it rather than plant the fighter on a bad number.
-        if (!(drop > 0.01 && drop < 0.45)) continue;
+        //
+        // The lower bound is a millimetre and not the centimetre it was. That
+        // centimetre was harmless while `floor` came from the whole robot's
+        // A-pose box, which sits well below every boot bone; against a floor
+        // measured on the boot itself the toe bone is the one that is nearly ON
+        // it, so the old window threw away the exact bone the machine stands on.
+        // Measured: all ten dropped from three sole points to two, and kestrel —
+        // whose digitigrade toe IS its contact patch — sank 146mm because the
+        // remaining points reported a sole higher than the boot's.
+        if (!(drop > -0.001 && drop < 0.45)) continue;
         _v.y = floor;
         _m.copy(bone.matrixWorld).invert();
         st.sole.push({ bone, local: _v.clone().applyMatrix4(_m) });
@@ -3014,15 +3071,28 @@ export class Fighter {
       // prone chassis the boot is not the lowest point and the smoothing that
       // makes a landing read has nothing left to smooth.
       if (need === null) { this.pelvisLift = 0; return; }
-      const want = THREE.MathUtils.clamp(need, 0, PELVIS_LIFT_MAX);
+      const want = THREE.MathUtils.clamp(need, -PELVIS_SINK_MAX, PELVIS_LIFT_MAX);
       const d = want - this.pelvisLift;
-      // Falling is normally eased, but a negative need means the correction is
-      // now holding the fighter off the floor, and that is not a thing to ease
-      // out of: give back most of the measured gap at once. A `r.crumple` was
-      // measured hovering 173mm for six frames on the fixed rate alone.
-      const step = d > 0 ? PELVIS_LIFT_RISE : Math.max(PELVIS_LIFT_FALL, -need * 0.9);
-      this.pelvisLift += Math.abs(d) <= step ? d : Math.sign(d) * step;
-      if (this.pelvisLift < PELVIS_LIFT_EPS) this.pelvisLift = 0;
+      // Three rates, because the three directions are three different things.
+      //
+      // Growing a lift is capped at the speed the body legitimately moves
+      // anyway. Giving one back used to be eased and must not be: a negative
+      // need under a positive lift means the correction is holding the fighter
+      // off the floor, and a `r.crumple` was measured hovering 173mm for six
+      // frames on the fixed rate alone — so hand most of the measured gap back
+      // at once. That fast release stops dead AT ZERO, because past zero it is
+      // no longer releasing anything, it is the third case: pushing the body
+      // down onto the floor, which moves the body and is deliberately the slow
+      // one (see PELVIS_SINK_RATE and the flight phase it has to survive).
+      if (d > 0) {
+        this.pelvisLift += Math.min(d, PELVIS_LIFT_RISE);
+      } else if (this.pelvisLift > 0) {
+        const fast = Math.max(PELVIS_LIFT_FALL, -Math.min(need, 0) * 0.9);
+        this.pelvisLift = Math.max(Math.max(want, 0), this.pelvisLift - fast);
+      } else {
+        this.pelvisLift += Math.max(d, -PELVIS_SINK_RATE);
+      }
+      if (Math.abs(this.pelvisLift) < PELVIS_LIFT_EPS) this.pelvisLift = 0;
       if (this.pelvisLift !== 0) pose.rootPos.y += this.pelvisLift;
     }, { stage: 'pre' });
   }
@@ -3035,19 +3105,33 @@ export class Fighter {
    * one in the air is a swing-arc problem, the minimum goes negative and the
    * correction releases — a walk cycle is therefore never touched.
    *
-   * @returns {?number} metres, or null when this state may not be corrected
+   * The mirror case is real too and used to return zero. When BOTH boots are
+   * clear of the floor the body is standing too high, and by the same argument
+   * the pelvis owns the SMALLER of the two gaps. This is not a hypothetical: a
+   * clip's root track is authored once against a reference rig, and a fighter
+   * whose own legs come out shorter than that rig's stands on nothing — with no
+   * penetration anywhere, the foot solver has nothing to grip. Four of the ten
+   * hang between 41mm and 143mm clear in the neutral idle without this.
+   *
+   * @returns {?number} metres — positive to lift, negative to sink, or null
+   *   when this state may not be corrected
    */
   #pelvisNeed(ctx) {
     if (this.airborne || !PELVIS_LIFT_STATES.has(this.state)) return null;
-    let shared = Infinity;
+    let shallowest = Infinity;
+    let deepest = -Infinity;
     for (const side of ['L', 'R']) {
       if (!this.plantState[side].sole.length) return null;
       const low = this.#soleNow(ctx, side);
       if (!Number.isFinite(low)) return null;
       const bury = this.floorY - low;
-      if (bury < shared) shared = bury;
+      if (bury < shallowest) shallowest = bury;
+      if (bury > deepest) deepest = bury;
     }
-    return Number.isFinite(shared) ? shared : null;
+    if (!Number.isFinite(shallowest)) return null;
+    if (shallowest > 0) return shallowest;   // both under: lift by the shallower
+    if (deepest < 0) return deepest;         // both clear: sink by the smaller gap
+    return 0;                                // one of each: a swing arc, leave it
   }
 
   /**
