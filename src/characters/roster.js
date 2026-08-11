@@ -357,7 +357,18 @@ export const ROSTER = [
       // brass hardware over olive plate, and this is now the material that
       // carries it. The oil black warms toward the sheet's olive-black so the
       // exposed frame belongs to the same machine as the plates.
-      primary: '#D6A017',   // safety yellow, chipped
+      // #D6A017 -> #C8871C. §3 says "olive -> safety yellow" and it still is
+      // one; what moves is how much green the hue has to spare. The arena rims
+      // the fighters with a strong GREEN-cyan bounce off the deck, and a paint
+      // whose green channel is already three quarters of its red has nothing to
+      // defend with: pair1-seraph-body.png photographs these plates as
+      // CHARTREUSE — a yellow-green that is not in this palette and is not on
+      // the `atlas-7` sheet either. That sheet's shell is an olive-BRASS: warm,
+      // ochre, red-leaning, which is exactly the direction that survives a green
+      // rim, because green added to an amber lands back on yellow instead of
+      // running past it. G/R goes 0.75 -> 0.68 and the value drops a little with
+      // it, so the bone banding above still reads as the lighter of the two.
+      primary: '#C8871C',   // safety yellow pulled to `atlas-7`'s olive-brass
       // `atlas-7` is a TWO-PAINT character and this is the second paint. Read
       // the sheet: an olive shell banded, at chest, upper arm and thigh, with
       // a wide cream/bone stripe — that banding is most of what stops a
@@ -523,7 +534,21 @@ export const ROSTER = [
       // own. Black oxide on steel is genuinely blue-black, so leaning it cool
       // gives the metal something to answer the key with, and lacquer black
       // plus a cool-dark hardware plus a crimson line is `neon-ronin`.
-      trim: '#545C6A',      // black-oxide gunmetal, cool, rim-only bright-work, F0
+      // Fourth pass. #545C6A is dark (0.114 linear luma) and it is cool, and
+      // r4's pair2-ronin-body.png STILL photographs a gold samurai — so the
+      // premise of the last three passes was wrong. A conductor has no colour of
+      // its own; what the camera sees is F0 times the environment, and
+      // `kb.worn` was reflecting this arena's warm key at roughness 0.13-0.25
+      // with envMapIntensity 0.95, which is a mirror. A mirror of a warm room is
+      // warm at ANY F0, so no amount of hue on this hex was ever going to reach
+      // it. The lobe is fixed in Materials.js (`trimPolish`, derived from this
+      // entry's own reflectance: a blackened finish is dark BECAUSE it is a
+      // rough conversion layer, so it gets the satin lobe it physically has).
+      // This hex goes with it rather than instead of it — 0.037 linear luma is
+      // where black oxide on steel actually sits, a third of what was here, and
+      // between the two the reflection drops by about a factor of five. Lacquer
+      // black, dark steel hardware, one crimson line: `neon-ronin`.
+      trim: '#2F3742',      // black-oxide gunmetal, cool, rim-only bright-work, F0
     },
     stats: { power: 7, speed: 7, reach: 6, weight: 5, defense: 6 },
     moveSet: 'ronin',
@@ -630,7 +655,20 @@ export const ROSTER = [
       // — gloss black torso, gold hardware, magenta line — but the limbs still
       // read gold rather than black with gold ON them, which is the whole
       // composition of that sheet.
-      trim: '#D0A95C',      // antique gold ring bezels, F0
+      // Third pass, and it is the last one this hex can carry alone. r4's
+      // pair3-nyx-body.png still has the torso, arms and thighs reading
+      // gold-bronze against a sheet that is void black. #D0A95C is 0.42 linear
+      // luma — that is not "antique", it is the polished value with a shade
+      // taken off, and on 77 builder call sites at roughness 0.13-0.25 it was
+      // simply the fighter. Genuine antique gold is a tarnish layer and sits
+      // near a sixth of polished stock; this is 0.16, which is a THIRD of what
+      // was here and still unmistakably gold next to a 0.006 lacquer black.
+      // The other half of the fix is in Materials.js: `trimPolish` reads this
+      // number's own reflectance and gives a dark entry the satin lobe a
+      // tarnished finish physically has, so the gold stops mirroring the
+      // arena's warm key across the whole limb. The BEZELS still catch it —
+      // that rim is roughness and geometry, not F0 (§1.4).
+      trim: '#8A6A33',      // tarnished antique gold ring bezels, F0
     },
     stats: { power: 6, speed: 8, reach: 5, weight: 4, defense: 6 },
     moveSet: 'nyx',

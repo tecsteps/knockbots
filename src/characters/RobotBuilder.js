@@ -1687,7 +1687,14 @@ class Rig {
     // Two half-heights plus a groove that is a fraction of the disc, never a
     // multiple of it. A coil is wound solid, so its turns pack tighter still.
     const coil = !!o.coil;
-    const pitch = h * 2 + h * (o.groove ?? (coil ? 0.10 : 0.30));
+    // 0.30 of a disc height of valley between rings was still wide enough for
+    // the shadow between two neighbours to read as one continuous groove
+    // spiralling round the column when the column is seen at an angle — which
+    // is why SERAPH's waist was still being reported as "a helical coil" in the
+    // fight frames when its geometry is flat discs. A ribbed column has rings
+    // that all but touch: at 0.16 the valley is under 1.5 mm on a torso stack
+    // and there is no diagonal for the eye to join up.
+    const pitch = h * 2 + h * (o.groove ?? (coil ? 0.10 : 0.16));
     const n = Math.max(1, Math.round(o.count ?? (Math.abs(span) / pitch + 1)));
     for (let i = 0; i < n; i++) {
       const f = n === 1 ? 0.5 : i / (n - 1);
@@ -2311,7 +2318,16 @@ const LEG_PLANS = ['plantigrade', 'digitigrade', 'splayed', 'piston'];
  * the ankle ram and the ankle loom on the same two numbers, and a boot that
  * shrinks without its hydraulics leaves a ram hanging in clear air.
  */
-const BOOT_TRIM = { plantigrade: 0.78, splayed: 0.78, piston: 0.82, digitigrade: 0.74 };
+// digitigrade was 0.74 on the argument above, and the argument was wrong on the
+// numbers. MEASURED on the built mesh at that value, KESTREL's raptor foot ran
+// from -0.130 to +0.381 in world Z: 511 mm of foot on a 964 mm hip-to-ankle,
+// i.e. 0.53 of the leg where the plantigrade boot the same paragraph quotes
+// sits at 0.39–0.47. It was also only 124 mm wide and 166 mm tall, so what the
+// fight frames show is a 4:1 flat sprawl of separate lozenges lying on the deck
+// — the "three loose barrel capsules with visible gaps" the round-4 verifier
+// names as the worst thing in the build. A raptor foot IS longer than a boot;
+// it is not twice as long. 0.58 brings the same assembly to 0.40 of the leg.
+const BOOT_TRIM = { plantigrade: 0.78, splayed: 0.78, piston: 0.82, digitigrade: 0.58 };
 const BOOT_WIDTH_TRIM = 0.82;
 const bootTrim = (plan) => BOOT_TRIM[plan] ?? BOOT_TRIM.plantigrade;
 
@@ -2421,7 +2437,12 @@ const TORSO_PLANS = {
     pelvis: [1.16, 1.00], waistLo: [1.22, 1.02], waistHi: [1.28, 1.04],
     ribs: [1.26, 1.04], chest: [1.24, 1.06], yoke: [1.22, 1.06],
     round: 0.10, rake: 0, hunch: 0.008, gap: 0.022,
-    pauldron: { w: 1.22, h: 1.14, d: 1.12, layers: 1, slab: true },
+    // `hub: 'cap'` — the boss branch's default is `atlas-7`'s spoked wheel, and
+    // on BASTION's near shoulder that disc is the single biggest feature in the
+    // frame. `paladin`, which §3 assigns BASTION, has no wheel anywhere on it:
+    // its pauldron is a smooth cowl over a plain pivot boss. Same mass, same
+    // budget, no spokes.
+    pauldron: { w: 1.22, h: 1.14, d: 1.12, layers: 1, slab: true, hub: 'cap' },
   },
   // AXIOM is the only fighter with nothing bolted to it, so its read has to be
   // the shape itself: one continuous ovoid from hip to collar, the highest
@@ -2448,7 +2469,20 @@ const TORSO_PLANS = {
     // fight frames show a barrel with arms. The single-piece boss branch in
     // `buildArm` is that dome (sphere plus an inset wheel hub, which is also
     // what aegis-01's shoulder close-up tile shows), so this plan takes it.
-    pauldron: { w: 1.10, h: 1.08, d: 1.14, layers: 1, slab: true },
+    //
+    // 1.10 was still not it. These multipliers land on the PRECISION chassis
+    // base (w 0.165), where ANVIL's identical-looking boss lands on the BRUTE
+    // base (0.265): 1.10 × 0.165 = 0.182 against 1.28 × 0.265 = 0.339, so the
+    // fighter built to the heaviest sheet in the set carried a shoulder barely
+    // half the size of the one built to the other, and the r4 verifier read
+    // VOLTA's caps as "small tapered". 1.86 × 0.165 = 0.307 puts the dome where
+    // aegis-01's is — the widest point of the whole machine, wider than the
+    // drum it sits on — without touching the arm bones under it.
+    // h is 1.32 and not 1.86's own scale: measured after the width change the
+    // boss came out 276 wide by 381 tall, a 1.30 aspect, where ANVIL's — the
+    // one the r4 verifier says is right — is 1.02. aegis-01's pauldron is a
+    // dome, and a dome is as wide as it is tall.
+    pauldron: { w: 1.86, h: 1.32, d: 1.78, layers: 1, slab: true },
   },
 };
 
@@ -2468,7 +2502,12 @@ const PLAN_CORE = {
   // `reference` was 'column', the same sealed sternum strip as `cuirass` — so
   // AXIOM and RONIN-07 wore the identical chest feature and AXIOM had none of
   // the arc-reactor disc §3 gives it. It has its own now.
-  carapace: 'slit', skeletal: 'crystal', wall: 'hex', reference: 'reactor', drum: 'cage',
+  // `wall` was 'hex' — the same six-sided furnace port VULKAN's barrel wears,
+  // and at BASTION's scale it photographed as a wheel/turbine disc bolted to
+  // the chest, which is atlas-7's language and belongs to ANVIL. §3 builds
+  // BASTION to `paladin`, whose single most identifiable element is the pointed
+  // heraldic breastplate; it had none. See `case 'shield'`.
+  carapace: 'slit', skeletal: 'crystal', wall: 'shield', reference: 'reactor', drum: 'cage',
 };
 
 /**
@@ -2586,6 +2625,7 @@ function chassisFor(def) {
         layers: o.layers ?? base.pauldron.layers,
         taper: o.taper ?? base.pauldron.taper,
         slab: !!o.slab,
+        hub: o.hub ?? 'wheel',
       };
     })(),
     legs: {
@@ -3215,6 +3255,60 @@ function buildChestCore(rig, spec, cw, cd, ch, cy, dz = 0) {
       { p: [0, cy, zf - FRONT * R * 0.04], r: [90 * DEG, 0, 0] });
       rig.add('chest', boltRing(6, R * 0.90, R * 0.11, R * 0.13, 0), 'trim',
         { p: [0, cy, zf + FRONT * R * 0.30], r: [-90 * DEG, 0, 0], tier: TIER.GREEBLE });
+      break;
+    }
+    case 'shield': {
+      // BASTION — `paladin`'s heraldic breastplate. On that sheet it is the one
+      // element anybody would name: a pointed shield covering most of the
+      // chest, two rounded lobes at the shoulders, a shallow V notch between
+      // them, a raised centre ridge and a single point at the belly. It is not
+      // a core in the sense the other five cases are — it is the plate the core
+      // sits in — so it is sized off the CHEST, not off `R`.
+      //
+      // Two halves rather than one plate, because the notch and the ridge are
+      // both the seam between them: each half is yawed about its own axis so
+      // its inboard edge stands forward, and the pair meets in a raised spine
+      // exactly the way a real heater shield's fuller does. One authored loft,
+      // written per side rather than mirrored — `mirror` reflects about the
+      // part origin and these stations carry their own X, so a mirrored copy
+      // would land on the wrong side of the sternum.
+      const top = cy + ch * 0.44;
+      const tip = cy - ch * 0.50;
+      const H = top - tip;
+      const face = zf - FRONT * cd * 0.06;
+      for (const { sign } of SIDES) {
+        rig.add('chest', loftHull([
+          { y: tip, x: sign * cw * 0.026, w: cw * 0.085, d: cd * 0.14, roll: -sign * 0.30, round: 0.50 },
+          { y: tip + H * 0.36, x: sign * cw * 0.120, w: cw * 0.250, d: cd * 0.20, roll: -sign * 0.30, round: 0.40, smooth: true },
+          { y: tip + H * 0.74, x: sign * cw * 0.188, w: cw * 0.390, d: cd * 0.22, roll: -sign * 0.28, round: 0.34, smooth: true },
+          { y: top, x: sign * cw * 0.196, w: cw * 0.400, d: cd * 0.17, roll: -sign * 0.26, round: 0.46 },
+        ], { perQuad: 4 }), 'armorPrimary', {
+          p: [0, 0, face], tier: TIER.PRIMARY, role: 'lame',
+        });
+      }
+      // The fuller: a polished rib let into the seam the two halves make, from
+      // the notch down to the point. It is what keeps the shield reading as one
+      // heraldic device rather than as two plates that happen to touch.
+      rig.add('chest', loftHull([
+        { y: tip + H * 0.02, w: cw * 0.030, d: cd * 0.14, round: 0.5 },
+        { y: tip + H * 0.52, w: cw * 0.052, d: cd * 0.19, round: 0.45, smooth: true },
+        { y: top - H * 0.06, w: cw * 0.044, d: cd * 0.15, round: 0.5 },
+      ]), 'trim', { p: [0, 0, face + FRONT * cd * 0.03], tier: TIER.PRIMARY });
+      // §1.6: one thin line, in the groove the fuller opens. The hex port this
+      // replaces lit a 6-sided lamp the width of a head.
+      rig.glow('chest', loftHull([
+        { y: tip + H * 0.14, w: cw * 0.012, d: 0.010, round: 0.5 },
+        { y: top - H * 0.16, w: cw * 0.010, d: 0.009, round: 0.5 },
+      ]), 'core', { p: [0, 0, face + FRONT * cd * 0.11] });
+      // Rivet line along each lobe's leading edge — edge-only hardware, §1.6.
+      for (const { sign } of SIDES) {
+        // Four and not three: a 3-stud ring has no mirror symmetry, so the left
+        // lobe and the right lobe wore visibly different fastener patterns.
+        rig.add('chest', boltRing(4, cw * 0.10, R * 0.09, R * 0.10, 0), 'trim', {
+          p: [sign * cw * 0.20, top - H * 0.10, face + FRONT * cd * 0.09],
+          r: FACE_FRONT, tier: TIER.GREEBLE,
+        });
+      }
       break;
     }
     case 'slit': {
@@ -4140,7 +4234,7 @@ function scaledPauldron(spec, m) {
   return {
     w: s.w * m.armK, h: s.h * m.armK, d: s.d * m.armK,
     out: s.out * m.armS, up: s.up * m.armS,
-    taper: s.taper, tilt: s.tilt, layers: s.layers, slab: !!s.slab,
+    taper: s.taper, tilt: s.tilt, layers: s.layers, slab: !!s.slab, hub: s.hub ?? 'wheel',
   };
 }
 
@@ -4934,48 +5028,52 @@ function headMono(rig) {
 }
 
 function headInsulator(rig) {
-  // VOLTA — the `aegis-01` sheet. A rounded helm with a broad accent strip
-  // across the brow, a narrow arc-white slit, and a cylindrical bushing over
-  // each ear; the sheet's head is a helmet with a hub on the side of it. The two
-  // ceramic sheds on the crown are what keeps VOLTA's own insulator identity on
-  // top of that.
+  // VOLTA — the `aegis-01` sheet, rebuilt to it. Read the sheet's head tile and
+  // there are four things and no fifth: a smooth rounded bowl with an accent
+  // cap over the crown, a NARROW cyan slit set in a dark recessed face, a
+  // circular bushing hub over each ear, and a small cheek plate. No crest, no
+  // finial, nothing above the crown at all.
   //
-  // The stack used to be three sheds up to 0.104 m in radius standing clear
-  // above the skull. A bushing column is a good shape, but that was a hat: it
-  // put the head's widest and its highest geometry somewhere a head has neither.
-  // A crown 40 mm lower than the canon: the sheds have to stand ON the helm,
-  // and at the full height they were four millimetres proud of a bowl that was
-  // still widening under them — invisible from every angle.
+  // What was here put a two-shed ceramic stack, a spark terminal and a glow cap
+  // 0.170 m up the head-local axis — 130 mm of hardware above a 200 mm skull.
+  // pair4-volta-head shows the result: a gourd with a snorkel on it, which is
+  // atlas-7's language (ANVIL's), not aegis-01's, and §3 assigns VOLTA the
+  // latter. The insulator identity survives as the ring bedded flush on the
+  // crown, which is also where the arc emitter still fires from.
   helmSkull(rig, {
-    w: SKULL.w * 0.98, d: SKULL.d * 0.94, crown: HEAD_CROWN - 0.040, band: 0.50,
-    bandArc: 184, bandMat: 'armorAccent',
+    w: SKULL.w * 1.00, d: SKULL.d * 0.96, crown: HEAD_CROWN - 0.010, band: 0.62,
+    bandArc: 176, bandMat: 'armorAccent',
   });
-  addVisor(rig, { w: 0.098, h: 0.012, y: 0.014, z: FRONT * 0.074, brow: 0.016, posts: false });
+  // The slit: 0.010 tall on a 138 mm skull, which is the thinnest emissive on
+  // any helmeted head in the cast. §1.6 — light lives in narrow grooves and the
+  // visor, never in a large glowing face — and this sheet's is the narrowest of
+  // the eight. The brow over it is deep so the well stays black under a top key.
+  addVisor(rig, { w: 0.094, h: 0.010, y: 0.016, z: FRONT * 0.076, brow: 0.024, posts: false });
 
-  for (let i = 0; i < 2; i++) {
-    const r = 0.056 - i * 0.014;
-    rig.add('head', discShed(r, 0.015, rig.maxTier >= 2 ? 20 : 12), i % 2 ? 'trim' : 'armorSecondary',
-      { p: [0, 0.112 + i * 0.022, 0], tier: TIER.PRIMARY });
-    rig.add('head', latheProfile([
-      { r: r * 0.42, y: 0 }, { r: r * 0.42, y: 0.011 },
-    ], 12), 'darkMetal', { p: [0, 0.127 + i * 0.022, 0], tier: TIER.SECONDARY });
-  }
-  // arc terminal
-  rig.add('head', latheProfile([
-    { r: 0, y: 0 }, { r: 0.017, y: 0 }, { r: 0.019, y: 0.007, smooth: true },
-    { r: 0.013, y: 0.018 }, { r: 0, y: 0.020 },
-  ], 14), 'trim', { p: [0, 0.152, 0], tier: TIER.PRIMARY });
-  rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.010, y: 0 }, { r: 0, y: 0.012 }], 10), 'core',
-    { p: [0, 0.170, 0] });
-  rig.emitter('arc', 'head', [0, 0.178, 0], [0, 1, 0], 0.03);
+  // Crown cap: one shallow ceramic ring lying ON the bowl, 10 mm proud rather
+  // than 130. It reads as a machined disc let into the helm from the front and
+  // as a low step in profile, which is what the sheet's crown does.
+  rig.add('head', discShed(0.044, 0.010, rig.maxTier >= 2 ? 20 : 12), 'trim',
+    { p: [0, 0.126, -FRONT * 0.006], tier: TIER.PRIMARY });
+  rig.glow('head', latheProfile([
+    { r: 0.020, y: 0 }, { r: 0.030, y: 0 }, { r: 0.030, y: 0.004 }, { r: 0.020, y: 0.004 },
+  ], 18), 'core', { p: [0, 0.134, -FRONT * 0.006] });
+  rig.emitter('arc', 'head', [0, 0.140, -FRONT * 0.006], [0, 1, 0], 0.03);
 
-  // ear bushings, so the profile is not merely a helm
+  // Ear bushings — the aegis-01 head's one protrusion, a wheel hub on the side
+  // of the helm with a cable gland behind it. Larger than they were, because
+  // they are now the whole of the head's profile incident.
   for (const { sign, mirror } of SIDES) {
     rig.add('head', latheProfile([
-      { r: 0, y: 0 }, { r: 0.023, y: 0 }, { r: 0.026, y: 0.007, smooth: true },
-      { r: 0.026, y: 0.020 }, { r: 0.018, y: 0.026 }, { r: 0, y: 0.026 },
+      { r: 0, y: 0 }, { r: 0.030, y: 0 }, { r: 0.033, y: 0.008, smooth: true },
+      { r: 0.033, y: 0.022 }, { r: 0.022, y: 0.030 }, { r: 0, y: 0.030 },
     ], rig.maxTier >= 2 ? 16 : 10), 'darkMetal', {
-      p: [sign * 0.060, 0.020, -FRONT * 0.008], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY,
+      p: [sign * 0.058, 0.024, -FRONT * 0.006], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.PRIMARY,
+    });
+    rig.add('head', latheProfile([
+      { r: 0, y: 0 }, { r: 0.013, y: 0 }, { r: 0.013, y: 0.006 }, { r: 0, y: 0.006 },
+    ], 12), 'trim', {
+      p: [sign * 0.088, 0.024, -FRONT * 0.006], r: [0, 0, sign * -90 * DEG], mirror, tier: TIER.SECONDARY,
     });
   }
 }
@@ -5223,19 +5321,30 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
       { r: sw * 0.07, y: 0.062 }, { r: 0, y: 0.062 },
     ], 24), 'trim', { p: [hubX, at[1], at[2]], r: axis, mirror, tier: TIER.PRIMARY });
     // Four spokes across the hub face, which is what says "wheel" rather than
-    // "washer" once the disc is only twenty pixels across.
-    const spokes = [];
-    for (let i = 0; i < 4; i++) {
-      const g = bevelBox(sw * 0.52, 0.014, 0.020, 0.004);
-      // Built in the hub's own frame (axis +Y) and rotated with it, rather than
-      // composing a second Euler at the call site — the hub is already rolled
-      // onto the joint axis and two orders do not compose readably.
-      g.applyMatrix4(new THREE.Matrix4().makeRotationY((i / 4) * Math.PI));
-      g.translate(0, 0.028, 0);
-      spokes.push(g);
+    // "washer" once the disc is only twenty pixels across — on `atlas-7`, whose
+    // shoulder tile is a spoked wheel. `paladin`'s is not, and a plan that says
+    // so gets a plain domed pivot cap instead: the r4 verifier read the spoked
+    // disc on BASTION's near shoulder as an atlas-7 part on a paladin fighter,
+    // and it was the largest single feature in that frame.
+    if (pd.hub === 'wheel') {
+      const spokes = [];
+      for (let i = 0; i < 4; i++) {
+        const g = bevelBox(sw * 0.52, 0.014, 0.020, 0.004);
+        // Built in the hub's own frame (axis +Y) and rotated with it, rather
+        // than composing a second Euler at the call site — the hub is already
+        // rolled onto the joint axis and two orders do not compose readably.
+        g.applyMatrix4(new THREE.Matrix4().makeRotationY((i / 4) * Math.PI));
+        g.translate(0, 0.028, 0);
+        spokes.push(g);
+      }
+      rig.add(`clavicle_${S}`, joinGeometries(spokes), 'darkMetal',
+        { p: [hubX, at[1], at[2]], r: axis, mirror, tier: TIER.SECONDARY });
+    } else {
+      rig.add(`clavicle_${S}`, latheProfile([
+        { r: 0, y: 0.030 }, { r: sw * 0.22, y: 0.030 },
+        { r: sw * 0.20, y: 0.048, smooth: true }, { r: 0, y: 0.056 },
+      ], 20), 'armorSecondary', { p: [hubX, at[1], at[2]], r: axis, mirror, tier: TIER.SECONDARY });
     }
-    rig.add(`clavicle_${S}`, joinGeometries(spokes), 'darkMetal',
-      { p: [hubX, at[1], at[2]], r: axis, mirror, tier: TIER.SECONDARY });
     rig.add(`clavicle_${S}`, boltRing(6, sw * 0.30, 0.010, 0.012), 'trim',
       { p: [hubX, at[1], at[2]], r: axis, mirror, tier: TIER.GREEBLE });
     rig.glow(`clavicle_${S}`, latheProfile([
@@ -5612,10 +5721,18 @@ function markStacks(rig, spec) {
   // head; the roll is now positive (outboard) and the roots start a full
   // pauldron width further out.
   for (let i = 0; i < 2; i++) {
-    const h = 0.58 - i * 0.15;
-    const x = -(bx + pd.w * (0.86 + i * 0.52));
-    const y0 = pd.up + pd.h * 0.30;
-    const roll = (5 + i * 6) * DEG;
+    // 0.58 m of flue rooted at shoulder height put the tips a clear head-height
+    // above a helmet that is 0.20 m tall — measured off pair0-vulkan-body, the
+    // stacks were the tallest thing in the silhouette and the first thing the
+    // eye found, on a fighter whose read is supposed to be the slot-visor helm.
+    // The mark is contractual, so it comes DOWN and OUT rather than off: 0.36
+    // and 0.25 bring the tall one level with the crown, the roots start lower
+    // on the deck, and the roll is doubled so the pair splays outboard where
+    // the head is not.
+    const h = 0.36 - i * 0.11;
+    const x = -(bx + pd.w * (1.10 + i * 0.58));
+    const y0 = pd.up + pd.h * 0.06;
+    const roll = (12 + i * 9) * DEG;
     const rot = [-16 * DEG, 0, roll];
     rig.add('clavicle_R', latheProfile([
       { r: 0.046, y: 0 }, { r: 0.046, y: h * 0.80 }, { r: 0.058, y: h * 0.86, smooth: true },
@@ -6045,20 +6162,26 @@ function markYoke(rig, spec) {
   // instrument's bezel encircles its dial, and every block has the block beside
   // it for company. The `pd.out` floor only stops a very wide pauldron eating it.
   const R = Math.max(m.skull * 0.82, pd.out * 0.60);
-  // Carried at head height, so the ring encircles the skull rather than sitting
-  // on the collar where the pauldrons are already competing for the outline.
-  const y = m.collar + m.nape + m.skull * 0.44 + (rig.headLift ?? 0);
+  // At head height the hoop did not read as a bezel round a dial: pair4-axiom-
+  // head shows twenty-two blocks CAGING the skull, which is the halo `ghostframe`
+  // gives SERAPH and the one thing §3's row for AXIOM rules out — "smooth
+  // featureless ovoid head ... cleanest surfacing in the cast". A yoke is a
+  // collar you hang a load from, and that is where this belongs: seated on the
+  // shoulder deck, encircling the base of the neck, with the skull standing
+  // clear above it in open sky. R is unchanged, so the ring is the same object;
+  // only its station moved, and the struts under it shrink to short posts.
+  const y = m.collar * 0.72;
   const at = [0, y, -FRONT * 0.010];
   // Twenty-two blocks at this radius leave a 3 mm gap between neighbours — the
   // facets still catch the rim light one at a time, but the ring reads as one
   // object, which thirty blocks on a metre circle did not.
   rig.add('chest', segmentRing(R, 0.026, 0.034, 22, 0.005), 'armorSecondary',
     { p: at, r: [90 * DEG, 0, 0], tier: TIER.PRIMARY });
-  // Three struts down to the shoulder deck. Without them the hoop reads as a
+  // Three posts down to the shoulder deck. Without them the hoop reads as a
   // halo hovering unattached, which belongs to the arcane chassis, not this one.
-  // Placed at the sides and directly aft: a strut at bearing 0 stands in front
-  // of the face, which is the one place on this fighter nothing may cover.
-  const drop = y - (m.collar * 0.86);
+  // Placed at the sides and directly aft: a post at bearing 0 stands in front
+  // of the throat, which is where the neck rings have to stay visible.
+  const drop = y - (m.collar * 0.40);
   for (const a of [Math.PI, Math.PI / 2, -Math.PI / 2]) {
     rig.add('chest', loftHull([
       { y: 0, w: 0.024, d: 0.024, round: 0.36 },
@@ -6308,19 +6431,33 @@ function buildLeg(rig, spec, side, sign, mirror) {
     // 0.43-wide bar, four of them with daylight between — the calf's share of
     // the slinky. `ribStack` derives the count now; the radii come in so the
     // rims sit just proud of the bar rather than hooping it.
+    // Tendon collar, not a bellows. This ran from -0.84 to -0.50 of the shank
+    // at a 0.014 disc height, which `ribStack` resolves to TWELVE rings over a
+    // third of the lower leg — measured on MANTIS at y 0.136–0.286 — and that is
+    // the r3 slinky moved from the waist into the shin. No sheet has a
+    // corrugated shank. A tendon has a SLEEVE at one end of its run and bare bar
+    // for the rest, so the rings are now five over an eighth of the shank,
+    // gathered where the cable enters the hock.
     rig.ribStack(`knee_${S}`, {
-      r0: ankleW * 0.21, r1: ankleW * 0.24,
-      y0: -sLen * 0.84, y1: -sLen * 0.50, h: sLen * 0.014,
+      count: 5, r0: ankleW * 0.22, r1: ankleW * 0.25,
+      y0: -sLen * 0.72, y1: -sLen * 0.58, h: sLen * 0.013,
       p: [0, 0, -FRONT * L.shin * 0.34], deep: 0.86, mirror,
     });
-    // calf thruster
+    // Calf thruster. Struck at 1.35 shin widths behind the bone it was a barrel
+    // hanging in clear air: the probe puts it at z -0.172 on KESTREL against a
+    // hock whose own back face is at -0.117, i.e. 55 mm of daylight, and the
+    // fight frames show it as "a stray grey cylinder floating free at knee
+    // height". It is a nozzle set INTO the back of the calf, so it seats on the
+    // hock's rear face — 0.30 of a shin width aft plus the hock's own half depth
+    // — and nothing about it is in open air any more.
+    const thrZ = -FRONT * (L.shin * 0.30 + kneeW * 0.60);
     rig.add(`knee_${S}`, latheProfile([
       { r: L.shin * 0.30, y: 0 }, { r: L.shin * 0.30, y: 0.05 }, { r: L.shin * 0.42, y: 0.085, smooth: true },
       { r: L.shin * 0.26, y: 0.09 }, { r: L.shin * 0.22, y: 0.05 }, { r: L.shin * 0.22, y: 0 },
-    ], 16), 'darkMetal', { p: [0, -sLen * 0.26, -FRONT * L.shin * 1.35], r: [(160 * DEG) * -FRONT, 0, 0], mirror, tier: TIER.SECONDARY });
+    ], 16), 'darkMetal', { p: [0, -sLen * 0.26, thrZ], r: [(160 * DEG) * -FRONT, 0, 0], mirror, tier: TIER.SECONDARY });
     rig.glow(`knee_${S}`, latheProfile([{ r: 0, y: 0 }, { r: L.shin * 0.22, y: 0 }, { r: 0, y: 0.008 }], 16), 'vents',
-      { p: [0, -sLen * 0.34, -FRONT * L.shin * 1.42], r: [(160 * DEG) * -FRONT, 0, 0], mirror });
-    rig.emitter('thruster', `knee_${S}`, [0, -sLen * 0.36, -FRONT * L.shin * 1.45], [0, -0.4, -FRONT], 0.04);
+      { p: [0, -sLen * 0.34, thrZ - FRONT * L.shin * 0.07], r: [(160 * DEG) * -FRONT, 0, 0], mirror });
+    rig.emitter('thruster', `knee_${S}`, [0, -sLen * 0.36, thrZ - FRONT * L.shin * 0.10], [0, -0.4, -FRONT], 0.04);
   } else if (piston) {
     // Piston leg: no shin armour at all below the knee cuff, just the bare
     // telescoping column with its gland nuts on show. A leg that is mostly
@@ -6340,9 +6477,17 @@ function buildLeg(rig, spec, side, sign, mirror) {
     // proud of the ram read as a ribbed sleeve, and running them the full
     // length of the free run leaves no bare column for the eye to read the
     // remaining nuts as turns of.
+    // Dust boot, at the TOP of the stroke only. Running the sleeve over the
+    // whole free run resolved to eighteen rings covering every millimetre of
+    // VOLTA's visible lower leg, and pair4-volta-body shows the result: a
+    // corrugated bellows where the shank should be. That is the same defect the
+    // waist had, one segment further down. A real ram has its boot gathered
+    // against the gland it retracts into and bare polished rod below it, and
+    // bare rod is also what stops the remaining rings being read as turns of a
+    // spring — there is nothing for them to be a spring ALONG.
     rig.ribStack(`knee_${S}`, {
-      r0: cr * 1.03, r1: cr * 1.02,
-      y0: -sLen * 0.46, y1: -sLen * 0.88, h: sLen * 0.011, mirror,
+      count: 5, r0: cr * 1.05, r1: cr * 1.02,
+      y0: -sLen * 0.42, y1: -sLen * 0.58, h: sLen * 0.012, mirror,
     });
     rig.add(`knee_${S}`, latheProfile([
       { r: cr * 1.20, y: -sLen * 0.30 }, { r: cr, y: -sLen * 0.36, smooth: true },
@@ -6519,38 +6664,66 @@ function buildLeg(rig, spec, side, sign, mirror) {
   // mass below is a lofted volume that swells at the instep and sweeps back into
   // the ankle, and the only boxes left are the sole pads and the cleats.
   if (digi) {
-    // Raptor foot: a slim pad thrown forward onto a long toe, with a tall heel
-    // spur standing well behind and above it. The spur is the part that reads —
-    // it puts a hard notch in the back of the ankle that a boot never has.
+    // Raptor foot, rebuilt as a BOOT that happens to be long rather than as a
+    // chain of lozenges laid end to end. What it replaces measured (probe, rest
+    // pose, KESTREL): heel −0.130, pad centre 0.092, toe plate centre 0.268,
+    // claws 0.290–0.380 — five separate masses strung over half a metre with
+    // 16–20 mm of clear air between the pad and the toe, and 166 mm of total
+    // height under a 964 mm leg. That is a flat sprawl, and at fight framing it
+    // reads exactly as the verifier called it: barrels lying on the deck.
+    //
+    // Three things change. The whole assembly is shorter (see BOOT_TRIM). Every
+    // mass now OVERLAPS its neighbour by 30–40 mm along Z instead of abutting
+    // it, so there is no station at which the foot is one plate thick. And the
+    // metatarsal shell RISES 98 mm to meet the pastern instead of lying flat,
+    // which is the arch — the thing that makes a bird's foot read as sprung.
+    //
+    // Metatarsal shell: sole at the front, climbing back and up into the ankle.
     rig.add(`foot_${S}`, loftHull([
-      { y: -0.018, w: fw * 0.90, d: fl * 0.54, round: 0.42 },
-      { y: 0.022, w: fw * 1.02, d: fl * 0.60, round: 0.32, smooth: true },
-      { y: 0.056, w: fw * 0.86, d: fl * 0.48, z: -FRONT * fl * 0.04, round: 0.36 },
-    ]), 'armorPrimary', { p: [0, 0, FRONT * fl * 0.10], mirror, tier: TIER.PRIMARY });
+      { y: -0.026, w: fw * 0.84, d: fl * 0.70, z: FRONT * fl * 0.10, round: 0.44 },
+      { y: 0.014, w: fw * 1.00, d: fl * 0.86, round: 0.36, smooth: true },
+      { y: 0.058, w: fw * 0.94, d: fl * 0.74, z: -FRONT * fl * 0.10, round: 0.38, smooth: true },
+      { y: 0.098, w: fw * 0.66, d: fl * 0.46, z: -FRONT * fl * 0.20, round: 0.48 },
+    ]), 'armorPrimary', { p: [0, 0, FRONT * fl * 0.30], mirror, tier: TIER.PRIMARY });
+    // Heel spur: the dew claw behind the hock. Pulled in from 0.40 to 0.30 of a
+    // foot length and widened at its base, so it grows OUT of the metatarsal
+    // rather than trailing behind it on a stalk.
     rig.add(`foot_${S}`, loftHull([
-      { y: -0.030, w: fw * 0.52, d: fl * 0.34, round: 0.38 },
-      { y: 0.030, w: fw * 0.44, d: fl * 0.28, z: -FRONT * fl * 0.06, round: 0.34, smooth: true },
-      { y: 0.092, w: fw * 0.24, d: fl * 0.15, z: -FRONT * fl * 0.15, round: 0.46 },
+      { y: -0.030, w: fw * 0.56, d: fl * 0.44, round: 0.38 },
+      { y: 0.030, w: fw * 0.44, d: fl * 0.30, z: -FRONT * fl * 0.06, round: 0.34, smooth: true },
+      { y: 0.092, w: fw * 0.24, d: fl * 0.16, z: -FRONT * fl * 0.15, round: 0.46 },
     ]), 'armorSecondary', {
-      p: [0, 0.062, -FRONT * fl * 0.40], r: [-34 * DEG, 0, 0], mirror, tier: TIER.PRIMARY,
+      p: [0, 0.062, -FRONT * fl * 0.30], r: [-34 * DEG, 0, 0], mirror, tier: TIER.PRIMARY,
     });
+    // Toe plate: wider than the claw row that sits on it (0.96 against a row
+    // spanning 0.74 of the same unit), and reaching 40 mm back OVER the
+    // metatarsal's front lip. At 0.80 wide the outer claws hung off its edges,
+    // which is half of why they read as loose barrels.
     rig.add(`toe_${S}`, loftHull([
-      { y: 0.020, w: fw * 0.80, d: fl * 0.62, round: 0.40 },
-      { y: 0.050, w: fw * 0.84, d: fl * 0.58, z: FRONT * fl * 0.05, round: 0.32, smooth: true },
-      { y: 0.078, w: fw * 0.54, d: fl * 0.36, z: FRONT * fl * 0.12, round: 0.44 },
-    ]), 'armorPrimary', { p: [0, 0, FRONT * fl * 0.16], mirror, tier: TIER.PRIMARY });
-    // three splayed claws, each its own toe rather than a shared cleat bar
+      { y: 0.014, w: fw * 0.96, d: fl * 0.62, round: 0.40 },
+      { y: 0.050, w: fw * 0.92, d: fl * 0.58, z: FRONT * fl * 0.04, round: 0.32, smooth: true },
+      { y: 0.082, w: fw * 0.58, d: fl * 0.34, z: FRONT * fl * 0.10, round: 0.44 },
+    ]), 'armorPrimary', { p: [0, 0, FRONT * fl * 0.10], mirror, tier: TIER.PRIMARY });
+    // Three claws, BEDDED INTO the toe plate: each starts inside it and only the
+    // last 8 mm of tip stands clear. They used to start 100 mm ahead of the toe
+    // hinge on a 0.30-long loft and finish 40 mm past the plate's front edge.
     for (let i = -1; i <= 1; i++) {
       rig.add(`toe_${S}`, loftHull([
-        { y: 0.030, w: fw * 0.22, d: fl * 0.30, round: 0.40 },
-        { y: 0.012, w: fw * 0.15, d: fl * 0.20, z: FRONT * fl * 0.10, round: 0.44, smooth: true },
-        { y: -0.008, w: fw * 0.06, d: fl * 0.08, z: FRONT * fl * 0.17, round: 0.48 },
+        { y: 0.030, w: fw * 0.24, d: fl * 0.24, round: 0.40 },
+        { y: 0.012, w: fw * 0.16, d: fl * 0.16, z: FRONT * fl * 0.06, round: 0.44, smooth: true },
+        // Sole plane. `Fighter.#measureSole` grounds the stance on the lowest
+        // built vertex, so this y and the 0.020 lift below are the two numbers
+        // in the raptor branch that may not move without moving every stance.
+        { y: -0.008, w: fw * 0.06, d: fl * 0.06, z: FRONT * fl * 0.12, round: 0.48 },
       ]), 'trim', {
-        p: [i * fw * 0.30, 0.020, FRONT * fl * 0.42], r: [0, i * -13 * DEG, 0], mirror, tier: TIER.PRIMARY,
+        // 0.38 rather than 0.30: measured, at 0.30 only 4 mm of tip stood clear
+        // of the toe plate, which is a claw the eye never finds. This leaves
+        // 20 mm proud with the root still 33 mm inside the plate.
+        p: [i * fw * 0.26, 0.020, FRONT * fl * 0.38], r: [0, i * -10 * DEG, 0], mirror, tier: TIER.PRIMARY,
       });
     }
-    rig.add(`foot_${S}`, bevelBox(fw * 0.88, 0.020, fl * 0.50, 0.005), 'rubber',
-      { p: [0, -0.020, FRONT * fl * 0.10], mirror, tier: TIER.SECONDARY });
+    rig.add(`foot_${S}`, bevelBox(fw * 0.88, 0.020, fl * 0.62, 0.005), 'rubber',
+      { p: [0, -0.020, FRONT * fl * 0.28], mirror, tier: TIER.SECONDARY });
   } else if (piston) {
     // Pad foot: one round plate on the end of the ram, no toe break at all.
     // A circular footprint is the only foot plan in the cast with no long axis,
@@ -6953,7 +7126,14 @@ function buildMechanism(rig, spec) {
     }
     if (loom >= 5) {
       rig.cable(`knee_${s}`, [sign * L.shin * 0.32, -m.shin * 0.79, back * L.shin * 0.40],
-        `foot_${s}`, [sign * L.footW * 0.40, 0.03, back * L.foot * 0.25], { sag: 0.015, radius: 0.0058 * k, strands: 2 });
+        // twists 0.5, not the 1.6 default. Two strands wound one and a half
+        // turns over a 20 cm run is a SPRING, and on the one loom in the cast
+        // that hangs in clear air down the back of the ankle that is what the
+        // fight frames showed — a bright helix on MANTIS's lower leg, the last
+        // survivor of the r3 slinky. Half a turn reads as two cables laid
+        // together, which is what §1.3 asks for behind the ankle.
+        `foot_${s}`, [sign * L.footW * 0.40, 0.03, back * L.foot * 0.25],
+        { sag: 0.015, radius: 0.0058 * k, strands: 2, twists: 0.5 });
     }
     // neck loom
     rig.cable('chest', [sign * 0.045, m.collar * 0.84, back * 0.06], 'head', [sign * 0.04, m.skull * 0.05, back * 0.07],
