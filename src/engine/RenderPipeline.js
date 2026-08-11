@@ -1105,6 +1105,17 @@ function installPcssShadows() {
  *
  * @type {Record<string, QualityTier>}
  */
+/**
+ * Device pixels a frame may cover before `renderScale` is applied.
+ *
+ * 1920x1080 is 2.07M and is the resolution every timing in this file was taken
+ * at, so the budget is that plus a little headroom rather than a round number
+ * chosen for looking tidy. `#pixelRatio` solves for the device pixel ratio that
+ * lands here, which is what keeps a tier's measured cost true on a surface the
+ * measurements never covered.
+ */
+const PIXEL_BUDGET = 2.30e6;
+
 export const QUALITY_TIERS = {
   ultra: {
     renderScale: 1.0, minScale: 1.0, shadowMapSize: 4096, pcss: true,
@@ -3576,7 +3587,30 @@ export class RenderPipeline {
 
   #pixelRatio() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    return dpr * this.renderScale;
+    /*
+     * Clamp the pixel COUNT, not just the ratio.
+     *
+     * Every number in QUALITY_TIERS was measured at 1920x1080, and `high` holds
+     * 60fps there with about 1.8ms of slack. Capping the ratio at 2 does not cap
+     * the work: what the GPU pays for is css area times dpr squared, so the same
+     * `high` tier that fits in budget on a 1080p tab asks for four times the
+     * pixels on a 2000px-wide surface at dpr 2, and a little over three times on
+     * a 4K monitor at dpr 1. Neither is a tier the table has ever described.
+     *
+     * That is not a hypothetical: published in a frame about 2000 css px wide on
+     * a retina display, the game ran but smeared -- a frame rate low enough that
+     * TAA was accumulating across visibly different poses, which reads as a hang
+     * rather than as a slow renderer.
+     *
+     * So solve for the ratio that lands on the budget instead of assuming one.
+     * At 1920x1080 this returns ~1.05 and nothing about the tuned case changes;
+     * the headless harness renders at dpr 1 and is untouched. The floor exists
+     * because a surface large enough to push the solution below it wants a lower
+     * TIER, which is a different decision from this one.
+     */
+    const css = this._cssWidth * this._cssHeight;
+    const solved = css > 0 ? Math.sqrt(PIXEL_BUDGET / css) : dpr;
+    return Math.max(0.6, Math.min(dpr, solved)) * this.renderScale;
   }
 
   /**
