@@ -1577,14 +1577,38 @@ function buildPlateDetail(size) {
   // panel is a gouge rather than a scuff. The hero pass below is untouched — 9
   // long, straight strokes per tile IS the "bright line of exposed metal" the
   // contract asks for, and it is the half of this term that was never noise.
+  //
+  // ROUND 7: 0.05 IS STILL A FIELD, AND THE CURL IS WHY IT READS AS DECALS.
+  // shots/r7/pair0-kestrel-head.png shows "about a dozen dark HOOKED chip
+  // decals distributed across the middle of the plate face", and the same marks
+  // are on ANVIL's pauldron. `curl: 0.42` bends a 8-60 texel stroke through
+  // enough arc that it closes into a comma or a hook — a shape the eye reads as
+  // a MARK someone applied, not as a scuff, and a shape is far more visible at
+  // a given contrast than a straight line is. So two moves, not one: the count
+  // halves again (0.022 * 1024 = ~23 strokes on the whole tile, i.e. well under
+  // one on any single plate's sixth-of-the-atlas footprint) and the curl comes
+  // off almost entirely, so what survives is a short straight abrasion rather
+  // than a hook. Strength follows, because at this density each stroke is read
+  // on its own.
   drawScratches(microScratch, size, rng, {
-    count: Math.round(size * 0.05), minLen: size * 0.008, maxLen: size * 0.06,
-    width: Math.max(0.75, size / 1100), strength: 0.30, curl: 0.42,
+    count: Math.round(size * 0.022), minLen: size * 0.008, maxLen: size * 0.05,
+    width: Math.max(0.75, size / 1100), strength: 0.22, curl: 0.12,
   });
   const heroScratch = new Float32Array(n);
+  // 9 -> 3, strength 0.8 -> 0.5. The note above defended these as "the bright
+  // line of exposed metal on a leading edge", and that is what they would be if
+  // they landed on edges — but `drawScratches` places them anywhere on the tile
+  // and each one is 14-45% of the atlas long, so a plate that samples a sixth of
+  // the tile gets one or two full-length bright gouges ACROSS ITS FACE. That is
+  // the pale diagonal streaking over NYX's helm dome in
+  // shots/r7/pair3-nyx-head.png, on a fighter whose sheet (`vesper`) is
+  // mirror-clean lacquer. §1.6 puts wear on leading edges; the leading edge is
+  // covered by the `rim` term in the chip mask and by the specular chamfer, both
+  // of which are distance-to-edge fields and cannot wander onto a face. Three
+  // strokes at 0.5 is the "couple of chips" clause and nothing more.
   drawScratches(heroScratch, size, rng, {
-    count: 9, minLen: size * 0.14, maxLen: size * 0.45,
-    width: Math.max(1.1, size / 620), strength: 0.8, curl: 0.09,
+    count: 3, minLen: size * 0.12, maxLen: size * 0.32,
+    width: Math.max(1.1, size / 620), strength: 0.5, curl: 0.09,
   });
 
   const drips = new Float32Array(n);
@@ -1620,8 +1644,19 @@ function buildPlateDetail(size) {
       // roughly half weight the cast texture is a sheen break the eye finds only
       // when it hunts for it, and `macro` (freq 4, the panel-scale swell that
       // makes a highlight travel) is untouched because form is not noise.
-      casting[i] * 0.013 +
-      tooth[i] * 0.005 -
+      // ROUND 7: 0.013 / 0.005 -> 0.007 / 0.0026. The note above records that
+      // half weight left "a sheen break the eye finds only when it hunts for
+      // it", and r7 hunts it down anyway: "a hammered all-over dimple" on
+      // RONIN's chest and pec ball, "a blotchy ... marbled pattern" on NYX's
+      // plates. Both are dark, glossy, clearcoated surfaces, which is the case
+      // the half-weight judgement was not made on — a broadband height field is
+      // invisible under a light diffuse albedo and is the ONLY thing visible
+      // under a near-black one, because a lacquer black shows nothing but the
+      // shape of its own reflection. Another half out of both leaves the plate a
+      // stamped panel rather than an optical flat, at a scale the reflection can
+      // no longer resolve into a pattern.
+      casting[i] * 0.007 +
+      tooth[i] * 0.0026 -
       // The other strand of the "weave" the reference contract names. This is an
       // aspect-14 fbm — parallel marks by construction — and at 0.009 it was the
       // dominant high-frequency term in the plate normal. Rolling marks are real,
@@ -1720,7 +1755,17 @@ function buildPlateDetail(size) {
     // 2cm halo of exposed steel round every panel — the "halo, not a line" the
     // contract calls out. (0.03,0.13)/(0.16,0.30) is three to four texels.
     const rim = smoothstep(0.03, 0.13, bevel[i]) * (1 - smoothstep(0.16, 0.30, bevel[i]));
-    chip[i] = clamp01(Math.max(smoothstep(0.4, 0.82, jag) * gate * 0.16, rim * (0.72 + casting[i] * 0.45)));
+    // ROUND 7: the flake share halves again, 0.16 -> 0.07. The chip mask does
+    // not only paint bare alloy into the albedo, it writes METALNESS (see the
+    // ormPainted loop), so every flake is a small patch of full conductor on an
+    // otherwise dielectric painted plate — and a small conductor in this arena
+    // returns a hard, saturated sample of whichever practical it happens to
+    // face. That is the "bright multi-coloured specks across the whole face"
+    // measured on BASTION's tan pauldron and ANVIL's shoulder ball in
+    // shots/r7/pair3-nyx-body.png: not dirt, but a confetti of tiny mirrors.
+    // The `rim` half is untouched — it is a distance-to-edge field, it is §1.6's
+    // leading-edge line, and it is the half the reference actually shows.
+    chip[i] = clamp01(Math.max(smoothstep(0.4, 0.82, jag) * gate * 0.07, rim * (0.72 + casting[i] * 0.45)));
   }
 
   const scratch = new Float32Array(n);
@@ -1823,7 +1868,10 @@ function buildPlateDetail(size) {
     // plate going glassy and uniform.
     let rough =
       ROLE_ROUGH[role] + jitter * 0.10 * AB.roughStruct +
-      (patch[i] * 0.12 +      // 8cm weathering patches: the hand-sized gloss break
+      // `patch` 0.12 -> 0.07 with the up-facing lift below: it is the other
+      // ungated decimetre gloss blob, and a gloss break the eye cannot see on a
+      // yellow plate is a marbled pattern on a black one.
+      (patch[i] * 0.07 +      // 8cm weathering patches: the hand-sized gloss break
        casting[i] * 0.09 +    // 8cm cast and roll mottle
        tooth[i] * 0.07 +      // 1.6cm surface tooth
        machining[i] * 0.025   // 5mm rolling marks; see the height loop above
@@ -1849,8 +1897,30 @@ function buildPlateDetail(size) {
     // ANVIL's pauldron in shots/r4/pair1-anvil-head.png answers the key with a
     // broad chalk sheet instead of a tight lobe. Settled grit does deaden a
     // horizontal lip; it does not resurface it.
-    rough = lerp(rough, 0.93, d * 0.16);
-    let metal = clamp01(c * (AB.chipMetal ?? 0.95) + s * 0.85);
+    // 0.16 -> 0.06, and the last step of the same argument. `d` is the up-facing
+    // mask times a blotchy casting field, so this term is "the top third of
+    // every plate goes matte in hand-sized patches". On a light palette that is
+    // a sheen break; on NYX's void black it is the whole read, because a matte
+    // up-facing face under this arena's bright overhead practicals returns a
+    // BROAD PALE reflection and a glossy one returns a small hard highlight —
+    // which is why shots/mat7c/pair3-nyx-head.png still shows the top face of a
+    // lacquer-black pauldron as a field of grey lichen while its side faces read
+    // as glossy black. §1.6 asks the large plates for a crisp tight highlight
+    // and `vesper` is mirror-clean; settled grit does not resurface a panel.
+    rough = lerp(rough, 0.93, d * 0.06);
+    // 0.95 / 0.85 -> 0.42 / 0.36, AND THIS IS THE OTHER HALF OF THE CONFETTI.
+    // A chip in a paint film does not expose a mirror: it exposes primer, or a
+    // phosphate/e-coat layer, or oxidised stock, all of which are dielectric or
+    // near enough. Writing metalness ~1 into a 2-texel flake turns it into a
+    // full conductor whose ONLY colour is what it reflects, which in this arena
+    // is a magenta practical on one side and a cyan deck bounce on the other —
+    // hence coloured specks on plates whose palettes contain neither hue. It
+    // also feeds `kbBare` in STORY_BODY_FRAGMENT (`kbBare = metalnessFactor *
+    // story.bare`), so every one of those texels was ALSO being washed toward
+    // 0xc2c6cb, which is what lifts a lacquer black toward bronze. Under 0.5 the
+    // chip still reads as a break in the paint — bare, matte, lighter than the
+    // colour around it — without becoming a light source.
+    let metal = clamp01(c * (AB.chipMetal ?? 0.42) + s * 0.36);
     metal *= 1 - g * 0.4;
     const o = i * 4;
     ormPainted[o] = clamp01(ao[i] * (1 - g * 0.25)) * 255;
@@ -1930,9 +2000,21 @@ function buildPlateDetail(size) {
     // own `kbDust * 0.15` on top (STORY_CLEARCOAT_FRAGMENT), so the two together
     // were 0.30 of coat roughness on the exact plates §1.6 wants a tight
     // highlight from. Grime keeps the largest share, which is where dirt belongs.
+    // ROUND 7: THE COAT'S OWN MOTTLE IS THE MARBLING ON THE DARK FIGHTERS.
+    // `film` is macro (fbm freq 4) + casting (freq 12) + patch (freq 13) — three
+    // low-frequency full-field octaves — so `(1 - film) * 0.09` plus
+    // `patch * 0.05` is up to 0.14 of coat roughness varying in decimetre-sized
+    // blobs across every plate. On a light palette that is an invisible sheen
+    // break. On `vesper`'s void black and `neon-ronin`'s lacquer it is the ONLY
+    // thing there, because a near-zero albedo shows nothing but its coat: the
+    // reflection sharpens and blurs in patches and the plate photographs as
+    // "blotchy rust-brown-and-white marbled" (shots/r7/pair3-nyx-head.png).
+    // A lacquer is a poured film and it is uniform; what varies on it is where
+    // it has been DAMAGED, which is `grime` (crevice-gated) and `scratch`, and
+    // both keep their share. The two ungated blob terms come down to a trace.
     const ccRough = clamp01(
-      0.055 + (1 - film) * 0.09 + patch[i] * 0.05 +
-      grime[i] * 0.22 + scratch[i] * 0.12 + dust[i] * 0.05,
+      0.055 + (1 - film) * 0.045 + patch[i] * 0.02 +
+      grime[i] * 0.22 + scratch[i] * 0.10 + dust[i] * 0.05,
     );
     const o = i * 4;
     ccPx[o] = strength * 255;
@@ -2599,6 +2681,7 @@ uniform vec3 kbSteelColor;
 uniform vec3 kbInkLight;
 uniform vec3 kbInkDark;
 uniform float kbAoIntensity;  // only read under KB_FOLD_AO; see the ORM fold note
+uniform float kbPigment;      // how much of the room's HUE the paint refuses; see STORY_PIGMENT_FRAGMENT
 varying vec3 vKbObjPos;
 varying vec3 vKbObjNrm;
 varying vec4 vKbFrame;
@@ -2631,6 +2714,67 @@ vec4 kbTriplanar( sampler2D t, vec3 p, vec3 n, vec3 w, float s ) {
 	return texture2D( t, vec2( p.z * f.x, p.y ) * s ) * w.x
 		+ texture2D( t, vec2( p.x, p.z * f.y ) * s ) * w.y
 		+ texture2D( t, vec2( p.x * f.z, p.y ) * s ) * w.z;
+}
+`;
+
+/**
+ * PIGMENT MEMORY — how much of the arena's HUE a painted surface is allowed to
+ * take, applied to the diffuse term only.
+ *
+ * This file's header rule says the palettes are authored in isolation and only
+ * ever seen lit, and seven rounds of captures have shown what that costs. The
+ * measurement that finally names it, from the r7 audit: ANVIL's shoulder plate
+ * is RGB(249,217,125) warm gold in `pair1-anvil-body.png` and RGB(162,182,71) —
+ * hue 71 deg, a flat grass green — in `pair1-seraph-body.png`. Same material,
+ * same frame, one camera move apart. "The fighter changes species between
+ * shots."
+ *
+ * It is not a palette fault and no hex can fix it. The arena rig (Environment.js
+ * MOOD table) runs its rim at intensity 10.4 in a saturated cyan against a key
+ * at 7.6 in a warm white, so the "rim" is a second KEY, and roughly half of a
+ * standing figure's diffuse irradiance is that cyan. Lambert is a per-channel
+ * product: the cyan's red channel is 0.0075 linear against its green at 0.70, a
+ * ratio of 93, so ANY warm albedo lit by it comes out green — measured directly
+ * this round by moving ANVIL's primary from hue 37 to hue 52 and watching the
+ * rim-lit chest go from hue 71 to hue 87. Saturation does not help, value does
+ * not help, and there is no yellow that is not green under a cyan light.
+ *
+ * So the fix is the one the audit asks for in its own words — "cap the green rim
+ * light's contribution on this material" — and it belongs here rather than in
+ * the light rig, because it must apply to the FIGHTERS and not to the arena that
+ * is supposed to be lit that way.
+ *
+ * What it does: recover the irradiance the diffuse term was multiplied by
+ * (E = reflectedLight.*Diffuse / albedo, exact, since Lambert is a per-channel
+ * product), desaturate E toward its own luminance, and re-multiply. Brightness,
+ * shading, shadowing and every falloff are untouched — only the light's HUE is
+ * pulled toward neutral, and only where it lands on pigment.
+ *
+ * Three properties make it safe rather than a grade:
+ *
+ *  - it cannot brighten anything. mix() toward the luminance is bounded by
+ *    max(E), so the result is bounded by albedo * max(E). No fireflies, no
+ *    clamp needed, no energy invented.
+ *  - it does not touch SPECULAR. A highlight is a reflection of the source and
+ *    is supposed to be the source's colour, so the cyan rim still puts a cyan
+ *    kick on every lit edge and the arena's mood survives on the fighters. What
+ *    stops is the coloured light REPLACING the paint across open plate faces.
+ *  - it is a no-op on metal. `material.diffuseColor` carries a (1 - metalness)
+ *    factor which cancels in the ratio, and a conductor's diffuse is zero, so
+ *    the bright-work keeps reflecting exactly what it reflected before.
+ *
+ * It is deliberately partial. At 1.0 the fighters would be lit by white in a
+ * coloured room, which is worse than the fault; the value is set per material
+ * (see `pigment` in STORY_DEFAULTS) and is off by default, so every surface that
+ * is genuinely metal or genuinely mechanism is untouched.
+ */
+const STORY_PIGMENT_FRAGMENT = /* glsl */`
+if ( kbPigment > 0.0 ) {
+	vec3 kbPigC = max( diffuseColor.rgb, vec3( 1e-3 ) );
+	vec3 kbEd = reflectedLight.directDiffuse / kbPigC;
+	reflectedLight.directDiffuse = kbPigC * mix( kbEd, vec3( dot( kbEd, vec3( 0.2126, 0.7152, 0.0722 ) ) ), kbPigment );
+	vec3 kbEi = reflectedLight.indirectDiffuse / kbPigC;
+	reflectedLight.indirectDiffuse = kbPigC * mix( kbEi, vec3( dot( kbEi, vec3( 0.2126, 0.7152, 0.0722 ) ) ), kbPigment );
 }
 `;
 
@@ -2743,8 +2887,21 @@ roughnessFactor = mix( roughnessFactor, 0.44, kbHeat * 0.5 );
 
 // Pale grit on the up-facing lips, which is what separates a top surface from
 // a side surface when the key light is doing nothing to help.
+//
+// THE TARGET NOW TRACKS THE SURFACE, and on the dark half of the roster that is
+// the difference between grit and a stain. vec3(0.20, 0.19, 0.17) is an
+// absolute, and the mask is kbUp * smoothstep(kbG.r) — an up-facing gate times
+// a 10-30cm noise field, i.e. blotches the size of a hand over any surface that
+// faces the key. On ANVIL's yellow that is invisible; on RONIN-07's #33363D
+// graphite shoulder it is a mix toward six times the plate's own value, and
+// shots/mat7b/pair2-ronin-head.png at 3x shows exactly that: a pale cloud
+// smeared across the upper half of an otherwise clean plate. Settled dust is
+// thin and it TINTS what is under it; it does not repaint a dark panel light
+// grey. Scaling the target by the plate's own luminance keeps the effect a tint
+// at every value in the roster, which is what the other five inks in this block
+// already do (see kbBare, kbOxide, kbGrime, kbBurn).
 float kbDust = kbUp * smoothstep( 0.42, 0.95, kbG.r ) * kbStoryB.z;
-diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.20, 0.19, 0.17 ), kbDust * 0.55 );
+diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.20, 0.19, 0.17 ) * ( 0.25 + 1.7 * kbLum ), kbDust * 0.55 );
 roughnessFactor = mix( roughnessFactor, 0.96, kbDust * 0.6 );
 
 // Sprayed markings, worn back by everything that landed on top of them.
@@ -3635,7 +3792,17 @@ const STORY_DEFAULTS = {
   lattice: 0.8,
   latticeGap: 0.0045,
   latticeOcclusion: 0.026,
-  latticePanel: 1.75,
+  // 1.75 -> 2.25. The r7 audit still finds "a flat slab split by a uniform cross
+  // into four equal rectangles" on RONIN's shoulder and "an even rectangular
+  // grid of the same lines" on its chest. Two cells on BOTH axes is a cross by
+  // construction, and at 1.75 any plate wider than 2 x pitch on both axes gets
+  // one. At 2.25 a plate needs to be half again as large before its second axis
+  // divides, so mid-sized plates get ONE split along their long axis — which is
+  // §1.6's "a handful of deliberate splits per plate, following the form",
+  // because the split is measured in the plate's own frame. ANVIL's panel read,
+  // which the audit signed off, is carried by the large chest and pauldron
+  // plates and those still divide on both axes.
+  latticePanel: 2.25,
   // Machining lay. `detail` is the master strength; the two pitches are the
   // physical wavelength of the tool marks and of the grinding pass, in metres,
   // and they are what decides which framing the octave lands in: 1.8mm is about
@@ -3695,6 +3862,11 @@ const STORY_DEFAULTS = {
   chamferWidth: 0.0021,
   chamferSlope: 0.84,
   chamferGloss: 1.25,
+  // See {@link STORY_PIGMENT_FRAGMENT}. Off by default: it is a claim about
+  // PAINT, and every material in this library that is bare metal, mechanism,
+  // glass or elastomer should keep taking the room's colour, because that is
+  // what those substances do.
+  pigment: 0,
 };
 
 /**
@@ -3805,6 +3977,7 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
     const abCham = (typeof window !== 'undefined' && Number.isFinite(window.__KB_CHAMFER))
       ? window.__KB_CHAMFER : 1;
     u.kbChamfer = { value: new THREE.Vector4(s.chamfer * abCham, s.chamferWidth, s.chamferSlope, s.chamferGloss) };
+    u.kbPigment = { value: s.pigment ?? 0 };
     u.kbSootColor = { value: new THREE.Color(STORY_INK.soot) };
     u.kbOxideColor = { value: new THREE.Color(STORY_INK.oxide) };
     u.kbHeatColor = { value: new THREE.Color(STORY_INK.heat) };
@@ -3839,6 +4012,10 @@ class StoryPhysicalMaterial extends THREE.MeshPhysicalMaterial {
       .replace('#include <normal_fragment_maps>',
         `#include <normal_fragment_maps>\n${STORY_BODY_FRAGMENT}\n${STORY_FORM_FRAGMENT}`)
       .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>\n${STORY_CLEARCOAT_FRAGMENT}`)
+      // After the lights have been accumulated and before `aomap_fragment`,
+      // which only multiplies the indirect term by a SCALAR and therefore
+      // commutes with it. See {@link STORY_PIGMENT_FRAGMENT}.
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>\n${STORY_PIGMENT_FRAGMENT}`)
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>\n${STORY_OCCLUSION_FRAGMENT}`);
   }
 }
@@ -4643,13 +4820,25 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
   // key with a saturated pink highlight (photographed, 5x, on
   // pair3-bastion-body). At 0.22 the frame is graphite with a cast of the
   // character in it, which is what keeps it from looking like a borrowed part.
-  const gunmetal = linearColor(alloy([0.072, 0.076, 0.084], secondary, 0.22));
+  // ROUND 7: 0.072 -> 0.056. The r7 audit still reads this zone as "bone-cream"
+  // on NYX's neck and BASTION's waist and as "bright polished brass" on SERAPH's
+  // abdomen, i.e. LIGHTER than the armour it is meant to hide behind, which is
+  // the exact inversion §1.3 exists to prevent. Most of that lift was the three
+  // story inks on `kb.darkMetal` (see the note there) and it is fixed at source;
+  // this takes the substrate itself down the last step, to graphite proper.
+  const gunmetal = linearColor(alloy([0.056, 0.059, 0.066], secondary, 0.22));
   // 0.55 -> 0.44. `kb.piston` is the rods and mirror bosses, and at 0.55 with
   // envMapIntensity 1.25 it was the brightest thing on several fighters — the
   // "bare chrome rods projecting like scaffolding poles" and "a full-height rod
   // through VULKAN's head" are geometry faults, but a rod that reads as polished
   // chrome is what makes them impossible to miss. Stainless is not a mirror.
-  const honedSteel = linearColor([0.44, 0.445, 0.455]);
+  // 0.44 -> 0.30, second step, same argument. `kb.piston` is the rods, the
+  // mirror bosses and the exposed spine column, and the r7 audit reads SERAPH's
+  // abdomen column as "bright polished brass" against a porcelain body — a
+  // neutral 0.44 conductor at envMapIntensity 0.85 in a room lit by a warm key
+  // IS brass, because a mirror of a warm room is warm at any neutral F0. 0.30 is
+  // stainless rather than a mirror finish, which is what a hydraulic rod is.
+  const honedSteel = linearColor([0.30, 0.305, 0.315]);
   // Was `accent, 0.13` — a near-neutral chrome tinted a little by the paint
   // accent. But `palette.trim` is the field that NAMES the roster's bright-work
   // ("hot brass", "polished nickel", "aged temple gold") and it was reaching
@@ -4769,9 +4958,27 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // reference does show a bright line — and hands the rest of that job to
     // kbLip and the specular chamfer, both of which are distance-to-edge terms
     // and cannot spread across a face no matter how curved it is.
+    // ROUND 7: `bare` 0.45 -> 0.20 and `burnish` 0.10 -> 0.05, because both are
+    // mixes toward `kbSteelColor` (0xc2c6cb) and both scale with the paint's own
+    // luma only weakly — `kbSteelColor * (0.3 + 1.5 * kbLum)` is 0.235 linear on
+    // a black lacquer, i.e. FORTY TIMES NYX's #12101A albedo. On a light palette
+    // they are a few percent; on the three dark fighters they are the difference
+    // between `vesper`'s void black and the "chocolate/maroon" and "warm bronze"
+    // the r7 audit measured on NYX's and RONIN's plates. The area they act over
+    // came down in the same pass (chip flake 0.16 -> 0.07, chip metalness 0.95
+    // -> 0.42, hero scratches 9 -> 3), so what is left is a trace on a genuinely
+    // rolled edge, which is the one place §1.6 puts exposed metal.
     story: story({
       grime: 0.22, oxide: 0.08, fade: 0.15, dust: 0.12, marking: 0.15,
-      bare: 0.45, burnish: 0.10,
+      bare: 0.20, burnish: 0.05,
+      // See {@link STORY_PIGMENT_FRAGMENT}. This is the material that carries
+      // most of every fighter's palette — 34 builder call sites of primary plus
+      // 41 of secondary — so it is the surface the "changes species between
+      // shots" measurement was taken on, and the one the value is set for. 0.55
+      // is a little over half the room's hue refused: enough that a rim-lit
+      // yellow stays a yellow and a rim-lit lacquer black stays black, not
+      // enough that the arena stops lighting the fighters in its own colours.
+      pigment: 0.55,
     }),
     color: paintPrimary,
     map: armorAlbedo,
@@ -4862,7 +5069,24 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // highlight the step was bought for is already there without it: it comes
     // from ROLE_ROUGH and the material scalar, both of which came down in the
     // same pass, and it is visible on the yellow plates in the capture.
-    envMapIntensity: 1,
+    //
+    // ROUND 7: 1 -> 0.72, AND IT IS THE SAME ARGUMENT RUN THE OTHER WAY.
+    // The note above establishes the mechanism and then declines to use it: on a
+    // near-dielectric painted plate `envMapIntensity` scales the DIFFUSE
+    // irradiance as well as the specular, and this arena's irradiance is not
+    // white — it is a warm key over a strong cyan-teal bounce off the wet deck,
+    // with a magenta practical bank. So the env term is a second, coloured,
+    // view-dependent albedo laid over every paint value in the roster, and the
+    // r7 audit measures exactly that: ANVIL's plates read RGB(249,217,125) warm
+    // gold in pair1-anvil-body and RGB(162,182,71) flat grass-green in
+    // pair1-seraph-body, "the fighter changes species between shots". A palette
+    // authored in isolation cannot defend against that; only its weight can.
+    // 0.72 is a 28% cut in how much of the room the paint carries, which is
+    // enough to keep the plate's own hue dominant on the rim-lit side, and the
+    // §1.6 "visible reflected environment on the large plates" read is not paid
+    // for out of this term anyway — it is the clearcoat's, which is at full
+    // strength over a 0.055-0.2 coat roughness and unchanged here.
+    envMapIntensity: 0.72,
   });
 
   const trimMat = new StoryPhysicalMaterial({
@@ -4876,7 +5100,12 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // accent panel is paint too, it is on the most-curved shells in the cast
     // (cowls, chevron bands, shoulder wraps), and inheriting the 0.55 default
     // laid the same pale-alloy wash over it.
-    story: story({ marking: 0.15, oxide: 0.06, fade: 0.15, grime: 0.2, dust: 0.1, bare: 0.4, burnish: 0.10 }),
+    // `bare` / `burnish` follow `kb.armor` down for the reason recorded there:
+    // both wash toward a bright neutral alloy in proportion to metalness, and an
+    // accent panel on a dark fighter is the same trap the primary was.
+    // `pigment` matches `kb.armor`: an accent panel is paint, and a stripe that
+    // changes hue with the camera separates from the body by the wrong thing.
+    story: story({ marking: 0.15, oxide: 0.06, fade: 0.15, grime: 0.2, dust: 0.1, bare: 0.18, burnish: 0.05, pigment: 0.55 }),
     color: paintAccent,
     map: trimAlbedo,
     normalMap: shared.plateNormal,
@@ -4902,7 +5131,13 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     emissiveMap: shared.plateEmissive,
     emissiveIntensity: 1.6,
     ior: 1.5,
-    envMapIntensity: 1.2,
+    // 1.2 -> 0.85, with `kb.armor`'s 1 -> 0.72 and for the same reason. This is
+    // the accent PAINT and it sits on the most curved shells in the cast, which
+    // is where an env term sweeps through the widest range of the room: the r7
+    // audit's "one plate runs teal to gold to salmon across its face" on MANTIS
+    // is that sweep. It stays the highest of the three painted materials because
+    // an accent panel is meant to be the best-finished paint on the machine.
+    envMapIntensity: 0.85,
   });
 
   // THE BRIGHT-WORK. Read RobotBuilder's `resolveMaterials` before changing
@@ -4965,7 +5200,11 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // off cool and dark `trim` hexes.
     story: story({
       grime: 0.25, oxide: 0.08, bare: 0, marking: 0.1, dust: 0.12,
-      burnish: 0.12, detail: 0, fade: 0.12,
+      // 0.12 -> 0.05. Last step of the same argument the note above makes: the
+      // population here is bezels, collars and lens surrounds, kbRoll saturates
+      // over the whole of every one of them, and the term's target is a bright
+      // neutral mixed straight into the F0 of a conductor.
+      burnish: 0.05, detail: 0, fade: 0.12,
     }),
     color: wornSteel,
     map: wornAlbedo,
@@ -5002,7 +5241,21 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // names polished brass, gold or nickel and half names blued steel, black
     // oxide or scorched iron, and a single roughness scalar has been rendering
     // the second half as the first.
-    roughness: lerp(0.72, 0.5, trimPolish),
+    //
+    // ROUND 7: lerp(0.72, 0.5) -> lerp(1.0, 0.62). A scalar can only multiply
+    // the map DOWN, so 0.72 was delivering 0.19-0.36 on the oxide entries — a
+    // narrow enough lobe to return a recognisable IMAGE of the room. That is
+    // what the r7 audit is describing on MANTIS ("one plate runs teal to gold to
+    // salmon across its face"), on BASTION (crimson panels in one camera, blue
+    // in another) and on VOLTA (olive and salmon panels on a copper/brass
+    // palette): these are not paint values at all, they are reflections, and a
+    // conductor has no colour but its reflection. At 1.0 the oxide entries
+    // deliver the map's own 0.26-0.50, which blurs the room to its average
+    // instead of resolving individual practicals. The polished half only moves
+    // 0.5 -> 0.62 (delivered 0.16-0.31), so ANVIL's brass hubs and NYX's gold
+    // ring bezels — both signed off in the audit's do-not-undo list — keep the
+    // hard travelling rim §1.4 asks for.
+    roughness: lerp(1.0, 0.62, trimPolish),
     // Was 1 — identical to `kb.armor`'s metalness and, because RobotBuilder's
     // `trim` batch is `tint(pick('worn'), palette.trim, { metalness: 1.0 })`,
     // identical to its own `trim` override too: forcing metalness to 1 on a
@@ -5036,7 +5289,16 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // 0.55/0.10 rather than 1.0/0.05 because this material binds no clearcoat
     // map, so whatever is set here is uniform over the part and a full-strength
     // uniform coat on a bezel is a mirror ball.
-    clearcoat: 0.55,
+    //
+    // Now derived from {@link trimPolish} too, and this is the term that was
+    // most obviously wrong on the dark half of the cast: a clearcoat is a
+    // DIELECTRIC layer over the metal, so it adds a white 4% mirror on top of
+    // whatever the substrate returns, at 0.1 roughness — a second, achromatic,
+    // full-strength reflection of the room that darkening the F0 cannot touch.
+    // A blued, blackened or oxidised finish is a bare conversion layer with no
+    // lacquer over it at all, which is why RONIN's and MANTIS's hardware kept
+    // photographing as chrome no matter how far their `trim` hexes came down.
+    clearcoat: lerp(0.15, 0.5, trimPolish),
     clearcoatRoughness: 0.1,
     // 0.28 -> 0.12. A turned ring keeps a faint circular lay; anything more and
     // the highlight smears into a streak and the ring stops reading as a ring —
@@ -5076,7 +5338,22 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // a dark metal, it is the only thing there, and it is warm because the room
     // is. 0.62 on those entries and 0.95 (unchanged) on ANVIL's brass and
     // VOLTA's collars, which are the two the contract genuinely wants bright.
-    envMapIntensity: lerp(0.62, 0.95, trimPolish),
+    //
+    // ROUND 7: lerp(0.62, 0.95) -> lerp(0.30, 0.78). The r7 audit finds
+    // off-palette colour on five fighters and every one of them resolves to this
+    // batch: VOLTA's "olive-green panels on hip and thigh and a salmon-pink
+    // panel across the abdomen" on a copper/brass palette, BASTION's "large
+    // crimson panels ... directly adjacent to navy plates at the same
+    // orientation", MANTIS's "salmon pink on top, cyan on the front and gold in
+    // the middle" on ONE shoulder, SERAPH's "chocolate-brown/copper" back stack
+    // against a porcelain body, ANVIL's shield interior at a saturated leaf
+    // green. None of those hues is in any of those palettes; all of them are in
+    // the arena. This is 100 builder call sites (trim 77 + armorAccent 23) of
+    // surface whose colour is the room's, and the environment weight is the only
+    // term in this file that decides how much of it lands. Halving the oxide end
+    // and taking ~18% off the polished end is the largest single move available
+    // toward "the palettes are authored in isolation but only ever seen lit".
+    envMapIntensity: lerp(0.30, 0.78, trimPolish),
   });
 
   const darkMetal = new StoryPhysicalMaterial({
@@ -5086,8 +5363,22 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // The frame is a machined billet, not a plate bedded into anything, so the
     // perimeter seam is held back and the burnish is pushed up: bare alloy is
     // exactly what polishes on an edge.
+    // ROUND 7: `oxide` 0.7 -> 0.26, `dust` 0.5 -> 0.18, `detail` 0.9 -> 0.30.
+    // §1.3 requires this layer to be "matte charcoal/graphite" and the r7 audit
+    // measures the opposite everywhere it is exposed: "SERAPH's abdomen column
+    // is bright polished brass; NYX's neck stack and BASTION's waist are
+    // bone-cream". The three inks above are why. `oxide` mixes toward
+    // STORY_INK.oxide (0x6b3418, a warm rust) at 0.7 — the single strongest ink
+    // weight in the library, on the one material the contract wants to be the
+    // darkest thing in frame, which is where the brass/bone cast comes from.
+    // `dust` mixes toward vec3(0.20, 0.19, 0.17): on a light plate that darkens,
+    // but this material's F0 is 0.072, so on a rib crest the term is a LIFT of
+    // nearly 3x. `detail` is the machining lay, whose cross-modulated carrier is
+    // what the audit calls "a repeating diagonal cross-hatch" on AXIOM's waist —
+    // the fix note at STORY_DEFAULTS took it to zero on painted armour for
+    // exactly this and left the bare-metal materials on the old value.
     story: story({
-      plateMasks: false, fade: 0.35, marking: 0, oxide: 0.7, bare: 0, grime: 1.15, heat: 0, dust: 0.5,
+      plateMasks: false, fade: 0.35, marking: 0, oxide: 0.26, bare: 0, grime: 1.15, heat: 0, dust: 0.18,
       // `burnish` 0.8 -> 0.22. Same mechanism as `kb.armor` (see the long note
       // there): kbRoll is geometric curvature, and this material's population is
       // ribs, rods, hubs and ring stacks — nothing on it has a radius over a
@@ -5096,7 +5387,10 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
       // into a frame the contract (§1.3) requires to be the DARKEST thing in
       // frame, which is the note at `gunmetal` above complaining about the
       // symptom of this line.
-      seam: 0.45, burnish: 0.22, lattice: 0.45, detail: 0.9, detailCoarse: 0.008,
+      // `burnish` 0.22 -> 0.07 for the third time in this file and the last: on
+      // a rib stack every crest is a convex edge, so the term is a flat wash of
+      // 0xc2c6cb over the material §1.3 wants darkest.
+      seam: 0.45, burnish: 0.07, lattice: 0.45, detail: 0.30, detailCoarse: 0.008,
     }),
     color: gunmetal,
     map: shared.metalMod,
@@ -5140,7 +5434,11 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     anisotropy: 0.24,
     anisotropyRotation: 0,
     anisotropyMap: shared.metalAniso,
-    envMapIntensity: 0.4,
+    // 0.40 -> 0.26. Same reason as `kb.armor` 1 -> 0.72, harder: a metal has no
+    // diffuse term at all, so on this material the environment is not a tint on
+    // a colour, it IS the colour, and §1.3's underskin is the one surface in the
+    // library allowed to be the darkest thing in frame.
+    envMapIntensity: 0.26,
   });
 
   // A rod and a mirror boss carry almost no history — the rod is wiped by its
@@ -5155,7 +5453,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // cylinder: kbRoll is at its maximum over every visible texel of one, so
     // this material is the extreme case of the curvature-gate problem and the
     // term was lightening the whole rod rather than its chamfer.
-    story: story({ ...bareSteel, grime: 0.35, dust: 0.15, seam: 0, burnish: 0.22, hollow: 0.6, detail: 0.55, detailWear: 0.3 }),
+    story: story({ ...bareSteel, grime: 0.35, dust: 0.15, seam: 0, burnish: 0.10, hollow: 0.6, detail: 0.55, detailWear: 0.3 }),
     color: honedSteel,
     map: shared.metalMod,
     normalMap: shared.metalNormal,
@@ -5172,7 +5470,11 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     anisotropy: 0.55,
     anisotropyRotation: 0,
     anisotropyMap: shared.metalAniso,
-    envMapIntensity: 0.85,
+    // 0.85 -> 0.52, with the F0 above. Together they take the rod's returned
+    // radiance to about a third of what it was, which is what stops a shoulder
+    // spar or an abdominal column reading as the brightest object on a fighter
+    // whose palette is porcelain or copper.
+    envMapIntensity: 0.52,
   });
 
   // THE SECOND COLOUR OF THE WHOLE DESIGN.
@@ -5397,14 +5699,22 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // alloy, and on a stack of a dozen ribs every single crest is a convex
     // edge — so the term that reads as "a worn edge" on a plate reads as "a
     // chrome thread" on a rib column.
-    story: story({ ...bareSteel, grime: 0.6, dust: 0.3, seam: 0, lattice: 0, detail: 0, burnish: 0.12, hollow: 0.8 }),
+    // `dust` 0.3 -> 0.10 and `burnish` 0.12 -> 0.04. Both mix toward pale
+    // neutrals (vec3(0.20,0.19,0.17) and 0xc2c6cb) and this material's base is
+    // 0.021 linear, so on a rib column they are lifts of 5x and 10x rather than
+    // the deadening and the edge polish their names claim. The r7 audit reads
+    // this zone as "bone-cream basket-weave" on NYX's neck and BASTION's waist,
+    // which is precisely a dark ribbed field with a pale wash over every crest.
+    story: story({ ...bareSteel, grime: 0.6, dust: 0.10, seam: 0, lattice: 0, detail: 0, burnish: 0.04, hollow: 0.8 }),
     // 0.028 -> 0.021 neutral, hue amount 0.2 -> 0.12. §1.3 asks for the same
     // substance on all eight sheets — the machine under the paint, not part of
     // the paint scheme — and the amount of the character that belongs in it is
     // a cast, not a tint. The darker neutral is what makes armour-then-gap-then-
     // mechanism three values instead of two: the gap is the darkest, this sits
     // just above it, the plate sits well above both.
-    color: linearColor(alloy([0.021, 0.022, 0.025], secondary, 0.12)),
+    // 0.021 -> 0.017 with the two ink lifts above removed: the three together
+    // are what put this zone above the armour instead of under it.
+    color: linearColor(alloy([0.017, 0.018, 0.021], secondary, 0.12)),
     map: shared.softMod,
     normalMap: shared.softNormal,
     normalScale: new THREE.Vector2(1.6, 1.6),
@@ -5429,7 +5739,7 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     // than repainting the part.
     specularIntensity: 0.5,
     ior: 1.5,
-    envMapIntensity: 0.3,
+    envMapIntensity: 0.22,
   });
 
   // Anodised optic surround. The one surface on the fighter allowed a mirror

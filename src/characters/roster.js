@@ -314,7 +314,15 @@ export const ROSTER = [
       // which asks for arctic white / cobalt / cyan and gets it unchanged. The
       // only move is the trim, which brightens to a real polished aluminium now
       // that it drives a mirror lobe rather than a wear tint.
-      primary: '#E8EEF5',   // arctic enamel
+      // r7: "KESTREL's 'arctic white' plates render warm cream/beige, and the
+      // shoulder canard is washed pink across its whole face by the arena's
+      // magenta kicker". #E8EEF5 is only 4% cooler than neutral, which is not
+      // enough hue for a light surface to hold against a warm key plus a magenta
+      // fill — a near-neutral takes whichever coloured light is facing it, the
+      // same failure SERAPH's pearl had two rounds ago. Value up (0.96 -> 0.99)
+      // so it stays at the top of the range under the key, and the blue-grey
+      // cast roughly doubled so the magenta has something to cancel against.
+      primary: '#EDF4FD',   // arctic enamel, blue-grey neutral
       secondary: '#1E2A38', // deep slate underskin
       accent: '#00A8FF',    // cobalt racing stripe
       emissive: '#31E8FF',  // cyan coolant glow
@@ -368,7 +376,34 @@ export const ROSTER = [
       // rim, because green added to an amber lands back on yellow instead of
       // running past it. G/R goes 0.75 -> 0.68 and the value drops a little with
       // it, so the bone banding above still reads as the lighter of the two.
-      primary: '#C8871C',   // safety yellow pulled to `atlas-7`'s olive-brass
+      // ROUND 7 REVERSES THE LAST STEP, AND THE MEASUREMENT SAYS SO.
+      // #C8871C was chosen to defend against the arena's green bounce by taking
+      // green out of the hue. It did not defend against anything — r7 measures
+      // the plate at CHARTREUSE in pair1-seraph-body regardless — and it cost
+      // the fighter its own colour in the frame where the paint IS the read:
+      // over the lit body in pair1-anvil-body, 73% of saturated pixels fall in
+      // hue 20-45 (orange) and only 6% in the 45-65 yellow band, with dominant
+      // swatches #f0b040 / #f0a030 / #e08010. §3 says "olive -> SAFETY YELLOW"
+      // and #C8871C at hue 37 deg is an amber; there is no framing in which it
+      // reads as one.
+      //
+      // The chartreuse was never this hex's to fix. It is the ARENA: a rim at
+      // intensity 10.4 in a saturated cyan against a key at 7.6 is a second key,
+      // and diffuse albedo times cyan light is green for ANY yellow, at any
+      // saturation — the hue of the product is set by the light, not by the
+      // paint. What a palette can do about it is (a) sit high enough in value
+      // that the rim-lit side washes toward white rather than toward a saturated
+      // secondary, and (b) stop the ENVIRONMENT adding a third coloured term on
+      // top, which is `kb.armor`'s envMapIntensity 1 -> 0.72 this round.
+      //
+      // So: hue 37 -> 52 deg, value 0.78 -> 0.91. Rendered hue lands about 4-9
+      // deg warm of the palette (measured: #C8871C at 37 photographs at 33), so
+      // 52 puts the lit body inside the 45-65 band the audit asks for. The bone
+      // banding below now separates by CHROMA rather than by value — a low-
+      // saturation cream against a hi-vis yellow of the same lightness, which is
+      // how `atlas-7` bands its shell — instead of by the value step it used
+      // when the primary was a mid-value amber.
+      primary: '#DEC62C',   // safety yellow, hi-vis, warm of true lemon
       // `atlas-7` is a TWO-PAINT character and this is the second paint. Read
       // the sheet: an olive shell banded, at chest, upper arm and thigh, with
       // a wide cream/bone stripe — that banding is most of what stops a
@@ -380,8 +415,18 @@ export const ROSTER = [
       // internal division at all. Warm and light, so it separates from the
       // yellow by hue and chroma rather than by value — a bone band on a yellow
       // plate is exactly the sheet, where a grey band would be a dead zone.
-      secondary: '#C4B491', // bone banding, `atlas-7`'s second paint
-      accent: '#FFC53D',    // hazard chevrons
+      // Lifted with the primary so the pair still reads as two paints: at
+      // #C4B491 against a 0.91-value yellow the band would have gone from "the
+      // lighter of the two" to a dull shadow, and a super-heavy needs that
+      // division to stop being one lump. Same hue, chroma held low.
+      secondary: '#DED4B4', // bone banding, `atlas-7`'s second paint
+      // `armorAccent` is a conductor's F0 at metalness 0.72 and gold times this
+      // arena's cyan deck bounce is GREEN — the file has now measured that three
+      // times (ANVIL's shield interior at 62,117,11 in r5, "a saturated emerald
+      // gradient" on pair1-anvil-head in r4). Green is what the accent's own G/R
+      // ratio buys the reflection, so it comes down: 0.77 -> 0.71, with a little
+      // value out of it too. Still unmistakably a hazard gold on a yellow shell.
+      accent: '#F2AD35',    // hazard chevrons
       emissive: '#FFD21A',  // amber warning strobes
       // `atlas-7`'s whole second colour, and the one fighter in the cast whose
       // sheet genuinely wants a large area of bright-work. It still comes down
@@ -463,7 +508,19 @@ export const ROSTER = [
       secondary: '#2B2540', // violet-graphite spine
       accent: '#9B6BFF',    // violet inlay
       emissive: '#8A4CFF',  // violet field glow
-      trim: '#B3A9CB',      // pewter with a violet cast, F0
+      // ROUND 7: #B3A9CB is 0.42 linear luma, which puts {@link trimPolish} at
+      // its ceiling — full mirror lobe, full environment weight — on the 100
+      // builder call sites this hex reaches. The audit finds the consequence:
+      // "behind SERAPH's shoulder sits a stack of chocolate-brown/copper
+      // rectangular slabs ... they read as a different character's parts". They
+      // are not a different character's parts and they are not brown paint;
+      // they are this metal returning an image of a warm room. `ghostframe`'s
+      // hardware is its graphite FRAME with a polished edge, not a bright pewter
+      // shell, so this drops to a third of its reflectance — which also drops
+      // trimPolish to ~0.7 and hands the material the satin lobe a frame member
+      // has, while the violet cast is kept and strengthened so what does catch
+      // the light belongs to this fighter's colour story.
+      trim: '#8B82A8',      // violet-graphite frame metal, satin, F0
     },
     stats: { power: 6, speed: 6, reach: 9, weight: 4, defense: 4 },
     moveSet: 'seraph',
@@ -578,9 +635,31 @@ export const ROSTER = [
       // underskin, neon grooves, acid green. Unchanged apart from the underside,
       // which comes up off near-zero: it is the colour the exposed frame and the
       // underskin are alloyed from, and at 0.055 luma both came out as holes.
-      primary: '#232E1C',   // carapace olive-black
-      secondary: '#161B14', // matte void underside
-      accent: '#9DFF3C',    // acid green wing flash
+      // THE ACID GREEN WAS NEVER ON A PAINTED SURFACE, AND THAT IS THE FAULT.
+      // §3 for this fighter reads "carbon underskin ... ACID GREEN", and the
+      // build put the green on `accent` and `emissive` — a conductor's F0 on 23
+      // sites and a glow — while `primary` and `secondary` were an olive-black
+      // and a near-black four percent apart. Two near-identical darks over 75
+      // painted call sites is not a two-value scheme, it is one value, so the
+      // only colour the fighter had left was whatever its metals reflected: r7
+      // measures "one shoulder carries salmon pink on top, cyan on the front and
+      // gold in the middle; the body is army olive with red patches ... acid
+      // green survives only as small lime slivers on the visor and horn".
+      //
+      // So the green moves to where the area is. `primary` becomes the acid
+      // green PAINT of the shells (§1.6: clean automotive paint on the primary
+      // plates, polished metal on trim only) and `secondary` stays the near-black
+      // carbon it always was, which is the "two values" the audit asks for —
+      // acid-green shells over carbon underskin. It is a chromatic mid-value, so
+      // it satisfies this file's opening rule the way a saturated colour does
+      // rather than the way a light one does.
+      primary: '#8CB92E',   // acid-green painted carapace
+      secondary: '#161B14', // matte void carbon underside
+      // Comes down off #9DFF3C. With the primary now carrying the acid green,
+      // an accent a shade BRIGHTER than the shell would invert the hierarchy and
+      // put the loudest value on the smallest area; and this hex is a metal F0,
+      // so its brightness is bought straight out of the arena's reflection.
+      accent: '#6FA51E',    // deep acid wing flash, one value under the shell
       emissive: '#7CFF00',  // bio-luminous acid glow
       // Follows RONIN-07 down and for the same reason — this fighter is in the
       // same `neon-ronin` language (§3) and pair2-mantis-body came back as a
@@ -594,7 +673,16 @@ export const ROSTER = [
       // Third pass with RONIN-07, same mechanism: at #62685C the metal took the
       // warm key and pair2-mantis-body came back KHAKI. Cool and dark, so the
       // carapace olive is the fighter's colour and the hardware is shadow.
-      trim: '#545A54',      // black-oxide gunmetal, cool olive cast, F0
+      // Fourth pass, one more step down, and this time with the lobe fixed under
+      // it: r7 still photographs MANTIS's shoulder and torso as CHROME — "one
+      // plate runs teal to gold to salmon across its face". #545A54 is 0.084
+      // linear, which lands trimPolish at 0.05, so `kb.worn` was already giving
+      // it the oxide roughness and the low env; what it was not giving it was a
+      // rough enough LOBE (0.19-0.36 delivered still resolves individual
+      // practicals) or any relief from the clearcoat over the top. Both are
+      // fixed in Materials.js this round. This goes with them rather than
+      // instead of them, to where a carbon-frame fastener actually sits.
+      trim: '#3E443E',      // black-oxide gunmetal, cool olive cast, F0
     },
     stats: { power: 5, speed: 9, reach: 8, weight: 4, defense: 3 },
     moveSet: 'mantis',
@@ -705,8 +793,19 @@ export const ROSTER = [
       // round separately found BASTION's chest reading as "the brightest object
       // in the frame, brighter than the practical strip lights behind it".
       primary: '#27364A',   // gunmetal blue
-      secondary: '#1C2740', // navy underlayer
-      accent: '#3A7BFF',    // sector blue stripe
+      // r7: "BASTION is a single blue value from helm to boot — plates,
+      // underlayer and accents all sit in hue 200-220. `paladin`'s read depends
+      // on light plate over a DARK underlayer with a contrasting trim line."
+      // The primary is signed off and stays; the underlayer takes the value step
+      // instead, a stop down and a shade bluer, so the layered-plate silhouette
+      // §3 asks for has something to be layered over.
+      secondary: '#131B2E', // navy underlayer, a stop under the plate
+      // And the trim line separates by VALUE the other way. #3A7BFF was already
+      // §3's sector blue but it sits at the same lightness as the primary once
+      // the arena has lit both, so the two merged; this is a full step brighter
+      // and higher-chroma, which is what makes a stripe read as a stripe at
+      // silhouette distance.
+      accent: '#5C9BFF',    // sector blue stripe
       emissive: '#2F6BFF',  // shield field blue
       // The one trim in the cast that is deliberately NOT bright-work. Look at
       // the `paladin` sheet: its bright mass is the ivory SHELL, and every ring,
@@ -728,7 +827,21 @@ export const ROSTER = [
       // giving this the primary's hue makes the hardware belong to the plate
       // instead of competing with it, and §3's "gunmetal blue" then describes
       // the whole fighter rather than a third of it.
-      trim: '#6D8199',      // dark blued steel, F0
+      // ...and a FOURTH step, because r7 finally identifies what the "silver
+      // machine with blue panels" actually photographs as, and it is worse than
+      // silver: "large CRIMSON panels (#b04050, #903040) sit on BASTION's
+      // shoulder, hip and thigh, directly adjacent to navy plates at the same
+      // orientation — so it is pigment, not rim light". It is neither. #6D8199
+      // is a near-NEUTRAL conductor at 0.21 linear luma, which put trimPolish at
+      // 0.70 — a mirror lobe at env 0.90 — and a neutral mirror has no colour of
+      // its own at all: on the side of the arena where the red practical bank
+      // and the magenta kicker dominate, it returns crimson; on the other side
+      // it returns silver. Same material, same frame, two "pigments".
+      // Under 0.13 linear the entry lands at trimPolish ~0.21, which in
+      // Materials.js this round means the satin lobe, half the environment
+      // weight and almost no clearcoat — a blued steel that shows a rim and
+      // nothing else, which is what every ring and collar on `paladin` is.
+      trim: '#4E6480',      // dark blued steel, blue-shifted, F0
     },
     stats: { power: 7, speed: 4, reach: 5, weight: 9, defense: 10 },
     moveSet: 'bastion',
@@ -762,7 +875,16 @@ export const ROSTER = [
       // wide margin, and #26403F was light enough to read as a third paint.
       primary: '#F2F5F3',   // clinical white composite
       secondary: '#1C2E2D', // dark teal slate underlayer
-      accent: '#00C79A',    // calibration green
+      // §3 says "cyan -> MINT", and #00C79A is not a mint: measured off
+      // pair4-axiom-body it delivers a saturated emerald, sat 0.90, "applied as
+      // broad blobs covering ~40% of each knee cap plus wedges on shin, thigh
+      // and toe bands". A mint is a pale, high-value, low-chroma green, and on
+      // `volt-monk` — the cleanest surfacing in the cast, which is the whole
+      // reason §3 hands AXIOM that sheet — the second colour is a tint on a
+      // white body, not a second body colour. The AREA is RobotBuilder's to fix;
+      // what a palette can do is stop the colour shouting at the area it has.
+      // sat 0.90 -> 0.36, value 0.78 -> 0.87.
+      accent: '#8FDEC0',    // pale mint calibration tint
       // Pushed 166° -> 159°. KESTREL's coolant cyan sits at 187° and these two
       // were the closest pair on the wheel after the red half was spread; the
       // bloom pass separates fighters by emissive hue and 21° is not a
@@ -819,7 +941,14 @@ export const ROSTER = [
       // and patina is exactly the surface a mirror lobe cannot represent.
       primary: '#9A6331',   // burnished copper
       secondary: '#2A2119', // tar-dipped insulation
-      accent: '#E4B266',    // polished brass collars
+      // Pulled warm and down a step. §3 allows this fighter "burnished copper /
+      // brass with arc-white emissive" and nothing else, and r7 reads
+      // "olive-green panels on hip and thigh". Green on a copper machine is a
+      // gold F0 multiplied by this arena's cyan deck bounce — the same product
+      // that has been turning ANVIL's accent emerald — and the G/R ratio of the
+      // hex is what buys it: 0.78 -> 0.72, with the value off the top so the
+      // band stops out-reflecting the copper plate it bands.
+      accent: '#C8934A',    // brass collars, burnished not polished
       emissive: '#F2F7FF',  // arc-white discharge
       // Read `aegis-01` again for what its metal actually is: the plates are
       // paint, the BANDS are the second paint, and every joint barrel, hub and
@@ -830,7 +959,18 @@ export const ROSTER = [
       // larger than either of them, and pair4-volta-body came back as a brass
       // machine with copper panels. Warm-tinted dark gunmetal puts the
       // hardware back underneath the paint, where the sheet has it.
-      trim: '#A0958A',      // dark gunmetal, warm cast, F0
+      // Second pass, and "dark gunmetal" was the right words on the wrong
+      // number. #A0958A is 0.30 linear luma, which is the TOP of the
+      // {@link trimPolish} window — full mirror lobe, full clearcoat, env 0.95 —
+      // so the entry the comment calls dark hardware was rendering as the
+      // brightest, most reflective substance on the fighter, across 100 builder
+      // call sites. r7: "a salmon-pink panel across the abdomen ... the drum
+      // torso reads cyan-teal", on a palette that contains neither. Both are
+      // this material returning an image of the room. Under 0.13 linear it lands
+      // at trimPolish ~0.21 and picks up the satin lobe, the halved environment
+      // and the near-zero clearcoat this round's Materials.js gives an oxide
+      // finish — which is what `aegis-01`'s joint barrels and hubs actually are.
+      trim: '#6A6058',      // dark gunmetal, warm cast, F0
     },
     stats: { power: 8, speed: 6, reach: 5, weight: 7, defense: 6 },
     moveSet: 'volta',
