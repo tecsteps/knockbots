@@ -313,10 +313,23 @@ export function primeKeyLabels() {
  * @returns {Scheme}
  */
 export function detectScheme() {
-  if (typeof navigator !== 'undefined' && navigator.getGamepads) {
-    for (const pad of navigator.getGamepads()) {
-      if (pad && pad.connected) return 'gamepad';
+  // `navigator.getGamepads` existing does not mean it may be CALLED. In a
+  // cross-origin iframe without `allow="gamepad"` -- which is how the published
+  // single-file build is embedded -- Chrome throws a SecurityError from the
+  // call rather than returning an empty list. That threw out of the legend,
+  // out of `main()` before its first progress tick, and past the try/catch
+  // around `game.init()`, so the published build sat on "INITIALISING" for ever
+  // with nothing in the UI to say why. `resolveKeyLabels` below already guarded
+  // the Keyboard Map API against the same policy; this call was simply missed.
+  try {
+    if (typeof navigator !== 'undefined' && navigator.getGamepads) {
+      for (const pad of navigator.getGamepads()) {
+        if (pad && pad.connected) return 'gamepad';
+      }
     }
+  } catch {
+    // Refused by permissions policy: no pad is visible to this document, which
+    // is the same answer as no pad being plugged in.
   }
   if (typeof matchMedia === 'function') {
     const coarse = matchMedia('(pointer: coarse)').matches;

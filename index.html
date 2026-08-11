@@ -88,6 +88,51 @@
         </div>
       </div>
     </div>
+    <!--
+      Say why, on the screen, when the boot never finishes.
+
+      main.js catches failures from `game.init()` and writes "Boot failure" into
+      the status line, but that is only the middle of the boot. Anything that
+      throws BEFORE the first progress tick -- a module that fails to evaluate,
+      or a browser API that a permissions policy refuses in an embedded frame --
+      rejects out of main() with the boot screen still reading "Initialising",
+      and the player is left looking at a title card with no way to tell a slow
+      load from a dead one. That happened to the published build and cost a
+      round trip to diagnose something the page already knew.
+
+      Classic, not module, and placed before the module tag so the handlers are
+      installed while it is still being fetched and evaluated.
+    -->
+    <script>
+      (function () {
+        var reported = false;
+        function report(what) {
+          if (reported) return;
+          reported = true;
+          var el = document.getElementById('boot-status');
+          if (!el) return;
+          el.textContent = String(what || 'unknown error').slice(0, 200);
+          el.style.color = '#ff6b6b';
+          el.style.textTransform = 'none';
+          el.style.letterSpacing = '.04em';
+        }
+        window.addEventListener('error', function (e) {
+          report(e && e.message ? e.message : 'script error');
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e && e.reason;
+          report(r && r.message ? r.message : r);
+        });
+        /* A boot that is merely slow is not a boot that is broken, so this only
+           speaks up if nothing has moved the status line at all. */
+        setTimeout(function () {
+          var el = document.getElementById('boot-status');
+          if (el && el.textContent === 'Initialising') {
+            report('Stalled before first step — see console');
+          }
+        }, 20000);
+      })();
+    </script>
     <script type="module" src="/src/main.js"></script>
 
     <!--

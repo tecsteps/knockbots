@@ -17,8 +17,19 @@ async function main() {
   // for the whole of the load rather than flashing up at the end of it. A
   // gamepad connected after this point still re-renders, because the pad is not
   // visible to the page until it reports its first input.
-  renderControlLegend(document);
-  window.addEventListener('gamepadconnected', () => renderControlLegend(document), { once: true });
+  //
+  // Wrapped, because this is the one thing that runs BEFORE the first progress
+  // tick and OUTSIDE the try/catch around `game.init()`. When a permissions
+  // policy made it throw, `main()` rejected with the boot screen still showing
+  // its initial "Initialising" -- no progress, no error state, nothing to
+  // diagnose from. A legend that cannot be drawn is a cosmetic loss; it must
+  // never be the reason the game does not start.
+  try {
+    renderControlLegend(document);
+    window.addEventListener('gamepadconnected', () => renderControlLegend(document), { once: true });
+  } catch (err) {
+    console.warn('[knockbots] control legend unavailable', err);
+  }
 
   const game = new Game(document.getElementById('app'), document.getElementById('ui'), progress);
   try {
