@@ -206,9 +206,26 @@ const main = async () => {
       await page.evaluate((side) => {
         window.KB.fightCamera.cinematic('closeup', { target: window.KB.fighters[side], bone: 'head' });
       }, s);
-      await sleep(2200);
+      // Wait on the HEAD, not on a stopwatch. A flat 2.2s sleep returned the
+      // wide body framing for RONIN, MANTIS and VOLTA in round 4 -- the spring
+      // was still travelling in from the portrait it had just held, so three
+      // heads went uninspected for a whole round and the critic could only
+      // report that it had not been shown them. The closeup rig solves its own
+      // lens, so the test is simply whether the skull now fills the frame.
+      const headed = await until(page, `(() => {
+        const KB = window.KB, THREE = KB.THREE, f = KB.fighters[${s}], cam = KB.camera;
+        let head = null;
+        f.robot.group.traverse((o) => { if (o.isBone && /head/i.test(o.name) && !head) head = o; });
+        if (!head) return false;
+        const t = head.getWorldPosition(new THREE.Vector3());
+        const p = t.clone().project(cam);
+        return Math.abs(p.x) < 0.6 && Math.abs(p.y) < 0.6 && p.z < 1
+          && cam.position.distanceTo(t) < 2.4;
+      })()`, 25000, 500);
+      if (!headed) console.log(`[scenecap] ${ids[s]} head: framing never converged — frame is suspect`);
+      await sleep(1100);
       f = resolve(OUT, `pair${pi}-${ids[s]}-head.png`);
-      await grab(page, f); manifest.frames.push({ file: f, kind: 'head', id: ids[s] });
+      await grab(page, f); manifest.frames.push({ file: f, kind: 'head', id: ids[s], framed: !!headed });
     }
 
     await page.evaluate(() => {
