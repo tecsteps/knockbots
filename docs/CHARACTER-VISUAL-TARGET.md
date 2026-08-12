@@ -188,3 +188,65 @@ model viewer):
 7. emissive reads as thin lines plus one hero element per fighter;
 8. the two fighters on screen are still distinguishable as silhouettes at 40px;
 9. the frame budget and the existing gates still pass.
+
+---
+
+## 5. Where this stopped, and what is still open
+
+Eight rounds. The cast is built to §3 and the acceptance list in §4 is largely met;
+what follows is the honest remainder, so the next person does not have to
+re-derive it from the frames.
+
+### Closed, and confirmed on a frame from the actual game
+
+| fighter | reads as its sheet | evidence |
+|---|---|---|
+| VULKAN | yes | riveted slot-visor helm, amber slit, brass rib-vent disc |
+| ANVIL | yes | spherical shoulder bosses with wheel hubs, goggled dome, safety yellow |
+| RONIN-07 | yes | bladed kabuto with horns, three-blade shoulder stacks, lacquer black |
+| BASTION | yes | pointed V heraldic breastplate over navy, big rounded pauldrons |
+| SERAPH | yes | porcelain and violet, halo ring, dorsal blade fins |
+| MANTIS | yes | acid green, bladed carapace |
+| AXIOM | close | bare smooth ovoid on a ribbed neck; hero chest disc still weak |
+| KESTREL | close | arctic shells, dome head, feet attached and segmented |
+| NYX | close | glossy black, bronze-gold bezels, no green |
+| VOLTA | close | copper-orange, domed pauldron caps, no wheel hub |
+
+Cast-wide: limbs taper and read as curved shells, joint bezels are turned
+hardware rather than coins, the dark underskin is visible at neck, waist, elbow
+and knee, hands show separated fingers, feet are segmented and joined, heads are
+at reference scale, and the paint carries a clearcoat with no all-over hatch.
+
+### Still open
+
+1. **AXIOM has no hero element.** `volt-monk`'s defining feature is a bright
+   ringed arc-reactor disc dead centre of the chest. AXIOM's sternum carries a
+   small dull oval that does not read at fight distance.
+2. **VOLTA is copper-ORANGE rather than a dark burnished copper.** Its value was
+   deliberately held to keep `aegis-01`'s mid-value primary place; if it should
+   be a more muted metal, the value is the number to move, not the hue.
+3. **NYX's gold is warmer than `vesper`'s.** A full R/G/B cube search found no
+   hex at saturation >= 0.48 whose cyan-rim reflection clears hue 158 while
+   staying in the gold band — under this arena's rim, "gold" and "never green"
+   cannot both be fully had. The balance struck favours never-green.
+4. **The heavy family still crowds at 40px.** BASTION, VOLTA and ANVIL share a
+   spherical shoulder boss, a ribbed waist and a chunky boot; hue does most of
+   the separating. KESTREL and AXIOM have the same problem in the light family.
+5. **Flat slab plates survive in places** at close framing — SERAPH's back stack
+   and some shoulder plates are still hard-cornered quads against §1.1.
+6. **A few small colour escapes**: a green patch on VOLTA's knee cap (a bezel or
+   greeble catching the rim, ~a few dozen pixels), and green stencil asterisks
+   that are `STORY_INK.light` — a near-neutral shared by all ten fighters, so
+   changing it is a cast-wide move rather than a per-character fix.
+7. **ANVIL's trim measures rim-reflected hue 163**, the only other entry near the
+   green failure. It was left alone deliberately: its shell is a 0.91-value
+   hi-vis yellow, so the bezels have nothing to contrast against and no green
+   reads on them in any frame.
+
+### How to check any of this
+
+`node tools/scenecap.mjs --width 1280 --height 720 --out shots/<name>` drives all
+five pairs into a real fight and photographs every fighter in the actual arena.
+It warns on stderr when a framing did not converge; a frame it warned about is
+not evidence. See also `docs/SIMTEST.md` for the numeric layer, which is four
+seconds and no browser.
