@@ -34,7 +34,7 @@ import { MenuSystem } from '../ui/MenuSystem.js';
 import { AudioDirector } from '../audio/AudioDirector.js';
 import { CPU } from '../ai/CPU.js';
 import { ROSTER } from '../characters/roster.js';
-import { makeTestHarness } from '../combat/TestHarness.js';
+import { makeTestHarness, makeGameTest } from '../combat/TestHarness.js';
 import { TouchControls } from './TouchControls.js';
 
 export const PHASE = {
@@ -153,6 +153,25 @@ export class Game {
     // Scripted entry points used by tools/capture.mjs to drive the game into
     // specific visual states for the automated critic pass.
     this.testHarness = makeTestHarness(this);
+
+    /*
+     * The deterministic simulation façade, for a caller that cannot watch the
+     * game play — `tools/simscene.mjs --shots` and anything else that needs to
+     * stop on an exact frame of an exact move and photograph it.
+     *
+     * ONE-WAY, exactly like `testHarness`: it is written to `window` and read
+     * by tools, and nothing on the gameplay path holds a reference or calls
+     * into it. `reset()` pauses this loop and `release()` un-pauses it, so a
+     * page nobody has driven behaves as though the façade were not there.
+     *
+     * The global is not gated on a build flag because `TestHarness.js` already
+     * ships and the façade is 4 KB of it — a flag would buy nothing and would
+     * mean the thing QA runs is not the thing players run, which is the one
+     * property a harness like this cannot afford to lose.
+     */
+    if (typeof window !== 'undefined') {
+      window.__GAME_TEST__ = makeGameTest(this, { harness: this.testHarness, roster: ROSTER });
+    }
 
     this.renderer.warmup(this.scene, this.camera);
     this.onProgress('Ready', 1);

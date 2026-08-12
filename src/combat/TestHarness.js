@@ -14,8 +14,10 @@
  */
 
 import * as THREE from 'three';
-import { METER_MAX, MAX_HEALTH, GROUND_Y } from '../core/Constants.js';
+import { METER_MAX, MAX_HEALTH, GROUND_Y, TICK_DT } from '../core/Constants.js';
 import { bus } from '../core/Bus.js';
+import { Input } from '../core/Input.js';
+import { SCENARIOS, physicalFor } from '../core/Scenarios.js';
 import { MOVES, findMoveByTag, getMove } from './Moves.js';
 import { STATE, retimeFor, strikeAim } from './Fighter.js';
 import { segSegDistSq } from './CombatSystem.js';
@@ -510,6 +512,19 @@ export function makeTestHarness(game) {
     clearLineup() {
       hideLineup();
       for (const f of fighters()) f.group.visible = true;
+    },
+
+    /**
+     * Face the pair off at `dist` metres, centred, both idle.
+     *
+     * Published so `makeGameTest` can stage a scenario through the SAME code
+     * every probe in this file already uses. `tools/simgate.mjs` carries a
+     * hand-copied version of this from before it was reachable, with a note
+     * saying it had to; a third copy would be the point at which the three
+     * quietly stop agreeing about what "staged" means.
+     */
+    stage(attacker, defender, dist = 1.05) {
+      stage(attacker, defender, dist);
     },
 
     /** Put both fighters back in a clean neutral round-start state. */
@@ -1082,4 +1097,652 @@ export function makeTestHarness(game) {
       }));
     },
   };
+}
+
+// ===========================================================================
+// __GAME_TEST__ — the deterministic simulation façade
+// ===========================================================================
+
+/**
+ * Bus events worth putting in a timeline.
+ *
+ * A whitelist rather than `bus.onAny`, and the exclusions are the point:
+ * `footstep` fires up to twice a frame on a walk and `shake` fires on every
+ * blow, so an unfiltered log is 80% noise and `stepUntil('hit')` becomes
+ * unreadable. What is left is the set of moments a test would ever want to jump
+ * to. `hitstop` is in because a freeze is the reason a run's frame count and
+ * its tick count are not the same number, and a reader who does not know that
+ * will mis-read every timeline that contains a hit.
+ */
+const TIMELINE_EVENTS = [
+  'hit', 'block', 'parry', 'whiff', 'launch', 'knockdown', 'wallSplat',
+  'groundImpact', 'armorAbsorb', 'partBreak', 'superStart', 'superHit',
+  'finisherStart', 'finisherHit', 'comboEnd', 'hitstop', 'timeScale',
+  'jump', 'dash', 'meterFull', 'roundEnd', 'matchEnd',
+];
+
+/**
+ * A keyboard that exists only in memory.
+ *
+ * `Input` binds three listeners to whatever target it is handed and reads only
+ * `e.code` and `e.repeat`, so a bare `EventTarget` plus a two-field Event
+ * subclass is a complete keyboard as far as the input stack is concerned. That
+ * is the whole reason synthetic input goes through here rather than around:
+ * every direction flip, every buffer entry and every motion recognition is
+ * produced by the code a real player's keystroke runs through, not by a
+ * re-implementation of it. `tools/simgate.mjs` exists because the last time
+ * this project tested the matcher instead of the input stack, it reported 12/12
+ * on a defect a player found in ten minutes.
+ */
+class SynthKeyEvent extends Event {
+  constructor(type, code) { super(type); this.code = code; this.repeat = false; }
+  preventDefault() {}
+}
+
+function makeSynthKeyboard() {
+  const target = new EventTarget();
+  const held = new Set();
+  const set = (code, down) => {
+    if (down) {
+      if (!held.has(code)) { held.add(code); target.dispatchEvent(new SynthKeyEvent('keydown', code)); }
+    } else if (held.delete(code)) {
+      target.dispatchEvent(new SynthKeyEvent('keyup', code));
+    }
+  };
+  return { target, held, set, release: () => { for (const c of [...held]) set(c, false); } };
+}
+
+/**
+ * The deterministic simulation façade — `window.__GAME_TEST__`.
+ *
+ * WHAT THIS IS FOR. An agent cannot watch a fighting game. It can, however,
+ * hold a simulation still, press a button on frame 10, ask what frame 23 looked
+ * like, and require that the same seed and the same input log produce the same
+ * answer every time. That is the whole design: nothing in here reads a clock,
+ * nothing samples `Math.random`, and every input is filed under a FRAME rather
+ * than a millisecond.
+ *
+ * WHAT IT IS BUILT ON. Everything above in this file, plus `Input`. It stages
+ * through `stage()`, steps the same fight-phase tick order `Game#simulate`
+ * runs, and drives commands out of a real `Input` fed by a synthetic keyboard.
+ * It does not re-implement any of that, because a harness that re-implements
+ * the thing it is testing tests the re-implementation.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO. It never renders unless asked. The whole
+ * suite runs in about two seconds in bare Node with no GL context; the same
+ * scenarios take two minutes a piece under a software rasteriser. Rendering is
+ * a separate, opt-in step (`captureFrame`) precisely so the numeric layer stays
+ * cheap enough to run on every change.
+ *
+ * DUCK-TYPED `game`. The browser passes the real `Game`. `tools/simscene.mjs`
+ * passes a stub with `fighters`, `combat`, `cpu`, `scene`, `phase` and a no-op
+ * `setPhase`, which is everything `stage()` touches. One code path, two hosts —
+ * so the frames the contact sheet is labelled with are the frames the
+ * invariants were measured on.
+ *
+ * @param {Object} game the Game instance, or a stub with the fields above
+ * @param {{harness?:Object, roster?:Array}} [opts]
+ * @returns {Object} the `__GAME_TEST__` object
+ */
+export function makeGameTest(game, opts = {}) {
+  const harness = opts.harness || game.testHarness || makeTestHarness(game);
+  const roster = opts.roster || null;
+
+  const kb = makeSynthKeyboard();
+  const input = new Input(kb.target);
+
+  /** Inputs still to be applied, keyed by the frame they fire on. */
+  let pending = [];
+  /** Every key edge that was actually dispatched, in frame order. A repro log. */
+  let inputLog = [];
+  let timeline = [];
+  let events = [];
+  let frame = 0;
+  let seed = 0;
+  let scenario = null;
+  let offBus = [];
+  let wasPaused = null;
+
+  /**
+   * Per-fighter hitstop, mirroring `Game.freezeTicks`.
+   *
+   * A freeze is not "the sim runs slower", it is "the sim does not run", and
+   * `Game#frame` gates the accumulator on it. If this harness ignored hitstop
+   * its frame numbers would drift from the game's by the length of every freeze
+   * in the run — a launcher alone is 11 — and every piece of frame data
+   * measured through it would be wrong by that amount. So the same gate is
+   * reproduced here: while both counters are live the tick does not run at all
+   * and the frame is marked `frozen`; while one is live that fighter alone
+   * holds and the world moves around it.
+   */
+  const freeze = [0, 0];
+
+  const fighters = () => game.fighters;
+  const A = () => game.fighters[0];
+  const D = () => game.fighters[1];
+
+  // -------------------------------------------------------------------------
+  // Recording
+  // -------------------------------------------------------------------------
+
+  /**
+   * The pose signature: a weighted sum over the rebuilt hurtbox capsules.
+   *
+   * `Fighter#reset`'s own notes name this as the column that made an
+   * animator-only divergence visible when position, velocity, state and the
+   * clocks all cancelled in the diff. Position tells you where the body is;
+   * this tells you what shape it is in, which is what the hitbox builder
+   * sweeps and what a screenshot photographs. A determinism check without it
+   * is a determinism check that cannot see the pose.
+   *
+   * MEASURED RELATIVE TO THE ROOT, which the version in `simgate` is not. A
+   * world-space signature is dominated by where the fighter is standing, so it
+   * answers "did the body move" — a question `x`, `y` and `z` already answer
+   * three columns to the left — instead of "is the body in the same shape".
+   * Subtracting the root makes it a pose measure, which is what the loop-closure
+   * invariant needs and what the determinism diff wanted all along.
+   *
+   * It is a SUM, so it is a change detector and not a pose comparison: two
+   * different poses can land on the same number. That is fine for both uses —
+   * determinism needs any change to show, and `loopCloses` compares means over
+   * many frames — and it would not be fine for "are these two poses the same",
+   * which nothing here asks.
+   */
+  function poseSig(f) {
+    let s = 0;
+    const p = f.position;
+    for (const h of f.hurtboxes) {
+      s += (h.p0.x - p.x) + (h.p0.y - p.y) * 3 + (h.p0.z - p.z) * 7
+        + (h.p1.x - p.x) * 11 + (h.p1.y - p.y) * 13 + (h.p1.z - p.z) * 17 + h.radius * 19;
+    }
+    return s;
+  }
+
+  /**
+   * How far the strike capsule reaches past the attacker's own root, in metres.
+   *
+   * This is what `deriveMarks` uses to find MAX EXTENSION without being told
+   * where it is, and it is a real measurement rather than a frame number
+   * copied out of a move table — a retime, an aim bias or a clip swap moves the
+   * true extension frame and leaves the authored one pointing at nothing.
+   */
+  function reachOf(f) {
+    let best = 0;
+    for (const hb of f.hitboxes) {
+      best = Math.max(best, Math.abs(hb.p0.x - f.position.x), Math.abs(hb.p1.x - f.position.x));
+    }
+    return best;
+  }
+
+  /** One fighter's serializable state. Numbers are rounded for diffability. */
+  function snap(f) {
+    const r = (v, n = 6) => +(+v).toFixed(n);
+    return {
+      id: f.def?.id || `p${f.index + 1}`,
+      index: f.index,
+      x: r(f.position.x, 9), y: r(f.position.y, 9), z: r(f.position.z, 9),
+      vx: r(f.velocity.x, 9), vy: r(f.velocity.y, 9), vz: r(f.velocity.z, 9),
+      facing: f.facing,
+      state: f.state, stateTicks: f.stateTicks, stun: f.stunTicks,
+      hp: r(f.health, 4), meter: r(f.meter, 4),
+      move: f.currentMove?.id ?? null, moveTick: f.moveTick,
+      boxes: f.hitboxes.length,
+      air: !!f.airborne, ground: !!f.grounded, crouch: !!f.crouching,
+      block: !!f.isBlocking, invuln: !!f.invulnerable,
+      combo: f.comboCount, juggle: f.juggleCount,
+      clip: f.currentClip,
+      // `group.scale` is uniform in this engine and nothing in the sim is
+      // supposed to touch it; recorded so `scaleStable` has something to be
+      // right about rather than a claim that it is.
+      scale: r(f.group?.scale?.x ?? 1, 9),
+      // Sole heights above the deck, straight off the tracker the footstep
+      // events are emitted from.
+      footL: r(f.footState?.L?.y ?? 0, 6), footR: r(f.footState?.R?.y ?? 0, 6),
+      pose: r(poseSig(f), 6),
+      reach: r(reachOf(f), 6),
+      rng: `${f.rng?.s0 ?? 0}:${f.rng?.s1 ?? 0}`,
+    };
+  }
+
+  /**
+   * One timeline row.
+   *
+   * Shaped so the flat reading in the brief is literally true — `frame`,
+   * `state`, `x`, `hit` are top-level and are the ATTACKER's — while `a` and
+   * `d` carry everything a diff needs. A timeline that is pleasant to read and
+   * a timeline that is complete are not the same artefact and this is cheaper
+   * than shipping two.
+   */
+  function record(frozen, evsThisFrame) {
+    const a = snap(A());
+    const d = snap(D());
+    timeline.push({
+      frame,
+      state: a.state,
+      x: a.x,
+      move: a.move,
+      moveTick: a.moveTick,
+      boxes: a.boxes,
+      reach: a.reach,
+      btn: kb.held.size > 0,
+      frozen: !!frozen,
+      hit: evsThisFrame.includes('hit') || undefined,
+      ev: evsThisFrame.length ? evsThisFrame : undefined,
+      a,
+      d,
+    });
+  }
+
+  /** Attach the event log. Payloads are COPIED — `Bus` reuses them per emit. */
+  function listen() {
+    unlisten();
+    for (const type of TIMELINE_EVENTS) {
+      offBus.push(bus.on(type, (p) => {
+        const row = { frame, type };
+        if (p?.attacker) row.attacker = p.attacker.index;
+        if (p?.defender) row.defender = p.defender.index;
+        if (p?.fighter) row.fighter = p.fighter.index;
+        if (p?.move?.id) row.move = p.move.id;
+        if (typeof p?.damage === 'number') row.damage = +p.damage.toFixed(3);
+        if (typeof p?.ticks === 'number') row.ticks = p.ticks;
+        if (typeof p?.scale === 'number') row.scale = p.scale;
+        if (typeof p?.hits === 'number') row.hits = p.hits;
+        if (typeof p?.winner === 'number') row.winner = p.winner;
+        if (p?.counter) row.counter = true;
+        events.push(row);
+      }));
+    }
+    // Hitstop has to be acted on as well as logged, or this harness's frames
+    // and the game's diverge by the length of every freeze.
+    offBus.push(bus.on('hitstop', (e) => {
+      const t = e?.ticks || 0;
+      const i = e?.attackerIndex;
+      if (Number.isInteger(i) && i >= 0 && i < 2) {
+        freeze[i] = Math.max(freeze[i], e.attackerTicks ?? t);
+        freeze[1 - i] = Math.max(freeze[1 - i], e.defenderTicks ?? t);
+      } else {
+        freeze[0] = Math.max(freeze[0], t);
+        freeze[1] = Math.max(freeze[1], t);
+      }
+    }));
+  }
+
+  function unlisten() { for (const off of offBus) off?.(); offBus = []; }
+
+  // -------------------------------------------------------------------------
+  // The tick
+  // -------------------------------------------------------------------------
+
+  /**
+   * Advance exactly one frame.
+   *
+   * This is `Game#simulate`'s FIGHT case plus `Game#frame`'s freeze drain, and
+   * nothing else. It reads no clock: there is no `dt`, no accumulator and no
+   * `requestAnimationFrame`, so a frame here is a frame anywhere and the
+   * machine it runs on cannot change the answer.
+   */
+  function advance() {
+    // Fire this frame's scheduled key edges BEFORE the tick, which is when a
+    // real keyboard's events land relative to the sim: `Input#beginTick` reads
+    // whatever is down at that instant.
+    for (let i = pending.length - 1; i >= 0; i--) {
+      if (pending[i].frame !== frame) continue;
+      const e = pending.splice(i, 1)[0];
+      const facing = fighters()[e.player]?.facing ?? 1;
+      const code = physicalFor(e.player, e.key, facing);
+      if (!code) continue;
+      kb.set(code, e.action !== 'up');
+      inputLog.push({ frame, player: e.player, code, action: e.action });
+    }
+
+    const before = events.length;
+    let frozen = false;
+
+    if (freeze[0] > 0 && freeze[1] > 0) {
+      // Both held: no simulation tick runs at all. This is the freeze.
+      freeze[0]--; freeze[1]--;
+      frozen = true;
+    } else {
+      input.beginTick(frame);
+      const cmds = [
+        game.cpu?.[0] ? game.cpu[0].think(frame) : input.commandsFor(0, A()),
+        game.cpu?.[1] ? game.cpu[1].think(frame) : input.commandsFor(1, D()),
+      ];
+      for (let i = 0; i < 2; i++) {
+        if (freeze[i] > 0) { freeze[i]--; continue; }
+        fighters()[i].simulate(cmds[i]);
+      }
+      game.combat.simulate(frame);
+      input.endTick();
+    }
+
+    // The camera is part of the sim tick in `Game`, and "inconsistent camera"
+    // is one of the defects the contact sheet exists to catch — so it has to be
+    // driven off the same frame clock, not off whatever the render loop
+    // happened to do between two captures.
+    game.fightCamera?.simulate?.(game.phase || 'fight', frame);
+
+    record(frozen, events.slice(before).map((e) => e.type));
+    frame++;
+  }
+
+  // -------------------------------------------------------------------------
+  // The façade
+  // -------------------------------------------------------------------------
+
+  const api = {
+    /**
+     * Put the simulation in a known state and make the seed real.
+     *
+     * SEEDING IS NOT DECORATION HERE. `Fighter#reset` constructs a fresh `Rng`
+     * from `0x51ed2701 + index * 0x9e37` — a constant — and `CombatSystem`'s is
+     * another constant, so without this every "seeded" run would be the same
+     * run and a fuzzer would explore one trajectory very thoroughly. The seed
+     * is mixed into all three generators AFTER `reset()` has replaced them,
+     * which is the only order that works: reset overwrites the object, so
+     * reseeding before it is a no-op that looks like it worked.
+     *
+     * @param {{seed?:number, dist?:number, cpu?:?number, p1?:number, p2?:number,
+     *          training?:boolean}} o
+     */
+    reset(o = {}) {
+      seed = (o.seed ?? 0) >>> 0;
+      pending = [];
+      inputLog = [];
+      timeline = [];
+      events = [];
+      frame = 0;
+      freeze[0] = 0; freeze[1] = 0;
+      scenario = null;
+
+      // Take the game's own loop out of the way. It keeps RENDERING — that is
+      // what makes `captureFrame` possible — but its accumulator stops being
+      // fed, so the only thing advancing the simulation is `step()`.
+      if (wasPaused === null && 'paused' in game) wasPaused = game.paused;
+      if ('paused' in game) game.paused = true;
+
+      kb.release();
+      if (roster && (o.p1 != null || o.p2 != null)) {
+        if (o.p1 != null && roster[o.p1]) A().setCharacter(roster[o.p1]);
+        if (o.p2 != null && roster[o.p2]) D().setCharacter(roster[o.p2]);
+      }
+
+      A().reset(new THREE.Vector3(-1.9, GROUND_Y, 0), 1);
+      D().reset(new THREE.Vector3(1.9, GROUND_Y, 0), -1);
+      game.combat.reset();
+
+      // The mixing constants are arbitrary but must be DIFFERENT per stream, or
+      // the two fighters and the combat system draw the same sequence and a
+      // "random" wake-up on one side predicts the other.
+      A().rng.reseed(seed ^ 0x1111_1111);
+      D().rng.reseed(seed ^ 0x2222_2222);
+      game.combat.rng?.reseed?.(seed ^ 0x3333_3333);
+
+      // The CPU is OFF unless asked for. A scripted scenario with a live
+      // opponent is not a scripted scenario: the bot's decisions depend on the
+      // whole trajectory, so a one-frame change anywhere rewrites the rest of
+      // the run and every invariant becomes a coin toss.
+      if (game.cpu) {
+        game.cpu[0] = null;
+        if (o.cpu != null && game.cpu[1]) game.cpu[1].setLevel(o.cpu);
+        else if (o.cpu == null) game.cpu[1] = null;
+      }
+      // The CPU reseeds itself off this event, which is how it gets folded into
+      // the run's seed at all.
+      bus.emit('roundStart', { round: 1 });
+
+      harness.stage(A(), D(), o.dist ?? 2.4);
+      if (o.training) { A().health = MAX_HEALTH * 100; D().health = MAX_HEALTH * 100; }
+      listen();
+      record(false, []);
+      // `record` stamped frame 0 and then `advance` will stamp it again on the
+      // first step, so the pre-input row is filed at -1: it is the staged pose
+      // BEFORE any tick has run, which is exactly the "before input" reference
+      // a contact sheet wants and is not a simulated frame.
+      timeline[0].frame = -1;
+      return api.getState();
+    },
+
+    /**
+     * Load a named scenario: cast, spacing, seed and the whole input script.
+     * Nothing is simulated — call `step()` or `run()` next.
+     * @param {string} name a key of `SCENARIOS`
+     * @param {{seed?:number}} [o]
+     */
+    loadScenario(name, o = {}) {
+      const scn = SCENARIOS[name];
+      if (!scn) throw new Error(`[__GAME_TEST__] unknown scenario "${name}" — have: ${Object.keys(SCENARIOS).join(', ')}`);
+      api.reset({ seed: o.seed ?? 0, dist: scn.dist, p1: scn.p1, p2: scn.p2, cpu: scn.cpu ?? null });
+      scenario = { name, ...scn };
+      for (const e of scn.script) api.input(e);
+      return { name, frames: scn.frames, dist: scn.dist, inputs: scn.script.length, what: scn.what };
+    },
+
+    /**
+     * Schedule an input on a FRAME.
+     *
+     * The whole point of the unit. A test that says "press punch after 200 ms"
+     * is a test whose result depends on how fast the machine is; a test that
+     * says "press punch on frame 12" is a test that has a single answer.
+     *
+     * @param {{frame:number, key:string, action?:'down'|'up', player?:number}|Array} e
+     */
+    input(e) {
+      if (Array.isArray(e)) { for (const x of e) api.input(x); return api; }
+      pending.push({ frame: e.frame | 0, key: e.key, action: e.action || 'down', player: e.player ?? 0 });
+      return api;
+    },
+
+    /** Advance `n` frames. @returns {number} frames advanced */
+    step(n = 1) {
+      for (let i = 0; i < n; i++) advance();
+      return n;
+    },
+
+    /**
+     * Advance until something named happens.
+     *
+     * `what` is either an event type ('hit', 'knockdown', ...) or a state
+     * predicate written as `state:<0|1|a|d>:<stateName>`. Returns the frame it
+     * stopped on, or null if it never happened inside `limit` — never a
+     * silent success, because "the hit never came" and "the hit came on frame
+     * 23" have to be distinguishable from the outside.
+     *
+     * @param {string} what
+     * @param {{limit?:number}} [o]
+     */
+    stepUntil(what, o = {}) {
+      const limit = o.limit ?? 600;
+      const m = /^state:([01ad]):(.+)$/.exec(what);
+      const idx = m ? (m[1] === 'a' ? 0 : m[1] === 'd' ? 1 : +m[1]) : -1;
+      for (let i = 0; i < limit; i++) {
+        const mark = events.length;
+        advance();
+        if (m) {
+          if (fighters()[idx].state === m[2]) return { frame: frame - 1, what, state: m[2] };
+        } else if (events.slice(mark).some((e) => e.type === what)) {
+          return { frame: frame - 1, what, event: events[events.length - 1] };
+        }
+      }
+      return null;
+    },
+
+    /** The current serializable state of the whole simulation. */
+    getState() {
+      return {
+        frame,
+        seed,
+        scenario: scenario?.name ?? null,
+        frozen: freeze[0] > 0 && freeze[1] > 0,
+        freeze: [...freeze],
+        held: [...kb.held].sort(),
+        a: snap(A()),
+        d: snap(D()),
+      };
+    },
+
+    /**
+     * Aggregates over the run so far.
+     *
+     * Everything here is derived from the timeline and the event log rather
+     * than accumulated as the run goes, so a metric can never disagree with the
+     * frames it is supposed to summarise.
+     */
+    getMetrics() {
+      const hits = events.filter((e) => e.type === 'hit');
+      const blocks = events.filter((e) => e.type === 'block');
+      const sim = timeline.filter((r) => r.frame >= 0 && !r.frozen).length;
+      const frozen = timeline.filter((r) => r.frozen).length;
+      const first = timeline[0]; const last = timeline[timeline.length - 1];
+      const travel = (side) => {
+        let d = 0;
+        for (let i = 1; i < timeline.length; i++) {
+          if (timeline[i].frozen) continue;
+          const p = timeline[i - 1][side]; const c = timeline[i][side];
+          d += Math.hypot(c.x - p.x, c.y - p.y, c.z - p.z);
+        }
+        return +d.toFixed(4);
+      };
+      return {
+        frames: frame,
+        simFrames: sim,
+        frozenFrames: frozen,
+        events: events.length,
+        hits: hits.length,
+        blocks: blocks.length,
+        whiffs: events.filter((e) => e.type === 'whiff').length,
+        damageToDefender: first && last ? +(first.d.hp - last.d.hp).toFixed(3) : 0,
+        damageToAttacker: first && last ? +(first.a.hp - last.a.hp).toFixed(3) : 0,
+        maxCombo: timeline.reduce((m, r) => Math.max(m, r.a.combo, r.d.combo), 0),
+        defenderPeakY: timeline.reduce((m, r) => Math.max(m, r.d.y), 0),
+        attackerTravel: travel('a'),
+        defenderTravel: travel('d'),
+        // The generator states at the end of the run. Two runs that agree on
+        // everything else and disagree here have drawn a different NUMBER of
+        // randoms, which is a divergence that has not surfaced yet rather than
+        // one that is not there.
+        rngEnd: last ? { a: last.a.rng, d: last.d.rng } : null,
+      };
+    },
+
+    /**
+     * A one-line fingerprint of the whole trajectory.
+     *
+     * The determinism test is a string comparison over this, per frame. It is a
+     * plain FNV-1a over the serialised rows rather than anything cryptographic:
+     * the job is to make two different trajectories produce two different
+     * strings, and a 32-bit hash over a 90-row timeline does that while staying
+     * readable in a terminal.
+     */
+    digest() {
+      let h = 0x811c9dc5;
+      for (const r of timeline) {
+        const s = JSON.stringify(r);
+        for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+      }
+      return (h >>> 0).toString(16).padStart(8, '0');
+    },
+
+    getTimeline() { return timeline; },
+    getEvents() { return events; },
+    getInputLog() { return inputLog; },
+    getScenario() { return scenario; },
+
+    /**
+     * A save state.
+     *
+     * HONEST ABOUT ITS FIDELITY, because the alternative is a harness that
+     * quietly lies about rewinding. What is captured is every sim-visible field
+     * plus all three generator states — which is a complete description of the
+     * SIMULATION but not of the POSE: the animator carries springs, inertia,
+     * blend stacks, IK hold quaternions and a ripple queue, and none of that is
+     * serialisable without reaching into `Animator`'s privates.
+     *
+     * So `loadState` rebuilds the pose from a clean `reset()` and replays the
+     * clip, which is exact for a state taken at frame 0 and approximate for one
+     * taken mid-move. Frame 0 is the case that matters: it is what a fuzzer
+     * repro bundle stores, and combined with the input log it reproduces the
+     * failure exactly. `tools/simscene.mjs --savestate` measures the mid-run
+     * error rather than assuming it, and docs/SIMTEST.md quotes the number.
+     */
+    saveState() {
+      const f = (x) => ({
+        pos: [x.position.x, x.position.y, x.position.z],
+        vel: [x.velocity.x, x.velocity.y, x.velocity.z],
+        facing: x.facing, state: x.state, stateTicks: x.stateTicks, stun: x.stunTicks,
+        health: x.health, recoverable: x.recoverable, meter: x.meter,
+        combo: x.comboCount, juggle: x.juggleCount, comboDamage: x.comboDamage,
+        move: x.currentMove?.id ?? null, moveTick: x.moveTick, moveInstance: x.moveInstance,
+        air: x.airborne, ground: x.grounded, crouch: x.crouching, block: x.isBlocking,
+        simTick: x.simTick, clip: x.currentClip,
+        rng: [x.rng.s0, x.rng.s1],
+      });
+      return {
+        version: 1, frame, seed, scenario: scenario?.name ?? null,
+        clean: frame === 0,
+        held: [...kb.held],
+        pending: pending.map((p) => ({ ...p })),
+        a: f(A()), d: f(D()),
+        combatRng: game.combat.rng ? [game.combat.rng.s0, game.combat.rng.s1] : null,
+      };
+    },
+
+    /** Restore a save state. See `saveState` for what "restore" means here. */
+    loadState(s) {
+      api.reset({ seed: s.seed, dist: 2.4 });
+      const put = (x, v) => {
+        x.position.set(v.pos[0], v.pos[1], v.pos[2]);
+        x.prevPosition.copy(x.position);
+        x.velocity.set(v.vel[0], v.vel[1], v.vel[2]);
+        x.facing = v.facing;
+        x.state = v.state; x.stateTicks = v.stateTicks; x.stunTicks = v.stun;
+        x.health = v.health; x.recoverable = v.recoverable; x.meter = v.meter;
+        x.comboCount = v.combo; x.juggleCount = v.juggle; x.comboDamage = v.comboDamage;
+        x.moveTick = v.moveTick; x.moveInstance = v.moveInstance;
+        x.airborne = v.air; x.grounded = v.ground; x.crouching = v.crouch; x.isBlocking = v.block;
+        x.simTick = v.simTick;
+        x.rng.s0 = v.rng[0]; x.rng.s1 = v.rng[1];
+        if (v.clip) { x.currentClip = ''; x.animator?.play(v.clip, { blend: 0, loop: false }); x.currentClip = v.clip; }
+      };
+      put(A(), s.a); put(D(), s.d);
+      if (s.combatRng && game.combat.rng) { game.combat.rng.s0 = s.combatRng[0]; game.combat.rng.s1 = s.combatRng[1]; }
+      kb.release();
+      for (const c of s.held || []) kb.set(c, true);
+      pending = (s.pending || []).map((p) => ({ ...p }));
+      frame = s.frame;
+      timeline = []; events = [];
+      record(false, []);
+      timeline[0].frame = frame - 1;
+      return api.getState();
+    },
+
+    /**
+     * Render the CURRENT frame and hand back a PNG data URL.
+     *
+     * Presentation is separable from game logic in this engine and this is the
+     * seam: nothing above this line has touched the renderer, and a run that
+     * never calls this never allocates a GL context. `alpha` is pinned to 1, so
+     * what comes back is the pose at the end of the frame just simulated rather
+     * than an interpolation toward it — a contact sheet of interpolated frames
+     * cannot be lined up against a timeline of simulated ones.
+     */
+    captureFrame() {
+      if (!game.renderer?.screenshot) return null;
+      for (const f of fighters()) f.render(1, TICK_DT);
+      game.fightCamera?.render?.(1, TICK_DT);
+      return game.renderer.screenshot();
+    },
+
+    /** Hand the game back its own loop. */
+    release() {
+      unlisten();
+      kb.release();
+      if (wasPaused !== null && 'paused' in game) { game.paused = wasPaused; wasPaused = null; }
+    },
+
+    /** Tear down the synthetic keyboard's listeners. */
+    dispose() { api.release(); input.dispose(); },
+  };
+
+  return api;
 }

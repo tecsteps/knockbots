@@ -1793,22 +1793,38 @@ class Rig {
     }
 
     // Outer face: the disc that has to survive the silhouette, so PRIMARY.
-    // It is deliberately a THIN concentric assembly rather than a thick puck.
-    // At R*0.21 proud it read as a road wheel bolted to the side of the leg,
-    // which is not what any of the eight sheets has at a knee.
+    //
+    // A COIN IS NOT HARDWARE. The previous profile spent R*0.15 of axial depth
+    // on a R*1.04 radius — a 14:1 disc, and on the four cleanest fighters (NYX,
+    // AXIOM, VOLTA, SERAPH) r9 read it exactly as what it is: a flat plate
+    // stuck on the side of the joint, "a wheel bolted to the leg rather than a
+    // joint bezel". §1.4 asks for a concentric ring assembly standing PROUD of
+    // the shells, and proud is a depth, not a diameter. So the depth nearly
+    // doubles to R*0.28 and it is spent on a cylindrical outer wall that runs
+    // from R*0.05 to R*0.19 before the face turns in: a rim you can see the
+    // side of is what separates a turned bezel from a washer.
+    //
+    // The radius comes IN at the same time (1.04 -> 0.96 R) so the ring no
+    // longer overhangs its own boot; §1.4's "larger than half the limb width"
+    // is a floor on the DIAMETER and every call site already clears it by a
+    // wide margin (0.62-0.70 of the limb width at hip and knee).
     put(latheProfile([
-      { r: R * 0.46, y: face },
-      { r: R * 1.00, y: face + R * 0.04, smooth: true },
-      { r: R * 1.04, y: face + R * 0.11 },
-      { r: R * 0.84, y: face + R * 0.15 },
-      { r: R * 0.38, y: face + R * 0.12 },
+      { r: R * 0.44, y: face },
+      { r: R * 0.90, y: face + R * 0.05, smooth: true },
+      { r: R * 0.96, y: face + R * 0.19 },
+      { r: R * 0.80, y: face + R * 0.28 },
+      { r: R * 0.56, y: face + R * 0.25 },
+      { r: R * 0.38, y: face + R * 0.22 },
     ], seg), 'trim', TIER.PRIMARY);
-    // The hub has to be WIDER than the ring's bore (0.38–0.46 R), not narrower.
+    // The hub has to be WIDER than the ring's bore (0.38–0.44 R), not narrower.
     // At 0.30 R it left an annular hole you could see the background through,
-    // which on the shoulder disc read as a punched-out washer.
+    // which on the shoulder disc read as a punched-out washer. It also has to
+    // stand a little PAST the ring now that the ring has a wall of its own, or
+    // the whole assembly is one flat-topped puck again.
     put(latheProfile([
-      { r: 0, y: face + R * 0.02 }, { r: R * 0.48, y: face + R * 0.02 },
-      { r: R * 0.44, y: face + R * 0.13 }, { r: 0, y: face + R * 0.15 },
+      { r: 0, y: face + R * 0.04 }, { r: R * 0.48, y: face + R * 0.04 },
+      { r: R * 0.46, y: face + R * 0.22, smooth: true },
+      { r: R * 0.34, y: face + R * 0.32 }, { r: 0, y: face + R * 0.34 },
     ], Math.max(10, Math.round(seg * 0.6))), 'darkMetal', TIER.PRIMARY);
 
     // Inner face: the same ring, thinner and one tier down. It is only ever seen
@@ -2424,7 +2440,25 @@ const TORSO_PLANS = {
     pelvis: [1.04, 0.98], waistLo: [0.76, 0.86], waistHi: [0.84, 0.92],
     ribs: [1.02, 0.92], chest: [1.10, 0.90], yoke: [1.26, 0.92],
     round: 0.22, rake: -7, hunch: 0.020, gap: 0.010,
-    pauldron: { w: 1.24, h: 1.06, d: 1.20, layers: 2, taper: 0.72 },
+    // THE SHOULDER WAS A BARREL. At `d: 1.20` this plan's lames came out
+    // 0.29 m front-to-back before `half` halved it, i.e. a swept shell 0.39 m
+    // round the arc and 0.27 m along the fore-aft axis — a cylinder lying
+    // across the deltoid. Two of them nested, plus the rolled rim band on each,
+    // gave four concentric bands, and r9's `pair2-ronin-body` and
+    // `pair2-ronin-vs-mantis-fight` both read the stack end-on as "a large
+    // cream-and-gold ribbed barrel slung across RONIN-07's back, roughly the
+    // size of its own torso". `neon-ronin` has no barrel anywhere on it: its
+    // shoulder tile is a fan of layered POINTED blades stepping down and out
+    // over the deltoid.
+    //
+    // So the depth comes off (0.60 makes each lame a 0.13 m band, a blade
+    // section rather than a drum), the wrap comes off with it (`taper` 0.44
+    // shortens the arc from 126 to 115 degrees and stops the shell closing
+    // round the joint), a third lame is added because the sheet's stack is a
+    // fan and two bands is a hinge, and `spikes` grows the pointed tips the
+    // barrel was standing in for. Those tips carry the silhouette mass the
+    // depth gave up, which is the trade: same read at 40 px, no cylinder.
+    pauldron: { w: 1.16, h: 1.06, d: 0.60, layers: 3, taper: 0.44, spikes: 3 },
   },
   // The only fighter whose thorax is not roughly vertical. A 19-degree rake was
   // still legible as "standing up straight" at 100 pixels and MANTIS measured
@@ -2680,6 +2714,11 @@ function chassisFor(def) {
         taper: o.taper ?? base.pauldron.taper,
         slab: !!o.slab,
         hub: o.hub ?? 'wheel',
+        // Plan-only, so it has to be listed here: this IIFE spreads the chassis
+        // pauldron and then names every field it forwards, and a key that is
+        // not named is silently dropped (which is how the first pass at
+        // RONIN's blades built nothing at all).
+        spikes: o.spikes ?? 0,
       };
     })(),
     legs: {
@@ -4400,6 +4439,7 @@ function scaledPauldron(spec, m) {
     w: s.w * m.armK, h: s.h * m.armK, d: s.d * m.armK,
     out: s.out * m.armS, up: s.up * m.armS,
     taper: s.taper, tilt: s.tilt, layers: s.layers, slab: !!s.slab, hub: s.hub ?? 'wheel',
+    spikes: s.spikes ?? 0,
   };
 }
 
@@ -5562,6 +5602,55 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
       { arc: (l.a1 - l.a0) * 0.42, phase: mid - (l.a1 - l.a0) * 0.21 }),
       'trim', { p: at, r: [-90 * DEG, 0, 0], mirror, tier: TIER.SECONDARY });
     });
+    // Pointed blades springing off the outer lame, for the one plan that asks
+    // for them (`cuirass` — RONIN, built to `neon-ronin`). The lame stack there
+    // used to carry its silhouette in DEPTH, and a deep swept shell seen down
+    // its own axis is a barrel: r9 read RONIN's shoulder as a ribbed drum the
+    // size of its torso. `neon-ronin`'s shoulder is a fan of blades, so the mass
+    // moves out of the shell and into these, where it is a spike from every
+    // angle instead of a cylinder from one.
+    //
+    // The lame's arc is measured from straight-out (0) through straight-up (90)
+    // and the shell is rolled into the frontal plane, so a blade rooted at angle
+    // `a` seats on the shell at (cos a, sin a) * R in clavicle space — same
+    // convention as `pauldronLames`, and the reason these are placed off `l0`
+    // rather than off a literal.
+    if (pd.spikes) {
+      const l0 = lames[0];
+      const rr = l0.R * 0.90;
+      for (let j = 0; j < pd.spikes; j++) {
+        const t = pd.spikes > 1 ? j / (pd.spikes - 1) : 0;
+        // 70 degrees is over the point of the shoulder, 10 is straight outboard:
+        // a fan down the deltoid rather than a crown round the neck, which is
+        // what keeps the tips clear of the head the clearance solve seats above
+        // them (it reads `pauldronTop`, which knows about lames and not these).
+        const a = (70 - t * 60) * DEG;
+        const len = pd.h * (0.88 - t * 0.24);
+        // Sections are ELLIPSES, not rounded rectangles. The first pass ran
+        // 0.24-0.34 and `pair2-ronin-head` came back with flat quadrilateral
+        // planks radiating off the deltoid — §1.1 allows a flat face only as a
+        // small deliberate facet, and a 0.20 m one at hero framing is not that.
+        // A blade is broader fore-aft than it is across (d beats w here), which
+        // is what makes it a blade rather than a spike, and the high round is
+        // what keeps that breadth curved.
+        rig.add(`clavicle_${S}`, loftHull([
+          { y: 0, w: pd.w * 0.30, d: pd.d * 0.76, round: 0.46 },
+          { y: len * 0.46, w: pd.w * 0.20, d: pd.d * 0.54, round: 0.42, smooth: true },
+          { y: len * 0.80, w: pd.w * 0.10, d: pd.d * 0.28, round: 0.44, smooth: true },
+          { y: len, w: pd.w * 0.026, d: pd.d * 0.07, round: 0.50 },
+        ]), j % 2 ? 'armorSecondary' : 'armorPrimary', {
+          p: [sign * (ballX + l0.dx + Math.cos(a) * rr),
+            l0.dy + Math.sin(a) * rr,
+            l0.dz - FRONT * pd.d * 0.16],
+          // Raked back off the vertical and canted outboard. Outboard is
+          // `sign * -angle` about Z — the same sign the shoulder cap and the
+          // slab boss already use, and getting it the other way round drives
+          // the blades through the fighter's own neck.
+          r: [-(22 + t * 16) * DEG, 0, sign * -(26 + t * 34) * DEG],
+          mirror, tier: TIER.PRIMARY, role: 'lame',
+        });
+      }
+    }
   }
 
   // shoulder cap: the block the lames hang off, closing the gap to the neck
@@ -5621,7 +5710,11 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
   rig.glow(`shoulder_${S}`, latheProfile([
     { r: 0, y: 0 }, { r: upper * 0.10, y: 0 }, { r: upper * 0.086, y: 0.008 }, { r: 0, y: 0.010 },
   ], 14), 'joints', {
-    world: true, p: [sign * (0.012 + upper * 1.078), 0, 0], r: [0, 0, sign * -90 * DEG], mirror,
+    // 1.078 was one hub-height clear of the old flat bezel (face 1.00 + R*0.15
+    // with R = 0.48 upper). The bezel now stands R*0.34 proud so its hub top is
+    // at 1.163, and a pilot light left at 1.078 is a pilot light INSIDE the hub
+    // it is supposed to sit in the middle of. Tracks the same arithmetic.
+    world: true, p: [sign * (0.012 + upper * 1.18), 0, 0], r: [0, 0, sign * -90 * DEG], mirror,
   });
 
   // Deltoid shell, on the shoulder so it swings with the arm. It wraps 232° and
@@ -6643,8 +6736,16 @@ function buildLeg(rig, spec, side, sign, mirror) {
   // half-depth at the knee (0.60 of a knee width) and the thigh's (0.38 of a
   // thigh width); this clears both by a nose and nothing more.
   const kneeR = Math.max(kneeW * 0.62, thighW * 0.40);
+  // `half` was 0.34 of a knee width against a 0.62 radius: 1.24 wide and 0.68
+  // long, i.e. a drum half again as wide as it is deep, and on the four slim
+  // fighters r9 read the near knee as a wheel rather than as a hinge. The
+  // radius cannot come down — it has to beat the shank's own half-DEPTH (about
+  // 0.60 of a knee width) or the barrel disappears inside the leg, which is the
+  // failure the comment above records. So the LENGTH goes up instead: at 0.42
+  // the boot is 0.84 long on 1.24 wide and reads as a turned barrel. It stays
+  // inside the bezel's seating face (0.70) so nothing collides.
   rig.bezel(`knee_${S}`, {
-    radius: kneeW * 0.32, face: kneeW * 0.70, boot: kneeR, half: kneeW * 0.34,
+    radius: kneeW * 0.32, face: kneeW * 0.70, boot: kneeR, half: kneeW * 0.42,
     sign, mirror,
   });
   // Floating knee cap. This was a bevelBox and it was the single most visible

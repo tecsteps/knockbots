@@ -756,7 +756,36 @@ export const ROSTER = [
       // tarnished finish physically has, so the gold stops mirroring the
       // arena's warm key across the whole limb. The BEZELS still catch it —
       // that rim is roughness and geometry, not F0 (§1.4).
-      trim: '#8A6A33',      // tarnished antique gold ring bezels, F0
+      // ROUND 9: THE BEZELS PHOTOGRAPH GRASS-GREEN, AND IT IS THE RIM.
+      // Measured 7x7 on pair3-bastion-body, NYX's hip disc is hue 153 and its
+      // knee disc hue 161 — a colour that is in no part of this palette. The
+      // arena's `rim` is 0x18dcff at intensity 10.4 against a key at 7.6, so on
+      // any face turned away from the key the dominant light is a saturated
+      // cyan; and a conductor has no colour but F0 x light. #8A6A33 in linear is
+      // (0.256, 0.144, 0.033), so cyan light comes back as (~0, 0.105, 0.033) —
+      // green with three times the green of the blue. This is the same product
+      // that made ANVIL chartreuse for four rounds.
+      //
+      // There is no gold that survives it. A search over the R/G/B cube finds
+      // ZERO hexes with saturation >= 0.48 and a key-lit hue in the gold band
+      // whose cyan reflection lands past hue 158: a saturated gold is by
+      // definition low in blue, and low blue under cyan light is green. What a
+      // palette CAN buy is how bright and how far round that green sits, and
+      // both are bought in the same direction — redder and a shade more
+      // saturated. Measured on the two lights: the rim's reflected luminance
+      // drops 0.80 -> 0.61 (-24%) and its hue moves 151.5 -> 161.0, i.e. from
+      // grass to a dark sea-green that reads as cyan light ON metal rather than
+      // as green paint; the key-lit face keeps 0.78 of its 0.87 luminance and
+      // stays unmistakably warm metal, which is what `vesper`'s bezels — this
+      // character's entire second colour — have to keep doing.
+      //
+      // Every other trim in the cast was measured the same way. Reflected-rim
+      // hue: KESTREL 193, SERAPH 201, RONIN 197, BASTION 200, AXIOM 185, MANTIS
+      // 184, VOLTA 184, VULKAN 175 — all cyan-to-blue, none at risk. Only ANVIL
+      // (163) is anywhere near this failure, and it is left alone deliberately:
+      // its shell is a 0.91-value hi-vis yellow, so its brass hubs have nothing
+      // to contrast against and no green reads on them in pair1-anvil-body.
+      trim: '#8E5C38',      // tarnished antique gold, red-shifted off the rim, F0
     },
     stats: { power: 6, speed: 8, reach: 5, weight: 4, defense: 6 },
     moveSet: 'nyx',
@@ -939,7 +968,25 @@ export const ROSTER = [
       // heavyweight reads as a brown mass. The trim goes from patinated to
       // POLISHED — the sheet's shoulder hubs and knuckle collars are bright,
       // and patina is exactly the surface a mirror lobe cannot represent.
-      primary: '#9A6331',   // burnished copper
+      //
+      // ROUND 9, AND THE MEASUREMENT SAYS THE HEX IS THE FAULT, NOT THE BATCH.
+      // r9 reads VOLTA as gold/amber and next-door to ANVIL. The first thing to
+      // rule out was the plates being drawn in the wrong batch — they are not:
+      // the domed pauldron cap on `aegis-01`'s plan is `armorPrimary` (the boss
+      // loft in `buildShoulder`), and sampled 7x7 on pair4-volta-body it comes
+      // back #9a5c2e / #af5e24, which IS this entry rendering faithfully. So
+      // #9A6331 is what "gold" looks like on screen: hue 26 deg at saturation
+      // 0.51 is a TAN, and a tan under a 7.6-intensity sodium key is an amber.
+      // Over VOLTA's whole body the saturated pixels ran 35% in hue 20-30 and
+      // 20% in 30-40, against ANVIL's lit plates at hue 49-53 — close enough on
+      // the wheel that at fight distance the two are one warm machine.
+      // Copper is not a desaturated orange, it is a RED metal: hue 26 -> 19.5
+      // and saturation 0.51 -> 0.75, with the value held at 0.62 so the point
+      // the previous note makes — that aegis's mid-value primary cannot become
+      // a brown mass — still holds. Against ANVIL that is now 30 deg of hue and
+      // a full 0.25 of value, and against VULKAN's #5C3226 scorched iron (same
+      // half of the wheel) it separates by value the other way: 0.62 to 0.36.
+      primary: '#9E5628',   // burnished copper, red not amber
       secondary: '#2A2119', // tar-dipped insulation
       // Pulled warm and down a step. §3 allows this fighter "burnished copper /
       // brass with arc-white emissive" and nothing else, and r7 reads
@@ -948,7 +995,17 @@ export const ROSTER = [
       // that has been turning ANVIL's accent emerald — and the G/R ratio of the
       // hex is what buys it: 0.78 -> 0.72, with the value off the top so the
       // band stops out-reflecting the copper plate it bands.
-      accent: '#C8934A',    // brass collars, burnished not polished
+      // And the second half of the gold: `armorAccent` is a conductor at
+      // metalness 0.72, so its brightness is bought from the room rather than
+      // from a paint film. Reflected against this arena's key (0xffc98e at 7.6)
+      // #C8934A returns 1.87 relative luminance where the copper plate it is
+      // supposed to be banding returns 0.84 — the trim line was out-shining the
+      // shell more than two to one, and a warm metal twice as bright as the
+      // paint around it IS the fighter's colour whatever the palette says. Down
+      // a stop to 1.51 and the hue held at brass (34 deg), which now sits 15 deg
+      // off the copper instead of 8 — a band that reads as a different metal
+      // from the plate rather than as a lighter patch of the same one.
+      accent: '#B8843C',    // brass collars, burnished not polished
       emissive: '#F2F7FF',  // arc-white discharge
       // Read `aegis-01` again for what its metal actually is: the plates are
       // paint, the BANDS are the second paint, and every joint barrel, hub and
