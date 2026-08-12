@@ -3148,9 +3148,12 @@ function buildTorso(rig, spec, def) {
       { p: [0, -m.mid * 0.22 + i * m.thorax * 0.30, -FRONT * (P.waistHi.d * 0.54 + 0.004)] });
   }
 
-  rig.decal('spine02', MARKINGS.SERIAL, 0.11, 0.11, {
-    p: [P.waistHi.w * 0.34, m.thorax * 0.24, -FRONT * (P.waistHi.d * 0.56)], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE,
-  });
+  // The 0.11 m SERIAL block that used to sit here is gone. `buildVariation`
+  // already stencils a per-character insignia on `spine02` a few centimetres
+  // away, so the dorsal spine wore two large markings on one small painted area
+  // — the exact "stencils scattered more or less uniformly" the r9 audit names.
+  // One marking per painted region is the budget; the variation cell keeps it,
+  // because it is the one that differs between fighters.
 
   // --- chest --------------------------------------------------------------
   // Read off the resolved stations, not off the raw chassis numbers, or the
@@ -3334,17 +3337,20 @@ function buildTorso(rig, spec, def) {
   buildTorsoMass(rig, spec, P, rz);
   buildBackHardware(rig, spec, cy, rz);
 
-  rig.decal('chest', MARKINGS.ROUNDEL, 0.10, 0.10, {
+  // ONE marking on the chest, high and off-centre, and nothing else.
+  //
+  // This was three: a 0.10 roundel at the collar, a 0.15 nameplate across the
+  // sternum and a chevron on the opposite pectoral. The chest is where every
+  // sheet puts its hero element (§1.6 — the core, the heraldic shield, the arc
+  // disc) and three stencils ringing that element is precisely what stops it
+  // reading as a focal point; the r9 audit sees the whole cast as "busier than
+  // the reference" and the sternum is where it is worst, because the nameplate
+  // sat directly over the core the eye is meant to land on. The roundel
+  // survives, and only the roundel: it is the smallest of the three, it is up on
+  // the collar where a unit badge actually goes, and it is clear of the core.
+  rig.decal('chest', MARKINGS.ROUNDEL, 0.072, 0.072, {
     p: [-cw * 0.30, m.collar * 0.34, FRONT * (cd * 0.5 + 0.03) + rz(m.collar * 0.34)], r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
   });
-  rig.decal('chest', MARKINGS.NAMEPLATE, 0.15, 0.062, {
-    p: [0, -m.thorax * 0.32, FRONT * (cd * 0.5 + 0.01) + rz(-m.thorax * 0.32)], r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
-  });
-  if (def?.archetype) {
-    rig.decal('chest', MARKINGS.CHEVRON, 0.07, 0.07, {
-      p: [cw * 0.32, -m.thorax * 0.10, FRONT * (cd * 0.5 + 0.02) + rz(-m.thorax * 0.10)], r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
-    });
-  }
 }
 
 function buildChestCore(rig, spec, cw, cd, ch, cy, dz = 0) {
@@ -3566,12 +3572,15 @@ function buildChestCore(rig, spec, cw, cd, ch, cy, dz = 0) {
         { r: R * 0.50, y: R * 0.42 }, { r: R * 0.72, y: R * 0.08 }, { r: R * 0.70, y: 0 },
       ], 6, { faceted: true, phase: Math.PI / 6 }), 'trim',
       { p: [0, cy, zf], r: [90 * DEG, 0, 0], tier: TIER.PRIMARY });
-      for (let i = 0; i < 3; i++) {
-        rig.decal('chest', MARKINGS.GAUGE, R * 0.60, R * 0.60, {
-          p: [Math.cos(i * 2.1) * R * 1.30, cy + Math.sin(i * 2.1) * R * 1.10, zf + FRONT * 0.006],
-          r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
-        });
-      }
+      // ONE gauge, not a ring of three. Three dials scattered on a circle round
+      // the stone made the setting compete with the stone — the hero element on
+      // this chassis is the gem, and §1.6 allows it exactly one companion. The
+      // survivor sits low and outboard where an instrument would be bracketed,
+      // not orbiting the thing it is meant to serve.
+      rig.decal('chest', MARKINGS.GAUGE, R * 0.46, R * 0.46, {
+        p: [-R * 1.24, cy - R * 0.72, zf + FRONT * 0.006],
+        r: [0, YAW_FRONT, 0], tier: TIER.GREEBLE,
+      });
       break;
     }
   }
@@ -3918,9 +3927,9 @@ function buildBackHardware(rig, spec, cyIn, rz = () => 0) {
       ]), 'armorSecondary', { p: [0, cy + 0.04, zb + back * 0.004], tier: TIER.PRIMARY });
       rig.glow('chest', bevelBox(0.026, 0.026, 0.008, 0.003), 'spine',
         { p: [0, cy + 0.15, zb + back * 0.020] });
-      rig.decal('chest', MARKINGS.BARCODE, t.chestW * 0.30, 0.05, {
-        p: [0, cy - 0.04, zb + back * 0.022], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE,
-      });
+      // The 0.30-chest-width barcode across this dorsal plate is gone: the back
+      // already carries the variation insignia on `spine02`, and a marking a
+      // third of the fighter's width across is not a marking, it is a texture.
       break;
     }
   }
@@ -5165,13 +5174,18 @@ function headLantern(rig) {
     ]), 'visor', { p: [sign * 0.026, 0.018, FRONT * 0.068], r: [0, 0, sign * -10 * DEG], mirror });
   }
 
-  // finial
-  rig.add('head', latheProfile([
-    { r: 0.018, y: 0 }, { r: 0.013, y: 0.012 }, { r: 0.007, y: 0.016 },
-    { r: 0.007, y: 0.034 }, { r: 0, y: 0.044 },
-  ], 12), 'armorAccent', { p: [0, 0.120, 0], tier: TIER.PRIMARY });
-  rig.glow('head', latheProfile([{ r: 0, y: 0 }, { r: 0.009, y: 0 }, { r: 0, y: 0.011 }], 10), 'spine',
-    { p: [0, 0.158, 0] });
+  // THE FINIAL IS GONE. It was a lathe that stepped r 0.018 -> 0.007 and then
+  // closed to a POINT at y 0.044, planted at y 0.120 with a glow pip floating
+  // 38 mm above its tip — i.e. a cone on a thin shaft standing on the crown of
+  // a 0.14 m skull, with a gap between the shaft and the thing it "carries".
+  // That is the same profile as the dorsal masts deleted in buildVariation §3,
+  // and the r7/r9 capture sets name it the same way both times: "a literal
+  // arrow ... stands on top of NYX's helmet crown ... it reads as a debug
+  // direction gizmo". `vesper` has nothing above the crown at all — the head is
+  // a smooth egg with a brow ring — and the outline above the shoulders is
+  // where §4.8's 40-pixel test is decided, so this was the single most
+  // expensive greeble on the fighter. The brow ring above and the lantern lens
+  // are the whole head, and that is what the sheet has.
 }
 
 function headBunker(rig) {
@@ -5244,8 +5258,10 @@ function headMono(rig) {
       { r: 0, y: 0 }, { r: 0.0055, y: 0 }, { r: 0, y: 0.005 },
     ], 8), 'visor', { p: [-0.020, 0.070 - i * 0.016, FRONT * 0.078], r: FACE_FRONT });
   }
-  rig.decal('head', MARKINGS.BARCODE, 0.048, 0.022,
-    { p: [0, 0.010, -FRONT * 0.082], r: [0, YAW_BACK, 0], tier: TIER.GREEBLE });
+  // Nothing is printed on this skull. AXIOM's head is the one bare smooth ovoid
+  // in the cast and that absence is its whole identity (§3, `volt-monk`); the
+  // barcode that used to sit on the occiput was the only thing breaking it, on
+  // the only head where a break costs something.
 }
 
 function headInsulator(rig) {
@@ -5798,8 +5814,16 @@ function buildArm(rig, spec, side, sign, mirror, opts = {}) {
     [sign * fore * 0.78, -0.13, -FRONT * fore * 0.36],
     [sign * fore * 0.68, -0.23, -FRONT * fore * 0.18],
   ], { radius: 0.008, mirror });
-  rig.decal(`elbow_${S}`, MARKINGS.SERIAL, fore * 1.1, fore * 1.1, {
-    p: [sign * fore * 0.68, -fLen * 0.45, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
+  // The forearm serial is the one marking §1.6 actually endorses in this
+  // region — but it was authored at 1.1 forearm widths square, which on a
+  // tapering shell is a card as wide as the limb itself, and at full-body
+  // framing it reads as a painted patch rather than as a number. 0.44 is about
+  // a thumb's width at fighter scale: legible in a hero closeup, invisible as a
+  // blotch at 100 px, which is the correct behaviour for a serial. Dropped to
+  // the wrist end of the shell too (0.58 of the run instead of 0.45), where the
+  // forearm is narrowest and where stencils sit on the reference.
+  rig.decal(`elbow_${S}`, MARKINGS.SERIAL, fore * 0.44, fore * 0.44, {
+    p: [sign * fore * 0.66, -fLen * 0.58, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
   });
 
   // --- wrist: the cuff boot over the necked wrist, and the polished bracelet
@@ -6117,12 +6141,22 @@ function markCanards(rig, spec) {
     // 0.052 on 0.190 is 1:4, which still reads as a blade in profile and has a
     // curved upper surface for the key light to travel across. Shorter too:
     // 0.240 instead of 0.330, so the pair stops out-reaching the skull.
+    //
+    // `role: 'bracket'` — pitch 0, so no panel lattice and, with it, none of the
+    // fastener rows the shader marches along panel gaps. Without a role a canard
+    // falls through to the default 'shell' plan and gets a grid of bolt heads
+    // stippled across the whole blade: that is the "chip decals scattered across
+    // the MIDDLE of the plate face" the r9 audit finds on this exact part —
+    // shots/r9/pair0-kestrel-head.png shows the fin as more speckle than paint.
+    // A canard is one moulded aerofoil, not sheet plating over a frame; it has
+    // no seams to bolt. That plan's 1.0 rim keeps §1.6's bright leading-edge
+    // line, which is the only wear a fin is actually allowed.
     rig.add(`clavicle_${s}`, loftHull([
       { y: 0, w: 0.052, d: 0.094, round: 0.44 },
       { y: 0.110, w: 0.044, d: 0.190, z: -FRONT * 0.086, round: 0.36, smooth: true },
       { y: 0.240, w: 0.022, d: 0.132, z: -FRONT * 0.208, round: 0.40 },
     ]), 'armorPrimary', {
-      p: at, r: rot, order: 'YXZ', mirror, tier: TIER.PRIMARY, sprung: `pack_${s}`,
+      p: at, r: rot, order: 'YXZ', mirror, tier: TIER.PRIMARY, sprung: `pack_${s}`, role: 'bracket',
     });
     // Winglet at the tip, cranked the other way: it breaks the fin's own line so
     // the pair does not read as two plain triangles. It is authored INSIDE the
@@ -6708,9 +6742,15 @@ function buildLeg(rig, spec, side, sign, mirror) {
     p: [sign * (L.thigh * 0.50), -tLen * 0.40, 0], r: [0, sign * 90 * DEG, 0],
     w: L.thigh * 0.54, h: tLen * 0.48, bolts: 4, mirror,
   });
-  rig.decal(`hip_${S}`, MARKINGS.ARROW, L.thigh * 0.7, L.thigh * 0.7, {
-    p: [sign * L.thigh * 0.54, -tLen * 0.6, 0], r: [0, sign * 90 * DEG, 0], mirror, tier: TIER.GREEBLE,
-  });
+  // NO STENCIL ON THE OUTER THIGH. This carried an ARROW cell at 0.7 of the
+  // thigh's own width — the largest marking anywhere on the build, on the
+  // largest single painted area on the build, dead in the middle of its face.
+  // Two of them, one per leg, and at full-body framing they do not read as
+  // markings at all: the r9 audit calls them "coloured blotches on the leg".
+  // §1.6 wants the big plates left clean so the panel splits and the joint
+  // hardware carry the detail; none of the eight sheets puts a stencil on the
+  // thigh. The bezel below and the panel strip above are this segment's whole
+  // detail budget now.
   // hip collar — the boot the bezel below sits on, so the bezel brings only the
   // disc and the hub
   rig.add(`hip_${S}`, latheProfile([
@@ -6943,14 +6983,15 @@ function buildLeg(rig, spec, side, sign, mirror) {
       w: L.shin * 0.70, h: sLen * 0.44, bolts: 4, splitsY: [0.24], splitsX: [], mirror,
     });
   }
-  // The rivet strip rides at calf height, where the digitigrade hock is swept
-  // AFT: its front face is only about 0.56 of a shin width forward, and at 0.72
-  // this decal was a flat card hanging off the leg with daylight behind it —
-  // the "large flat brown quad off MANTIS's shin" the fight frames show.
-  rig.decal(`knee_${S}`, MARKINGS.RIVETS, L.shin * 1.1, L.shin * 0.28, {
-    p: [0, -sLen * 0.16, FRONT * (L.shin * (piston ? 0.68 : digi ? 0.52 : 0.72))],
-    r: [0, YAW_FRONT, 0], mirror, tier: TIER.GREEBLE,
-  });
+  // THE SHIN RIVET STRIP IS GONE. Previous rounds moved it inward twice to stop
+  // it hanging off the leg with daylight behind it ("a large flat brown quad off
+  // MANTIS's shin"), which fixed the float but not the read: a strip 1.1 shin
+  // widths across is a band of painted dots crossing the widest clean face on
+  // the lower leg, and r9 reads it as a coloured blotch rather than as fasteners.
+  // Rivets in the reference are geometry on a rim, not a printed row on a face —
+  // the shin already gets its fastener line from `addPanelDetail`'s bolt row
+  // above, which is real hardware, sits at the plate's lower edge, and catches a
+  // highlight. One source of fasteners per segment is the whole point.
 
   // --- ankle
   // The tarsal collar: the run between where the shank's shell stops and the
@@ -7311,23 +7352,36 @@ function buildVariation(rig, spec, def) {
   // this machine rather than that a generator extruded it.
   const numberSide = rng.sign();
   const unitCell = rng.pick([MARKINGS.UNIT, MARKINGS.ROUNDEL, MARKINGS.SERIAL]);
-  for (const { s, sign, mirror } of SIDES) {
+  // ONE shoulder carries a number. The other used to carry tally chevrons and
+  // the numbered one additionally wore a hazard band round its rim — three
+  // stencils on a pair of plates that are already the busiest hardware on the
+  // fighter (lames, rim studs, joint bezel). The asymmetry argument above is
+  // *better* served by one mark than by two: a number on the left and chevrons
+  // on the right is still a symmetric distribution of ink, whereas one marked
+  // shoulder and one clean one is the thing that actually reads as asymmetric at
+  // silhouette size. It is also §1.6 — detail concentrated at the joints, the
+  // large painted faces left alone — and the r9 audit's "nothing reads as a
+  // focal point" is what three markings per shoulder pair buys.
+  {
+    // SIDES maps L -> sign +1, R -> sign -1, so the marked bone is the one whose
+    // sign IS numberSide — getting this backwards puts the decal's X on one
+    // shoulder and its bone on the other, i.e. a stencil floating in the armpit.
+    const s = numberSide > 0 ? 'L' : 'R';
     const ballX = Math.abs((rig.restPos[`shoulder_${s}`]?.x ?? 0.155)
       - (rig.restPos[`clavicle_${s}`]?.x ?? 0)) * 0.58;
-    const marked = sign === numberSide;
-    rig.decal(`clavicle_${s}`, marked ? unitCell : MARKINGS.CHEVRON,
-      lame.R * (marked ? 0.66 : 0.44), lame.R * (marked ? 0.66 : 0.44), {
-        p: [sign * (ballX + lame.dx + lame.R * 0.34), lame.dy + lame.R * 0.30,
-          FRONT * (lame.half + 0.008)],
-        r: [0, YAW_FRONT, sign * (marked ? -14 : 8) * DEG], mirror, tier: TIER.GREEBLE,
-      });
+    rig.decal(`clavicle_${s}`, unitCell, lame.R * 0.52, lame.R * 0.52, {
+      p: [numberSide * (ballX + lame.dx + lame.R * 0.34), lame.dy + lame.R * 0.30,
+        FRONT * (lame.half + 0.008)],
+      r: [0, YAW_FRONT, numberSide * -14 * DEG], mirror: numberSide < 0, tier: TIER.GREEBLE,
+    });
   }
-  rig.decal(`clavicle_${numberSide > 0 ? 'R' : 'L'}`, MARKINGS.HAZARD, scaled.d * 0.44, 0.034, {
-    p: [-numberSide * (scaled.out + scaled.w * 0.30), lame.dy + lame.R * 0.70, 0],
-    r: [-72 * DEG, 0, numberSide * 18 * DEG], mirror: numberSide > 0, tier: TIER.GREEBLE,
-  });
-  // service stencils: a lifting point over one hip, a no-step warning on the
-  // opposite shin, both on the side a crew chief would actually walk up to
+  // A lifting point over one hip. The matching NOSTEP that used to go on the
+  // opposite shin is gone: at 1.5 shin widths by 0.62 it was the second-largest
+  // marking in the build after the thigh arrow, flat across the front of the
+  // lower leg, and it is the same failure — a big printed rectangle in the
+  // middle of a clean plate. The lift point survives because it is 75 mm across,
+  // sits on the BACK of the girdle, and is the one stencil here that names a
+  // piece of real hardware.
   const lift = rng.sign();
   // Against the girdle's own station, not the raw chassis waist: the pelvis is
   // banded to what the legs will carry now (§1.2) and the two numbers no longer
@@ -7335,10 +7389,6 @@ function buildVariation(rig, spec, def) {
   rig.decal('hips', MARKINGS.LIFT, 0.075, 0.038, {
     p: [lift * t.pelvisW * 0.40, 0.028, back * (torsoStations(spec).pelvis.d * 0.5 + 0.008)],
     r: [0, YAW_BACK, lift * 4 * DEG], tier: TIER.GREEBLE,
-  });
-  rig.decal(`knee_${lift > 0 ? 'R' : 'L'}`, MARKINGS.NOSTEP, spec.legs.shin * 1.5, spec.legs.shin * 0.62, {
-    p: [0, -rig.dim.shin * 0.66, FRONT * (spec.legs.shin * rig.dim.legK * 0.72 + 0.006)],
-    r: [0, YAW_FRONT, 0], mirror: lift < 0, tier: TIER.GREEBLE,
   });
 
   // 2. hip stowage: an ammo drum or a utility block on one side

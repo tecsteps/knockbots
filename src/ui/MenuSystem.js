@@ -164,6 +164,20 @@ const SWAP_SWING = 0.34;
 /** Amplitude and period of the idle turntable drift, radians / seconds. */
 const DRIFT_AMOUNT = 0.115;
 const DRIFT_PERIOD = 17;
+/** Swap-swing decay, per second. e^-6.3 a second is the 0.9-per-frame this
+ *  replaces, evaluated at 60fps — the same settle, but the same settle at four
+ *  frames a second too, where per-frame decay took ten seconds to finish. */
+const SWING_DECAY = 6.3;
+/** How long the stage may be waiting for the game before it admits it, ms.
+ *  Boot assembles the fighters asynchronously; flashing "PREVIEW OFFLINE" for
+ *  the last few hundred ms of that is worse than an empty window. */
+const PREVIEW_OFFLINE_GRACE = 1200;
+/** Watchdog on the display mark: how often to check, ms, and how far the
+ *  subject may stray before it is replanted, metres. The slack is far wider
+ *  than any idle animation travels — this catches a fighter something else has
+ *  moved, and must never argue with the animation. */
+const PREVIEW_PLANT_CHECK = 500;
+const PREVIEW_PLANT_SLACK = 1.0;
 /** How long a focus must hold before the rig is rebuilt, ms. Arrowing across
  *  the roster must not queue ten `setCharacter()` calls. */
 const SWAP_DEBOUNCE = 130;
@@ -1451,84 +1465,232 @@ export class MenuSystem {
    * without reaching into anything that belongs to FightCamera.
    */
   #previewOpen() {
-    const g = this.game;
-    const fighter = g.fighters?.[0];
-    const cam = g.fightCamera;
-    const r = this._select;
-    if (!fighter || !cam?.cinematic) {
-      r.stage.classList.add('kbs-stage--offline');
-      return;
-    }
-    r.stage.classList.remove('kbs-stage--offline');
-
-    const foe = g.fighters?.[1];
-    this._foeGroup = foe?.group || null;
-    if (this._foeGroup) {
-      this._foeWasVisible = this._foeGroup.visible;
-      this._foeGroup.visible = false;
-    }
-    foe?.reset?.(OPPONENT_MARK, 1);
-
-    fighter.reset(PREVIEW_MARK, 1);
-    this._camOpts = {
-      target: fighter, dist: PREVIEW_DIST, yaw: PREVIEW_YAW, height: PREVIEW_HEIGHT,
-    };
-    cam.cinematic('portrait', this._camOpts);
-
+    // NOTHING IS SET UP HERE THAT THE FRAME LOOP CANNOT SET UP LATER, and that
+    // is the whole shape of this section now.
+    //
+    // The version this replaces did the work once, on show, and gave up if the
+    // game was not ready for it: no `game.fighters` or no `game.fightCamera`
+    // meant the stage was marked offline and the method RETURNED — no rAF loop
+    // was started, so nothing ever looked again, and `#previewSet` short-
+    // circuits on a null `_camOpts`, so every later focus change was dropped on
+    // the floor too. One unlucky moment (a screen entered while boot is still
+    // assembling the fighters, a rebuild landing across the phase change on a
+    // machine running at four frames a second) left the window dead for the
+    // whole visit with no way back. It is a state that could be entered and
+    // never left, which is exactly the reported symptom.
+    //
+    // So `#previewOpen` now only says "the screen is up"; `#previewAttach`
+    // takes the stage and is safe to call on every frame, and the loop below
+    // calls it on every frame until it succeeds and then to keep it true.
+    this._previewOn = true;
+    // Seeded before the first attach so an attach that beats the nav's opening
+    // focus event asks for the machine this visit is about, not the one the
+    // last visit left in `_wantIndex`.
+    this._wantIndex = this.p1Index;
+    this._wantAt = 1;
     this._swing = SWAP_SWING;
     this._previewT0 = performance.now();
+    this._previewFrameAt = this._previewT0;
+    this._previewSince = this._previewT0;
+    this._plantCheckAt = this._previewT0;
+    this.#previewAttach();
     this.#previewStart();
   }
 
+  /**
+   * Take the stage, or report that the game is not ready to hand it over.
+   *
+   * Idempotent and cheap: it compares before it writes, so the frame loop can
+   * call it every frame, and every invariant the window depends on is asserted
+   * from one place instead of being set once and hoped for.
+   *
+   * @returns {boolean} true once player one is standing on the mark under the
+   *   portrait framing.
+   */
+  #previewAttach() {
+    const g = this.game;
+    const r = this._select;
+    const fighter = g.fighters?.[0];
+    const cam = g.fightCamera;
+    if (!fighter?.group || !cam?.cinematic) {
+      // OFFLINE IS A WAITING STATE, NOT A TERMINAL ONE. It is also not shown
+      // straight away: a boot that is half a second from producing the fighters
+      // would otherwise flash "PREVIEW OFFLINE" at every player on a slow
+      // machine, which is worse than a beat of empty window.
+      if (performance.now() - this._previewSince > PREVIEW_OFFLINE_GRACE) {
+        r.stage.classList.add('kbs-stage--offline');
+      }
+      this._camOpts = null;
+      return false;
+    }
+
+    // `target !== fighter` covers the game replacing its fighters under us —
+    // the camera must never be left aiming at a body that is no longer in the
+    // scene, which frames a correct, empty piece of floor.
+    const first = !this._camOpts || this._camOpts.target !== fighter;
+
+    const foe = g.fighters?.[1];
+    const foeGroup = foe?.group || null;
+    if (foeGroup && foeGroup !== this._foeGroup) {
+      // The opponent's own visibility is read ONCE per group per visit. Reading
+      // it again while the preview is up reads back the `false` we wrote
+      // ourselves, and `#previewClose` then restores that — an opponent that is
+      // invisible for the whole match that follows. Since this runs every
+      // frame now, re-reading would guarantee that bug rather than merely risk
+      // it on a double entry.
+      this._foeGroup = foeGroup;
+      this._foeWasVisible = foeGroup.visible;
+      foe.reset?.(OPPONENT_MARK, 1);
+    }
+    if (this._foeGroup && this._foeGroup.visible) this._foeGroup.visible = false;
+
+    // This screen never hides the subject, so anything that finds it hidden is
+    // someone else's leak — a capture harness that did not restore what it
+    // borrowed, a render pass that culled it and threw before putting it back.
+    // Whatever the cause, the symptom is this window, so it is repaired here
+    // rather than inherited.
+    if (!fighter.group.visible) fighter.group.visible = true;
+
+    if (first) {
+      fighter.reset(PREVIEW_MARK, 1);
+      this._camOpts = {
+        target: fighter, dist: PREVIEW_DIST, yaw: PREVIEW_YAW, height: PREVIEW_HEIGHT,
+      };
+      cam.cinematic('portrait', this._camOpts);
+      this._swing = SWAP_SWING;
+      r.stage.classList.remove('kbs-stage--offline');
+      // A machine asked for while we had no stand to put it on is loaded now.
+      this.#previewApply();
+    }
+    return true;
+  }
+
   #previewClose() {
+    this._previewOn = false;
     this.#previewStop();
+    const r = this._select;
+    clearTimeout(r.swapTimer);
+    r.swapTimer = 0;
+    this._wantAt = 0;
     if (this._foeGroup) this._foeGroup.visible = this._foeWasVisible !== false;
     this._foeGroup = null;
+    this._foeWasVisible = undefined;
+    const opts = this._camOpts;
     this._camOpts = null;
+    // Hand the lens back, but only if it is still running OUR options object.
+    //
+    // FightCamera keeps its own reference to that object and `#onPhaseChange`
+    // only re-frames a mode that is not already 'fight' — so leaving the screen
+    // to the title used to leave the camera in a portrait of fighter one,
+    // mutating an options object nobody was driving any more. The match path is
+    // unaffected: `startMatch` moves to INTRO, and the camera re-frames on the
+    // phase change a tick later.
+    const cam = this.game.fightCamera;
+    if (opts && cam?.cinematic && cam.modeOpts === opts) cam.cinematic('fight');
   }
 
   /**
-   * Loads roster index `i` onto the display stand.
+   * Ask for roster index `i` on the display stand.
    *
    * `Fighter#setCharacter` tears down and regrows the whole rig — measured at
    * 40–130 ms per machine — so arrowing across the rack must not queue one call
    * per keystroke. The focus has to hold for `SWAP_DEBOUNCE` first, and a
    * machine that is already loaded costs nothing at all, which is why entering
    * the screen on the last-used character is free.
+   *
+   * The request is now RECORDED (`_wantIndex`) and given a DEADLINE
+   * (`_wantAt`), with the timer as one of two ways to meet it. The other is the
+   * frame loop. That matters because a timer is the one clock a throttled or
+   * backgrounded tab may defer indefinitely, and because the request used to be
+   * dropped outright when the stand was not attached yet — which is how a
+   * preview could end up correctly framed on the machine the player had left
+   * rather than the one they were looking at, or on nothing at all.
    */
   #previewSet(i, immediate) {
-    const fighter = this.game.fighters?.[0];
-    const def = ROSTER[i];
     const r = this._select;
     clearTimeout(r.swapTimer);
+    r.swapTimer = 0;
+    this._wantIndex = i;
+    // 1, not 0: `_wantAt` is also the "something is owed" flag, so it has to
+    // stay truthy until `#previewApply` actually lands the machine.
+    this._wantAt = immediate ? 1 : performance.now() + SWAP_DEBOUNCE;
+    if (immediate) this.#previewApply();
+    else r.swapTimer = setTimeout(() => { r.swapTimer = 0; this.#previewApply(); }, SWAP_DEBOUNCE);
+  }
+
+  /** Load the machine the screen is currently asking for, if it can. */
+  #previewApply() {
+    if (!this._previewOn || this.current !== 'select') return;
+    const fighter = this.game.fighters?.[0];
+    const def = ROSTER[this._wantIndex];
+    // Not ready: leave `_wantAt` armed and let the frame loop ask again.
     if (!fighter || !def || !this._camOpts) return;
+    // `setCharacter` records the def and returns WITHOUT building when the
+    // fighter has not finished `init()`, so "the def matches" is not the same
+    // as "this machine is the one standing on the mark". Only a call made
+    // against a ready fighter counts as met; anything else is re-armed.
+    if (!fighter.ready) { this._wantAt = performance.now() + SWAP_DEBOUNCE; return; }
+    this._wantAt = 0;
     if (fighter.def === def) return;
-    const run = () => {
-      if (!this._camOpts || this.current !== 'select') return;
-      fighter.setCharacter(def);
-      this._swing = SWAP_SWING;
-    };
-    if (immediate) run();
-    else r.swapTimer = setTimeout(run, SWAP_DEBOUNCE);
+    fighter.setCharacter(def);
+    this._swing = SWAP_SWING;
   }
 
   #previewStart() {
     if (this._previewRAF) return;
     const step = () => {
       this._previewRAF = requestAnimationFrame(step);
+      if (!this._previewOn) return;
+      const now = performance.now();
+      const dt = Math.min(0.5, Math.max(0, (now - this._previewFrameAt) / 1000));
+      this._previewFrameAt = now;
+
+      // The frame is the clock everything hangs off, deliberately: if frames
+      // are not being produced then nothing is being looked at either, so
+      // asserting the world here means every frame a player can actually see
+      // has had the window's invariants checked — where a timer or a one-shot
+      // set-up on show can be deferred, missed, or beaten by a phase change.
+      if (!this.#previewAttach()) return;
       const o = this._camOpts;
-      if (!o) return;
+      const cam = this.game.fightCamera;
       // FightCamera resolves a phase change inside its own `simulate()`, one
       // tick AFTER the bus event that opened this screen, and its default
       // branch pulls any non-fight mode back to pair tracking. So the framing
       // cannot simply be set once on show — it is asserted here, which also
       // makes the preview self-healing if anything else takes the camera.
-      const cam = this.game.fightCamera;
-      if (cam && cam.mode !== 'portrait') cam.cinematic('portrait', o);
-      const t = (performance.now() - this._previewT0) / 1000;
+      // `modeOpts` is checked as well as `mode`: another portrait, driven from
+      // someone else's options, is just as wrong as no portrait at all.
+      if (cam.mode !== 'portrait' || cam.modeOpts !== o) cam.cinematic('portrait', o);
+
+      // The debounced rebuild, met by whichever of timer and frame comes first.
+      if (this._wantAt && now >= this._wantAt) this.#previewApply();
+
+      // Watchdog on the mark, at 2 Hz and with a metre of slack, so it can only
+      // ever catch a fighter that something else has MOVED (a round reset
+      // arriving late, a stray teleport) and never fight the idle animation.
+      // A subject standing a couple of metres off the mark is framed by the
+      // portrait springs, but its opponent's mark is not, and the screen was
+      // reported blank rather than misframed — so this is a hardening measure,
+      // not a proven cause.
+      if (now - this._plantCheckAt > PREVIEW_PLANT_CHECK) {
+        this._plantCheckAt = now;
+        const p = o.target?.position;
+        if (p && (Math.abs(p.x - PREVIEW_MARK.x) > PREVIEW_PLANT_SLACK
+                || Math.abs(p.z - PREVIEW_MARK.z) > PREVIEW_PLANT_SLACK)) {
+          o.target.reset(PREVIEW_MARK, 1);
+        }
+      }
+
+      const t = (now - this._previewT0) / 1000;
       // A swap swings the lens out and lets the portrait spring pull it back:
       // the machine reads as being turned into place, not cross-faded.
-      this._swing *= 0.9;
+      //
+      // Decayed against TIME, not against frames. `*= 0.9` per frame is 0.9^60
+      // a second at 60fps and 0.9^4 a second at 4, so on the slow machine this
+      // issue was reported from, the settle that should take a third of a
+      // second held the lens a fifth of a radian off-axis for ten — a preview
+      // that looks aimed at nothing in particular for as long as you look at it.
+      this._swing *= Math.exp(-SWING_DECAY * dt);
       o.yaw = PREVIEW_YAW + Math.sin((t / DRIFT_PERIOD) * Math.PI * 2) * DRIFT_AMOUNT - this._swing;
     };
     this._previewRAF = requestAnimationFrame(step);
