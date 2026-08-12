@@ -5561,8 +5561,13 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     metalness: 1,
     // Sheen is what gives an elastomer its soft, dusty rim response instead of
     // reading as a black plastic blob under the rim light.
-    sheen: 0.85,
-    sheenColor: new THREE.Color(0x6f7a86),
+    // 0.85 -> 0.34, with `kb.gasket` and `kb.underskin`. The dusty rim response
+    // the note above wants survives at a third of the weight; what does not is
+    // the pale near-neutral crest line the term draws on every rib and every
+    // knuckle of a moulded part, which is what put a bone-cream cast on the
+    // mechanism zones of four fighters.
+    sheen: 0.34,
+    sheenColor: new THREE.Color(0x565f69),
     sheenRoughness: 1,
     sheenRoughnessMap: shared.softOrm,
     specularIntensity: 0.4,
@@ -5634,8 +5639,21 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     roughnessMap: shared.softOrm,
     roughness: 1,
     metalness: 0,
-    sheen: 0.45,
-    sheenColor: new THREE.Color(0x8d97a3),
+    // SHEEN IS WHY THE MECHANISM READS AS WICKER, and it is the last of the
+    // §1.3 "bone-cream" faults. A sheen lobe is retroreflective: it fires at
+    // grazing angles, so on a stack of a dozen moulded ribs EVERY crest lights
+    // at once, in a pale near-neutral, whatever the substrate underneath is
+    // doing. That is the "basket-weave lattice barrel", the "bone-cream" neck
+    // stack on NYX and the "bright polished brass" abdomen on SERAPH — one
+    // material trait, four fighters, and it survives every darkening of the
+    // base colour because the sheen term is ADDED after the diffuse.
+    // The 0.45 -> 0.25 sweep recorded above ("drops the zone's p99 from 167 to
+    // 143") is the measurement that this term IS the zone's brightness; it was
+    // read as a reason to keep it. 0.16 in a graphite tint keeps a soft
+    // separation between one rib and the next and stops the column being the
+    // lightest object on a fighter whose armour is meant to hide it.
+    sheen: 0.16,
+    sheenColor: new THREE.Color(0x4e555e),
     sheenRoughness: 1,
     sheenRoughnessMap: shared.softOrm,
     specularIntensity: 0.5,
@@ -5727,8 +5745,11 @@ export function makeMaterialLibrary(renderer, palette = DEFAULT_PALETTE, options
     roughness: 1,
     metalness: 0.28,
     clearcoat: 0,
-    sheen: 0.22,
-    sheenColor: new THREE.Color(0x6b7178),
+    // With `kb.gasket` (see the long note there): a retroreflective lobe on a
+    // rib stack lights every crest, which is the mechanism behind §1.3's zone
+    // reading as woven bone rather than as shadow and machinery.
+    sheen: 0.10,
+    sheenColor: new THREE.Color(0x4a5057),
     sheenRoughness: 1,
     sheenRoughnessMap: shared.softOrm,
     // 0.85 -> 0.5 and 0.8 -> 0.3. These are the two terms that decide how much
