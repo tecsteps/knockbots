@@ -64,6 +64,7 @@ import { pathToFileURL } from 'node:url';
 import { dirname, resolve as resolvePath, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolvePath(HERE, '..');
@@ -85,6 +86,8 @@ const JSON_OUT = opt('json', null);
 const CELLS = Number(opt('cells', 20));
 const SHOT_OUT = opt('out', 'shots/sim');
 const SEED = Number(opt('seed', 20260812));
+/** Internal: print one scenario's digest and exit. Used for the cross-process check. */
+const DIGEST_ONLY = opt('digest', null);
 
 // ---------------------------------------------------------------------------
 // DOM shim — lifted from tools/simgate.mjs, which lifted it from check.mjs.
@@ -213,6 +216,7 @@ function runScenario(name, seed = SEED) {
     digest: GT.digest(),
     metrics: GT.getMetrics(),
     marks, events, timeline,
+    contactFrames: pickContactFrames(scn.frames, marks, CELLS),
     invariants: inv.rows,
     ok: inv.ok,
     inputLog: GT.getInputLog(),
@@ -276,12 +280,34 @@ function trajectory(name, seed) {
   };
 }
 
+/**
+ * The first row that differs, reported FIELD BY FIELD.
+ *
+ * Printing the two rows whole is what the first version did and it is nearly
+ * useless: a timeline row is 700 characters, the terminal truncates it, and the
+ * one field that moved is somewhere in the middle. A divergence report has to
+ * name the column, or the next step is to write this function anyway.
+ */
 function firstDiff(a, b) {
   const n = Math.max(a.rows.length, b.rows.length);
   for (let i = 0; i < n; i++) {
-    if (a.rows[i] !== b.rows[i]) return { i, a: a.rows[i], b: b.rows[i] };
+    if (a.rows[i] === b.rows[i]) continue;
+    const ra = JSON.parse(a.rows[i] || '{}');
+    const rb = JSON.parse(b.rows[i] || '{}');
+    const fields = [];
+    const walk = (x, y, path) => {
+      for (const k of new Set([...Object.keys(x || {}), ...Object.keys(y || {})])) {
+        const va = x?.[k]; const vb = y?.[k];
+        if (va && typeof va === 'object') { walk(va, vb, `${path}${k}.`); continue; }
+        if (va !== vb) fields.push(`${path}${k}: ${va} vs ${vb}`);
+      }
+    };
+    walk(ra, rb, '');
+    return { i, frame: ra.frame, fields };
   }
-  if (a.events.join('\n') !== b.events.join('\n')) return { i: -1, a: a.events.join(' '), b: b.events.join(' ') };
+  if (a.events.join('\n') !== b.events.join('\n')) {
+    return { i: -1, frame: null, fields: ['the EVENT LOG differs while every timeline row matched'] };
+  }
   return null;
 }
 
@@ -291,8 +317,27 @@ function testDeterminism(names) {
     const t1 = trajectory(name, SEED);
     const t2 = trajectory(name, SEED);
     const t3 = trajectory(name, SEED);
+    // INTERLEAVED. Three runs back to back only prove there is no carry from
+    // the same scenario. Running every OTHER scenario in between and then
+    // repeating this one proves there is no carry from a DIFFERENT one, which
+    // is where both of the leaks found while building this actually lived —
+    // banked meter and a stale `Input` history, neither of which shows up when
+    // a scenario only ever follows itself.
+    for (const other of Object.keys(SCENARIOS)) if (other !== name) trajectory(other, SEED ^ 0x777);
+    const t4 = trajectory(name, SEED);
+    /*
+     * CROSS-PROCESS. Everything above runs in one V8 with one set of module
+     * instances, so it cannot see a divergence that comes from module load
+     * order, a cache warmed at import time, or anything else that is settled
+     * before the first scenario runs. A cold child process asked for the same
+     * seed and the same scenario has none of that in common except the source,
+     * and its digest has to match anyway — that is what "a replay" means.
+     */
+    const child = spawnSync(process.execPath,
+      [fileURLToPath(import.meta.url), `--digest=${name}`, `--seed=${SEED}`], { encoding: 'utf8' });
+    const childDigest = (child.stdout || '').trim().split('\n').pop();
     const d12 = firstDiff(t1, t2);
-    const d23 = firstDiff(t2, t3);
+    const d23 = firstDiff(t2, t3) || firstDiff(t3, t4);
     // A seed that changes nothing is a seed that is not wired up. This is the
     // negative control for the positive claim above: if a different seed
     // produced the same digest, "same seed, same trajectory" would be true for
@@ -300,15 +345,16 @@ function testDeterminism(names) {
     const other = trajectory(name, SEED ^ 0x5f5f5f);
     const seedMatters = other.digest !== t1.digest
       || SCENARIOS[name].script.length === 0 || !usesRandomness(name);
-    const ok = !d12 && !d23;
+    const ok = !d12 && !d23 && childDigest === t1.digest;
     if (!ok) bad++;
     say(`[simscene] ${ok ? 'PASS' : 'FAIL'}  determinism ${name.padEnd(18)} digest ${t1.digest} `
-      + `x3${d12 || d23 ? '' : ' identical'}${seedMatters ? '' : '   (seed has no effect on this scenario)'}`);
+      + `x3 + interleaved + cold process ${childDigest}`
+      + `${d12 || d23 ? '' : ', all identical'}`
+      + `${seedMatters ? '' : '   (this scenario draws no randomness, so the seed cannot change it)'}`);
     const d = d12 || d23;
     if (d) {
-      say(`          first divergence at row ${d.i}`);
-      say(`            A ${String(d.a).slice(0, 400)}`);
-      say(`            B ${String(d.b).slice(0, 400)}`);
+      say(`          first divergence at row ${d.i} (frame ${d.frame})`);
+      for (const f of d.fields) say(`            ${f}`);
     }
   }
   return bad === 0;
@@ -403,6 +449,14 @@ function report(r) {
 
 const names = ONLY ? ONLY.split(',').filter((n) => SCENARIOS[n]) : Object.keys(SCENARIOS);
 if (!names.length) { say(`[simscene] no such scenario. have: ${Object.keys(SCENARIOS).join(', ')}`); process.exit(2); }
+
+if (DIGEST_ONLY) {
+  // Cold-process arm of the determinism check. Nothing else runs, nothing is
+  // printed but the digest, so the parent can compare it as a plain string.
+  const r = runScenario(DIGEST_ONLY, SEED);
+  say(r.digest);
+  process.exit(0);
+}
 
 const km = preflightKeymap();
 if (km.length) {

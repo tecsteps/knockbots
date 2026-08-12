@@ -141,10 +141,10 @@ export const SCENARIOS = {
   },
 
   juggle: {
-    what: 'A launcher into two follow-ups while the defender is airborne. '
-      + 'Exercises the parts of the sim that nothing else here reaches: '
+    what: 'A launcher, a walk-in, and a second blow that connects on the way '
+      + 'down. Exercises the parts of the sim that nothing else here reaches: '
       + 'gravity, juggle decay, combo scaling and the airborne hurtbox.',
-    p1: 0, p2: 1, dist: 1.05, frames: 150,
+    p1: 0, p2: 1, dist: 1.05, frames: 170,
     // df+2 is the launcher in every archetype. The direction is held for four
     // frames before the button because that is how a human enters a held-
     // direction move and how `probePlay` enters it; a same-frame stab is a
@@ -153,27 +153,36 @@ export const SCENARIOS = {
       ...hold(6, 40, 'f'), ...hold(6, 40, 'd'),
       ...tap(10, '2'),
       /*
-       * THE FOLLOW-UP IS TIMED FROM A MEASUREMENT, NOT FROM TASTE.
+       * THE FOLLOW-UP IS TIMED AND POSITIONED FROM MEASUREMENTS, NOT FROM
+       * TASTE, AND THE FIRST TWO ATTEMPTS WERE WRONG IN DIFFERENT WAYS.
        *
-       * The first version of this scenario pressed jab at frames 52 and 76 and
-       * both whiffed, which is correct behaviour reported as a passing test:
-       * `hitsAtLeast: 1` was satisfied by the launcher alone, so a "juggle"
-       * scenario shipped with no juggle in it. Tracing the victim's height per
-       * frame is what showed why — it is airborne from 40 to 117 and above two
-       * metres for most of it:
+       * Attempt 1 pressed jab on frames 52 and 76. Both whiffed, and the
+       * scenario PASSED — `hitsAtLeast: 1` was satisfied by the launcher alone,
+       * so a "juggle" test shipped with no juggle in it. That is the exact
+       * failure mode this whole harness exists to prevent, found by reading the
+       * timeline it prints.
+       *
+       * Attempt 2 pressed at 103, timed off the victim's height per frame:
        *
        *     f40 0.29  f52 1.24  f64 1.82  f76 2.02  f88 1.86  f100 1.33
        *     f104 1.07  f108 0.77  f112 0.43  f116 0.05
        *
-       * A jab reaches nothing at 2.0 m. The launcher's own recovery does not
-       * end until frame 62, so the only window where the attacker is free AND
-       * the victim is within reach is the last few frames of the descent. Jab
-       * is 10 frames of startup, so pressing on 103 puts the active window on
-       * 112-113, at 0.43 m — and the invariant is `hitsAtLeast: 2`, so if that
-       * window ever stops connecting the scenario goes red instead of quietly
-       * testing nothing.
+       * The active window landed on 112-113 at 0.43 m, and it STILL whiffed —
+       * because height was only half the problem. The launcher also throws the
+       * victim 2.4 m away, and jab reaches 0.93 m. Two independent quantities,
+       * and measuring one of them is how a test convinces itself it has the
+       * answer.
+       *
+       * So: forward is held from frame 62, the first frame the launcher's own
+       * recovery lets go, to walk the gap back down, and `straight` (14 frames
+       * of startup, 0.6 m more reach than jab) is pressed on 94. Swept across
+       * presses 92-104 and buttons 1/2/3, that lands a genuine second hit at
+       * frame 111 for 57.5 total damage and a combo counter of 2. The
+       * invariant is `hitsAtLeast: 2`, so the day this stops connecting the
+       * scenario goes red rather than quietly testing nothing again.
        */
-      ...tap(103, '1'),
+      ...hold(62, 130, 'f'),
+      ...tap(94, '2'),
     ],
     expect: { hitsAtLeast: 2, defenderAirborne: true },
     move: 'launcherPunch',
@@ -243,6 +252,33 @@ export const SCENARIOS = {
     },
   },
 
+  dash: {
+    what: 'A backdash and a forward dash from a standing start. Added AFTER '
+      + 'the fuzzer found that the largest single-frame root step in the game '
+      + 'is not a launcher or a throw but an ordinary dash, and that it is a '
+      + 'lurch rather than a slide. This scenario exists to keep that number '
+      + 'from growing while nobody is looking.',
+    p1: 0, p2: 1, dist: 3.0, frames: 90,
+    // A real double tap passes through neutral, and that release is the whole
+    // difference between a dash and a held direction — both `Input#motion` and
+    // `Fighter#dashMotion` test for it, so it has to be in the key edges.
+    script: [
+      ...tap(10, 'b', 2), ...tap(14, 'b', 2),
+      ...tap(50, 'f', 2), ...tap(54, 'f', 2),
+    ],
+    expect: { hits: 0 },
+    move: null,
+    invariants: ['finite', 'inArena', 'scaleStable', 'rootStep', 'facingSane',
+      'expectedHits', 'validStates', 'settles'],
+    tune: {
+      // Measured worst frame: 0.391 m on the backdash, 0.303 m forward. The
+      // limit is 15% above the worst, which is tight enough that the lurch
+      // getting worse turns this red and loose enough that a tuning pass on
+      // dash friction does not.
+      rootStep: 0.45,
+    },
+  },
+
   'roundhouse-loop': {
     what: 'The scenario the invariant list in the brief was written about: a '
       + 'heavy back-input kick, entered while retreating, all the way from '
@@ -274,8 +310,30 @@ export const SCENARIOS = {
  * the shipping build; the worst value observed is quoted next to the limit.
  */
 export const DEFAULT_TUNE = {
-  /** Metres of root travel between adjacent frames. Worst measured: 0.152. */
-  rootStep: 0.3,
+  /*
+   * Metres of root travel between adjacent frames.
+   *
+   * THE LARGEST LEGAL SINGLE-FRAME STEP IN THE GAME TODAY IS A DEFECT, AND
+   * THIS LIMIT IS DELIBERATELY SET ABOVE IT.
+   *
+   * The scripted scenarios never exceed 0.152 m. The fuzzer found the real
+   * ceiling in its first twenty-five runs: a dash. Measured on a clean
+   * double-tap from a standing start, per-frame root travel is
+   *
+   *   backdash  0.114 0.089 0.042 0.391 0.197 0.093 0.045 0.026 0.019 ...
+   *   forward   0.099 0.078 0.059 0.026 0.303 0.130 0.052 0.025 0.017 ...
+   *
+   * while velocity decays cleanly by a factor of 0.8 every frame in both cases
+   * (-6.88 -5.50 -4.40 -3.52 ...). So the lurch is not physics — it is clip
+   * root motion, and one frame of a backdash covers 0.391 m, which is 23.4 m/s
+   * instantaneous and nine times its own neighbour. That is a visible snap.
+   *
+   * Reported in docs/SIMTEST.md rather than fixed, and pinned by the `dash`
+   * scenario so it cannot get worse unnoticed. This limit sits just above it so
+   * the fuzzer reports NEW teleports instead of re-reporting a known one on
+   * every fourth run.
+   */
+  rootStep: 0.45,
   /** Metres of net displacement over a whole run. Worst measured: 0.005 idle. */
   drift: 0.05,
   /**

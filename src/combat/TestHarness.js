@@ -1188,8 +1188,34 @@ export function makeGameTest(game, opts = {}) {
   const harness = opts.harness || game.testHarness || makeTestHarness(game);
   const roster = opts.roster || null;
 
-  const kb = makeSynthKeyboard();
-  const input = new Input(kb.target);
+  /*
+   * A FRESH KEYBOARD AND A FRESH `Input` PER RESET, NOT ONE FOR THE LIFETIME
+   * OF THE HARNESS.
+   *
+   * `Input` keeps `history[player]`, a rolling list of direction changes it
+   * prunes with `this.tick - hist[0].tick > INPUT_BUFFER_TICKS`. Every reset
+   * puts the frame counter back to zero, so that expression goes deeply
+   * negative against the previous run's entries and NOTHING IS EVER PRUNED —
+   * the tail of the last scenario sits inside the motion window of the next
+   * one for good.
+   *
+   * Measured, running the same scenario four times in one process: runs 1 and
+   * 2 were identical, and run 3 turned the held BACK of `roundhouse-loop` into
+   * a `bb` and started a BACKDASH on frame 0 — velocity -6.88 against -1.6,
+   * clip `loco.dashBack` against `loco.runBack`, 22 frames of dash stun the
+   * scenario never asked for. `juggle` did the same thing with `ff` on frame
+   * 63. Both scenarios then ran a completely different trajectory while every
+   * invariant still passed, which is the worst possible failure mode for a
+   * harness: wrong, and quiet about it.
+   *
+   * `tools/simgate.mjs` already carries this rule, in its own words: "A FRESH
+   * ONE PER CASE ... reusing one instance would let the tail of the previous
+   * notation sit inside the motion window of the next — which is precisely the
+   * kind of cross-talk this gate exists to detect, and would be
+   * indistinguishable from a real one."
+   */
+  let kb = makeSynthKeyboard();
+  let input = new Input(kb.target);
 
   /** Inputs still to be applied, keyed by the frame they fire on. */
   let pending = [];
@@ -1385,14 +1411,49 @@ export function makeGameTest(game, opts = {}) {
     // Fire this frame's scheduled key edges BEFORE the tick, which is when a
     // real keyboard's events land relative to the sim: `Input#beginTick` reads
     // whatever is down at that instant.
-    for (let i = pending.length - 1; i >= 0; i--) {
-      if (pending[i].frame !== frame) continue;
-      const e = pending.splice(i, 1)[0];
+    /*
+     * IN INSERTION ORDER, WHICH A BACKWARD SPLICE IS NOT.
+     *
+     * The first version walked `pending` backwards and spliced, so several
+     * edges on the same frame fired in REVERSE of the order they were
+     * scheduled. That is invisible for two different keys — the held set is a
+     * set — and decisive for a down and an up of the SAME key on one frame,
+     * which `makeInputLog` produces whenever a press is clamped to the last
+     * frame of a run.
+     *
+     * It cost a whole repro path: a fuzzer bundle recorded its edges in
+     * dispatch order (already reversed), replaying re-reversed them, and seed
+     * 11 came back with digest a596419f against the recorded 40c3c5f5. The
+     * same seed run twice through the fuzzer matched perfectly, so the harness
+     * looked deterministic while its own replay was not — the worst place for
+     * an ordering bug to hide.
+     */
+    const fire = [];
+    pending = pending.filter((e) => (e.frame === frame ? (fire.push(e), false) : true));
+    for (const e of fire) {
       const facing = fighters()[e.player]?.facing ?? 1;
       const code = physicalFor(e.player, e.key, facing);
       if (!code) continue;
       kb.set(code, e.action !== 'up');
-      inputLog.push({ frame, player: e.player, code, action: e.action });
+      /*
+       * THE LOG IS RECORDED IN THE SHAPE `input()` ACCEPTS, and that is not a
+       * cosmetic choice — it is the difference between a repro bundle that
+       * replays and one that silently does nothing.
+       *
+       * The first version stored the resolved code under `code`. `input()`
+       * reads `key`, so replaying a fuzzer bundle handed it `key: undefined`,
+       * every edge was dropped, and the replay ran 300 frames of two fighters
+       * standing still — which the harness then reported as "NO LONGER FAILS".
+       * A repro path that reports a fix when it has replayed nothing is worse
+       * than no repro path.
+       *
+       * `key` holds the PHYSICAL code rather than the facing-relative token
+       * that produced it. Those two are the same thing only while a fighter
+       * stays on the side it started on; a run that crossed over would replay
+       * differently from the tokens and identically from the codes, and it is
+       * the codes the sim actually saw.
+       */
+      inputLog.push({ frame, player: e.player, key: code, action: e.action });
     }
 
     const before = events.length;
@@ -1461,7 +1522,14 @@ export function makeGameTest(game, opts = {}) {
       if (wasPaused === null && 'paused' in game) wasPaused = game.paused;
       if ('paused' in game) game.paused = true;
 
+      // See the note on `kb`/`input`: the old pair is torn down rather than
+      // cleared, because "cleared" would mean knowing every field `Input`
+      // carries, and the list is not this file's to keep up to date.
       kb.release();
+      input.dispose();
+      kb = makeSynthKeyboard();
+      input = new Input(kb.target);
+
       if (roster && (o.p1 != null || o.p2 != null)) {
         if (o.p1 != null && roster[o.p1]) A().setCharacter(roster[o.p1]);
         if (o.p2 != null && roster[o.p2]) D().setCharacter(roster[o.p2]);
@@ -1470,6 +1538,45 @@ export function makeGameTest(game, opts = {}) {
       A().reset(new THREE.Vector3(-1.9, GROUND_Y, 0), 1);
       D().reset(new THREE.Vector3(1.9, GROUND_Y, 0), -1);
       game.combat.reset();
+
+      /*
+       * THE TWO FIELDS `Fighter#reset` DOES NOT CLEAR, AND WHY THAT MATTERS
+       * HERE MORE THAN IT DOES IN THE GAME.
+       *
+       * Found by running the same scenario four times in one process and
+       * diffing the trajectories field by field. Runs 2, 3 and 4 were
+       * bit-identical to each other and run 1 was not, on exactly these:
+       *
+       *     strike-connects  run1->2  a.meter 0 -> 7.128    a.footL 1 -> 0.0218
+       *                      run2->3  a.meter 7.128 -> 14.256
+       *                      run3->4  a.meter 14.256 -> 21.384
+       *
+       * METER. `reset()` does `meter = min(meter, METER_MAX * 0.25)` on
+       * purpose: a fighter is meant to carry up to a quarter bar between the
+       * rounds of a match. Correct for a match, wrong for a test — a scenario
+       * that lands a blow banks meter, and the NEXT scenario starts with it,
+       * climbing 7.128 a run until it saturates at 25 four runs later. Every
+       * trajectory in between is a different trajectory, and a meter-gated move
+       * would start in one and refuse in another. The harness therefore starts
+       * from the CONSTRUCTED value, which is what "a clean run" has to mean.
+       *
+       * FOOT STATE. `footState[side].y` is the previous tick's sole height and
+       * is initialised to 1 in the constructor, but `reset()` never touches it,
+       * so it enters a new round holding the last frame of the old one.
+       * `#trackFootfalls` computes `dv = h - s.y` and emits `footstep` on a
+       * falling edge, so the very first tick after a reset compares against a
+       * stale height and can fire or swallow a footfall that has nothing to do
+       * with the round it is in. Restored to 1 for the same reason as the
+       * meter: a scenario starts where a freshly built fighter starts.
+       *
+       * Both are reported as product findings in docs/SIMTEST.md rather than
+       * fixed in `Fighter.js`, which this workstream does not own.
+       */
+      for (const f of [A(), D()]) {
+        f.meter = 0;
+        f.footState.L.y = 1; f.footState.L.down = false;
+        f.footState.R.y = 1; f.footState.R.down = false;
+      }
 
       // The mixing constants are arbitrary but must be DIFFERENT per stream, or
       // the two fighters and the combat system draw the same sequence and a
@@ -1702,7 +1809,28 @@ export function makeGameTest(game, opts = {}) {
         x.airborne = v.air; x.grounded = v.ground; x.crouching = v.crouch; x.isBlocking = v.block;
         x.simTick = v.simTick;
         x.rng.s0 = v.rng[0]; x.rng.s1 = v.rng[1];
-        if (v.clip) { x.currentClip = ''; x.animator?.play(v.clip, { blend: 0, loop: false }); x.currentClip = v.clip; }
+        /*
+         * A CLEAN STATE IS ALREADY RESTORED BY THE `reset()` ABOVE, AND
+         * TOUCHING THE ANIMATOR AGAIN IS WHAT BROKE IT.
+         *
+         * The first version replayed the saved clip unconditionally, with
+         * `loop: false`. For a frame-0 state the saved clip is `idle.fight`,
+         * which `reset()` had just played with `loop: true` — so the reload
+         * left the fighter on a NON-looping idle, the entry retired part way
+         * through the run, and every frame-0 reload diverged from the run it
+         * was supposed to reproduce. All six scenarios, silently, in the one
+         * case the whole feature exists for.
+         *
+         * So a clean state skips the pose restore entirely: `reset()` is
+         * definitionally the frame-0 pose, and the least code that can be
+         * wrong here is no code at all. Mid-run states still get the
+         * approximation, and `--savestate` prints how far off it is.
+         */
+        if (!s.clean && v.clip) {
+          x.currentClip = '';
+          x.animator?.play(v.clip, { blend: 0, loop: false });
+          x.currentClip = v.clip;
+        }
       };
       put(A(), s.a); put(D(), s.d);
       if (s.combatRng && game.combat.rng) { game.combat.rng.s0 = s.combatRng[0]; game.combat.rng.s1 = s.combatRng[1]; }

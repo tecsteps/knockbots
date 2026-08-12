@@ -14,6 +14,9 @@
     "touchgate": "node tools/touchgate.mjs --control=both",
     "simgate": "node tools/simgate.mjs",
     "simgate:control": "node tools/simgate.mjs --positive-control",
+    "simscene": "node tools/simscene.mjs --determinism",
+    "simscene:shots": "node tools/simscene.mjs --shots",
+    "simfuzz": "node tools/simfuzz.mjs",
     "deploy": "node tools/deploy.mjs",
     "deploy:verify": "node tools/deploy.mjs --verify-only"
   },
